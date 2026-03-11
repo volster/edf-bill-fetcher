@@ -8,11 +8,15 @@ import os
 import gc
 import threading
 import hashlib
+import json
+import urllib.parse
+import urllib.request
 import pdfplumber
 import tempfile
 import traceback
 from bs4 import BeautifulSoup
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -54,42 +58,45 @@ PERIOD_RE = re.compile(
 _ISO_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 def parse_to_display_date(date_input):
-    """Converts any date string or datetime to DD/MM/YYYY. Returns original on failure.
-    ISO format (YYYY-MM-DD) is parsed without dayfirst to avoid a pandas UserWarning;
-    all other formats use dayfirst=True so DD/MM/YYYY strings are interpreted correctly.
-    """
-    if not date_input or str(date_input).strip() in ("Unknown", ""):
+    """Converts any date string or datetime to DD/MM/YYYY. Returns original on failure."""
+    dt = parse_to_sort_date(date_input)
+    if pd.isna(dt):
         return date_input
-    s = str(date_input).strip()
-    try:
-        if _ISO_DATE_RE.match(s):
-            return pd.to_datetime(s, format='%Y-%m-%d').strftime('%d/%m/%Y')
-        return pd.to_datetime(s, dayfirst=True, format='mixed').strftime('%d/%m/%Y')
-    except Exception:
-        return s
+    return dt.strftime('%d/%m/%Y')
 
 
 def parse_to_sort_date(date_input):
     """Returns a sortable datetime for internal use only."""
     s = str(date_input).strip() if date_input else ''
+    if not s or s == 'Unknown':
+        return pd.NaT
     try:
         if _ISO_DATE_RE.match(s):
-            return pd.to_datetime(s, format='%Y-%m-%d')
-        return pd.to_datetime(s, dayfirst=True, format='mixed')
+            return pd.to_datetime(s, format='%Y-%m-%d', errors='coerce')
+        dt = pd.to_datetime(s, dayfirst=True, errors='coerce')
+        if pd.isna(dt):
+            dt = pd.to_datetime(s, dayfirst=False, errors='coerce')
+        return dt
     except Exception:
         return pd.NaT
 
 
 class EvidenceEngine:
-    def __init__(self, config, update_ui_cb):
+    def __init__(self, config, update_ui_cb, progress_cb=None, cancel_event=None):
         self.config           = config
         self.records          = []
         self.filtered_records = []   # records below min_amount threshold
         self.update_ui        = update_ui_cb
+        self.update_progress  = progress_cb
+        self.cancel_event     = cancel_event or threading.Event()
         self.pdf_count        = 0
         self.email_count      = 0
         self.error_log        = []
         self.seen_pdf_hashes  = set()
+        self.lock             = threading.Lock()
+
+    def is_cancelled(self):
+        return self.cancel_event.is_set()
 
     def log_error(self, context, err):
         self.error_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] {context} — {err}")
@@ -157,14 +164,15 @@ class EvidenceEngine:
         # Post-extraction filter: discard records below minimum threshold.
         # Also retain an audit trail so users can review filtered-out items.
         if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
-            self.filtered_records.append({
-                "Source": source_type,
-                "Date": date_to_use,
-                "Amount (£)": found_amt,
-                "Details": detail[:60],
-                "Logic Used": strategy,
-                "Reason": f"Below minimum threshold (£{self.config['min_amount']:,.2f})"
-            })
+            with self.lock:
+                self.filtered_records.append({
+                    "Source": source_type,
+                    "Date": date_to_use,
+                    "Amount (£)": found_amt,
+                    "Details": detail[:60],
+                    "Logic Used": strategy,
+                    "Reason": f"Below minimum threshold (£{self.config['min_amount']:,.2f})"
+                })
             return
 
         # Reading type
@@ -189,27 +197,31 @@ class EvidenceEngine:
 
         period_from, period_to = self.find_billing_period(clean_text)
 
-        self.records.append({
-            "Source":               source_type,
-            "Date":                 date_to_use,
-            "Period From":          period_from,
-            "Period To":            period_to,
-            "Invoice #":            inv_num,
-            "Amount (£)":           found_amt,
-            "Reading":              r_type,
-            "Units (kWh)":          units_used,
-            "Standing Chg (p/day)": standing_charge,
-            "Details":              detail[:60],
-            "Logic Used":           strategy
-        })
+        with self.lock:
+            self.records.append({
+                "Source":               source_type,
+                "Date":                 date_to_use,
+                "Period From":          period_from,
+                "Period To":            period_to,
+                "Invoice #":            inv_num,
+                "Amount (£)":           found_amt,
+                "Reading":              r_type,
+                "Units (kWh)":          units_used,
+                "Standing Chg (p/day)": standing_charge,
+                "Details":              detail[:60],
+                "Logic Used":           strategy
+            })
 
     def process_pdf_file(self, path, source_label, detail_label, fallback_date):
+        if self.is_cancelled():
+            return
         try:
             with open(path, 'rb') as fh:
                 pdf_hash = hashlib.sha1(fh.read()).hexdigest()
-            if pdf_hash in self.seen_pdf_hashes:
-                return
-            self.seen_pdf_hashes.add(pdf_hash)
+            with self.lock:
+                if pdf_hash in self.seen_pdf_hashes:
+                    return
+                self.seen_pdf_hashes.add(pdf_hash)
 
             with pdfplumber.open(path) as pdf:
                 pdf_text = " ".join([p.extract_text() or "" for p in pdf.pages])
@@ -218,13 +230,21 @@ class EvidenceEngine:
             self.log_error(f"PDF: {detail_label}", str(e))
 
     def crawl_pst(self, folder):
-        for i in range(folder.get_number_of_sub_messages()):
+        if self.is_cancelled():
+            return
+        msg_total = folder.get_number_of_sub_messages()
+        for i in range(msg_total):
+            if self.is_cancelled():
+                return
             try:
                 msg  = folder.get_sub_message(i)
                 subj = str(msg.get_subject() or "")
 
                 d_time   = msg.get_delivery_time()
                 date_str = parse_to_display_date(d_time.strftime('%Y-%m-%d')) if d_time else "Unknown"
+
+                if self.update_progress and i % 100 == 0:
+                    self.update_progress(i + 1, msg_total, f"Scanning PST/OST folder: {i + 1}/{msg_total}")
 
                 # Email body — filter to EDF-related subjects
                 if any(k in subj.upper() for k in ["EDF", "BILL", "STATEMENT", "ACCOUNT", "INVOICE"]):
@@ -238,7 +258,6 @@ class EvidenceEngine:
                     elif plain:
                         self.process_text(plain.decode('utf-8', errors='ignore'), "Email Body", subj, date_str)
                     else:
-                        # Older emails (pre-2021) are often RTF only — strip control words to extract text
                         rtf_body = None
                         try:
                             rtf_body = msg.get_rtf_body()
@@ -255,8 +274,9 @@ class EvidenceEngine:
                         else:
                             self.log_error(f"Email: {subj} ({date_str})", "No readable body (tried HTML, plain, RTF)")
 
-                # PDF attachments — detected by magic bytes, not file extension
                 for a_idx in range(msg.get_number_of_attachments()):
+                    if self.is_cancelled():
+                        return
                     try:
                         att  = msg.get_attachment(a_idx)
                         size = att.get_size()
@@ -264,7 +284,6 @@ class EvidenceEngine:
                             buf = att.read_buffer(size)
                             if buf and buf.startswith(b'%PDF'):
                                 self.pdf_count += 1
-                                # pypff uses get_long_filename / get_short_filename, not get_name
                                 try:
                                     att_name = att.get_long_filename() or att.get_short_filename() or f"Attachment_{self.pdf_count}.pdf"
                                 except Exception:
@@ -287,91 +306,117 @@ class EvidenceEngine:
         self.update_ui(f"Scanned {self.email_count} emails, {self.pdf_count} attached PDFs…")
 
         for j in range(folder.get_number_of_sub_folders()):
+            if self.is_cancelled():
+                return
             self.crawl_pst(folder.get_sub_folder(j))
 
 
-    def crawl_m365_graph_mailbox(self, tenant_id, client_id, mailbox=None, folder='Inbox', token_path=None, token_file=None):
-        """Uses python-o365 with Graph token-backed mailbox access."""
-        try:
+    def crawl_m365_graph_mailbox(self, access_token, mailbox=None, folder='Inbox'):
+        """Uses Graph REST with a token obtained via desktop device-code login."""
+        if not access_token:
+            self.log_error('M365 Graph', 'Missing access token')
+            return
+
+        headers = {'Authorization': f'Bearer {access_token}'}
+        endpoint = 'me/messages' if not mailbox else f"users/{mailbox}/messages"
+        base_messages = endpoint
+        attach_base = 'me' if not mailbox else f"users/{mailbox}"
+        select = '$select=id,subject,receivedDateTime,body,hasAttachments'
+        url = f"https://graph.microsoft.com/v1.0/{base_messages}?{select}&$top=50"
+        if folder and folder.lower() != 'inbox':
+            flt = urllib.parse.quote(f"contains(parentFolderId,'{folder}')")
+            url += f"&$filter={flt}"
+
+        msg_index = 0
+        while url and not self.is_cancelled():
             try:
-                from O365 import Account, MSGraphProtocol, FileSystemTokenBackend
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    payload = json.loads(resp.read().decode('utf-8'))
             except Exception as e:
-                self.log_error('M365 Graph', f"O365 module unavailable: {e}")
+                self.log_error('M365 Graph', f'Message fetch failed: {e}')
                 return
 
-            token_backend = FileSystemTokenBackend(
-                token_path=(token_path or tempfile.gettempdir()),
-                token_filename=(token_file or 'edf_bill_fetcher_o365_token.txt')
-            )
-            creds = (client_id, None)
-            account = Account(
-                credentials=creds,
-                protocol=MSGraphProtocol(),
-                tenant_id=tenant_id,
-                token_backend=token_backend,
-                auth_flow_type='authorization'
-            )
-            if not account.authenticate(scopes=['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft.com/User.Read', 'offline_access']):
-                self.log_error('M365 Graph', 'Authentication failed (check app registration permissions/consent)')
-                return
-
-            mailbox_obj = account.mailbox(resource=mailbox) if mailbox else account.mailbox()
-            folder_obj = mailbox_obj.get_folder(folder_name=folder) or mailbox_obj.inbox_folder()
-
-            for msg in folder_obj.get_messages(limit=None, download_attachments=True):
+            messages = payload.get('value', [])
+            total_batch = len(messages)
+            for idx, msg in enumerate(messages, start=1):
+                if self.is_cancelled():
+                    return
+                msg_index += 1
+                if self.update_progress:
+                    self.update_progress(idx, max(total_batch, 1), f"M365 messages batch: {idx}/{total_batch}")
                 try:
-                    subj = str(msg.subject or '')
-                    date_str = 'Unknown'
-                    if msg.received:
-                        date_str = parse_to_display_date(msg.received.strftime('%Y-%m-%d'))
+                    subj = str(msg.get('subject') or '')
+                    received = msg.get('receivedDateTime')
+                    date_str = parse_to_display_date(received[:10]) if received else 'Unknown'
 
                     if any(k in subj.upper() for k in ['EDF', 'BILL', 'STATEMENT', 'ACCOUNT', 'INVOICE']):
                         self.email_count += 1
-                        body_text = ''
-                        try:
-                            body = msg.get_body_text() or ''
-                            body_text = BeautifulSoup(body, 'html.parser').get_text(separator=' ')
-                        except Exception:
-                            body_text = str(msg.body or '')
+                        body = ((msg.get('body') or {}).get('content') or '')
+                        body_text = BeautifulSoup(body, 'html.parser').get_text(separator=' ')
                         if body_text.strip():
                             self.process_text(body_text, 'Email Body (M365 Graph)', subj, date_str)
 
-                    for att in (msg.attachments or []):
-                        try:
-                            if ((hasattr(att, 'mime_type') and att.mime_type == 'application/pdf') or str(getattr(att, 'name', '')).lower().endswith('.pdf')):
-                                content = getattr(att, 'content', None)
-                                if not content:
+                    if msg.get('hasAttachments'):
+                        msg_id = msg.get('id')
+                        att_url = f"https://graph.microsoft.com/v1.0/{attach_base}/messages/{msg_id}/attachments?$top=100"
+                        att_req = urllib.request.Request(att_url, headers=headers)
+                        with urllib.request.urlopen(att_req, timeout=60) as att_resp:
+                            att_payload = json.loads(att_resp.read().decode('utf-8'))
+                        for att in att_payload.get('value', []):
+                                if self.is_cancelled():
+                                    return
+                                if att.get('@odata.type') != '#microsoft.graph.fileAttachment':
                                     continue
+                                name = str(att.get('name') or '')
+                                ctype = str(att.get('contentType') or '')
+                                if ctype != 'application/pdf' and not name.lower().endswith('.pdf'):
+                                    continue
+                                b64 = att.get('contentBytes')
+                                if not b64:
+                                    continue
+                                import base64
+                                content = base64.b64decode(b64)
                                 self.pdf_count += 1
                                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
                                     tmp.write(content)
                                     tmp_path = tmp.name
                                 try:
-                                    self.process_pdf_file(tmp_path, 'M365 Graph PDF Attachment', getattr(att, 'name', '') or f'Attachment_{self.pdf_count}.pdf', date_str)
+                                    self.process_pdf_file(tmp_path, 'M365 Graph PDF Attachment', name or f'Attachment_{self.pdf_count}.pdf', date_str)
                                 finally:
                                     if os.path.exists(tmp_path):
                                         os.remove(tmp_path)
-                        except Exception as e:
-                            self.log_error('M365 Graph attachment', str(e))
-
                 except Exception as e:
                     self.log_error('M365 Graph message', str(e))
 
-            self.update_ui(f"Scanned {self.email_count} emails, {self.pdf_count} total PDFs…")
-        except Exception as e:
-            self.log_error('M365 Graph', str(e))
+            url = payload.get('@odata.nextLink')
+
+        self.update_ui(f"Scanned {self.email_count} emails, {self.pdf_count} total PDFs…")
 
     def crawl_local_pdfs(self, path):
         if not path or not os.path.exists(path):
             return
-        for file in os.listdir(path):
-            if file.lower().endswith(".pdf"):
+        pdf_files = [f for f in os.listdir(path) if f.lower().endswith('.pdf')]
+        total = len(pdf_files)
+
+        def _process_one(i_file):
+            idx, file = i_file
+            if self.is_cancelled():
+                return
+            file_path = os.path.join(path, file)
+            fallback_date = parse_to_display_date(
+                datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d')
+            )
+            with self.lock:
                 self.pdf_count += 1
-                file_path     = os.path.join(path, file)
-                fallback_date = parse_to_display_date(
-                    datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d')
-                )
-                self.process_pdf_file(file_path, "Local PDF Folder", file, fallback_date)
+            self.process_pdf_file(file_path, 'Local PDF Folder', file, fallback_date)
+            if self.update_progress:
+                self.update_progress(idx, total, f"Scanning local PDFs: {idx}/{total}")
+
+        workers = max(2, min(8, (os.cpu_count() or 4)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(_process_one, enumerate(pdf_files, start=1)))
+
         self.update_ui(f"Scanned {self.email_count} emails, {self.pdf_count} total PDFs…")
 
 
@@ -537,7 +582,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df = pd.DataFrame(data)
 
     # Sort chronologically
-    df['_sort'] = pd.to_datetime(df['Date'], dayfirst=True, format='mixed', errors='coerce')
+    df['_sort'] = df['Date'].apply(parse_to_sort_date)
     df = df.sort_values(by=['_sort', 'Invoice #'], ascending=[True, False]).reset_index(drop=True)
 
     # % Change column written as Excel formula in write_evidence_sheet — no Python pre-computation needed
@@ -567,7 +612,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # Snapshot list of years from extracted rows. Aggregated values in summary
     # are formulas against the evidence sheet so they recalculate after edits.
     years = sorted(
-        y for y in pd.to_datetime(df['Date'], dayfirst=True, format='mixed', errors='coerce').dt.year.dropna().astype(int).unique()
+        y for y in df['Date'].apply(parse_to_sort_date).dropna().dt.year.astype(int).unique()
     )
 
     wb = openpyxl.Workbook()
@@ -684,7 +729,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # Build clean analysis frame
     # ------------------------------------------------------------------
     df_an = df.copy()
-    df_an['_dt'] = pd.to_datetime(df_an['Date'], dayfirst=True, format='mixed', errors='coerce')
+    df_an['_dt'] = df_an['Date'].apply(parse_to_sort_date)
     df_an = df_an.sort_values('_dt').reset_index(drop=True)
     analysis_min = float(config.get("analysis_min", 5000.0))
     report_account_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
@@ -1263,7 +1308,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("EDF Master Evidence Collector")
-        self.root.geometry("680x760")
+        self.root.geometry("760x820")
         self.root.configure(bg=EDF_OFFWHITE)
 
         self.pst_path = tk.StringVar()
@@ -1276,6 +1321,7 @@ class App:
         self.graph_auth = None
         self.acc_num  = tk.StringVar(value="671078701920")
         self.status   = tk.StringVar(value="Ready.")
+        self.progress_value = tk.DoubleVar(value=0)
 
         self.use_anchors  = tk.BooleanVar(value=True)
         self.use_large    = tk.BooleanVar(value=True)
@@ -1291,6 +1337,9 @@ class App:
         self.output_name  = tk.StringVar(value="EDF_Dispute_Evidence.xlsx")
         self.report_account_ref = tk.StringVar(value="671078701920")
 
+        self.cancel_event = threading.Event()
+        self.worker_thread = None
+
         self.build_ui()
 
     def build_ui(self):
@@ -1300,10 +1349,25 @@ class App:
                  bg=EDF_ORANGE, fg="white",
                  font=("Calibri", 14, "bold")).pack(pady=15)
 
-        main = ttk.Frame(self.root, padding=20)
-        main.pack(fill=tk.BOTH, expand=True)
+        container = ttk.Frame(self.root)
+        container.pack(fill=tk.BOTH, expand=True)
 
-        # Section 1 — Source files
+        canvas = tk.Canvas(container, bg=EDF_OFFWHITE, highlightthickness=0)
+        yscroll = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=yscroll.set)
+        yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        main = ttk.Frame(canvas, padding=16)
+        canvas_window = canvas.create_window((0, 0), window=main, anchor="nw")
+
+        def _on_configure(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(canvas_window, width=canvas.winfo_width())
+
+        main.bind("<Configure>", _on_configure)
+        canvas.bind("<Configure>", _on_configure)
+
         s1 = ttk.LabelFrame(main, text=" 1. Source Data ", padding=10)
         s1.pack(fill=tk.X, pady=5)
 
@@ -1338,96 +1402,59 @@ class App:
         ttk.Label(r2g, text="Folder:", width=12).pack(side=tk.LEFT)
         ttk.Entry(r2g, textvariable=self.graph_folder, width=20).pack(side=tk.LEFT, padx=5)
 
-        # Section 2 — Search options
         s2 = ttk.LabelFrame(main, text=" 2. Search & Filter Options ", padding=10)
         s2.pack(fill=tk.X, pady=5)
-
-        tk.Checkbutton(s2,
-            text="Smart Context Search  (looks for 'Balance', 'Debit', etc.)",
-            variable=self.use_anchors, bg=EDF_OFFWHITE).pack(anchor=tk.W)
-        tk.Checkbutton(s2,
-            text="Large Number Fallback  (catch any large £ amount)",
-            variable=self.use_large, bg=EDF_OFFWHITE).pack(anchor=tk.W)
-        tk.Checkbutton(s2,
-            text="Classify Reading Type  (Estimated / Actual / Smart)",
-            variable=self.use_reading_classification, bg=EDF_OFFWHITE).pack(anchor=tk.W)
-        tk.Checkbutton(s2,
-            text="Deep PDF Mine  (extract kWh, standing charges & invoice #)",
-            variable=self.use_pdf_fields, bg=EDF_OFFWHITE).pack(anchor=tk.W)
+        tk.Checkbutton(s2, text="Smart Context Search", variable=self.use_anchors, bg=EDF_OFFWHITE).pack(anchor=tk.W)
+        tk.Checkbutton(s2, text="Large Number Fallback", variable=self.use_large, bg=EDF_OFFWHITE).pack(anchor=tk.W)
+        tk.Checkbutton(s2, text="Classify Reading Type", variable=self.use_reading_classification, bg=EDF_OFFWHITE).pack(anchor=tk.W)
+        tk.Checkbutton(s2, text="Deep PDF Mine", variable=self.use_pdf_fields, bg=EDF_OFFWHITE).pack(anchor=tk.W)
 
         r3 = ttk.Frame(s2); r3.pack(fill=tk.X, pady=5)
-        tk.Checkbutton(r3, text="Filter by Account #:",
-                       variable=self.use_acc_filt, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
+        tk.Checkbutton(r3, text="Filter by Account #:", variable=self.use_acc_filt, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
         ttk.Entry(r3, textvariable=self.acc_num, width=15).pack(side=tk.LEFT, padx=5)
 
         r4 = ttk.Frame(s2); r4.pack(fill=tk.X, pady=(4, 0))
-        chk_filt = tk.Checkbutton(r4, text="Filter ALL results below minimum £:",
-                                  variable=self.filter_below, bg=EDF_OFFWHITE)
+        chk_filt = tk.Checkbutton(r4, text="Filter results below minimum £:", variable=self.filter_below, bg=EDF_OFFWHITE)
         chk_filt.pack(side=tk.LEFT)
         ttk.Entry(r4, textvariable=self.min_amount, width=8).pack(side=tk.LEFT, padx=5)
 
         r4c = ttk.Frame(s2); r4c.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(r4c, text="Analysis threshold £ (for advanced tabs):", width=36).pack(side=tk.LEFT)
+        ttk.Label(r4c, text="Analysis threshold £:", width=22).pack(side=tk.LEFT)
         ttk.Entry(r4c, textvariable=self.analysis_min, width=8).pack(side=tk.LEFT, padx=5)
 
         r4d = ttk.Frame(s2); r4d.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(r4d, text="Report account reference:", width=36).pack(side=tk.LEFT)
+        ttk.Label(r4d, text="Report account reference:", width=22).pack(side=tk.LEFT)
         ttk.Entry(r4d, textvariable=self.report_account_ref, width=20).pack(side=tk.LEFT, padx=5)
 
         r4e = ttk.Frame(s2); r4e.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(r4e, text="Output filename:", width=36).pack(side=tk.LEFT)
+        ttk.Label(r4e, text="Output filename:", width=22).pack(side=tk.LEFT)
         ttk.Entry(r4e, textvariable=self.output_name, width=28).pack(side=tk.LEFT, padx=5)
 
-        r4b = ttk.Frame(s2); r4b.pack(fill=tk.X)
-        chk_save_filt = tk.Checkbutton(r4b,
-            text="Save filtered-out records to a separate worksheet for review",
-            variable=self.save_filtered, bg=EDF_OFFWHITE)
+        chk_save_filt = tk.Checkbutton(s2, text="Save filtered-out records", variable=self.save_filtered, bg=EDF_OFFWHITE)
         chk_save_filt.pack(anchor=tk.W, padx=20)
+        chk_filt.config(command=lambda: chk_save_filt.config(state="normal" if self.filter_below.get() else "disabled"))
 
-        def toggle_filt_save():
-            chk_save_filt.config(state="normal" if self.filter_below.get() else "disabled")
-        chk_filt.config(command=toggle_filt_save)
-        toggle_filt_save()  # set initial state
-
-        # Section 3 — Deduplication
         s3 = ttk.LabelFrame(main, text=" 3. Deduplication ", padding=10)
         s3.pack(fill=tk.X, pady=5)
-
-        chk_dup = tk.Checkbutton(s3,
-            text="Filter duplicate records  (same date & amount)",
-            variable=self.use_dedup, bg=EDF_OFFWHITE)
+        chk_dup = tk.Checkbutton(s3, text="Filter duplicate records", variable=self.use_dedup, bg=EDF_OFFWHITE)
         chk_dup.pack(anchor=tk.W)
-
-        chk_save_dup = tk.Checkbutton(s3,
-            text="Save duplicates to a separate worksheet for review",
-            variable=self.save_dups, bg=EDF_OFFWHITE)
+        chk_save_dup = tk.Checkbutton(s3, text="Save duplicates worksheet", variable=self.save_dups, bg=EDF_OFFWHITE)
         chk_save_dup.pack(anchor=tk.W, padx=20)
+        chk_dup.config(command=lambda: chk_save_dup.config(state="normal" if self.use_dedup.get() else "disabled"))
 
-        def toggle_dup_save():
-            chk_save_dup.config(state="normal" if self.use_dedup.get() else "disabled")
-        chk_dup.config(command=toggle_dup_save)
-        toggle_dup_save()  # set initial state
+        self.pb = ttk.Progressbar(main, mode='determinate', maximum=100, variable=self.progress_value)
+        self.pb.pack(fill=tk.X, pady=10)
+        ttk.Label(main, textvariable=self.status, foreground=EDF_NAVY, font=("Calibri", 11, "bold")).pack()
 
-        # Progress & status
-        self.pb = ttk.Progressbar(main, mode='indeterminate')
-        self.pb.pack(fill=tk.X, pady=15)
-        ttk.Label(main, textvariable=self.status,
-                  foreground=EDF_NAVY,
-                  font=("Calibri", 11, "bold")).pack()
-
-        self.run_btn = tk.Button(
-            main, text="EXTRACT TO EXCEL",
-            bg=EDF_ORANGE, fg="white",
-            font=("Calibri", 12, "bold"),
-            command=self.start_thread,
-            relief="flat"
-        )
-        self.run_btn.pack(fill=tk.X, pady=10, ipady=8)
+        btns = ttk.Frame(main)
+        btns.pack(fill=tk.X, pady=8)
+        self.run_btn = tk.Button(btns, text="EXTRACT TO EXCEL", bg=EDF_ORANGE, fg="white", font=("Calibri", 12, "bold"), command=self.start_thread, relief="flat")
+        self.run_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8)
+        self.cancel_btn = ttk.Button(btns, text="Cancel", command=self.cancel_run, state="disabled")
+        self.cancel_btn.pack(side=tk.LEFT, padx=8)
 
     def pick_mailstore_file(self):
-        path = filedialog.askopenfilename(
-            filetypes=[("Mail Stores", "*.pst *.ost"), ("PST", "*.pst"), ("OST", "*.ost")]
-        )
+        path = filedialog.askopenfilename(filetypes=[("Mail Stores", "*.pst *.ost"), ("PST", "*.pst"), ("OST", "*.ost")])
         if path:
             self.pst_path.set(path)
 
@@ -1436,61 +1463,51 @@ class App:
         if path:
             self.pdf_dir.set(path)
 
+    def _token_cache_path(self):
+        return os.path.join(tempfile.gettempdir(), DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_msal_token.json')
+
     def clear_m365_login(self):
         try:
-            token_path = tempfile.gettempdir()
-            token_file = DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_o365_token.txt'
-            token_fp = os.path.join(token_path, token_file)
+            token_fp = self._token_cache_path()
             if os.path.exists(token_fp):
                 os.remove(token_fp)
             self.graph_auth = None
             self.m365_login_state.set('Not logged in')
-            self.show_message('info', 'M365 Graph', f'Cleared cached login token at:\n{token_fp}')
+            self.show_message('info', 'M365 Graph', f'Cleared cached login token at\n{token_fp}')
         except Exception as e:
             self.show_message('error', 'M365 Graph', f'Could not clear cached login: {e}')
 
     def login_m365_graph(self):
         try:
-            from O365 import Account, MSGraphProtocol, FileSystemTokenBackend
-        except Exception as e:
-            self.show_message("error", "M365 Graph", f"O365 module unavailable: {e}")
-            return
-
-        try:
-            client_id = (self.graph_client_id.get().strip() or DEFAULT_M365_CLIENT_ID)
+            import json
+            import msal
+            client_id = self.graph_client_id.get().strip()
             if not client_id:
-                self.m365_login_state.set('Missing Client ID')
-                self.show_message("error", "M365 Graph",
-                    "Missing Microsoft Graph Client ID.\n\nPaste your app registration Client ID into the Client ID field (or set EDF_M365_CLIENT_ID), then retry Login.")
+                self.show_message('error', 'M365 Graph', 'Please enter your Azure App Registration Client ID once, then click Login.')
                 return
 
-            token_backend = FileSystemTokenBackend(
-                token_path=tempfile.gettempdir(),
-                token_filename=(DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_o365_token.txt')
-            )
-            account = Account(
-                credentials=(client_id, None),
-                protocol=MSGraphProtocol(),
-                tenant_id=DEFAULT_M365_TENANT,
-                token_backend=token_backend,
-                auth_flow_type='authorization'
-            )
-            ok = account.authenticate(scopes=['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft.com/User.Read', 'offline_access'])
-            if ok:
-                self.graph_auth = {
-                    'tenant_id': DEFAULT_M365_TENANT,
-                    'client_id': client_id,
-                    'token_path': tempfile.gettempdir(),
-                    'token_file': (DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_o365_token.txt')
-                }
-                self.m365_login_state.set('Logged in ✅')
-                self.show_message("info", "M365 Graph", "Microsoft 365 login successful.")
-            else:
-                self.m365_login_state.set('Login failed')
-                self.show_message("warning", "M365 Graph", "Login failed.\n\nIf you see AADSTS65002, the app is not pre-authorized for Graph. Use your own Azure App Registration and set EDF_M365_CLIENT_ID.")
+            authority = f"https://login.microsoftonline.com/{DEFAULT_M365_TENANT or 'common'}"
+            app = msal.PublicClientApplication(client_id=client_id, authority=authority)
+            scopes = ['Mail.Read', 'User.Read', 'offline_access']
+
+            result = None
+            flow = app.initiate_device_flow(scopes=scopes)
+            if 'user_code' not in flow:
+                raise RuntimeError(f"Device login setup failed: {flow}")
+            self.show_message('info', 'M365 Login', flow.get('message', 'Complete login in browser and return.'))
+            result = app.acquire_token_by_device_flow(flow)
+            if 'access_token' not in result:
+                raise RuntimeError(result.get('error_description') or str(result))
+
+            token_data = {'access_token': result['access_token'], 'client_id': client_id}
+            with open(self._token_cache_path(), 'w', encoding='utf-8') as fh:
+                json.dump(token_data, fh)
+            self.graph_auth = token_data
+            self.m365_login_state.set('Logged in ✅')
+            self.show_message('info', 'M365 Graph', 'Microsoft 365 login successful.')
         except Exception as e:
             self.m365_login_state.set('Login failed')
-            self.show_message("error", "M365 Graph", f"Login error: {e}")
+            self.show_message('error', 'M365 Graph', f'Login error: {e}')
 
     def set_status(self, text):
         if threading.current_thread() is threading.main_thread():
@@ -1498,6 +1515,19 @@ class App:
             self.root.update_idletasks()
         else:
             self.root.after(0, self.set_status, text)
+
+    def set_progress(self, current, total, text=None):
+        pct = 0
+        if total and total > 0:
+            pct = max(0, min(100, (current / total) * 100))
+        def _apply():
+            self.progress_value.set(pct)
+            if text:
+                self.status.set(text)
+        if threading.current_thread() is threading.main_thread():
+            _apply()
+        else:
+            self.root.after(0, _apply)
 
     def show_message(self, level, title, text):
         def _show():
@@ -1514,70 +1544,82 @@ class App:
             self.root.after(0, _show)
 
     def finish_run(self):
-        self.pb.stop()
         self.run_btn.config(state="normal")
-        self.set_status("Ready.")
+        self.cancel_btn.config(state='disabled')
+        self.progress_value.set(0)
+        if self.cancel_event.is_set():
+            self.set_status('Cancelled.')
+        else:
+            self.set_status("Ready.")
         gc.collect()
+
+    def cancel_run(self):
+        self.cancel_event.set()
+        self.set_status('Cancelling…')
 
     def start_thread(self):
         has_file_sources = bool(self.pst_path.get().strip() or self.pdf_dir.get().strip())
         has_graph = self.use_graph.get() and bool(self.graph_auth)
         if not has_file_sources and not has_graph:
-            messagebox.showerror("Error", "Please select a PST/OST file, PDF folder, or enable Graph API and complete Login to Microsoft 365.")
+            self.show_message('error', 'Error', 'Please select a PST/OST file, PDF folder, or enable Graph API and complete Login to Microsoft 365.')
             return
+        self.cancel_event.clear()
         self.run_btn.config(state="disabled")
-        self.pb.start()
-        threading.Thread(target=self.run_process, daemon=True).start()
+        self.cancel_btn.config(state='normal')
+        self.progress_value.set(0)
+        self.worker_thread = threading.Thread(target=self.run_process, daemon=True)
+        self.worker_thread.start()
 
     def run_process(self):
         config = {
-            "use_anchors":    self.use_anchors.get(),
-            "use_large":      self.use_large.get(),
+            "use_anchors": self.use_anchors.get(),
+            "use_large": self.use_large.get(),
             "use_reading_classification": self.use_reading_classification.get(),
             "use_pdf_fields": self.use_pdf_fields.get(),
             "use_acc_filter": self.use_acc_filt.get(),
-            "acc_num":        self.acc_num.get(),
-            "min_amount":     self.min_amount.get(),
-            "analysis_min":   self.analysis_min.get(),
+            "acc_num": self.acc_num.get(),
+            "min_amount": self.min_amount.get(),
+            "analysis_min": self.analysis_min.get(),
             "report_account_ref": self.report_account_ref.get().strip(),
-            "filter_below":   self.filter_below.get(),
-            "save_filtered":  self.save_filtered.get(),
-            "use_dedup":      self.use_dedup.get(),
-            "save_dups":      self.save_dups.get(),
-            "use_graph":      self.use_graph.get(),
-            "graph_tenant_id": (self.graph_auth or {}).get("tenant_id"),
-            "graph_client_id": (self.graph_auth or {}).get("client_id"),
-            "graph_token_path": (self.graph_auth or {}).get("token_path"),
-            "graph_token_file": (self.graph_auth or {}).get("token_file"),
-            "graph_mailbox":  self.graph_mailbox.get().strip(),
-            "graph_folder":   (self.graph_folder.get().strip() or "Inbox")
+            "filter_below": self.filter_below.get(),
+            "save_filtered": self.save_filtered.get(),
+            "use_dedup": self.use_dedup.get(),
+            "save_dups": self.save_dups.get(),
+            "use_graph": self.use_graph.get(),
+            "graph_access_token": (self.graph_auth or {}).get('access_token'),
+            "graph_mailbox": self.graph_mailbox.get().strip(),
+            "graph_folder": (self.graph_folder.get().strip() or 'Inbox')
         }
 
-        engine = EvidenceEngine(config, self.set_status)
+        engine = EvidenceEngine(config, self.set_status, progress_cb=self.set_progress, cancel_event=self.cancel_event)
 
         try:
             pst_path = self.pst_path.get().strip()
-            if pst_path and os.path.exists(pst_path):
+            if pst_path and os.path.exists(pst_path) and not self.cancel_event.is_set():
+                self.set_status('Scanning PST/OST…')
                 clean_path = os.path.abspath(os.path.normpath(pst_path))
                 pff_file = pypff.file()
                 pff_file.open(clean_path)
-                engine.crawl_pst(pff_file.get_root_folder())
-                pff_file.close()
+                try:
+                    engine.crawl_pst(pff_file.get_root_folder())
+                finally:
+                    pff_file.close()
 
-            if config["use_graph"] and config["graph_tenant_id"] and config["graph_client_id"]:
+            if config["use_graph"] and config["graph_access_token"] and not self.cancel_event.is_set():
                 self.set_status("Connecting to Microsoft 365 Graph…")
                 engine.crawl_m365_graph_mailbox(
-                    config["graph_tenant_id"],
-                    config["graph_client_id"],
+                    config["graph_access_token"],
                     mailbox=(config["graph_mailbox"] or None),
-                    folder=config["graph_folder"],
-                    token_path=config.get("graph_token_path"),
-                    token_file=config.get("graph_token_file")
+                    folder=config["graph_folder"]
                 )
 
             pdf_path = self.pdf_dir.get().strip()
-            if pdf_path and os.path.exists(pdf_path):
+            if pdf_path and os.path.exists(pdf_path) and not self.cancel_event.is_set():
                 engine.crawl_local_pdfs(pdf_path)
+
+            if self.cancel_event.is_set():
+                self.show_message('warning', 'Cancelled', 'Extraction cancelled by user.')
+                return
 
             if engine.records:
                 self.set_status("Writing Excel report…")
@@ -1586,8 +1628,7 @@ class App:
                 if not out_name.lower().endswith(".xlsx"):
                     out_name += ".xlsx"
                 out_path = os.path.join(save_dir, out_name)
-                export_to_excel(engine.records, out_path, engine.error_log, config,
-                                filtered=engine.filtered_records)
+                export_to_excel(engine.records, out_path, engine.error_log, config, filtered=engine.filtered_records)
 
                 summary = (
                     f"Extraction complete.\n\n"
@@ -1600,13 +1641,10 @@ class App:
                 summary += f"\n\nSaved to:\n{out_path}"
                 self.show_message("info", "Success", summary)
             else:
-                self.show_message("warning", "No Data",
-                    "No billing amounts found.\n\nTry unchecking the Account Filter.")
+                self.show_message("warning", "No Data", "No billing amounts found. Try unchecking the Account Filter.")
 
         except Exception:
-            self.show_message("error", "System Error",
-                f"An error occurred:\n\n{traceback.format_exc()}\n\n"
-                "Ensure Outlook is closed for OST/PST access, paths are correct, and Graph app credentials/permissions are valid.")
+            self.show_message("error", "System Error", f"An error occurred:\n\n{traceback.format_exc()}")
         finally:
             self.root.after(0, self.finish_run)
 
