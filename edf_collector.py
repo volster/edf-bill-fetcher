@@ -336,6 +336,8 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                 if c_idx == 7 and isinstance(val, (int, float)):
                     c.number_format = '0.0%'
                     c.alignment = Alignment(horizontal='right', vertical='top')
+                if c_idx in (2, 3, 4) and hasattr(excel_val, 'year'):
+                    c.number_format = 'dd/mm/yyyy'
             c.font   = Font(name="Calibri", size=10)
             c.fill   = row_fill if not is_duplicate else PatternFill("solid", start_color=DUP_GREY)
             c.border = CELL_BORDER
@@ -355,6 +357,9 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             c13.fill   = PatternFill("solid", start_color=JUMP_RED)
 
         # Hidden helper date serial (col 14 / N) for formula-driven summaries/charts.
+        # Mirrors the real Excel Date serial so downstream summary formulas
+        # remain robust and locale-independent.
+        c14 = ws.cell(row=r_idx, column=14, value=f'=IF(ISNUMBER(B{r_idx}),B{r_idx},"")')
         # Uses DATEVALUE from visible Date column so downstream tabs recalculate
         # if users prune/edit rows.
         c14 = ws.cell(row=r_idx, column=14, value=f'=IFERROR(DATEVALUE(B{r_idx}),"")')
@@ -593,6 +598,10 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df_an = df.copy()
     df_an['_dt'] = pd.to_datetime(df_an['Date'], dayfirst=True, format='mixed', errors='coerce')
     df_an = df_an.sort_values('_dt').reset_index(drop=True)
+    analysis_min = float(config.get("analysis_min", 5000.0))
+    report_account_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
+
+    dfc   = df_an[df_an['Amount (£)'] >= analysis_min].copy().reset_index(drop=True)
     dfc   = df_an[df_an['Amount (£)'] >= 5000].copy().reset_index(drop=True)
     dfc['year']  = dfc['_dt'].dt.year
     dfc['month'] = dfc['_dt'].dt.month
@@ -656,6 +665,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # and Period Charges col F, so they recalculate if rows are edited or deleted.
 
     r = 2;  _section_hdr(ws_ks, r, 'ACCOUNT OVERVIEW')
+    r = 3;  ks_row(r, 'Account reference', report_account_ref, alt=True)
     r = 3;  ks_row(r, 'Account reference', '671078701920', alt=True)
     r = 4;  ks_row(r, 'First bill on record',
                    "='Balance Trend'!A2",
@@ -1172,6 +1182,12 @@ class App:
 
         self.pst_path = tk.StringVar()
         self.pdf_dir  = tk.StringVar()
+        self.use_graph = tk.BooleanVar(value=False)
+        self.graph_tenant_id = tk.StringVar()
+        self.graph_client_id = tk.StringVar()
+        self.graph_client_secret = tk.StringVar()
+        self.graph_mailbox = tk.StringVar()
+        self.graph_folder = tk.StringVar(value="Inbox")
         self.acc_num  = tk.StringVar(value="671078701920")
         self.status   = tk.StringVar(value="Ready.")
 
@@ -1185,6 +1201,9 @@ class App:
         self.use_dedup    = tk.BooleanVar(value=True)
         self.save_dups    = tk.BooleanVar(value=True)
         self.min_amount   = tk.DoubleVar(value=1000.0)
+        self.analysis_min = tk.DoubleVar(value=5000.0)
+        self.output_name  = tk.StringVar(value="EDF_Dispute_Evidence.xlsx")
+        self.report_account_ref = tk.StringVar(value="671078701920")
 
         self.build_ui()
 
@@ -1203,6 +1222,11 @@ class App:
         s1.pack(fill=tk.X, pady=5)
 
         r1 = ttk.Frame(s1); r1.pack(fill=tk.X, pady=2)
+        ttk.Label(r1, text="PST/OST File:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r1, textvariable=self.pst_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(r1, text="Browse",
+                   command=lambda: self.pst_path.set(
+                       filedialog.askopenfilename(filetypes=[("Mail Stores", "*.pst *.ost"), ("PST", "*.pst"), ("OST", "*.ost")])
         ttk.Label(r1, text="PST Export:", width=12).pack(side=tk.LEFT)
         ttk.Entry(r1, textvariable=self.pst_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Button(r1, text="Browse",
@@ -1216,6 +1240,29 @@ class App:
         ttk.Button(r2, text="Browse",
                    command=lambda: self.pdf_dir.set(filedialog.askdirectory())
                    ).pack(side=tk.LEFT)
+
+        r2b = ttk.Frame(s1); r2b.pack(fill=tk.X, pady=2)
+        tk.Checkbutton(r2b, text="Connect to Microsoft 365 (Graph API)", variable=self.use_graph, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
+
+        r2c = ttk.Frame(s1); r2c.pack(fill=tk.X, pady=2)
+        ttk.Label(r2c, text="Tenant ID:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r2c, textvariable=self.graph_tenant_id).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        r2d = ttk.Frame(s1); r2d.pack(fill=tk.X, pady=2)
+        ttk.Label(r2d, text="Client ID:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r2d, textvariable=self.graph_client_id).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        r2e = ttk.Frame(s1); r2e.pack(fill=tk.X, pady=2)
+        ttk.Label(r2e, text="Client Secret:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r2e, textvariable=self.graph_client_secret, show="*").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        r2f = ttk.Frame(s1); r2f.pack(fill=tk.X, pady=2)
+        ttk.Label(r2f, text="Mailbox:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r2f, textvariable=self.graph_mailbox).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        r2g = ttk.Frame(s1); r2g.pack(fill=tk.X, pady=2)
+        ttk.Label(r2g, text="Folder:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r2g, textvariable=self.graph_folder, width=20).pack(side=tk.LEFT, padx=5)
 
         # Section 2 — Search options
         s2 = ttk.LabelFrame(main, text=" 2. Search & Filter Options ", padding=10)
@@ -1244,6 +1291,18 @@ class App:
                                   variable=self.filter_below, bg=EDF_OFFWHITE)
         chk_filt.pack(side=tk.LEFT)
         ttk.Entry(r4, textvariable=self.min_amount, width=8).pack(side=tk.LEFT, padx=5)
+
+        r4c = ttk.Frame(s2); r4c.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4c, text="Analysis threshold £ (for advanced tabs):", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4c, textvariable=self.analysis_min, width=8).pack(side=tk.LEFT, padx=5)
+
+        r4d = ttk.Frame(s2); r4d.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4d, text="Report account reference:", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4d, textvariable=self.report_account_ref, width=20).pack(side=tk.LEFT, padx=5)
+
+        r4e = ttk.Frame(s2); r4e.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4e, text="Output filename:", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4e, textvariable=self.output_name, width=28).pack(side=tk.LEFT, padx=5)
 
         r4b = ttk.Frame(s2); r4b.pack(fill=tk.X)
         chk_save_filt = tk.Checkbutton(r4b,
@@ -1319,6 +1378,10 @@ class App:
         gc.collect()
 
     def start_thread(self):
+        has_file_sources = bool(self.pst_path.get().strip() or self.pdf_dir.get().strip())
+        has_graph = self.use_graph.get() and self.graph_tenant_id.get().strip() and self.graph_client_id.get().strip() and self.graph_client_secret.get().strip()
+        if not has_file_sources and not has_graph:
+            messagebox.showerror("Error", "Please select a PST/OST file, PDF folder, or enable M365 Graph API with tenant/client credentials.")
         if not self.pst_path.get() and not self.pdf_dir.get():
             messagebox.showerror("Error", "Please select a PST file or PDF folder.")
             return
@@ -1335,6 +1398,18 @@ class App:
             "use_acc_filter": self.use_acc_filt.get(),
             "acc_num":        self.acc_num.get(),
             "min_amount":     self.min_amount.get(),
+            "analysis_min":   self.analysis_min.get(),
+            "report_account_ref": self.report_account_ref.get().strip(),
+            "filter_below":   self.filter_below.get(),
+            "save_filtered":  self.save_filtered.get(),
+            "use_dedup":      self.use_dedup.get(),
+            "save_dups":      self.save_dups.get(),
+            "use_graph":      self.use_graph.get(),
+            "graph_tenant_id": self.graph_tenant_id.get().strip(),
+            "graph_client_id": self.graph_client_id.get().strip(),
+            "graph_client_secret": self.graph_client_secret.get(),
+            "graph_mailbox":  self.graph_mailbox.get().strip(),
+            "graph_folder":   (self.graph_folder.get().strip() or "Inbox")
             "filter_below":   self.filter_below.get(),
             "save_filtered":  self.save_filtered.get(),
             "use_dedup":      self.use_dedup.get(),
@@ -1347,6 +1422,20 @@ class App:
             pst_path = self.pst_path.get().strip()
             if pst_path and os.path.exists(pst_path):
                 clean_path = os.path.abspath(os.path.normpath(pst_path))
+                pff_file = pypff.file()
+                pff_file.open(clean_path)
+                engine.crawl_pst(pff_file.get_root_folder())
+                pff_file.close()
+
+            if config["use_graph"] and config["graph_tenant_id"] and config["graph_client_id"] and config["graph_client_secret"]:
+                self.set_status("Connecting to Microsoft 365 Graph…")
+                engine.crawl_m365_graph_mailbox(
+                    config["graph_tenant_id"],
+                    config["graph_client_id"],
+                    config["graph_client_secret"],
+                    mailbox=(config["graph_mailbox"] or None),
+                    folder=config["graph_folder"]
+                )
                 pst = pypff.file()
                 pst.open(clean_path)
                 engine.crawl_pst(pst.get_root_folder())
@@ -1358,6 +1447,11 @@ class App:
 
             if engine.records:
                 self.set_status("Writing Excel report…")
+                save_dir = (os.path.dirname(pst_path) if pst_path else (pdf_path if pdf_path else os.getcwd()))
+                out_name = self.output_name.get().strip() or "EDF_Dispute_Evidence.xlsx"
+                if not out_name.lower().endswith(".xlsx"):
+                    out_name += ".xlsx"
+                out_path = os.path.join(save_dir, out_name)
                 save_dir = os.path.dirname(pst_path) if pst_path else pdf_path
                 out_path = os.path.join(save_dir, "EDF_Dispute_Evidence.xlsx")
                 export_to_excel(engine.records, out_path, engine.error_log, config,
@@ -1380,6 +1474,7 @@ class App:
         except Exception:
             self.show_message("error", "System Error",
                 f"An error occurred:\n\n{traceback.format_exc()}\n\n"
+                "Ensure Outlook is closed for OST/PST access, paths are correct, and Graph app credentials/permissions are valid.")
                 "Ensure Outlook is closed and paths are correct.")
         finally:
             self.root.after(0, self.finish_run)
