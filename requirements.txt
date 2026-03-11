@@ -5,3 +5,4 @@ beautifulsoup4
 openpyxl
 numpy
 pyinstaller
+O365

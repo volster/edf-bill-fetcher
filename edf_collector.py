@@ -7,6 +7,7 @@ import re
 import os
 import gc
 import threading
+import hashlib
 import pdfplumber
 import tempfile
 import traceback
@@ -20,6 +21,9 @@ from openpyxl.chart import BarChart, LineChart, Reference
 # --- Branding & Colors ---
 EDF_ORANGE, EDF_NAVY, EDF_OFFWHITE = "#FE5716", "#10367A", "#F5F5F5"
 EST_YELLOW, JUMP_RED, DUP_GREY = "FFFF99", "FF9999", "E0E0E0"
+
+DEFAULT_M365_CLIENT_ID = os.environ.get("EDF_M365_CLIENT_ID", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
+DEFAULT_M365_TENANT = os.environ.get("EDF_M365_TENANT", "common")
 
 # --- Extraction Patterns ---
 AMOUNT_PATTERNS = [
@@ -84,6 +88,7 @@ class EvidenceEngine:
         self.pdf_count        = 0
         self.email_count      = 0
         self.error_log        = []
+        self.seen_pdf_hashes  = set()
 
     def log_error(self, context, err):
         self.error_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] {context} — {err}")
@@ -137,26 +142,9 @@ class EvidenceEngine:
         if not found_amt:
             return
 
-        # Post-extraction filter: discard records below minimum threshold.
-        # filter_strategy controls which extraction methods this applies to:
-        #   "all"         — strip anything below threshold regardless of how it was found
-        #   "anchor_only" — only strip low values found via Smart Context
-        #   "large_only"  — only strip low values found via Large Amount Fallback
-        if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
-            return
-
-        # Reading type
-        r_type = "Unknown"
-        if self.config["use_readings"]:
-            for label, pat in READING_PATTERNS.items():
-                if pat.search(clean_text):
-                    r_type = label
-                    break
-
-        # Deep PDF fields
-        units_used = standing_charge = inv_num = "N/A"
+        # Prefer parsed bill date (for PDFs) before any early-return filtering so
+        # filtered audit rows still carry the most accurate statement date.
         date_to_use = fallback_date
-
         if "PDF" in source_type:
             date_m = re.search(
                 r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s\w+\s\d{4})",
@@ -165,13 +153,38 @@ class EvidenceEngine:
             if date_m:
                 date_to_use = parse_to_display_date(date_m.group(1))
 
-        u_m  = re.search(r'([\d,]+)\s*kWh',                           clean_text, re.IGNORECASE)
-        sc_m = re.search(r'(\d+\.\d{2})p\s*per day',                  clean_text, re.IGNORECASE)
-        in_m = re.search(r'Invoice number[\s:,\"\'\n]*([A-Z0-9\-]+)', clean_text, re.IGNORECASE)
+        # Post-extraction filter: discard records below minimum threshold.
+        # Also retain an audit trail so users can review filtered-out items.
+        if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
+            self.filtered_records.append({
+                "Source": source_type,
+                "Date": date_to_use,
+                "Amount (£)": found_amt,
+                "Details": detail[:60],
+                "Logic Used": strategy,
+                "Reason": f"Below minimum threshold (£{self.config['min_amount']:,.2f})"
+            })
+            return
 
-        if u_m:  units_used      = u_m.group(1)
-        if sc_m: standing_charge = sc_m.group(1)
-        if in_m: inv_num         = in_m.group(1)
+        # Reading type
+        r_type = "Unknown"
+        if self.config.get("use_reading_classification", True):
+            for label, pat in READING_PATTERNS.items():
+                if pat.search(clean_text):
+                    r_type = label
+                    break
+
+        # Deep PDF fields
+        units_used = standing_charge = inv_num = "N/A"
+
+        if self.config.get("use_pdf_fields", True):
+            u_m  = re.search(r'([\d,]+)\s*kWh',                           clean_text, re.IGNORECASE)
+            sc_m = re.search(r'(\d+\.\d{2})p\s*per day',                  clean_text, re.IGNORECASE)
+            in_m = re.search(r'Invoice number[\s:,\"\'\n]*([A-Z0-9\-]+)', clean_text, re.IGNORECASE)
+
+            if u_m:  units_used      = u_m.group(1)
+            if sc_m: standing_charge = sc_m.group(1)
+            if in_m: inv_num         = in_m.group(1)
 
         period_from, period_to = self.find_billing_period(clean_text)
 
@@ -191,6 +204,12 @@ class EvidenceEngine:
 
     def process_pdf_file(self, path, source_label, detail_label, fallback_date):
         try:
+            with open(path, 'rb') as fh:
+                pdf_hash = hashlib.sha1(fh.read()).hexdigest()
+            if pdf_hash in self.seen_pdf_hashes:
+                return
+            self.seen_pdf_hashes.add(pdf_hash)
+
             with pdfplumber.open(path) as pdf:
                 pdf_text = " ".join([p.extract_text() or "" for p in pdf.pages])
                 self.process_text(pdf_text, source_label, detail_label, fallback_date)
@@ -269,6 +288,78 @@ class EvidenceEngine:
         for j in range(folder.get_number_of_sub_folders()):
             self.crawl_pst(folder.get_sub_folder(j))
 
+
+    def crawl_m365_graph_mailbox(self, tenant_id, client_id, mailbox=None, folder='Inbox', token_path=None, token_file=None):
+        """Uses python-o365 with Microsoft Graph app credentials flow."""
+        try:
+            try:
+                from O365 import Account, MSGraphProtocol, FileSystemTokenBackend
+            except Exception as e:
+                self.log_error('M365 Graph', f"O365 module unavailable: {e}")
+                return
+
+            token_backend = FileSystemTokenBackend(
+                token_path=(token_path or tempfile.gettempdir()),
+                token_filename=(token_file or 'edf_bill_fetcher_o365_token.txt')
+            )
+            creds = (client_id, None)
+            account = Account(
+                credentials=creds,
+                protocol=MSGraphProtocol(),
+                tenant_id=tenant_id,
+                token_backend=token_backend,
+                auth_flow_type='credentials'
+            )
+            if not account.authenticate(scopes=['https://graph.microsoft.com/.default']):
+                self.log_error('M365 Graph', 'Authentication failed (check app permissions and admin consent)')
+                return
+
+            mailbox_obj = account.mailbox(resource=mailbox) if mailbox else account.mailbox()
+            folder_obj = mailbox_obj.get_folder(folder_name=folder) or mailbox_obj.inbox_folder()
+
+            for msg in folder_obj.get_messages(limit=None, download_attachments=True):
+                try:
+                    subj = str(msg.subject or '')
+                    date_str = 'Unknown'
+                    if msg.received:
+                        date_str = parse_to_display_date(msg.received.strftime('%Y-%m-%d'))
+
+                    if any(k in subj.upper() for k in ['EDF', 'BILL', 'STATEMENT', 'ACCOUNT', 'INVOICE']):
+                        self.email_count += 1
+                        body_text = ''
+                        try:
+                            body = msg.get_body_text() or ''
+                            body_text = BeautifulSoup(body, 'html.parser').get_text(separator=' ')
+                        except Exception:
+                            body_text = str(msg.body or '')
+                        if body_text.strip():
+                            self.process_text(body_text, 'Email Body (M365 Graph)', subj, date_str)
+
+                    for att in (msg.attachments or []):
+                        try:
+                            if ((hasattr(att, 'mime_type') and att.mime_type == 'application/pdf') or str(getattr(att, 'name', '')).lower().endswith('.pdf')):
+                                content = getattr(att, 'content', None)
+                                if not content:
+                                    continue
+                                self.pdf_count += 1
+                                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                                    tmp.write(content)
+                                    tmp_path = tmp.name
+                                try:
+                                    self.process_pdf_file(tmp_path, 'M365 Graph PDF Attachment', getattr(att, 'name', '') or f'Attachment_{self.pdf_count}.pdf', date_str)
+                                finally:
+                                    if os.path.exists(tmp_path):
+                                        os.remove(tmp_path)
+                        except Exception as e:
+                            self.log_error('M365 Graph attachment', str(e))
+
+                except Exception as e:
+                    self.log_error('M365 Graph message', str(e))
+
+            self.update_ui(f"Scanned {self.email_count} emails, {self.pdf_count} total PDFs…")
+        except Exception as e:
+            self.log_error('M365 Graph', str(e))
+
     def crawl_local_pdfs(self, path):
         if not path or not os.path.exists(path):
             return
@@ -324,12 +415,19 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                 c.number_format = '0.0%'
                 c.alignment = Alignment(horizontal='right', vertical='top')
             else:
-                c = ws.cell(row=r_idx, column=c_idx, value=val)
+                excel_val = val
+                if c_idx in (2, 3, 4):
+                    dt = parse_to_sort_date(val)
+                    if not pd.isna(dt):
+                        excel_val = dt.to_pydatetime()
+                c = ws.cell(row=r_idx, column=c_idx, value=excel_val)
                 if c_idx == 6 and isinstance(val, (int, float)):
                     c.number_format = '£#,##0.00'
                 if c_idx == 7 and isinstance(val, (int, float)):
                     c.number_format = '0.0%'
                     c.alignment = Alignment(horizontal='right', vertical='top')
+                if c_idx in (2, 3, 4) and hasattr(excel_val, 'year'):
+                    c.number_format = 'dd/mm/yyyy'
             c.font   = Font(name="Calibri", size=10)
             c.fill   = row_fill if not is_duplicate else PatternFill("solid", start_color=DUP_GREY)
             c.border = CELL_BORDER
@@ -348,6 +446,13 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             c13.border = CELL_BORDER
             c13.fill   = PatternFill("solid", start_color=JUMP_RED)
 
+        # Hidden helper date serial (col 14 / N) for formula-driven summaries/charts.
+        # Mirrors the real Excel Date serial so downstream summary formulas
+        # remain robust and locale-independent.
+        c14 = ws.cell(row=r_idx, column=14, value=f'=IF(ISNUMBER(B{r_idx}),B{r_idx},"")')
+        c14.border = CELL_BORDER
+        c14.number_format = 'yyyy-mm-dd'
+
     # Column widths
     widths = {
         'A': 18, 'B': 13, 'C': 13, 'D': 13, 'E': 16,
@@ -356,32 +461,13 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
+    ws.column_dimensions['N'].hidden = True
 
     ws.freeze_panes = "A2"
 
 
-def write_summary_sheet(ws, df):
+def write_summary_sheet(ws, years, evidence_sheet_name, evidence_max_row):
     ws.title = "Annual Summary"
-
-    df = df.copy()
-    df['_sort'] = pd.to_datetime(df['Date'], dayfirst=True, format='mixed', errors='coerce')
-    df['Year']  = df['_sort'].dt.year.astype('Int64')
-
-    def _bal_range(s):
-        return s.max() - s.min()
-
-    yearly = (
-        df.dropna(subset=['Year'])
-          .groupby('Year', as_index=False)
-          .agg(
-              Bal_Range   =('Amount (£)', _bal_range),
-              Bill_Count  =('Amount (£)', 'count'),
-              Average_Bill=('Amount (£)', 'mean'),
-              Highest_Bill=('Amount (£)', 'max'),
-              Lowest_Bill =('Amount (£)', 'min'),
-          )
-          .sort_values('Year')
-    )
 
     headers = ["Year", "Balance Range (£)", "Records",
                "Avg Balance (£)", "Peak Balance (£)", "Lowest Balance (£)"]
@@ -390,11 +476,21 @@ def write_summary_sheet(ws, df):
     ws.row_dimensions[1].height = 28
 
     alt_fill = PatternFill("solid", start_color="EEF2FF")
-    for r_idx, row in enumerate(yearly.values, 2):
+    date_rng = f"'{evidence_sheet_name}'!$N$2:$N${evidence_max_row}"
+    amt_rng = f"'{evidence_sheet_name}'!$F$2:$F${evidence_max_row}"
+
+    for r_idx, year_val in enumerate(years, 2):
         row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()
-        for c_idx, val in enumerate(row, 1):
-            c = ws.cell(row=r_idx, column=c_idx,
-                        value=int(val) if c_idx == 1 else val)
+        row_values = [
+            int(year_val),
+            f'=IFERROR(MAXIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1))-MINIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1)),"")',
+            f'=COUNTIFS({date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1))',
+            f'=IFERROR(AVERAGEIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1)),"")',
+            f'=IFERROR(MAXIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1)),"")',
+            f'=IFERROR(MINIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1)),"")',
+        ]
+        for c_idx, val in enumerate(row_values, 1):
+            c = ws.cell(row=r_idx, column=c_idx, value=val)
             c.font      = Font(name="Calibri", size=10)
             c.fill      = row_fill
             c.border    = CELL_BORDER
@@ -410,7 +506,7 @@ def write_summary_sheet(ws, df):
                 c.number_format = '£#,##0.00'
 
     # Grand total row — Excel formulas so they recalculate if data rows are edited/deleted
-    n          = len(yearly) + 2   # row index of totals row
+    n          = len(years) + 2   # row index of totals row
     first_r    = 2
     last_r     = n - 1
     total_fill = PatternFill("solid", start_color="10367A")
@@ -467,15 +563,22 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df     = df.reindex(columns=col_order)
     dup_df = dup_df.reindex(columns=col_order) if not dup_df.empty else dup_df
 
+    # Snapshot list of years from extracted rows. Aggregated values in summary
+    # are formulas against the evidence sheet so they recalculate after edits.
+    years = sorted(
+        y for y in pd.to_datetime(df['Date'], dayfirst=True, format='mixed', errors='coerce').dt.year.dropna().astype(int).unique()
+    )
+
     wb = openpyxl.Workbook()
 
-    # Tab 1: Annual Summary (first thing anyone sees)
-    ws_summary = wb.active
-    write_summary_sheet(ws_summary, df)
-
-    # Tab 2: Full evidence
-    ws_main = wb.create_sheet(title="EDF Evidence Report")
+    # Tab 1: Full evidence (created first so summary formulas can reference it)
+    ws_main = wb.active
+    ws_main.title = "EDF Evidence Report"
     write_evidence_sheet(ws_main, df, is_duplicate=False)
+
+    # Tab 2: Annual Summary
+    ws_summary = wb.create_sheet(title="Annual Summary", index=0)
+    write_summary_sheet(ws_summary, years, ws_main.title, max(ws_main.max_row, 2))
 
     # Tab 3: Duplicates
     if not dup_df.empty:
@@ -582,12 +685,16 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df_an = df.copy()
     df_an['_dt'] = pd.to_datetime(df_an['Date'], dayfirst=True, format='mixed', errors='coerce')
     df_an = df_an.sort_values('_dt').reset_index(drop=True)
-    dfc   = df_an[df_an['Amount (£)'] >= 5000].copy().reset_index(drop=True)
+    analysis_min = float(config.get("analysis_min", 5000.0))
+    report_account_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
+
+    dfc   = df_an[df_an['Amount (£)'] >= analysis_min].copy().reset_index(drop=True)
     dfc['year']  = dfc['_dt'].dt.year
     dfc['month'] = dfc['_dt'].dt.month
 
     if len(dfc) < 2:
-        return   # not enough data to analyse; wb.save called unconditionally below
+        wb.save(output_path)
+        return   # not enough data to analyse for analysis tabs; base workbook already built
 
     amounts  = dfc['Amount (£)'].values.astype(float)
     dates_dt = dfc['_dt'].tolist()
@@ -644,7 +751,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # and Period Charges col F, so they recalculate if rows are edited or deleted.
 
     r = 2;  _section_hdr(ws_ks, r, 'ACCOUNT OVERVIEW')
-    r = 3;  ks_row(r, 'Account reference', '671078701920', alt=True)
+    r = 3;  ks_row(r, 'Account reference', report_account_ref, alt=True)
     r = 4;  ks_row(r, 'First bill on record',
                    "='Balance Trend'!A2",
                    note='Auto-reads from Balance Trend sheet')
@@ -1160,18 +1267,27 @@ class App:
 
         self.pst_path = tk.StringVar()
         self.pdf_dir  = tk.StringVar()
+        self.use_graph = tk.BooleanVar(value=False)
+        self.graph_mailbox = tk.StringVar()
+        self.graph_folder = tk.StringVar(value="Inbox")
+        self.m365_login_state = tk.StringVar(value="Not logged in")
+        self.graph_auth = None
         self.acc_num  = tk.StringVar(value="671078701920")
         self.status   = tk.StringVar(value="Ready.")
 
         self.use_anchors  = tk.BooleanVar(value=True)
         self.use_large    = tk.BooleanVar(value=True)
-        self.use_readings = tk.BooleanVar(value=True)
+        self.use_reading_classification = tk.BooleanVar(value=True)
+        self.use_pdf_fields = tk.BooleanVar(value=True)
         self.use_acc_filt = tk.BooleanVar(value=False)
         self.filter_below  = tk.BooleanVar(value=True)
         self.save_filtered = tk.BooleanVar(value=True)
         self.use_dedup    = tk.BooleanVar(value=True)
         self.save_dups    = tk.BooleanVar(value=True)
         self.min_amount   = tk.DoubleVar(value=1000.0)
+        self.analysis_min = tk.DoubleVar(value=5000.0)
+        self.output_name  = tk.StringVar(value="EDF_Dispute_Evidence.xlsx")
+        self.report_account_ref = tk.StringVar(value="671078701920")
 
         self.build_ui()
 
@@ -1190,19 +1306,30 @@ class App:
         s1.pack(fill=tk.X, pady=5)
 
         r1 = ttk.Frame(s1); r1.pack(fill=tk.X, pady=2)
-        ttk.Label(r1, text="PST Export:", width=12).pack(side=tk.LEFT)
+        ttk.Label(r1, text="PST/OST File:", width=12).pack(side=tk.LEFT)
         ttk.Entry(r1, textvariable=self.pst_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(r1, text="Browse",
-                   command=lambda: self.pst_path.set(
-                       filedialog.askopenfilename(filetypes=[("PST", "*.pst")])
-                   )).pack(side=tk.LEFT)
+        ttk.Button(r1, text="Browse", command=self.pick_mailstore_file).pack(side=tk.LEFT)
 
         r2 = ttk.Frame(s1); r2.pack(fill=tk.X, pady=2)
         ttk.Label(r2, text="PDF Folder:", width=12).pack(side=tk.LEFT)
         ttk.Entry(r2, textvariable=self.pdf_dir).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(r2, text="Browse",
-                   command=lambda: self.pdf_dir.set(filedialog.askdirectory())
-                   ).pack(side=tk.LEFT)
+        ttk.Button(r2, text="Browse", command=self.pick_pdf_folder).pack(side=tk.LEFT)
+
+        r2b = ttk.Frame(s1); r2b.pack(fill=tk.X, pady=2)
+        tk.Checkbutton(r2b, text="Connect to Microsoft 365 (Graph API)", variable=self.use_graph, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
+        ttk.Button(r2b, text="Login to Microsoft 365", command=self.login_m365_graph).pack(side=tk.LEFT, padx=8)
+
+        r2c = ttk.Frame(s1); r2c.pack(fill=tk.X, pady=2)
+        ttk.Label(r2c, text="Login status:", width=12).pack(side=tk.LEFT)
+        ttk.Label(r2c, textvariable=self.m365_login_state, foreground=EDF_NAVY).pack(side=tk.LEFT)
+
+        r2f = ttk.Frame(s1); r2f.pack(fill=tk.X, pady=2)
+        ttk.Label(r2f, text="Mailbox:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r2f, textvariable=self.graph_mailbox).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        r2g = ttk.Frame(s1); r2g.pack(fill=tk.X, pady=2)
+        ttk.Label(r2g, text="Folder:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r2g, textvariable=self.graph_folder, width=20).pack(side=tk.LEFT, padx=5)
 
         # Section 2 — Search options
         s2 = ttk.LabelFrame(main, text=" 2. Search & Filter Options ", padding=10)
@@ -1215,8 +1342,11 @@ class App:
             text="Large Number Fallback  (catch any large £ amount)",
             variable=self.use_large, bg=EDF_OFFWHITE).pack(anchor=tk.W)
         tk.Checkbutton(s2,
+            text="Classify Reading Type  (Estimated / Actual / Smart)",
+            variable=self.use_reading_classification, bg=EDF_OFFWHITE).pack(anchor=tk.W)
+        tk.Checkbutton(s2,
             text="Deep PDF Mine  (extract kWh, standing charges & invoice #)",
-            variable=self.use_readings, bg=EDF_OFFWHITE).pack(anchor=tk.W)
+            variable=self.use_pdf_fields, bg=EDF_OFFWHITE).pack(anchor=tk.W)
 
         r3 = ttk.Frame(s2); r3.pack(fill=tk.X, pady=5)
         tk.Checkbutton(r3, text="Filter by Account #:",
@@ -1228,6 +1358,18 @@ class App:
                                   variable=self.filter_below, bg=EDF_OFFWHITE)
         chk_filt.pack(side=tk.LEFT)
         ttk.Entry(r4, textvariable=self.min_amount, width=8).pack(side=tk.LEFT, padx=5)
+
+        r4c = ttk.Frame(s2); r4c.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4c, text="Analysis threshold £ (for advanced tabs):", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4c, textvariable=self.analysis_min, width=8).pack(side=tk.LEFT, padx=5)
+
+        r4d = ttk.Frame(s2); r4d.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4d, text="Report account reference:", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4d, textvariable=self.report_account_ref, width=20).pack(side=tk.LEFT, padx=5)
+
+        r4e = ttk.Frame(s2); r4e.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4e, text="Output filename:", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4e, textvariable=self.output_name, width=28).pack(side=tk.LEFT, padx=5)
 
         r4b = ttk.Frame(s2); r4b.pack(fill=tk.X)
         chk_save_filt = tk.Checkbutton(r4b,
@@ -1275,13 +1417,86 @@ class App:
         )
         self.run_btn.pack(fill=tk.X, pady=10, ipady=8)
 
+    def pick_mailstore_file(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Mail Stores", "*.pst *.ost"), ("PST", "*.pst"), ("OST", "*.ost")]
+        )
+        if path:
+            self.pst_path.set(path)
+
+    def pick_pdf_folder(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.pdf_dir.set(path)
+
+    def login_m365_graph(self):
+        try:
+            from O365 import Account, MSGraphProtocol, FileSystemTokenBackend
+        except Exception as e:
+            self.show_message("error", "M365 Graph", f"O365 module unavailable: {e}")
+            return
+
+        try:
+            token_backend = FileSystemTokenBackend(
+                token_path=tempfile.gettempdir(),
+                token_filename='edf_bill_fetcher_o365_token.txt'
+            )
+            account = Account(
+                credentials=(DEFAULT_M365_CLIENT_ID, None),
+                protocol=MSGraphProtocol(),
+                tenant_id=DEFAULT_M365_TENANT,
+                token_backend=token_backend,
+                auth_flow_type='authorization'
+            )
+            ok = account.authenticate(scopes=['basic', 'message_all'])
+            if ok:
+                self.graph_auth = {
+                    'tenant_id': DEFAULT_M365_TENANT,
+                    'client_id': DEFAULT_M365_CLIENT_ID,
+                    'token_path': tempfile.gettempdir(),
+                    'token_file': 'edf_bill_fetcher_o365_token.txt'
+                }
+                self.m365_login_state.set('Logged in ✅')
+                self.show_message("info", "M365 Graph", "Microsoft 365 login successful.")
+            else:
+                self.m365_login_state.set('Login failed')
+                self.show_message("warning", "M365 Graph", "Login failed. Please retry.")
+        except Exception as e:
+            self.m365_login_state.set('Login failed')
+            self.show_message("error", "M365 Graph", f"Login error: {e}")
+
     def set_status(self, text):
-        self.status.set(text)
-        self.root.update_idletasks()
+        if threading.current_thread() is threading.main_thread():
+            self.status.set(text)
+            self.root.update_idletasks()
+        else:
+            self.root.after(0, self.set_status, text)
+
+    def show_message(self, level, title, text):
+        def _show():
+            if level == "info":
+                messagebox.showinfo(title, text)
+            elif level == "warning":
+                messagebox.showwarning(title, text)
+            else:
+                messagebox.showerror(title, text)
+
+        if threading.current_thread() is threading.main_thread():
+            _show()
+        else:
+            self.root.after(0, _show)
+
+    def finish_run(self):
+        self.pb.stop()
+        self.run_btn.config(state="normal")
+        self.set_status("Ready.")
+        gc.collect()
 
     def start_thread(self):
-        if not self.pst_path.get() and not self.pdf_dir.get():
-            messagebox.showerror("Error", "Please select a PST file or PDF folder.")
+        has_file_sources = bool(self.pst_path.get().strip() or self.pdf_dir.get().strip())
+        has_graph = self.use_graph.get() and bool(self.graph_auth)
+        if not has_file_sources and not has_graph:
+            messagebox.showerror("Error", "Please select a PST/OST file, PDF folder, or enable Graph API and complete Login to Microsoft 365.")
             return
         self.run_btn.config(state="disabled")
         self.pb.start()
@@ -1291,14 +1506,24 @@ class App:
         config = {
             "use_anchors":    self.use_anchors.get(),
             "use_large":      self.use_large.get(),
-            "use_readings":   self.use_readings.get(),
+            "use_reading_classification": self.use_reading_classification.get(),
+            "use_pdf_fields": self.use_pdf_fields.get(),
             "use_acc_filter": self.use_acc_filt.get(),
             "acc_num":        self.acc_num.get(),
             "min_amount":     self.min_amount.get(),
+            "analysis_min":   self.analysis_min.get(),
+            "report_account_ref": self.report_account_ref.get().strip(),
             "filter_below":   self.filter_below.get(),
             "save_filtered":  self.save_filtered.get(),
             "use_dedup":      self.use_dedup.get(),
-            "save_dups":      self.save_dups.get()
+            "save_dups":      self.save_dups.get(),
+            "use_graph":      self.use_graph.get(),
+            "graph_tenant_id": (self.graph_auth or {}).get("tenant_id"),
+            "graph_client_id": (self.graph_auth or {}).get("client_id"),
+            "graph_token_path": (self.graph_auth or {}).get("token_path"),
+            "graph_token_file": (self.graph_auth or {}).get("token_file"),
+            "graph_mailbox":  self.graph_mailbox.get().strip(),
+            "graph_folder":   (self.graph_folder.get().strip() or "Inbox")
         }
 
         engine = EvidenceEngine(config, self.set_status)
@@ -1307,10 +1532,21 @@ class App:
             pst_path = self.pst_path.get().strip()
             if pst_path and os.path.exists(pst_path):
                 clean_path = os.path.abspath(os.path.normpath(pst_path))
-                pst = pypff.file()
-                pst.open(clean_path)
-                engine.crawl_pst(pst.get_root_folder())
-                pst.close()
+                pff_file = pypff.file()
+                pff_file.open(clean_path)
+                engine.crawl_pst(pff_file.get_root_folder())
+                pff_file.close()
+
+            if config["use_graph"] and config["graph_tenant_id"] and config["graph_client_id"]:
+                self.set_status("Connecting to Microsoft 365 Graph…")
+                engine.crawl_m365_graph_mailbox(
+                    config["graph_tenant_id"],
+                    config["graph_client_id"],
+                    mailbox=(config["graph_mailbox"] or None),
+                    folder=config["graph_folder"],
+                    token_path=config.get("graph_token_path"),
+                    token_file=config.get("graph_token_file")
+                )
 
             pdf_path = self.pdf_dir.get().strip()
             if pdf_path and os.path.exists(pdf_path):
@@ -1318,8 +1554,11 @@ class App:
 
             if engine.records:
                 self.set_status("Writing Excel report…")
-                save_dir = os.path.dirname(pst_path) if pst_path else pdf_path
-                out_path = os.path.join(save_dir, "EDF_Dispute_Evidence.xlsx")
+                save_dir = (os.path.dirname(pst_path) if pst_path else (pdf_path if pdf_path else os.getcwd()))
+                out_name = self.output_name.get().strip() or "EDF_Dispute_Evidence.xlsx"
+                if not out_name.lower().endswith(".xlsx"):
+                    out_name += ".xlsx"
+                out_path = os.path.join(save_dir, out_name)
                 export_to_excel(engine.records, out_path, engine.error_log, config,
                                 filtered=engine.filtered_records)
 
@@ -1332,20 +1571,17 @@ class App:
                 if engine.error_log:
                     summary += f"\n  Parse errors:     {len(engine.error_log)}  (see 'Parse Errors' tab)"
                 summary += f"\n\nSaved to:\n{out_path}"
-                messagebox.showinfo("Success", summary)
+                self.show_message("info", "Success", summary)
             else:
-                messagebox.showwarning("No Data",
+                self.show_message("warning", "No Data",
                     "No billing amounts found.\n\nTry unchecking the Account Filter.")
 
         except Exception:
-            messagebox.showerror("System Error",
+            self.show_message("error", "System Error",
                 f"An error occurred:\n\n{traceback.format_exc()}\n\n"
-                "Ensure Outlook is closed and paths are correct.")
+                "Ensure Outlook is closed for OST/PST access, paths are correct, and Graph app credentials/permissions are valid.")
         finally:
-            self.pb.stop()
-            self.run_btn.config(state="normal")
-            self.set_status("Ready.")
-            gc.collect()
+            self.root.after(0, self.finish_run)
 
 
 if __name__ == "__main__":
