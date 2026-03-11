@@ -7,7 +7,6 @@ import re
 import os
 import gc
 import threading
-import hashlib
 import pdfplumber
 import tempfile
 import traceback
@@ -85,7 +84,6 @@ class EvidenceEngine:
         self.pdf_count        = 0
         self.email_count      = 0
         self.error_log        = []
-        self.seen_pdf_hashes  = set()
 
     def log_error(self, context, err):
         self.error_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] {context} — {err}")
@@ -139,23 +137,12 @@ class EvidenceEngine:
         if not found_amt:
             return
 
-        # Prefer parsed bill date (for PDFs) before any early-return filtering so
-        # filtered audit rows still carry the most accurate statement date.
-        date_to_use = fallback_date
-        if "PDF" in source_type:
-            date_m = re.search(
-                r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s\w+\s\d{4})",
-                clean_text, re.IGNORECASE
-            )
-            if date_m:
-                date_to_use = parse_to_display_date(date_m.group(1))
-
         # Post-extraction filter: discard records below minimum threshold.
         # Also retain an audit trail so users can review filtered-out items.
         if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
             self.filtered_records.append({
                 "Source": source_type,
-                "Date": date_to_use,
+                "Date": fallback_date,
                 "Amount (£)": found_amt,
                 "Details": detail[:60],
                 "Logic Used": strategy,
@@ -173,6 +160,15 @@ class EvidenceEngine:
 
         # Deep PDF fields
         units_used = standing_charge = inv_num = "N/A"
+        date_to_use = fallback_date
+
+        if "PDF" in source_type:
+            date_m = re.search(
+                r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s\w+\s\d{4})",
+                clean_text, re.IGNORECASE
+            )
+            if date_m:
+                date_to_use = parse_to_display_date(date_m.group(1))
 
         if self.config.get("use_pdf_fields", True):
             u_m  = re.search(r'([\d,]+)\s*kWh',                           clean_text, re.IGNORECASE)
@@ -201,12 +197,6 @@ class EvidenceEngine:
 
     def process_pdf_file(self, path, source_label, detail_label, fallback_date):
         try:
-            with open(path, 'rb') as fh:
-                pdf_hash = hashlib.sha1(fh.read()).hexdigest()
-            if pdf_hash in self.seen_pdf_hashes:
-                return
-            self.seen_pdf_hashes.add(pdf_hash)
-
             with pdfplumber.open(path) as pdf:
                 pdf_text = " ".join([p.extract_text() or "" for p in pdf.pages])
                 self.process_text(pdf_text, source_label, detail_label, fallback_date)
@@ -340,19 +330,12 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                 c.number_format = '0.0%'
                 c.alignment = Alignment(horizontal='right', vertical='top')
             else:
-                excel_val = val
-                if c_idx in (2, 3, 4):
-                    dt = parse_to_sort_date(val)
-                    if not pd.isna(dt):
-                        excel_val = dt.to_pydatetime()
-                c = ws.cell(row=r_idx, column=c_idx, value=excel_val)
+                c = ws.cell(row=r_idx, column=c_idx, value=val)
                 if c_idx == 6 and isinstance(val, (int, float)):
                     c.number_format = '£#,##0.00'
                 if c_idx == 7 and isinstance(val, (int, float)):
                     c.number_format = '0.0%'
                     c.alignment = Alignment(horizontal='right', vertical='top')
-                if c_idx in (2, 3, 4) and hasattr(excel_val, 'year'):
-                    c.number_format = 'dd/mm/yyyy'
             c.font   = Font(name="Calibri", size=10)
             c.fill   = row_fill if not is_duplicate else PatternFill("solid", start_color=DUP_GREY)
             c.border = CELL_BORDER
@@ -372,9 +355,9 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             c13.fill   = PatternFill("solid", start_color=JUMP_RED)
 
         # Hidden helper date serial (col 14 / N) for formula-driven summaries/charts.
-        # Mirrors the real Excel Date serial so downstream summary formulas
-        # remain robust and locale-independent.
-        c14 = ws.cell(row=r_idx, column=14, value=f'=IF(ISNUMBER(B{r_idx}),B{r_idx},"")')
+        # Uses DATEVALUE from visible Date column so downstream tabs recalculate
+        # if users prune/edit rows.
+        c14 = ws.cell(row=r_idx, column=14, value=f'=IFERROR(DATEVALUE(B{r_idx}),"")')
         c14.border = CELL_BORDER
         c14.number_format = 'yyyy-mm-dd'
 
@@ -610,10 +593,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df_an = df.copy()
     df_an['_dt'] = pd.to_datetime(df_an['Date'], dayfirst=True, format='mixed', errors='coerce')
     df_an = df_an.sort_values('_dt').reset_index(drop=True)
-    analysis_min = float(config.get("analysis_min", 5000.0))
-    report_account_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
-
-    dfc   = df_an[df_an['Amount (£)'] >= analysis_min].copy().reset_index(drop=True)
+    dfc   = df_an[df_an['Amount (£)'] >= 5000].copy().reset_index(drop=True)
     dfc['year']  = dfc['_dt'].dt.year
     dfc['month'] = dfc['_dt'].dt.month
 
@@ -676,7 +656,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # and Period Charges col F, so they recalculate if rows are edited or deleted.
 
     r = 2;  _section_hdr(ws_ks, r, 'ACCOUNT OVERVIEW')
-    r = 3;  ks_row(r, 'Account reference', report_account_ref, alt=True)
+    r = 3;  ks_row(r, 'Account reference', '671078701920', alt=True)
     r = 4;  ks_row(r, 'First bill on record',
                    "='Balance Trend'!A2",
                    note='Auto-reads from Balance Trend sheet')
@@ -1205,9 +1185,6 @@ class App:
         self.use_dedup    = tk.BooleanVar(value=True)
         self.save_dups    = tk.BooleanVar(value=True)
         self.min_amount   = tk.DoubleVar(value=1000.0)
-        self.analysis_min = tk.DoubleVar(value=5000.0)
-        self.output_name  = tk.StringVar(value="EDF_Dispute_Evidence.xlsx")
-        self.report_account_ref = tk.StringVar(value="671078701920")
 
         self.build_ui()
 
@@ -1267,18 +1244,6 @@ class App:
                                   variable=self.filter_below, bg=EDF_OFFWHITE)
         chk_filt.pack(side=tk.LEFT)
         ttk.Entry(r4, textvariable=self.min_amount, width=8).pack(side=tk.LEFT, padx=5)
-
-        r4c = ttk.Frame(s2); r4c.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(r4c, text="Analysis threshold £ (for advanced tabs):", width=36).pack(side=tk.LEFT)
-        ttk.Entry(r4c, textvariable=self.analysis_min, width=8).pack(side=tk.LEFT, padx=5)
-
-        r4d = ttk.Frame(s2); r4d.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(r4d, text="Report account reference:", width=36).pack(side=tk.LEFT)
-        ttk.Entry(r4d, textvariable=self.report_account_ref, width=20).pack(side=tk.LEFT, padx=5)
-
-        r4e = ttk.Frame(s2); r4e.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(r4e, text="Output filename:", width=36).pack(side=tk.LEFT)
-        ttk.Entry(r4e, textvariable=self.output_name, width=28).pack(side=tk.LEFT, padx=5)
 
         r4b = ttk.Frame(s2); r4b.pack(fill=tk.X)
         chk_save_filt = tk.Checkbutton(r4b,
@@ -1370,8 +1335,6 @@ class App:
             "use_acc_filter": self.use_acc_filt.get(),
             "acc_num":        self.acc_num.get(),
             "min_amount":     self.min_amount.get(),
-            "analysis_min":   self.analysis_min.get(),
-            "report_account_ref": self.report_account_ref.get().strip(),
             "filter_below":   self.filter_below.get(),
             "save_filtered":  self.save_filtered.get(),
             "use_dedup":      self.use_dedup.get(),
@@ -1396,10 +1359,7 @@ class App:
             if engine.records:
                 self.set_status("Writing Excel report…")
                 save_dir = os.path.dirname(pst_path) if pst_path else pdf_path
-                out_name = self.output_name.get().strip() or "EDF_Dispute_Evidence.xlsx"
-                if not out_name.lower().endswith(".xlsx"):
-                    out_name += ".xlsx"
-                out_path = os.path.join(save_dir, out_name)
+                out_path = os.path.join(save_dir, "EDF_Dispute_Evidence.xlsx")
                 export_to_excel(engine.records, out_path, engine.error_log, config,
                                 filtered=engine.filtered_records)
 
