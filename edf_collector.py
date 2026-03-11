@@ -1269,6 +1269,7 @@ class App:
         self.pst_path = tk.StringVar()
         self.pdf_dir  = tk.StringVar()
         self.use_graph = tk.BooleanVar(value=False)
+        self.graph_client_id = tk.StringVar(value=DEFAULT_M365_CLIENT_ID)
         self.graph_mailbox = tk.StringVar()
         self.graph_folder = tk.StringVar(value="Inbox")
         self.m365_login_state = tk.StringVar(value="Not logged in")
@@ -1324,6 +1325,10 @@ class App:
         r2c = ttk.Frame(s1); r2c.pack(fill=tk.X, pady=2)
         ttk.Label(r2c, text="Login status:", width=12).pack(side=tk.LEFT)
         ttk.Label(r2c, textvariable=self.m365_login_state, foreground=EDF_NAVY).pack(side=tk.LEFT)
+
+        r2cid = ttk.Frame(s1); r2cid.pack(fill=tk.X, pady=2)
+        ttk.Label(r2cid, text="Client ID:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(r2cid, textvariable=self.graph_client_id).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
         r2f = ttk.Frame(s1); r2f.pack(fill=tk.X, pady=2)
         ttk.Label(r2f, text="Mailbox:", width=12).pack(side=tk.LEFT)
@@ -1452,10 +1457,11 @@ class App:
             return
 
         try:
-            if not DEFAULT_M365_CLIENT_ID:
+            client_id = (self.graph_client_id.get().strip() or DEFAULT_M365_CLIENT_ID)
+            if not client_id:
                 self.m365_login_state.set('Missing Client ID')
                 self.show_message("error", "M365 Graph",
-                    "Missing Microsoft Graph Client ID.\n\nSet environment variable EDF_M365_CLIENT_ID to your app registration Client ID, then retry Login.")
+                    "Missing Microsoft Graph Client ID.\n\nPaste your app registration Client ID into the Client ID field (or set EDF_M365_CLIENT_ID), then retry Login.")
                 return
 
             token_backend = FileSystemTokenBackend(
@@ -1463,7 +1469,7 @@ class App:
                 token_filename=(DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_o365_token.txt')
             )
             account = Account(
-                credentials=(DEFAULT_M365_CLIENT_ID, None),
+                credentials=(client_id, None),
                 protocol=MSGraphProtocol(),
                 tenant_id=DEFAULT_M365_TENANT,
                 token_backend=token_backend,
@@ -1473,7 +1479,7 @@ class App:
             if ok:
                 self.graph_auth = {
                     'tenant_id': DEFAULT_M365_TENANT,
-                    'client_id': DEFAULT_M365_CLIENT_ID,
+                    'client_id': client_id,
                     'token_path': tempfile.gettempdir(),
                     'token_file': (DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_o365_token.txt')
                 }
