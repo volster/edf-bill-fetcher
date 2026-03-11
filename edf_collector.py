@@ -7,6 +7,7 @@ import re
 import os
 import gc
 import threading
+import hashlib
 import pdfplumber
 import tempfile
 import traceback
@@ -84,6 +85,7 @@ class EvidenceEngine:
         self.pdf_count        = 0
         self.email_count      = 0
         self.error_log        = []
+        self.seen_pdf_hashes  = set()
 
     def log_error(self, context, err):
         self.error_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] {context} — {err}")
@@ -137,12 +139,23 @@ class EvidenceEngine:
         if not found_amt:
             return
 
+        # Prefer parsed bill date (for PDFs) before any early-return filtering so
+        # filtered audit rows still carry the most accurate statement date.
+        date_to_use = fallback_date
+        if "PDF" in source_type:
+            date_m = re.search(
+                r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s\w+\s\d{4})",
+                clean_text, re.IGNORECASE
+            )
+            if date_m:
+                date_to_use = parse_to_display_date(date_m.group(1))
+
         # Post-extraction filter: discard records below minimum threshold.
         # Also retain an audit trail so users can review filtered-out items.
         if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
             self.filtered_records.append({
                 "Source": source_type,
-                "Date": fallback_date,
+                "Date": date_to_use,
                 "Amount (£)": found_amt,
                 "Details": detail[:60],
                 "Logic Used": strategy,
@@ -160,15 +173,6 @@ class EvidenceEngine:
 
         # Deep PDF fields
         units_used = standing_charge = inv_num = "N/A"
-        date_to_use = fallback_date
-
-        if "PDF" in source_type:
-            date_m = re.search(
-                r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s\w+\s\d{4})",
-                clean_text, re.IGNORECASE
-            )
-            if date_m:
-                date_to_use = parse_to_display_date(date_m.group(1))
 
         if self.config.get("use_pdf_fields", True):
             u_m  = re.search(r'([\d,]+)\s*kWh',                           clean_text, re.IGNORECASE)
@@ -197,6 +201,12 @@ class EvidenceEngine:
 
     def process_pdf_file(self, path, source_label, detail_label, fallback_date):
         try:
+            with open(path, 'rb') as fh:
+                pdf_hash = hashlib.sha1(fh.read()).hexdigest()
+            if pdf_hash in self.seen_pdf_hashes:
+                return
+            self.seen_pdf_hashes.add(pdf_hash)
+
             with pdfplumber.open(path) as pdf:
                 pdf_text = " ".join([p.extract_text() or "" for p in pdf.pages])
                 self.process_text(pdf_text, source_label, detail_label, fallback_date)
@@ -330,12 +340,19 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                 c.number_format = '0.0%'
                 c.alignment = Alignment(horizontal='right', vertical='top')
             else:
-                c = ws.cell(row=r_idx, column=c_idx, value=val)
+                excel_val = val
+                if c_idx in (2, 3, 4):
+                    dt = parse_to_sort_date(val)
+                    if not pd.isna(dt):
+                        excel_val = dt.to_pydatetime()
+                c = ws.cell(row=r_idx, column=c_idx, value=excel_val)
                 if c_idx == 6 and isinstance(val, (int, float)):
                     c.number_format = '£#,##0.00'
                 if c_idx == 7 and isinstance(val, (int, float)):
                     c.number_format = '0.0%'
                     c.alignment = Alignment(horizontal='right', vertical='top')
+                if c_idx in (2, 3, 4) and hasattr(excel_val, 'year'):
+                    c.number_format = 'dd/mm/yyyy'
             c.font   = Font(name="Calibri", size=10)
             c.fill   = row_fill if not is_duplicate else PatternFill("solid", start_color=DUP_GREY)
             c.border = CELL_BORDER
@@ -355,9 +372,9 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             c13.fill   = PatternFill("solid", start_color=JUMP_RED)
 
         # Hidden helper date serial (col 14 / N) for formula-driven summaries/charts.
-        # Uses DATEVALUE from visible Date column so downstream tabs recalculate
-        # if users prune/edit rows.
-        c14 = ws.cell(row=r_idx, column=14, value=f'=IFERROR(DATEVALUE(B{r_idx}),"")')
+        # Mirrors the real Excel Date serial so downstream summary formulas
+        # remain robust and locale-independent.
+        c14 = ws.cell(row=r_idx, column=14, value=f'=IF(ISNUMBER(B{r_idx}),B{r_idx},"")')
         c14.border = CELL_BORDER
         c14.number_format = 'yyyy-mm-dd'
 
