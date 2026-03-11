@@ -22,6 +22,9 @@ from openpyxl.chart import BarChart, LineChart, Reference
 EDF_ORANGE, EDF_NAVY, EDF_OFFWHITE = "#FE5716", "#10367A", "#F5F5F5"
 EST_YELLOW, JUMP_RED, DUP_GREY = "FFFF99", "FF9999", "E0E0E0"
 
+DEFAULT_M365_CLIENT_ID = os.environ.get("EDF_M365_CLIENT_ID", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
+DEFAULT_M365_TENANT = os.environ.get("EDF_M365_TENANT", "common")
+
 # --- Extraction Patterns ---
 AMOUNT_PATTERNS = [
     r"balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)",
@@ -286,7 +289,7 @@ class EvidenceEngine:
             self.crawl_pst(folder.get_sub_folder(j))
 
 
-    def crawl_m365_graph_mailbox(self, tenant_id, client_id, client_secret, mailbox=None, folder='Inbox'):
+    def crawl_m365_graph_mailbox(self, tenant_id, client_id, mailbox=None, folder='Inbox', token_path=None, token_file=None):
         """Uses python-o365 with Microsoft Graph app credentials flow."""
         try:
             try:
@@ -296,10 +299,10 @@ class EvidenceEngine:
                 return
 
             token_backend = FileSystemTokenBackend(
-                token_path=tempfile.gettempdir(),
-                token_filename='edf_bill_fetcher_o365_token.txt'
+                token_path=(token_path or tempfile.gettempdir()),
+                token_filename=(token_file or 'edf_bill_fetcher_o365_token.txt')
             )
-            creds = (client_id, client_secret)
+            creds = (client_id, None)
             account = Account(
                 credentials=creds,
                 protocol=MSGraphProtocol(),
@@ -1265,11 +1268,10 @@ class App:
         self.pst_path = tk.StringVar()
         self.pdf_dir  = tk.StringVar()
         self.use_graph = tk.BooleanVar(value=False)
-        self.graph_tenant_id = tk.StringVar()
-        self.graph_client_id = tk.StringVar()
-        self.graph_client_secret = tk.StringVar()
         self.graph_mailbox = tk.StringVar()
         self.graph_folder = tk.StringVar(value="Inbox")
+        self.m365_login_state = tk.StringVar(value="Not logged in")
+        self.graph_auth = None
         self.acc_num  = tk.StringVar(value="671078701920")
         self.status   = tk.StringVar(value="Ready.")
 
@@ -1315,18 +1317,11 @@ class App:
 
         r2b = ttk.Frame(s1); r2b.pack(fill=tk.X, pady=2)
         tk.Checkbutton(r2b, text="Connect to Microsoft 365 (Graph API)", variable=self.use_graph, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
+        ttk.Button(r2b, text="Login to Microsoft 365", command=self.login_m365_graph).pack(side=tk.LEFT, padx=8)
 
         r2c = ttk.Frame(s1); r2c.pack(fill=tk.X, pady=2)
-        ttk.Label(r2c, text="Tenant ID:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(r2c, textvariable=self.graph_tenant_id).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-
-        r2d = ttk.Frame(s1); r2d.pack(fill=tk.X, pady=2)
-        ttk.Label(r2d, text="Client ID:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(r2d, textvariable=self.graph_client_id).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-
-        r2e = ttk.Frame(s1); r2e.pack(fill=tk.X, pady=2)
-        ttk.Label(r2e, text="Client Secret:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(r2e, textvariable=self.graph_client_secret, show="*").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Label(r2c, text="Login status:", width=12).pack(side=tk.LEFT)
+        ttk.Label(r2c, textvariable=self.m365_login_state, foreground=EDF_NAVY).pack(side=tk.LEFT)
 
         r2f = ttk.Frame(s1); r2f.pack(fill=tk.X, pady=2)
         ttk.Label(r2f, text="Mailbox:", width=12).pack(side=tk.LEFT)
@@ -1434,6 +1429,42 @@ class App:
         if path:
             self.pdf_dir.set(path)
 
+    def login_m365_graph(self):
+        try:
+            from O365 import Account, MSGraphProtocol, FileSystemTokenBackend
+        except Exception as e:
+            self.show_message("error", "M365 Graph", f"O365 module unavailable: {e}")
+            return
+
+        try:
+            token_backend = FileSystemTokenBackend(
+                token_path=tempfile.gettempdir(),
+                token_filename='edf_bill_fetcher_o365_token.txt'
+            )
+            account = Account(
+                credentials=(DEFAULT_M365_CLIENT_ID, None),
+                protocol=MSGraphProtocol(),
+                tenant_id=DEFAULT_M365_TENANT,
+                token_backend=token_backend,
+                auth_flow_type='authorization'
+            )
+            ok = account.authenticate(scopes=['basic', 'message_all'])
+            if ok:
+                self.graph_auth = {
+                    'tenant_id': DEFAULT_M365_TENANT,
+                    'client_id': DEFAULT_M365_CLIENT_ID,
+                    'token_path': tempfile.gettempdir(),
+                    'token_file': 'edf_bill_fetcher_o365_token.txt'
+                }
+                self.m365_login_state.set('Logged in ✅')
+                self.show_message("info", "M365 Graph", "Microsoft 365 login successful.")
+            else:
+                self.m365_login_state.set('Login failed')
+                self.show_message("warning", "M365 Graph", "Login failed. Please retry.")
+        except Exception as e:
+            self.m365_login_state.set('Login failed')
+            self.show_message("error", "M365 Graph", f"Login error: {e}")
+
     def set_status(self, text):
         if threading.current_thread() is threading.main_thread():
             self.status.set(text)
@@ -1463,9 +1494,9 @@ class App:
 
     def start_thread(self):
         has_file_sources = bool(self.pst_path.get().strip() or self.pdf_dir.get().strip())
-        has_graph = self.use_graph.get() and self.graph_tenant_id.get().strip() and self.graph_client_id.get().strip() and self.graph_client_secret.get().strip()
+        has_graph = self.use_graph.get() and bool(self.graph_auth)
         if not has_file_sources and not has_graph:
-            messagebox.showerror("Error", "Please select a PST/OST file, PDF folder, or enable M365 Graph API with tenant/client credentials.")
+            messagebox.showerror("Error", "Please select a PST/OST file, PDF folder, or enable Graph API and complete Login to Microsoft 365.")
             return
         self.run_btn.config(state="disabled")
         self.pb.start()
@@ -1487,9 +1518,10 @@ class App:
             "use_dedup":      self.use_dedup.get(),
             "save_dups":      self.save_dups.get(),
             "use_graph":      self.use_graph.get(),
-            "graph_tenant_id": self.graph_tenant_id.get().strip(),
-            "graph_client_id": self.graph_client_id.get().strip(),
-            "graph_client_secret": self.graph_client_secret.get(),
+            "graph_tenant_id": (self.graph_auth or {}).get("tenant_id"),
+            "graph_client_id": (self.graph_auth or {}).get("client_id"),
+            "graph_token_path": (self.graph_auth or {}).get("token_path"),
+            "graph_token_file": (self.graph_auth or {}).get("token_file"),
             "graph_mailbox":  self.graph_mailbox.get().strip(),
             "graph_folder":   (self.graph_folder.get().strip() or "Inbox")
         }
@@ -1505,14 +1537,15 @@ class App:
                 engine.crawl_pst(pff_file.get_root_folder())
                 pff_file.close()
 
-            if config["use_graph"] and config["graph_tenant_id"] and config["graph_client_id"] and config["graph_client_secret"]:
+            if config["use_graph"] and config["graph_tenant_id"] and config["graph_client_id"]:
                 self.set_status("Connecting to Microsoft 365 Graph…")
                 engine.crawl_m365_graph_mailbox(
                     config["graph_tenant_id"],
                     config["graph_client_id"],
-                    config["graph_client_secret"],
                     mailbox=(config["graph_mailbox"] or None),
-                    folder=config["graph_folder"]
+                    folder=config["graph_folder"],
+                    token_path=config.get("graph_token_path"),
+                    token_file=config.get("graph_token_file")
                 )
 
             pdf_path = self.pdf_dir.get().strip()
