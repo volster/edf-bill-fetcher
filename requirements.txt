@@ -1,0 +1,7 @@
+libpff-python
+pandas
+pdfplumber
+beautifulsoup4
+openpyxl
+numpy
+pyinstaller
