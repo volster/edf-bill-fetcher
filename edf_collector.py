@@ -7,6 +7,7 @@ import re
 import os
 import gc
 import threading
+import hashlib
 import pdfplumber
 import tempfile
 import traceback
@@ -84,6 +85,7 @@ class EvidenceEngine:
         self.pdf_count        = 0
         self.email_count      = 0
         self.error_log        = []
+        self.seen_pdf_hashes  = set()
 
     def log_error(self, context, err):
         self.error_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] {context} — {err}")
@@ -137,12 +139,23 @@ class EvidenceEngine:
         if not found_amt:
             return
 
+        # Prefer parsed bill date (for PDFs) before any early-return filtering so
+        # filtered audit rows still carry the most accurate statement date.
+        date_to_use = fallback_date
+        if "PDF" in source_type:
+            date_m = re.search(
+                r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s\w+\s\d{4})",
+                clean_text, re.IGNORECASE
+            )
+            if date_m:
+                date_to_use = parse_to_display_date(date_m.group(1))
+
         # Post-extraction filter: discard records below minimum threshold.
         # Also retain an audit trail so users can review filtered-out items.
         if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
             self.filtered_records.append({
                 "Source": source_type,
-                "Date": fallback_date,
+                "Date": date_to_use,
                 "Amount (£)": found_amt,
                 "Details": detail[:60],
                 "Logic Used": strategy,
@@ -160,15 +173,6 @@ class EvidenceEngine:
 
         # Deep PDF fields
         units_used = standing_charge = inv_num = "N/A"
-        date_to_use = fallback_date
-
-        if "PDF" in source_type:
-            date_m = re.search(
-                r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s\w+\s\d{4})",
-                clean_text, re.IGNORECASE
-            )
-            if date_m:
-                date_to_use = parse_to_display_date(date_m.group(1))
 
         if self.config.get("use_pdf_fields", True):
             u_m  = re.search(r'([\d,]+)\s*kWh',                           clean_text, re.IGNORECASE)
@@ -197,6 +201,12 @@ class EvidenceEngine:
 
     def process_pdf_file(self, path, source_label, detail_label, fallback_date):
         try:
+            with open(path, 'rb') as fh:
+                pdf_hash = hashlib.sha1(fh.read()).hexdigest()
+            if pdf_hash in self.seen_pdf_hashes:
+                return
+            self.seen_pdf_hashes.add(pdf_hash)
+
             with pdfplumber.open(path) as pdf:
                 pdf_text = " ".join([p.extract_text() or "" for p in pdf.pages])
                 self.process_text(pdf_text, source_label, detail_label, fallback_date)
@@ -275,6 +285,78 @@ class EvidenceEngine:
         for j in range(folder.get_number_of_sub_folders()):
             self.crawl_pst(folder.get_sub_folder(j))
 
+
+    def crawl_m365_graph_mailbox(self, tenant_id, client_id, client_secret, mailbox=None, folder='Inbox'):
+        """Uses python-o365 with Microsoft Graph app credentials flow."""
+        try:
+            try:
+                from O365 import Account, MSGraphProtocol, FileSystemTokenBackend
+            except Exception as e:
+                self.log_error('M365 Graph', f"O365 module unavailable: {e}")
+                return
+
+            token_backend = FileSystemTokenBackend(
+                token_path=tempfile.gettempdir(),
+                token_filename='edf_bill_fetcher_o365_token.txt'
+            )
+            creds = (client_id, client_secret)
+            account = Account(
+                credentials=creds,
+                protocol=MSGraphProtocol(),
+                tenant_id=tenant_id,
+                token_backend=token_backend,
+                auth_flow_type='credentials'
+            )
+            if not account.authenticate(scopes=['https://graph.microsoft.com/.default']):
+                self.log_error('M365 Graph', 'Authentication failed (check app permissions and admin consent)')
+                return
+
+            mailbox_obj = account.mailbox(resource=mailbox) if mailbox else account.mailbox()
+            folder_obj = mailbox_obj.get_folder(folder_name=folder) or mailbox_obj.inbox_folder()
+
+            for msg in folder_obj.get_messages(limit=None, download_attachments=True):
+                try:
+                    subj = str(msg.subject or '')
+                    date_str = 'Unknown'
+                    if msg.received:
+                        date_str = parse_to_display_date(msg.received.strftime('%Y-%m-%d'))
+
+                    if any(k in subj.upper() for k in ['EDF', 'BILL', 'STATEMENT', 'ACCOUNT', 'INVOICE']):
+                        self.email_count += 1
+                        body_text = ''
+                        try:
+                            body = msg.get_body_text() or ''
+                            body_text = BeautifulSoup(body, 'html.parser').get_text(separator=' ')
+                        except Exception:
+                            body_text = str(msg.body or '')
+                        if body_text.strip():
+                            self.process_text(body_text, 'Email Body (M365 Graph)', subj, date_str)
+
+                    for att in (msg.attachments or []):
+                        try:
+                            if ((hasattr(att, 'mime_type') and att.mime_type == 'application/pdf') or str(getattr(att, 'name', '')).lower().endswith('.pdf')):
+                                content = getattr(att, 'content', None)
+                                if not content:
+                                    continue
+                                self.pdf_count += 1
+                                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                                    tmp.write(content)
+                                    tmp_path = tmp.name
+                                try:
+                                    self.process_pdf_file(tmp_path, 'M365 Graph PDF Attachment', getattr(att, 'name', '') or f'Attachment_{self.pdf_count}.pdf', date_str)
+                                finally:
+                                    if os.path.exists(tmp_path):
+                                        os.remove(tmp_path)
+                        except Exception as e:
+                            self.log_error('M365 Graph attachment', str(e))
+
+                except Exception as e:
+                    self.log_error('M365 Graph message', str(e))
+
+            self.update_ui(f"Scanned {self.email_count} emails, {self.pdf_count} total PDFs…")
+        except Exception as e:
+            self.log_error('M365 Graph', str(e))
+
     def crawl_local_pdfs(self, path):
         if not path or not os.path.exists(path):
             return
@@ -330,7 +412,12 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                 c.number_format = '0.0%'
                 c.alignment = Alignment(horizontal='right', vertical='top')
             else:
-                c = ws.cell(row=r_idx, column=c_idx, value=val)
+                excel_val = val
+                if c_idx in (2, 3, 4):
+                    dt = parse_to_sort_date(val)
+                    if not pd.isna(dt):
+                        excel_val = dt.to_pydatetime()
+                c = ws.cell(row=r_idx, column=c_idx, value=excel_val)
                 if c_idx == 6 and isinstance(val, (int, float)):
                     c.number_format = '£#,##0.00'
                 if c_idx == 7 and isinstance(val, (int, float)):
@@ -360,9 +447,6 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         # Mirrors the real Excel Date serial so downstream summary formulas
         # remain robust and locale-independent.
         c14 = ws.cell(row=r_idx, column=14, value=f'=IF(ISNUMBER(B{r_idx}),B{r_idx},"")')
-        # Uses DATEVALUE from visible Date column so downstream tabs recalculate
-        # if users prune/edit rows.
-        c14 = ws.cell(row=r_idx, column=14, value=f'=IFERROR(DATEVALUE(B{r_idx}),"")')
         c14.border = CELL_BORDER
         c14.number_format = 'yyyy-mm-dd'
 
@@ -602,7 +686,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     report_account_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
 
     dfc   = df_an[df_an['Amount (£)'] >= analysis_min].copy().reset_index(drop=True)
-    dfc   = df_an[df_an['Amount (£)'] >= 5000].copy().reset_index(drop=True)
     dfc['year']  = dfc['_dt'].dt.year
     dfc['month'] = dfc['_dt'].dt.month
 
@@ -666,7 +749,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
 
     r = 2;  _section_hdr(ws_ks, r, 'ACCOUNT OVERVIEW')
     r = 3;  ks_row(r, 'Account reference', report_account_ref, alt=True)
-    r = 3;  ks_row(r, 'Account reference', '671078701920', alt=True)
     r = 4;  ks_row(r, 'First bill on record',
                    "='Balance Trend'!A2",
                    note='Auto-reads from Balance Trend sheet')
@@ -1224,22 +1306,12 @@ class App:
         r1 = ttk.Frame(s1); r1.pack(fill=tk.X, pady=2)
         ttk.Label(r1, text="PST/OST File:", width=12).pack(side=tk.LEFT)
         ttk.Entry(r1, textvariable=self.pst_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(r1, text="Browse",
-                   command=lambda: self.pst_path.set(
-                       filedialog.askopenfilename(filetypes=[("Mail Stores", "*.pst *.ost"), ("PST", "*.pst"), ("OST", "*.ost")])
-        ttk.Label(r1, text="PST Export:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(r1, textvariable=self.pst_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(r1, text="Browse",
-                   command=lambda: self.pst_path.set(
-                       filedialog.askopenfilename(filetypes=[("PST", "*.pst")])
-                   )).pack(side=tk.LEFT)
+        ttk.Button(r1, text="Browse", command=self.pick_mailstore_file).pack(side=tk.LEFT)
 
         r2 = ttk.Frame(s1); r2.pack(fill=tk.X, pady=2)
         ttk.Label(r2, text="PDF Folder:", width=12).pack(side=tk.LEFT)
         ttk.Entry(r2, textvariable=self.pdf_dir).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(r2, text="Browse",
-                   command=lambda: self.pdf_dir.set(filedialog.askdirectory())
-                   ).pack(side=tk.LEFT)
+        ttk.Button(r2, text="Browse", command=self.pick_pdf_folder).pack(side=tk.LEFT)
 
         r2b = ttk.Frame(s1); r2b.pack(fill=tk.X, pady=2)
         tk.Checkbutton(r2b, text="Connect to Microsoft 365 (Graph API)", variable=self.use_graph, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
@@ -1350,6 +1422,18 @@ class App:
         )
         self.run_btn.pack(fill=tk.X, pady=10, ipady=8)
 
+    def pick_mailstore_file(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Mail Stores", "*.pst *.ost"), ("PST", "*.pst"), ("OST", "*.ost")]
+        )
+        if path:
+            self.pst_path.set(path)
+
+    def pick_pdf_folder(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.pdf_dir.set(path)
+
     def set_status(self, text):
         if threading.current_thread() is threading.main_thread():
             self.status.set(text)
@@ -1382,8 +1466,6 @@ class App:
         has_graph = self.use_graph.get() and self.graph_tenant_id.get().strip() and self.graph_client_id.get().strip() and self.graph_client_secret.get().strip()
         if not has_file_sources and not has_graph:
             messagebox.showerror("Error", "Please select a PST/OST file, PDF folder, or enable M365 Graph API with tenant/client credentials.")
-        if not self.pst_path.get() and not self.pdf_dir.get():
-            messagebox.showerror("Error", "Please select a PST file or PDF folder.")
             return
         self.run_btn.config(state="disabled")
         self.pb.start()
@@ -1410,10 +1492,6 @@ class App:
             "graph_client_secret": self.graph_client_secret.get(),
             "graph_mailbox":  self.graph_mailbox.get().strip(),
             "graph_folder":   (self.graph_folder.get().strip() or "Inbox")
-            "filter_below":   self.filter_below.get(),
-            "save_filtered":  self.save_filtered.get(),
-            "use_dedup":      self.use_dedup.get(),
-            "save_dups":      self.save_dups.get()
         }
 
         engine = EvidenceEngine(config, self.set_status)
@@ -1436,10 +1514,6 @@ class App:
                     mailbox=(config["graph_mailbox"] or None),
                     folder=config["graph_folder"]
                 )
-                pst = pypff.file()
-                pst.open(clean_path)
-                engine.crawl_pst(pst.get_root_folder())
-                pst.close()
 
             pdf_path = self.pdf_dir.get().strip()
             if pdf_path and os.path.exists(pdf_path):
@@ -1452,8 +1526,6 @@ class App:
                 if not out_name.lower().endswith(".xlsx"):
                     out_name += ".xlsx"
                 out_path = os.path.join(save_dir, out_name)
-                save_dir = os.path.dirname(pst_path) if pst_path else pdf_path
-                out_path = os.path.join(save_dir, "EDF_Dispute_Evidence.xlsx")
                 export_to_excel(engine.records, out_path, engine.error_log, config,
                                 filtered=engine.filtered_records)
 
@@ -1475,7 +1547,6 @@ class App:
             self.show_message("error", "System Error",
                 f"An error occurred:\n\n{traceback.format_exc()}\n\n"
                 "Ensure Outlook is closed for OST/PST access, paths are correct, and Graph app credentials/permissions are valid.")
-                "Ensure Outlook is closed and paths are correct.")
         finally:
             self.root.after(0, self.finish_run)
 
