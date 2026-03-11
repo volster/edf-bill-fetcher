@@ -78,12 +78,13 @@ def parse_to_sort_date(date_input):
 
 class EvidenceEngine:
     def __init__(self, config, update_ui_cb):
-        self.config      = config
-        self.records     = []
-        self.update_ui   = update_ui_cb
-        self.pdf_count   = 0
-        self.email_count = 0
-        self.error_log   = []
+        self.config           = config
+        self.records          = []
+        self.filtered_records = []   # records below min_amount threshold
+        self.update_ui        = update_ui_cb
+        self.pdf_count        = 0
+        self.email_count      = 0
+        self.error_log        = []
 
     def log_error(self, context, err):
         self.error_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] {context} — {err}")
@@ -142,7 +143,7 @@ class EvidenceEngine:
         #   "all"         — strip anything below threshold regardless of how it was found
         #   "anchor_only" — only strip low values found via Smart Context
         #   "large_only"  — only strip low values found via Large Amount Fallback
-        if self.config.get("filter_below", False) and found_amt < self.config["min_amount"]:
+        if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
             fs = self.config.get("filter_strategy", "all")
             if fs == "all":
                 return
@@ -369,11 +370,14 @@ def write_summary_sheet(ws, df):
     df['_sort'] = pd.to_datetime(df['Date'], dayfirst=True, format='mixed', errors='coerce')
     df['Year']  = df['_sort'].dt.year.astype('Int64')
 
+    def _bal_range(s):
+        return s.max() - s.min()
+
     yearly = (
         df.dropna(subset=['Year'])
           .groupby('Year', as_index=False)
           .agg(
-              Total_Billed=('Amount (£)', 'sum'),
+              Bal_Range   =('Amount (£)', _bal_range),
               Bill_Count  =('Amount (£)', 'count'),
               Average_Bill=('Amount (£)', 'mean'),
               Highest_Bill=('Amount (£)', 'max'),
@@ -382,8 +386,8 @@ def write_summary_sheet(ws, df):
           .sort_values('Year')
     )
 
-    headers = ["Year", "Total Billed (£)", "Number of Bills",
-               "Average Bill (£)", "Highest Bill (£)", "Lowest Bill (£)"]
+    headers = ["Year", "Balance Range (£)", "Records",
+               "Avg Balance (£)", "Peak Balance (£)", "Lowest Balance (£)"]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 1, col, h, bg="10367A")
     ws.row_dimensions[1].height = 28
@@ -411,8 +415,8 @@ def write_summary_sheet(ws, df):
     # Grand total row
     n = len(yearly) + 2
     totals = [
-        "TOTAL",
-        yearly['Total_Billed'].sum(),
+        "OVERALL",
+        yearly['Highest_Bill'].max() - yearly['Lowest_Bill'].min(),  # overall balance swing
         int(yearly['Bill_Count'].sum()),
         yearly['Average_Bill'].mean(),
         yearly['Highest_Bill'].max(),
@@ -439,7 +443,7 @@ def write_summary_sheet(ws, df):
     ws.freeze_panes = "A2"
 
 
-def export_to_excel(data, output_path, error_log, config):
+def export_to_excel(data, output_path, error_log, config, filtered=None):
     df = pd.DataFrame(data)
 
     # Sort chronologically
@@ -494,7 +498,26 @@ def export_to_excel(data, output_path, error_log, config):
         ws_dup = wb.create_sheet(title="Duplicate Entries")
         write_evidence_sheet(ws_dup, dup_df, is_duplicate=True)
 
-    # Tab 4: Parse errors (only created if there were errors)
+    # Tab 4: Filtered records (below minimum threshold)
+    if filtered and config.get("save_filtered", True):
+        ws_filt = wb.create_sheet(title="Filtered (Below Min)")
+        filt_headers = ["Source", "Date", "Amount (£)", "Details", "Logic Used", "Reason"]
+        for ci, h in enumerate(filt_headers, 1):
+            _hcell(ws_filt, 1, ci, h, bg="888888")
+        filt_df = pd.DataFrame(filtered).sort_values('Amount (£)', ascending=False)
+        for r_idx, frow in enumerate(filt_df.values, 2):
+            bg_hex = "F5F5F5" if r_idx % 2 == 0 else None
+            for c_idx, val in enumerate(frow, 1):
+                c = ws_filt.cell(row=r_idx, column=c_idx, value=val)
+                c.font   = Font(name="Calibri", size=10)
+                c.border = CELL_BORDER
+                if bg_hex: c.fill = PatternFill("solid", start_color=bg_hex)
+                if c_idx == 3: c.number_format = '£#,##0.00'
+        for col, w in zip(['A','B','C','D','E','F'], [18,13,14,38,18,28]):
+            ws_filt.column_dimensions[col].width = w
+        ws_filt.freeze_panes = "A2"
+
+    # Tab 5: Parse errors (only created if there were errors)
     if error_log:
         ws_err = wb.create_sheet(title="Parse Errors")
         _hcell(ws_err, 1, 1, "Time",    bg="888888")
@@ -1080,9 +1103,11 @@ class App:
         self.use_large    = tk.BooleanVar(value=True)
         self.use_readings = tk.BooleanVar(value=True)
         self.use_acc_filt = tk.BooleanVar(value=False)
+        self.filter_below  = tk.BooleanVar(value=True)
+        self.save_filtered = tk.BooleanVar(value=True)
         self.use_dedup    = tk.BooleanVar(value=True)
         self.save_dups    = tk.BooleanVar(value=True)
-        self.min_amount   = tk.DoubleVar(value=100.0)
+        self.min_amount   = tk.DoubleVar(value=1000.0)
 
         self.build_ui()
 
@@ -1134,9 +1159,22 @@ class App:
                        variable=self.use_acc_filt, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
         ttk.Entry(r3, textvariable=self.acc_num, width=15).pack(side=tk.LEFT, padx=5)
 
-        r4 = ttk.Frame(s2); r4.pack(fill=tk.X)
-        ttk.Label(r4, text="Minimum £ for 'Large Number' rule:").pack(side=tk.LEFT)
+        r4 = ttk.Frame(s2); r4.pack(fill=tk.X, pady=(4, 0))
+        chk_filt = tk.Checkbutton(r4, text="Filter ALL results below minimum £:",
+                                  variable=self.filter_below, bg=EDF_OFFWHITE)
+        chk_filt.pack(side=tk.LEFT)
         ttk.Entry(r4, textvariable=self.min_amount, width=8).pack(side=tk.LEFT, padx=5)
+
+        r4b = ttk.Frame(s2); r4b.pack(fill=tk.X)
+        chk_save_filt = tk.Checkbutton(r4b,
+            text="Save filtered-out records to a separate worksheet for review",
+            variable=self.save_filtered, bg=EDF_OFFWHITE)
+        chk_save_filt.pack(anchor=tk.W, padx=20)
+
+        def toggle_filt_save():
+            chk_save_filt.config(state="normal" if self.filter_below.get() else "disabled")
+        chk_filt.config(command=toggle_filt_save)
+        toggle_filt_save()  # set initial state
 
         # Section 3 — Deduplication
         s3 = ttk.LabelFrame(main, text=" 3. Deduplication ", padding=10)
@@ -1192,6 +1230,8 @@ class App:
             "use_acc_filter": self.use_acc_filt.get(),
             "acc_num":        self.acc_num.get(),
             "min_amount":     self.min_amount.get(),
+            "filter_below":   self.filter_below.get(),
+            "save_filtered":  self.save_filtered.get(),
             "use_dedup":      self.use_dedup.get(),
             "save_dups":      self.save_dups.get()
         }
@@ -1215,7 +1255,8 @@ class App:
                 self.set_status("Writing Excel report…")
                 save_dir = os.path.dirname(pst_path) if pst_path else pdf_path
                 out_path = os.path.join(save_dir, "EDF_Dispute_Evidence.xlsx")
-                export_to_excel(engine.records, out_path, engine.error_log, config)
+                export_to_excel(engine.records, out_path, engine.error_log, config,
+                                filtered=engine.filtered_records)
 
                 summary = (
                     f"Extraction complete.\n\n"
