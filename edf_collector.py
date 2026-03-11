@@ -22,9 +22,8 @@ from openpyxl.chart import BarChart, LineChart, Reference
 EDF_ORANGE, EDF_NAVY, EDF_OFFWHITE = "#FE5716", "#10367A", "#F5F5F5"
 EST_YELLOW, JUMP_RED, DUP_GREY = "FFFF99", "FF9999", "E0E0E0"
 
-DEFAULT_M365_CLIENT_ID = os.environ.get("EDF_M365_CLIENT_ID", "").strip()
-DEFAULT_M365_TENANT = os.environ.get("EDF_M365_TENANT", "common").strip()
-DEFAULT_M365_TOKEN_FILE = os.environ.get("EDF_M365_TOKEN_FILE", "edf_bill_fetcher_o365_token.txt").strip()
+DEFAULT_M365_CLIENT_ID = os.environ.get("EDF_M365_CLIENT_ID", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
+DEFAULT_M365_TENANT = os.environ.get("EDF_M365_TENANT", "common")
 
 # --- Extraction Patterns ---
 AMOUNT_PATTERNS = [
@@ -291,7 +290,7 @@ class EvidenceEngine:
 
 
     def crawl_m365_graph_mailbox(self, tenant_id, client_id, mailbox=None, folder='Inbox', token_path=None, token_file=None):
-        """Uses python-o365 with Graph token-backed mailbox access."""
+        """Uses python-o365 with Microsoft Graph app credentials flow."""
         try:
             try:
                 from O365 import Account, MSGraphProtocol, FileSystemTokenBackend
@@ -309,10 +308,10 @@ class EvidenceEngine:
                 protocol=MSGraphProtocol(),
                 tenant_id=tenant_id,
                 token_backend=token_backend,
-                auth_flow_type='authorization'
+                auth_flow_type='credentials'
             )
-            if not account.authenticate(scopes=['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft.com/User.Read', 'offline_access']):
-                self.log_error('M365 Graph', 'Authentication failed (check app registration permissions/consent)')
+            if not account.authenticate(scopes=['https://graph.microsoft.com/.default']):
+                self.log_error('M365 Graph', 'Authentication failed (check app permissions and admin consent)')
                 return
 
             mailbox_obj = account.mailbox(resource=mailbox) if mailbox else account.mailbox()
@@ -1319,7 +1318,6 @@ class App:
         r2b = ttk.Frame(s1); r2b.pack(fill=tk.X, pady=2)
         tk.Checkbutton(r2b, text="Connect to Microsoft 365 (Graph API)", variable=self.use_graph, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
         ttk.Button(r2b, text="Login to Microsoft 365", command=self.login_m365_graph).pack(side=tk.LEFT, padx=8)
-        ttk.Button(r2b, text="Clear cached login", command=self.clear_m365_login).pack(side=tk.LEFT, padx=4)
 
         r2c = ttk.Frame(s1); r2c.pack(fill=tk.X, pady=2)
         ttk.Label(r2c, text="Login status:", width=12).pack(side=tk.LEFT)
@@ -1431,19 +1429,6 @@ class App:
         if path:
             self.pdf_dir.set(path)
 
-    def clear_m365_login(self):
-        try:
-            token_path = tempfile.gettempdir()
-            token_file = DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_o365_token.txt'
-            token_fp = os.path.join(token_path, token_file)
-            if os.path.exists(token_fp):
-                os.remove(token_fp)
-            self.graph_auth = None
-            self.m365_login_state.set('Not logged in')
-            self.show_message('info', 'M365 Graph', f'Cleared cached login token at:\n{token_fp}')
-        except Exception as e:
-            self.show_message('error', 'M365 Graph', f'Could not clear cached login: {e}')
-
     def login_m365_graph(self):
         try:
             from O365 import Account, MSGraphProtocol, FileSystemTokenBackend
@@ -1452,15 +1437,9 @@ class App:
             return
 
         try:
-            if not DEFAULT_M365_CLIENT_ID:
-                self.m365_login_state.set('Missing Client ID')
-                self.show_message("error", "M365 Graph",
-                    "Missing Microsoft Graph Client ID.\n\nSet environment variable EDF_M365_CLIENT_ID to your app registration Client ID, then retry Login.")
-                return
-
             token_backend = FileSystemTokenBackend(
                 token_path=tempfile.gettempdir(),
-                token_filename=(DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_o365_token.txt')
+                token_filename='edf_bill_fetcher_o365_token.txt'
             )
             account = Account(
                 credentials=(DEFAULT_M365_CLIENT_ID, None),
@@ -1469,19 +1448,19 @@ class App:
                 token_backend=token_backend,
                 auth_flow_type='authorization'
             )
-            ok = account.authenticate(scopes=['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft.com/User.Read', 'offline_access'])
+            ok = account.authenticate(scopes=['basic', 'message_all'])
             if ok:
                 self.graph_auth = {
                     'tenant_id': DEFAULT_M365_TENANT,
                     'client_id': DEFAULT_M365_CLIENT_ID,
                     'token_path': tempfile.gettempdir(),
-                    'token_file': (DEFAULT_M365_TOKEN_FILE or 'edf_bill_fetcher_o365_token.txt')
+                    'token_file': 'edf_bill_fetcher_o365_token.txt'
                 }
                 self.m365_login_state.set('Logged in ✅')
                 self.show_message("info", "M365 Graph", "Microsoft 365 login successful.")
             else:
                 self.m365_login_state.set('Login failed')
-                self.show_message("warning", "M365 Graph", "Login failed.\n\nIf you see AADSTS65002, the app is not pre-authorized for Graph. Use your own Azure App Registration and set EDF_M365_CLIENT_ID.")
+                self.show_message("warning", "M365 Graph", "Login failed. Please retry.")
         except Exception as e:
             self.m365_login_state.set('Login failed')
             self.show_message("error", "M365 Graph", f"Login error: {e}")
