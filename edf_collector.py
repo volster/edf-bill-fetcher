@@ -138,16 +138,21 @@ class EvidenceEngine:
             return
 
         # Post-extraction filter: discard records below minimum threshold.
-        # filter_strategy controls which extraction methods this applies to:
-        #   "all"         — strip anything below threshold regardless of how it was found
-        #   "anchor_only" — only strip low values found via Smart Context
-        #   "large_only"  — only strip low values found via Large Amount Fallback
+        # Also retain an audit trail so users can review filtered-out items.
         if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
+            self.filtered_records.append({
+                "Source": source_type,
+                "Date": fallback_date,
+                "Amount (£)": found_amt,
+                "Details": detail[:60],
+                "Logic Used": strategy,
+                "Reason": f"Below minimum threshold (£{self.config['min_amount']:,.2f})"
+            })
             return
 
         # Reading type
         r_type = "Unknown"
-        if self.config["use_readings"]:
+        if self.config.get("use_reading_classification", True):
             for label, pat in READING_PATTERNS.items():
                 if pat.search(clean_text):
                     r_type = label
@@ -165,13 +170,14 @@ class EvidenceEngine:
             if date_m:
                 date_to_use = parse_to_display_date(date_m.group(1))
 
-        u_m  = re.search(r'([\d,]+)\s*kWh',                           clean_text, re.IGNORECASE)
-        sc_m = re.search(r'(\d+\.\d{2})p\s*per day',                  clean_text, re.IGNORECASE)
-        in_m = re.search(r'Invoice number[\s:,\"\'\n]*([A-Z0-9\-]+)', clean_text, re.IGNORECASE)
+        if self.config.get("use_pdf_fields", True):
+            u_m  = re.search(r'([\d,]+)\s*kWh',                           clean_text, re.IGNORECASE)
+            sc_m = re.search(r'(\d+\.\d{2})p\s*per day',                  clean_text, re.IGNORECASE)
+            in_m = re.search(r'Invoice number[\s:,\"\'\n]*([A-Z0-9\-]+)', clean_text, re.IGNORECASE)
 
-        if u_m:  units_used      = u_m.group(1)
-        if sc_m: standing_charge = sc_m.group(1)
-        if in_m: inv_num         = in_m.group(1)
+            if u_m:  units_used      = u_m.group(1)
+            if sc_m: standing_charge = sc_m.group(1)
+            if in_m: inv_num         = in_m.group(1)
 
         period_from, period_to = self.find_billing_period(clean_text)
 
@@ -348,6 +354,13 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             c13.border = CELL_BORDER
             c13.fill   = PatternFill("solid", start_color=JUMP_RED)
 
+        # Hidden helper date serial (col 14 / N) for formula-driven summaries/charts.
+        # Uses DATEVALUE from visible Date column so downstream tabs recalculate
+        # if users prune/edit rows.
+        c14 = ws.cell(row=r_idx, column=14, value=f'=IFERROR(DATEVALUE(B{r_idx}),"")')
+        c14.border = CELL_BORDER
+        c14.number_format = 'yyyy-mm-dd'
+
     # Column widths
     widths = {
         'A': 18, 'B': 13, 'C': 13, 'D': 13, 'E': 16,
@@ -356,32 +369,13 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
+    ws.column_dimensions['N'].hidden = True
 
     ws.freeze_panes = "A2"
 
 
-def write_summary_sheet(ws, df):
+def write_summary_sheet(ws, years, evidence_sheet_name, evidence_max_row):
     ws.title = "Annual Summary"
-
-    df = df.copy()
-    df['_sort'] = pd.to_datetime(df['Date'], dayfirst=True, format='mixed', errors='coerce')
-    df['Year']  = df['_sort'].dt.year.astype('Int64')
-
-    def _bal_range(s):
-        return s.max() - s.min()
-
-    yearly = (
-        df.dropna(subset=['Year'])
-          .groupby('Year', as_index=False)
-          .agg(
-              Bal_Range   =('Amount (£)', _bal_range),
-              Bill_Count  =('Amount (£)', 'count'),
-              Average_Bill=('Amount (£)', 'mean'),
-              Highest_Bill=('Amount (£)', 'max'),
-              Lowest_Bill =('Amount (£)', 'min'),
-          )
-          .sort_values('Year')
-    )
 
     headers = ["Year", "Balance Range (£)", "Records",
                "Avg Balance (£)", "Peak Balance (£)", "Lowest Balance (£)"]
@@ -390,11 +384,21 @@ def write_summary_sheet(ws, df):
     ws.row_dimensions[1].height = 28
 
     alt_fill = PatternFill("solid", start_color="EEF2FF")
-    for r_idx, row in enumerate(yearly.values, 2):
+    date_rng = f"'{evidence_sheet_name}'!$N$2:$N${evidence_max_row}"
+    amt_rng = f"'{evidence_sheet_name}'!$F$2:$F${evidence_max_row}"
+
+    for r_idx, year_val in enumerate(years, 2):
         row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()
-        for c_idx, val in enumerate(row, 1):
-            c = ws.cell(row=r_idx, column=c_idx,
-                        value=int(val) if c_idx == 1 else val)
+        row_values = [
+            int(year_val),
+            f'=IFERROR(MAXIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1))-MINIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1)),"")',
+            f'=COUNTIFS({date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1))',
+            f'=IFERROR(AVERAGEIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1)),"")',
+            f'=IFERROR(MAXIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1)),"")',
+            f'=IFERROR(MINIFS({amt_rng},{date_rng},">="&DATE(A{r_idx},1,1),{date_rng},"<"&DATE(A{r_idx}+1,1,1)),"")',
+        ]
+        for c_idx, val in enumerate(row_values, 1):
+            c = ws.cell(row=r_idx, column=c_idx, value=val)
             c.font      = Font(name="Calibri", size=10)
             c.fill      = row_fill
             c.border    = CELL_BORDER
@@ -410,7 +414,7 @@ def write_summary_sheet(ws, df):
                 c.number_format = '£#,##0.00'
 
     # Grand total row — Excel formulas so they recalculate if data rows are edited/deleted
-    n          = len(yearly) + 2   # row index of totals row
+    n          = len(years) + 2   # row index of totals row
     first_r    = 2
     last_r     = n - 1
     total_fill = PatternFill("solid", start_color="10367A")
@@ -467,15 +471,22 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df     = df.reindex(columns=col_order)
     dup_df = dup_df.reindex(columns=col_order) if not dup_df.empty else dup_df
 
+    # Snapshot list of years from extracted rows. Aggregated values in summary
+    # are formulas against the evidence sheet so they recalculate after edits.
+    years = sorted(
+        y for y in pd.to_datetime(df['Date'], dayfirst=True, format='mixed', errors='coerce').dt.year.dropna().astype(int).unique()
+    )
+
     wb = openpyxl.Workbook()
 
-    # Tab 1: Annual Summary (first thing anyone sees)
-    ws_summary = wb.active
-    write_summary_sheet(ws_summary, df)
-
-    # Tab 2: Full evidence
-    ws_main = wb.create_sheet(title="EDF Evidence Report")
+    # Tab 1: Full evidence (created first so summary formulas can reference it)
+    ws_main = wb.active
+    ws_main.title = "EDF Evidence Report"
     write_evidence_sheet(ws_main, df, is_duplicate=False)
+
+    # Tab 2: Annual Summary
+    ws_summary = wb.create_sheet(title="Annual Summary", index=0)
+    write_summary_sheet(ws_summary, years, ws_main.title, max(ws_main.max_row, 2))
 
     # Tab 3: Duplicates
     if not dup_df.empty:
@@ -582,12 +593,16 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df_an = df.copy()
     df_an['_dt'] = pd.to_datetime(df_an['Date'], dayfirst=True, format='mixed', errors='coerce')
     df_an = df_an.sort_values('_dt').reset_index(drop=True)
-    dfc   = df_an[df_an['Amount (£)'] >= 5000].copy().reset_index(drop=True)
+    analysis_min = float(config.get("analysis_min", 5000.0))
+    report_account_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
+
+    dfc   = df_an[df_an['Amount (£)'] >= analysis_min].copy().reset_index(drop=True)
     dfc['year']  = dfc['_dt'].dt.year
     dfc['month'] = dfc['_dt'].dt.month
 
     if len(dfc) < 2:
-        return   # not enough data to analyse; wb.save called unconditionally below
+        wb.save(output_path)
+        return   # not enough data to analyse for analysis tabs; base workbook already built
 
     amounts  = dfc['Amount (£)'].values.astype(float)
     dates_dt = dfc['_dt'].tolist()
@@ -644,7 +659,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # and Period Charges col F, so they recalculate if rows are edited or deleted.
 
     r = 2;  _section_hdr(ws_ks, r, 'ACCOUNT OVERVIEW')
-    r = 3;  ks_row(r, 'Account reference', '671078701920', alt=True)
+    r = 3;  ks_row(r, 'Account reference', report_account_ref, alt=True)
     r = 4;  ks_row(r, 'First bill on record',
                    "='Balance Trend'!A2",
                    note='Auto-reads from Balance Trend sheet')
@@ -1165,13 +1180,17 @@ class App:
 
         self.use_anchors  = tk.BooleanVar(value=True)
         self.use_large    = tk.BooleanVar(value=True)
-        self.use_readings = tk.BooleanVar(value=True)
+        self.use_reading_classification = tk.BooleanVar(value=True)
+        self.use_pdf_fields = tk.BooleanVar(value=True)
         self.use_acc_filt = tk.BooleanVar(value=False)
         self.filter_below  = tk.BooleanVar(value=True)
         self.save_filtered = tk.BooleanVar(value=True)
         self.use_dedup    = tk.BooleanVar(value=True)
         self.save_dups    = tk.BooleanVar(value=True)
         self.min_amount   = tk.DoubleVar(value=1000.0)
+        self.analysis_min = tk.DoubleVar(value=5000.0)
+        self.output_name  = tk.StringVar(value="EDF_Dispute_Evidence.xlsx")
+        self.report_account_ref = tk.StringVar(value="671078701920")
 
         self.build_ui()
 
@@ -1215,8 +1234,11 @@ class App:
             text="Large Number Fallback  (catch any large £ amount)",
             variable=self.use_large, bg=EDF_OFFWHITE).pack(anchor=tk.W)
         tk.Checkbutton(s2,
+            text="Classify Reading Type  (Estimated / Actual / Smart)",
+            variable=self.use_reading_classification, bg=EDF_OFFWHITE).pack(anchor=tk.W)
+        tk.Checkbutton(s2,
             text="Deep PDF Mine  (extract kWh, standing charges & invoice #)",
-            variable=self.use_readings, bg=EDF_OFFWHITE).pack(anchor=tk.W)
+            variable=self.use_pdf_fields, bg=EDF_OFFWHITE).pack(anchor=tk.W)
 
         r3 = ttk.Frame(s2); r3.pack(fill=tk.X, pady=5)
         tk.Checkbutton(r3, text="Filter by Account #:",
@@ -1228,6 +1250,18 @@ class App:
                                   variable=self.filter_below, bg=EDF_OFFWHITE)
         chk_filt.pack(side=tk.LEFT)
         ttk.Entry(r4, textvariable=self.min_amount, width=8).pack(side=tk.LEFT, padx=5)
+
+        r4c = ttk.Frame(s2); r4c.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4c, text="Analysis threshold £ (for advanced tabs):", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4c, textvariable=self.analysis_min, width=8).pack(side=tk.LEFT, padx=5)
+
+        r4d = ttk.Frame(s2); r4d.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4d, text="Report account reference:", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4d, textvariable=self.report_account_ref, width=20).pack(side=tk.LEFT, padx=5)
+
+        r4e = ttk.Frame(s2); r4e.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(r4e, text="Output filename:", width=36).pack(side=tk.LEFT)
+        ttk.Entry(r4e, textvariable=self.output_name, width=28).pack(side=tk.LEFT, padx=5)
 
         r4b = ttk.Frame(s2); r4b.pack(fill=tk.X)
         chk_save_filt = tk.Checkbutton(r4b,
@@ -1276,8 +1310,31 @@ class App:
         self.run_btn.pack(fill=tk.X, pady=10, ipady=8)
 
     def set_status(self, text):
-        self.status.set(text)
-        self.root.update_idletasks()
+        if threading.current_thread() is threading.main_thread():
+            self.status.set(text)
+            self.root.update_idletasks()
+        else:
+            self.root.after(0, self.set_status, text)
+
+    def show_message(self, level, title, text):
+        def _show():
+            if level == "info":
+                messagebox.showinfo(title, text)
+            elif level == "warning":
+                messagebox.showwarning(title, text)
+            else:
+                messagebox.showerror(title, text)
+
+        if threading.current_thread() is threading.main_thread():
+            _show()
+        else:
+            self.root.after(0, _show)
+
+    def finish_run(self):
+        self.pb.stop()
+        self.run_btn.config(state="normal")
+        self.set_status("Ready.")
+        gc.collect()
 
     def start_thread(self):
         if not self.pst_path.get() and not self.pdf_dir.get():
@@ -1291,10 +1348,13 @@ class App:
         config = {
             "use_anchors":    self.use_anchors.get(),
             "use_large":      self.use_large.get(),
-            "use_readings":   self.use_readings.get(),
+            "use_reading_classification": self.use_reading_classification.get(),
+            "use_pdf_fields": self.use_pdf_fields.get(),
             "use_acc_filter": self.use_acc_filt.get(),
             "acc_num":        self.acc_num.get(),
             "min_amount":     self.min_amount.get(),
+            "analysis_min":   self.analysis_min.get(),
+            "report_account_ref": self.report_account_ref.get().strip(),
             "filter_below":   self.filter_below.get(),
             "save_filtered":  self.save_filtered.get(),
             "use_dedup":      self.use_dedup.get(),
@@ -1319,7 +1379,10 @@ class App:
             if engine.records:
                 self.set_status("Writing Excel report…")
                 save_dir = os.path.dirname(pst_path) if pst_path else pdf_path
-                out_path = os.path.join(save_dir, "EDF_Dispute_Evidence.xlsx")
+                out_name = self.output_name.get().strip() or "EDF_Dispute_Evidence.xlsx"
+                if not out_name.lower().endswith(".xlsx"):
+                    out_name += ".xlsx"
+                out_path = os.path.join(save_dir, out_name)
                 export_to_excel(engine.records, out_path, engine.error_log, config,
                                 filtered=engine.filtered_records)
 
@@ -1332,20 +1395,17 @@ class App:
                 if engine.error_log:
                     summary += f"\n  Parse errors:     {len(engine.error_log)}  (see 'Parse Errors' tab)"
                 summary += f"\n\nSaved to:\n{out_path}"
-                messagebox.showinfo("Success", summary)
+                self.show_message("info", "Success", summary)
             else:
-                messagebox.showwarning("No Data",
+                self.show_message("warning", "No Data",
                     "No billing amounts found.\n\nTry unchecking the Account Filter.")
 
         except Exception:
-            messagebox.showerror("System Error",
+            self.show_message("error", "System Error",
                 f"An error occurred:\n\n{traceback.format_exc()}\n\n"
                 "Ensure Outlook is closed and paths are correct.")
         finally:
-            self.pb.stop()
-            self.run_btn.config(state="normal")
-            self.set_status("Ready.")
-            gc.collect()
+            self.root.after(0, self.finish_run)
 
 
 if __name__ == "__main__":
