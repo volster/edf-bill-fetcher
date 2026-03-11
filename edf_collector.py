@@ -16,7 +16,6 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, LineChart, Reference
-from openpyxl.chart.series import SeriesLabel
 
 # --- Branding & Colors ---
 EDF_ORANGE, EDF_NAVY, EDF_OFFWHITE = "#FE5716", "#10367A", "#F5F5F5"
@@ -144,13 +143,7 @@ class EvidenceEngine:
         #   "anchor_only" — only strip low values found via Smart Context
         #   "large_only"  — only strip low values found via Large Amount Fallback
         if self.config.get("filter_below", True) and found_amt < self.config["min_amount"]:
-            fs = self.config.get("filter_strategy", "all")
-            if fs == "all":
-                return
-            elif fs == "anchor_only" and strategy == "Smart Context":
-                return
-            elif fs == "large_only" and strategy == "Large Amount Fallback":
-                return
+            return
 
         # Reading type
         r_type = "Unknown"
@@ -324,32 +317,36 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()
 
         for c_idx, val in enumerate(row, 1):
-            c = ws.cell(row=r_idx, column=c_idx, value=val)
-            c.font      = Font(name="Calibri", size=10)
-            c.fill      = row_fill if not is_duplicate else PatternFill("solid", start_color=DUP_GREY)
-            c.border    = CELL_BORDER
-            c.alignment = Alignment(vertical="top")
-
-            if c_idx == 6 and isinstance(val, (int, float)):   # Amount
-                c.number_format = '£#,##0.00'
-            if c_idx == 7 and isinstance(val, (int, float)):   # % Change
+            # Col 7 (% Change) — write as live Excel formula instead of Python value
+            if c_idx == 7 and not is_duplicate:
+                c = ws.cell(row=r_idx, column=7,
+                            value=f'=IFERROR((F{r_idx}-F{r_idx-1})/F{r_idx-1},"")')
                 c.number_format = '0.0%'
-                c.alignment = Alignment(horizontal="right", vertical="top")
+                c.alignment = Alignment(horizontal='right', vertical='top')
+            else:
+                c = ws.cell(row=r_idx, column=c_idx, value=val)
+                if c_idx == 6 and isinstance(val, (int, float)):
+                    c.number_format = '£#,##0.00'
+                if c_idx == 7 and isinstance(val, (int, float)):
+                    c.number_format = '0.0%'
+                    c.alignment = Alignment(horizontal='right', vertical='top')
+            c.font   = Font(name="Calibri", size=10)
+            c.fill   = row_fill if not is_duplicate else PatternFill("solid", start_color=DUP_GREY)
+            c.border = CELL_BORDER
+            if c_idx != 7:  # col 7 alignment already set above
+                c.alignment = Alignment(vertical="top")
 
-            # Estimated reading rows — yellow tint
+            # Estimated reading rows — yellow tint (col 8 = Reading)
             if not is_duplicate and len(row) > 7 and row[7] == "Estimated":
                 c.fill = PatternFill("solid", start_color=EST_YELLOW)
 
-        # Anomaly flag — >100% jump (col 13)
+        # Anomaly flag col 13 — live Excel formula: flags >100% jump vs previous row
         if not is_duplicate and r_idx > 2:
-            prev = ws.cell(row=r_idx - 1, column=6).value
-            curr = row[5]  # Amount (£) in df column order
-            if isinstance(prev, (int, float)) and isinstance(curr, (int, float)) and prev > 0:
-                if curr > prev * 2:
-                    c = ws.cell(row=r_idx, column=13, value="⚠ >100% INCREASE")
-                    c.fill   = PatternFill("solid", start_color=JUMP_RED)
-                    c.font   = Font(name="Calibri", size=10, bold=True)
-                    c.border = CELL_BORDER
+            c13 = ws.cell(row=r_idx, column=13,
+                          value=f'=IF(AND(F{r_idx-1}>0,F{r_idx}>F{r_idx-1}*2),"\u26a0 >100% INCREASE","")')
+            c13.font   = Font(name="Calibri", size=10, bold=True)
+            c13.border = CELL_BORDER
+            c13.fill   = PatternFill("solid", start_color=JUMP_RED)
 
     # Column widths
     widths = {
@@ -446,17 +443,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df['_sort'] = pd.to_datetime(df['Date'], dayfirst=True, format='mixed', errors='coerce')
     df = df.sort_values(by=['_sort', 'Invoice #'], ascending=[True, False]).reset_index(drop=True)
 
-    # % change column — calculated here so it survives manual row deletion gracefully
-    # (stored as a decimal so Excel formats it as percentage)
-    pct_changes = [None]
-    for i in range(1, len(df)):
-        prev = df.at[i - 1, 'Amount (£)']
-        curr = df.at[i,     'Amount (£)']
-        if isinstance(prev, (int, float)) and prev > 0:
-            pct_changes.append((curr - prev) / prev)
-        else:
-            pct_changes.append(None)
-    df['% Change'] = pct_changes
+    # % Change column written as Excel formula in write_evidence_sheet — no Python pre-computation needed
+    df['% Change'] = None
 
     # Deduplication
     dup_df = pd.DataFrame()
@@ -541,7 +529,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # charge for any period = closing_balance − opening_balance.
     # =========================================================================
     import numpy as np
-    import statistics as _stats
     from openpyxl.chart import BarChart, LineChart, Reference
 
     NAVY   = "10367A"
@@ -610,14 +597,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # Periodic charges (balance diffs between consecutive bills)
     raw_diffs  = np.diff(amounts)                        # can be negative (payments)
     pos_diffs  = raw_diffs[raw_diffs > 0]               # genuine charges only
-
-    # Rolling 6-bill average
-    rolling6 = pd.Series(amounts).rolling(6, min_periods=3).mean().tolist()
-
-    # Linear trend
-    x_idx   = np.arange(n)
-    slope, intercept = np.polyfit(x_idx, amounts, 1)
-    trend_line = (slope * x_idx + intercept).tolist()
 
     # Year groups
     yearly = dfc.groupby('year').agg(
@@ -754,24 +733,46 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         _hcell(ws_bt, 1, ci, h, bg=NAVY)
     ws_bt.row_dimensions[1].height = 22
 
-    period_charges = [None] + list(raw_diffs)   # first row has no prior
-
+    # Col B = balance values (Python-written).
+    # Col C = 6-bill rolling avg  \  Excel formulas — recalculate if rows edited/deleted
+    # Col D = linear trend line   /
+    # Col E = period charge (difference from previous balance, Python-written value)
+    last_data_row = n + 1   # row index of final balance entry
     for i in range(n):
         r  = i + 2
         bg = LGREY if i % 2 == 0 else None
         _text(ws_bt,  r, 1, dates_lbl[i], fill_hex=bg)
         _money(ws_bt, r, 2, float(amounts[i]), fill_hex=bg)
-        rv = rolling6[i]
-        if rv is not None and not (isinstance(rv, float) and np.isnan(rv)):
-            _money(ws_bt, r, 3, round(float(rv), 2), fill_hex=bg)
-        else:
-            ws_bt.cell(row=r, column=3).fill = PatternFill("solid", start_color=bg) if bg else PatternFill()
-        _money(ws_bt, r, 4, round(float(trend_line[i]), 2), fill_hex=bg)
-        pc = period_charges[i]
-        if pc is not None:
-            c = _money(ws_bt, r, 5, float(pc), fill_hex=bg)
-            if float(pc) > float(np.mean(pos_diffs)) * 2 if len(pos_diffs) else False:
-                c.fill = PatternFill("solid", start_color=AMBER)
+
+        # Rolling 6-bill average: window starts at row 2 minimum
+        start_r = max(2, r - 5)
+        c3 = ws_bt.cell(row=r, column=3, value=f"=IFERROR(AVERAGE(B{start_r}:B{r}),\"\")")
+        c3.number_format = "£#,##0.00"
+        c3.font      = Font(name="Calibri", size=10)
+        c3.border    = CELL_BORDER
+        c3.alignment = Alignment(horizontal="right")
+        if bg:
+            c3.fill = PatternFill("solid", start_color=bg)
+
+        # Linear trend: FORECAST.LINEAR using row number as x-axis proxy
+        c4 = ws_bt.cell(row=r, column=4,
+                        value=f"=IFERROR(FORECAST.LINEAR(ROW(),B$2:B${last_data_row},ROW(B$2:B${last_data_row})),\"\")")
+        c4.number_format = "£#,##0.00"
+        c4.font      = Font(name="Calibri", size=10)
+        c4.border    = CELL_BORDER
+        c4.alignment = Alignment(horizontal="right")
+        if bg:
+            c4.fill = PatternFill("solid", start_color=bg)
+
+        # Period charge — formula so it recalculates if balances are edited
+        if i > 0:
+            c5 = ws_bt.cell(row=r, column=5, value=f'=B{r}-B{r-1}')
+            c5.number_format = '£#,##0.00'
+            c5.font      = Font(name='Calibri', size=10)
+            c5.border    = CELL_BORDER
+            c5.alignment = Alignment(horizontal='right')
+            if bg:
+                c5.fill = PatternFill('solid', start_color=bg)
 
     # Line chart
     lc = LineChart()
@@ -846,16 +847,30 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         _money(ws_yoy, r_off, 4, av,   fill_hex=bg)
         _money(ws_yoy, r_off, 5, lo,   fill_hex=bg)
 
-        if yoy_chg_abs is not None:
-            _money(ws_yoy, r_off, 6, yoy_chg_abs, fill_hex=bg, bold=(abs(yoy_chg_abs)>5000))
+        # YoY delta columns — formulas so they stay correct if year rows are edited
+        if r_off > 2:  # first data row has no prior year
+            c6 = ws_yoy.cell(row=r_off, column=6, value=f'=D{r_off}-D{r_off-1}')
+            c6.number_format = '£#,##0.00'
+            c6.font   = Font(name='Calibri', size=10, bold=True)
+            c6.border = CELL_BORDER
+            c6.alignment = Alignment(horizontal='right')
+            if bg: c6.fill = PatternFill('solid', start_color=bg)
+            c7f = ws_yoy.cell(row=r_off, column=7,
+                              value=f'=IFERROR(F{r_off}/D{r_off-1},"")')
+            c7f.number_format = '+0.0%;-0.0%;—'
+            c7f.font   = Font(name='Calibri', size=10, bold=True)
+            c7f.border = CELL_BORDER
+            c7f.alignment = Alignment(horizontal='right')
+            # Colour coding retained — based on Python value since conditional formatting
+            # is not available here; colours will be approximate after manual edits
+            yoy_fill = (RED if yoy_chg_pct is not None and yoy_chg_pct > 0.5
+                        else (AMBER if yoy_chg_pct is not None and yoy_chg_pct > 0.2
+                        else (GREEN if yoy_chg_pct is not None and yoy_chg_pct < -0.1
+                        else bg)))
+            if yoy_fill: c7f.fill = PatternFill('solid', start_color=yoy_fill)
         else:
-            ws_yoy.cell(row=r_off, column=6, value="—")
-
-        if yoy_chg_pct is not None:
-            c7 = _num(ws_yoy, r_off, 7, yoy_chg_pct, fmt="+0.0%;-0.0%;—", bold=True,
-                      fill_hex=(RED if yoy_chg_pct > 0.5 else (AMBER if yoy_chg_pct > 0.2 else (GREEN if yoy_chg_pct < -0.1 else bg))))
-        else:
-            ws_yoy.cell(row=r_off, column=7, value="—")
+            ws_yoy.cell(row=r_off, column=6, value='—').border = CELL_BORDER
+            ws_yoy.cell(row=r_off, column=7, value='—').border = CELL_BORDER
 
         yr_est = int((dfc[dfc['year']==yr]['Reading']=='Estimated').sum()) if 'Reading' in dfc.columns else 0
         _num(ws_yoy, r_off, 8, yr_est, fmt="#,##0", fill_hex=bg)
@@ -927,9 +942,19 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         _num(ws_pc,   pc_r, 3, days,       fmt="#,##0",  fill_hex=bg)
         _money(ws_pc, pc_r, 4, float(p['Amount (£)']),   fill_hex=bg)
         _money(ws_pc, pc_r, 5, float(c_['Amount (£)']),  fill_hex=bg)
-        chg_cell = _money(ws_pc, pc_r, 6, charge,        fill_hex=bg, bold=(charge > float(np.mean(pos_diffs))*1.5 if len(pos_diffs) else False))
-        if daily is not None:
-            _money(ws_pc, pc_r, 7, daily, fill_hex=bg)
+        # Charge and daily rate as formulas so they update if balances are edited
+        c6 = ws_pc.cell(row=pc_r, column=6, value=f'=E{pc_r}-D{pc_r}')
+        c6.number_format = '£#,##0.00'
+        c6.font = Font(name='Calibri', size=10)
+        c6.border = CELL_BORDER
+        c6.alignment = Alignment(horizontal='right')
+        if bg: c6.fill = PatternFill('solid', start_color=bg)
+        c7 = ws_pc.cell(row=pc_r, column=7, value=f'=IFERROR(F{pc_r}/C{pc_r},"")')
+        c7.number_format = '£#,##0.00'
+        c7.font = Font(name='Calibri', size=10)
+        c7.border = CELL_BORDER
+        c7.alignment = Alignment(horizontal='right')
+        if bg: c7.fill = PatternFill('solid', start_color=bg)
         _text(ws_pc,  pc_r, 8, flag, fill_hex=bg, wrap=True, color=(DGREY if not flag else "000000"))
 
         if charge > 0:
@@ -1232,6 +1257,7 @@ class App:
         def toggle_dup_save():
             chk_save_dup.config(state="normal" if self.use_dedup.get() else "disabled")
         chk_dup.config(command=toggle_dup_save)
+        toggle_dup_save()  # set initial state
 
         # Progress & status
         self.pb = ttk.Progressbar(main, mode='indeterminate')
