@@ -412,31 +412,27 @@ def write_summary_sheet(ws, df):
             elif c_idx > 3:
                 c.number_format = '£#,##0.00'
 
-    # Grand total row
-    n = len(yearly) + 2
-    totals = [
-        "OVERALL",
-        yearly['Highest_Bill'].max() - yearly['Lowest_Bill'].min(),  # overall balance swing
-        int(yearly['Bill_Count'].sum()),
-        yearly['Average_Bill'].mean(),
-        yearly['Highest_Bill'].max(),
-        yearly['Lowest_Bill'].min(),
-    ]
+    # Grand total row — Excel formulas so they recalculate if data rows are edited/deleted
+    n          = len(yearly) + 2   # row index of totals row
+    first_r    = 2
+    last_r     = n - 1
     total_fill = PatternFill("solid", start_color="10367A")
-    for c_idx, val in enumerate(totals, 1):
+    total_specs = [
+        ("OVERALL",                                              None,         "center"),
+        (f"=MAX(E{first_r}:E{last_r})-MIN(F{first_r}:F{last_r})", '£#,##0.00', "right"),  # balance swing
+        (f"=SUM(C{first_r}:C{last_r})",                          '#,##0',      "right"),  # total records
+        (f"=IFERROR(AVERAGE(D{first_r}:D{last_r}),\"\")",         '£#,##0.00', "right"),  # mean avg balance
+        (f"=MAX(E{first_r}:E{last_r})",                           '£#,##0.00', "right"),  # overall peak
+        (f"=MIN(F{first_r}:F{last_r})",                           '£#,##0.00', "right"),  # overall low
+    ]
+    for c_idx, (val, num_fmt, align) in enumerate(total_specs, 1):
         c = ws.cell(row=n, column=c_idx, value=val)
         c.font      = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
         c.fill      = total_fill
         c.border    = CELL_BORDER
-        c.alignment = Alignment(
-            horizontal="center" if c_idx == 1 else "right"
-        )
-        if c_idx == 2 and isinstance(val, float):
-            c.number_format = '£#,##0.00'
-        elif c_idx == 3:
-            c.number_format = '#,##0'
-        elif c_idx > 3 and isinstance(val, float):
-            c.number_format = '£#,##0.00'
+        c.alignment = Alignment(horizontal=align)
+        if num_fmt:
+            c.number_format = num_fmt
 
     for col_letter in ['A', 'B', 'C', 'D', 'E', 'F']:
         ws.column_dimensions[col_letter].width = 20
@@ -665,57 +661,88 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
             _text(ws_ks, r, 2, value, bold=bold, fill_hex=bg, align="right")
         _text(ws_ks, r, 3, note, fill_hex=bg, color=DGREY)
 
-    first_bill = dfc.iloc[0]
-    last_bill  = dfc.iloc[-1]
-    span_days  = (last_bill['_dt'] - first_bill['_dt']).days
-    span_months= span_days / 30.44
+    # Key Statistics: all figures are Excel formulas referencing Balance Trend col B
+    # and Period Charges col F, so they recalculate if rows are edited or deleted.
 
-    r = 2;  _section_hdr(ws_ks, r, "ACCOUNT OVERVIEW")
-    r = 3;  ks_row(r, "Account reference", "671078701920", alt=True)
-    r = 4;  ks_row(r, "First bill on record", first_bill['Date'])
-    r = 5;  ks_row(r, "Most recent bill", last_bill['Date'], alt=True)
-    r = 6;  ks_row(r, "Period covered", f"{int(span_months)} months  ({span_days:,} days)")
-    r = 7;  ks_row(r, "Total bills analysed (≥£5,000)", n, fmt="#,##0", alt=True)
+    r = 2;  _section_hdr(ws_ks, r, 'ACCOUNT OVERVIEW')
+    r = 3;  ks_row(r, 'Account reference', '671078701920', alt=True)
+    r = 4;  ks_row(r, 'First bill on record',
+                   "='Balance Trend'!A2",
+                   note='Auto-reads from Balance Trend sheet')
+    r = 5;  ks_row(r, 'Most recent bill',
+                   "=INDEX('Balance Trend'!A:A,COUNTA('Balance Trend'!A:A))",
+                   alt=True)
+    r = 6;  ks_row(r, 'Period covered (days)',
+                   "=IFERROR(INT(INDEX('Balance Trend'!A:A,COUNTA('Balance Trend'!A:A))-'Balance Trend'!A2),\"\")",
+                   note='Days between first and last bill in Balance Trend sheet')
+    r = 7;  ks_row(r, 'Total bills on record',
+                   "=IFERROR(COUNTA('Balance Trend'!B:B)-1,\"\")",
+                   fmt='#,##0', alt=True)
 
-    r = 8;  _section_hdr(ws_ks, r, "BALANCE FIGURES")
-    r = 9;  ks_row(r, "Opening balance", first_bill['Amount (£)'], f"Bill dated {first_bill['Date']}", fmt='£', alt=True)
-    r = 10; ks_row(r, "Current balance (latest bill)", last_bill['Amount (£)'], f"Bill dated {last_bill['Date']}", fmt='£', bold=True)
-    r = 11; ks_row(r, "Total balance increase", last_bill['Amount (£)'] - first_bill['Amount (£)'], "Latest minus earliest", fmt='£', bold=True, alt=True)
-    r = 12; ks_row(r, "% increase over full period", (last_bill['Amount (£)']-first_bill['Amount (£)'])/first_bill['Amount (£)'], "", fmt='%', bold=True)
-    r = 13; ks_row(r, "Mean balance across all bills", float(np.mean(amounts)), "", fmt='£', alt=True)
-    r = 14; ks_row(r, "Median balance", float(np.median(amounts)), "", fmt='£')
-    r = 15; ks_row(r, "Peak balance recorded", float(np.max(amounts)), f"Bill dated {dfc.loc[dfc['Amount (£)']==np.max(amounts),'Date'].iloc[0]}", fmt='£', alt=True)
-    r = 16; ks_row(r, "Lowest balance recorded (clean)", float(np.min(amounts)), f"Bill dated {dfc.loc[dfc['Amount (£)']==np.min(amounts),'Date'].iloc[0]}", fmt='£')
+    r = 8;  _section_hdr(ws_ks, r, 'BALANCE FIGURES')
+    r = 9;  ks_row(r, 'Opening balance (first bill)',
+                   "='Balance Trend'!B2",
+                   note='First entry in Balance Trend sheet', fmt='£', alt=True)
+    r = 10; ks_row(r, 'Current balance (latest bill)',
+                   "=INDEX('Balance Trend'!B:B,COUNTA('Balance Trend'!B:B))",
+                   note='Last entry in Balance Trend sheet', fmt='£', bold=True)
+    r = 11; ks_row(r, 'Total balance increase',
+                   '=IFERROR(B10-B9,"")',
+                   note='Latest minus earliest', fmt='£', bold=True, alt=True)
+    r = 12; ks_row(r, '% increase over full period',
+                   '=IFERROR((B10-B9)/B9,"")',
+                   note='', fmt='%', bold=True)
+    r = 13; ks_row(r, 'Mean balance across all bills',
+                   "=IFERROR(AVERAGE('Balance Trend'!B2:INDEX('Balance Trend'!B:B,COUNTA('Balance Trend'!B:B))),\"\")",
+                   note='', fmt='£', alt=True)
+    r = 14; ks_row(r, 'Median balance',
+                   "=IFERROR(MEDIAN('Balance Trend'!B2:INDEX('Balance Trend'!B:B,COUNTA('Balance Trend'!B:B))),\"\")",
+                   note='', fmt='£')
+    r = 15; ks_row(r, 'Peak balance recorded',
+                   "=IFERROR(MAX('Balance Trend'!B:B),\"\")",
+                   note='', fmt='£', alt=True)
+    r = 16; ks_row(r, 'Lowest balance recorded',
+                   "=IFERROR(MIN('Balance Trend'!B2:INDEX('Balance Trend'!B:B,COUNTA('Balance Trend'!B:B))),\"\")",
+                   note='', fmt='£')
 
-    r = 17; _section_hdr(ws_ks, r, "PERIODIC CHARGES  (balance difference between consecutive bills)")
-    note_charges = "Bills represent a running cumulative balance; charge = closing − opening"
-    r = 18; ks_row(r, "Note", note_charges, alt=True)
-    if len(pos_diffs):
-        r = 19; ks_row(r, "Mean charge per period", float(np.mean(pos_diffs)), "Average across all positive-diff periods", fmt='£')
-        r = 20; ks_row(r, "Median charge per period", float(np.median(pos_diffs)), "", fmt='£', alt=True)
-        r = 21; ks_row(r, "Largest single-period charge", float(np.max(pos_diffs)), "", fmt='£', bold=True)
-        r = 22; ks_row(r, "Smallest single-period charge", float(np.min(pos_diffs)), "", fmt='£', alt=True)
-        # Annualised estimate from most recent 6 positive diffs
-        recent6 = raw_diffs[-6:]
-        recent6_pos = recent6[recent6 > 0]
-        if len(recent6_pos):
-            ann = float(np.mean(recent6_pos)) * 12
-            r = 23; ks_row(r, "Implied annual rate (latest 6 periods)", ann, "Mean recent positive charge × 12", fmt='£', bold=True)
+    r = 17; _section_hdr(ws_ks, r, 'PERIODIC CHARGES  (balance difference between consecutive bills)')
+    r = 18; ks_row(r, 'Note',
+                   'Bills are a running cumulative balance — charge = closing balance minus opening balance',
+                   alt=True)
+    r = 19; ks_row(r, 'Mean charge per period  (positive periods only)',
+                   "=IFERROR(AVERAGEIF('Period Charges'!F:F,\">0\"),\"\")",
+                   note='Average amount added between consecutive bills', fmt='£')
+    r = 20; ks_row(r, 'Largest single-period charge',
+                   "=IFERROR(MAX('Period Charges'!F:F),\"\")",
+                   note='', fmt='£', bold=True, alt=True)
+    r = 21; ks_row(r, 'Smallest positive charge',
+                   "=IFERROR(MINIFS('Period Charges'!F:F,'Period Charges'!F:F,\">0\"),\"\")",
+                   note='', fmt='£')
+    r = 22; ks_row(r, 'Periods where balance increased',
+                   "=IFERROR(COUNTIF('Period Charges'!F:F,\">0\"),\"\")",
+                   note='', fmt='#,##0', alt=True)
+    r = 23; ks_row(r, 'Periods where balance fell  (payments / credits)',
+                   "=IFERROR(COUNTIF('Period Charges'!F:F,\"<0\"),\"\")",
+                   note='', fmt='#,##0')
+    r = 24; ks_row(r, 'Implied annual rate  (avg last 6 charges x12)',
+                   "=IFERROR(AVERAGE(OFFSET('Period Charges'!F1,MAX(1,COUNTIF('Period Charges'!F:F,\">0\")-5),0,6,1))*12,\"\")",
+                   note='Approximate — extrapolated from recent trend', fmt='£', bold=True, alt=True)
 
-    r = 24; _section_hdr(ws_ks, r, "READING & DATA QUALITY")
-    if 'Reading' in dfc.columns:
-        est_n  = int((dfc['Reading']=='Estimated').sum())
-        act_n  = int((dfc['Reading']=='Actual').sum())
-        smt_n  = int((dfc['Reading']=='Smart').sum())
-        unk_n  = n - est_n - act_n - smt_n
-        est_pct= est_n / n
-        r = 25; ks_row(r, "Estimated readings", est_n, f"{est_pct*100:.0f}% of bills — EDF may have charged without actual read",
-                       fmt="#,##0", bold=(est_pct>0.4), alt=True)
-        r = 26; ks_row(r, "Actual / customer readings", act_n, fmt="#,##0")
-        r = 27; ks_row(r, "Smart meter readings", smt_n, fmt="#,##0", alt=True)
-        r = 28; ks_row(r, "Unknown / not extracted", unk_n, fmt="#,##0")
+    r = 25; _section_hdr(ws_ks, r, 'READING & DATA QUALITY')
+    r = 26; ks_row(r, 'Estimated readings',
+                   "=IFERROR(COUNTIF('EDF Evidence Report'!H:H,\"Estimated\"),\"\")",
+                   note='EDF charged without actual meter reading', fmt='#,##0', alt=True)
+    r = 27; ks_row(r, 'Actual / customer readings',
+                   "=IFERROR(COUNTIF('EDF Evidence Report'!H:H,\"Actual\"),\"\")",
+                   fmt='#,##0')
+    r = 28; ks_row(r, 'Smart meter readings',
+                   "=IFERROR(COUNTIF('EDF Evidence Report'!H:H,\"Smart\"),\"\")",
+                   fmt='#,##0', alt=True)
+    r = 29; ks_row(r, '% of bills with estimated readings',
+                   "=IFERROR(B26/IFERROR(COUNTA('EDF Evidence Report'!H2:H9999),1),\"\")",
+                   fmt='%')
 
-    ws_ks.freeze_panes = "A2"
+    ws_ks.freeze_panes = 'A2'
 
     # ==========================================================================
     # TAB B: BALANCE TREND  (data + line chart)
@@ -909,28 +936,39 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
             pc_rows_data.append((c_['Date'], charge))
         pc_r += 1
 
-    # Summary stats below the table
-    if len(pos_diffs):
+    # Summary stats — Excel formulas referencing column F (charges) and C (days) above
+    if pc_r > 2:
         gap = 2
         sr  = pc_r + gap
         _section_hdr(ws_pc, sr, "SUMMARY STATISTICS", ncols=8, bg=ORANGE)
         sr += 1
-        def pc_stat(r, lbl, val, fmt='£'):
+
+        def pc_stat(r, lbl, formula, fmt='£'):
             _text(ws_pc, r, 1, lbl, bold=True, fill_hex=LGREY)
-            if fmt == '£':
-                _money(ws_pc, r, 2, val, fill_hex=LGREY, bold=True)
-            else:
-                _num(ws_pc, r, 2, val, fmt=fmt, fill_hex=LGREY, bold=True)
-            for cc in range(3,9):
-                ws_pc.cell(row=r, column=cc).fill = PatternFill("solid", start_color=LGREY)
+            c = ws_pc.cell(row=r, column=2, value=formula)
+            c.font   = Font(name='Calibri', size=10, bold=True)
+            c.fill   = PatternFill('solid', start_color=LGREY)
+            c.border = CELL_BORDER
+            c.alignment = Alignment(horizontal='right')
+            c.number_format = '£#,##0.00' if fmt == '£' else fmt
+            for cc in range(3, 9):
+                ws_pc.cell(row=r, column=cc).fill   = PatternFill('solid', start_color=LGREY)
                 ws_pc.cell(row=r, column=cc).border = CELL_BORDER
 
-        pc_stat(sr,   "Mean charge per period",    float(np.mean(pos_diffs)))
-        pc_stat(sr+1, "Median charge per period",  float(np.median(pos_diffs)))
-        pc_stat(sr+2, "Largest single charge",     float(np.max(pos_diffs)))
-        pc_stat(sr+3, "Smallest single charge",    float(np.min(pos_diffs)))
-        avg_days = float(np.mean([(dfc.iloc[i]['_dt']-dfc.iloc[i-1]['_dt']).days for i in range(1,n)]))
-        pc_stat(sr+4, "Average days between bills", avg_days, fmt="#,##0.0")
+        dr = f'F2:F{pc_r - 1}'   # data range for charges column
+        cr = f'C2:C{pc_r - 1}'   # data range for days column
+        pc_stat(sr,   'Mean charge per period  (positive only)',
+                      f'=IFERROR(AVERAGEIF({dr},">0"),"")')
+        pc_stat(sr+1, 'Largest single charge',
+                      f'=IFERROR(MAX({dr}),"")')
+        pc_stat(sr+2, 'Largest credit / reduction',
+                      f'=IFERROR(MIN({dr}),"")')
+        pc_stat(sr+3, 'Charge periods  (balance increased)',
+                      f'=IFERROR(COUNTIF({dr},">0"),"")', fmt='#,##0')
+        pc_stat(sr+4, 'Credit periods  (balance fell)',
+                      f'=IFERROR(COUNTIF({dr},"<0"),"")', fmt='#,##0')
+        pc_stat(sr+5, 'Average days between bills',
+                      f'=IFERROR(AVERAGE({cr}),"")', fmt='#,##0.0')
 
     # Bar chart — charge per period
     if len(pc_rows_data) > 1:
@@ -970,7 +1008,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         ws.row_dimensions[r].height = 20
 
     _banner(ws_df, 1, "EDF ENERGY DISPUTE  —  AUTOMATED ANALYSIS FLAGS", ORANGE)
-    ws_df.cell(row=2, column=1, value=f"Generated {datetime.now().strftime('%d/%m/%Y %H:%M')}  |  {n} bills analysed  |  Period: {dates_lbl[0]} → {dates_lbl[-1]}")
+    ws_df.cell(row=2, column=1,
+               value=f"Generated {datetime.now().strftime('%d/%m/%Y %H:%M')}  |  Flags generated from Balance Trend data  |  Period: {dates_lbl[0]} to {dates_lbl[-1]}")
     ws_df.cell(row=2, column=1).font = Font(name="Calibri", size=9, italic=True, color=DGREY)
 
     legend_row = 3
