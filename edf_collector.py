@@ -245,18 +245,22 @@ def parse_htm_account_history(text):
         period_from = parse_to_display_date(m.group(4)) if m.group(4) else 'N/A'
         period_to   = parse_to_display_date(m.group(5)) if m.group(5) else 'N/A'
         units       = m.group(3) if m.group(3) else 'N/A'
+        charge_amt  = float(m.group(2).replace(',', ''))
         balance     = float(m.group(6).replace(',', ''))
         records.append({
             'Source':               'HTM Account History',
+            'Sender':               '',
             'Date':                 date_str,
             'Period From':          period_from,
             'Period To':            period_to,
             'Invoice #':            'N/A',
             'Amount (£)':           balance,
-            'Entry Type':           'Balance',
+            'Period Charge (£)':    charge_amt,
+            'Entry Type':           'Ongoing Balance',
             'Reading':              'Unknown',
             'Units (kWh)':          units,
             'Standing Chg (p/day)': 'N/A',
+            'Attachment Name':      'N/A',
             'Details':              'HTM: charged account',
             'Logic Used':           'HTM Charge',
         })
@@ -272,15 +276,18 @@ def parse_htm_account_history(text):
         balance  = float(m.group(3).replace(',', ''))
         records.append({
             'Source':               'HTM Account History',
+            'Sender':               '',
             'Date':                 date_str,
             'Period From':          'N/A',
             'Period To':            'N/A',
             'Invoice #':            'N/A',
             'Amount (£)':           balance,
+            'Period Charge (£)':    'N/A',
             'Entry Type':           'Payment',
             'Reading':              'Unknown',
             'Units (kWh)':          'N/A',
             'Standing Chg (p/day)': 'N/A',
+            'Attachment Name':      'N/A',
             'Details':              'HTM: payment received',
             'Logic Used':           'HTM Payment',
         })
@@ -296,15 +303,18 @@ def parse_htm_account_history(text):
         balance  = float(m.group(3).replace(',', ''))
         records.append({
             'Source':               'HTM Account History',
+            'Sender':               '',
             'Date':                 date_str,
             'Period From':          'N/A',
             'Period To':            'N/A',
             'Invoice #':            'N/A',
             'Amount (£)':           balance,
+            'Period Charge (£)':    'N/A',
             'Entry Type':           'Credit',
             'Reading':              'Unknown',
             'Units (kWh)':          'N/A',
             'Standing Chg (p/day)': 'N/A',
+            'Attachment Name':      'N/A',
             'Details':              'HTM: reversed account charge',
             'Logic Used':           'HTM Reversal',
         })
@@ -315,6 +325,57 @@ def parse_htm_account_history(text):
 # ---------------------------------------------------------------------------
 # Evidence Engine
 # ---------------------------------------------------------------------------
+
+def _extract_sender_email(msg):
+    """Extract sender email address from a pypff message, trying multiple methods."""
+    sender = None
+    # Try transport headers first (most reliable for SMTP email address)
+    try:
+        headers = msg.get_transport_headers()
+        if headers:
+            headers_str = headers if isinstance(headers, str) else headers.decode('utf-8', errors='replace')
+            m = re.search(r'^From:\s*.*?([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})', headers_str, re.MULTILINE | re.IGNORECASE)
+            if m:
+                sender = m.group(1).lower()
+    except Exception:
+        pass
+    # Fallback: try sender name field (sometimes contains email)
+    if not sender:
+        try:
+            name = msg.get_sender_name() or ''
+            m = re.search(r'([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})', name)
+            if m:
+                sender = m.group(1).lower()
+        except Exception:
+            pass
+    return sender or ''
+
+
+def _matches_domain_filter(sender_email, filter_str):
+    """
+    Check if sender_email matches the domain filter string.
+    filter_str is comma-separated, supporting:
+      - domain names: "edf.com" matches *@edf.com and *@*.edf.com
+      - full addresses: "billing@edf.com" matches exactly
+      - wildcard domains: "*.edf.com" matches subdomains
+    """
+    if not sender_email or not filter_str:
+        return False
+    sender_email = sender_email.lower().strip()
+    parts = [p.strip().lower() for p in filter_str.split(',') if p.strip()]
+    for pattern in parts:
+        if '@' in pattern:
+            # Full email address match
+            if sender_email == pattern:
+                return True
+        else:
+            # Domain match — check exact domain or subdomain
+            domain = pattern.lstrip('*').lstrip('.')
+            sender_domain = sender_email.split('@')[-1] if '@' in sender_email else ''
+            if sender_domain == domain or sender_domain.endswith('.' + domain):
+                return True
+    return False
+
 
 class EvidenceEngine:
     def __init__(self, config, update_ui_cb, progress_cb=None, cancel_event=None):
@@ -366,7 +427,8 @@ class EvidenceEngine:
     # New-format PDF processing
     # ------------------------------------------------------------------
 
-    def _process_new_invoice(self, text, source_label, detail_label, fallback_date):
+    def _process_new_invoice(self, text, source_label, detail_label, fallback_date,
+                             sender='', attachment_name=''):
         fields = extract_new_invoice_fields(text)
         if 'amount' not in fields:
             return False  # didn't match
@@ -388,23 +450,30 @@ class EvidenceEngine:
                 r_type = label
                 break
 
+        # Classify entry type: New Bill if it has period charges, else Ongoing Balance
+        entry_type = 'New Bill' if fields.get('period_charge') or fields.get('period_from') else 'Ongoing Balance'
+
         self._add_record({
             'Source':               source_label,
+            'Sender':               sender,
             'Date':                 fields.get('date', fallback_date),
             'Period From':          fields.get('period_from', 'N/A'),
             'Period To':            fields.get('period_to', 'N/A'),
             'Invoice #':            fields.get('inv_num', 'N/A'),
             'Amount (£)':           fields['amount'],
-            'Entry Type':           'Balance',
+            'Period Charge (£)':    fields.get('period_charge', 'N/A'),
+            'Entry Type':           entry_type,
             'Reading':              r_type,
             'Units (kWh)':          fields.get('units_used', 'N/A'),
             'Standing Chg (p/day)': fields.get('standing_charge', 'N/A'),
+            'Attachment Name':      attachment_name or 'N/A',
             'Details':              (detail_label or 'New invoice')[:60],
             'Logic Used':           'New Invoice Format',
         })
         return True
 
-    def _process_new_credit(self, text, source_label, detail_label, fallback_date):
+    def _process_new_credit(self, text, source_label, detail_label, fallback_date,
+                            sender='', attachment_name=''):
         fields = extract_new_credit_fields(text)
         if 'amount' not in fields:
             return False
@@ -419,15 +488,18 @@ class EvidenceEngine:
 
         self._add_record({
             'Source':               source_label,
+            'Sender':               sender,
             'Date':                 fields.get('date', fallback_date),
             'Period From':          'N/A',
             'Period To':            'N/A',
             'Invoice #':            fields.get('inv_num', 'N/A'),
             'Amount (£)':           fields['amount'],
+            'Period Charge (£)':    'N/A',
             'Entry Type':           'Credit',
             'Reading':              'Unknown',
             'Units (kWh)':          'N/A',
             'Standing Chg (p/day)': 'N/A',
+            'Attachment Name':      attachment_name or 'N/A',
             'Details':              (detail_label or 'Credit note')[:60],
             'Logic Used':           'New Credit Note Format',
         })
@@ -437,7 +509,7 @@ class EvidenceEngine:
     # Generic text processing (old format + email bodies)
     # ------------------------------------------------------------------
 
-    def process_text(self, text, source_type, detail, fallback_date):
+    def process_text(self, text, source_type, detail, fallback_date, sender='', attachment_name=''):
         if not text:
             return
 
@@ -450,14 +522,16 @@ class EvidenceEngine:
                 return
 
         found_amt, strategy = None, ''
+        matched_pattern_idx = -1
 
         if self.config.get('use_anchors', True):
-            for p in AMOUNT_PATTERNS:
+            for idx, p in enumerate(AMOUNT_PATTERNS):
                 m = re.search(p, clean_text, re.IGNORECASE)
                 if m:
                     try:
                         found_amt = float(m.group(1).replace(',', ''))
                         strategy  = 'Smart Context'
+                        matched_pattern_idx = idx
                         break
                     except Exception:
                         continue
@@ -502,26 +576,86 @@ class EvidenceEngine:
 
         period_from, period_to = self.find_billing_period(clean_text)
 
+        # Attempt to extract period charge separately from cumulative balance
+        period_charge = 'N/A'
+        pc_m = re.search(
+            r'total charges for this (?:period|bill|invoice)\s+£\s?([\d,]+(?:\.\d{2})?)',
+            clean_text, re.IGNORECASE
+        )
+        if pc_m:
+            try:
+                period_charge = float(pc_m.group(1).replace(',', ''))
+            except (ValueError, AttributeError):
+                pass
+
+        # Classify Entry Type based on content
+        entry_type = self._classify_entry_type(clean_text, matched_pattern_idx,
+                                               period_from, period_to, strategy)
+
         self._add_record({
             'Source':               source_type,
+            'Sender':               sender,
             'Date':                 date_to_use,
             'Period From':          period_from,
             'Period To':            period_to,
             'Invoice #':            inv_num,
             'Amount (£)':           found_amt,
-            'Entry Type':           'Balance',
+            'Period Charge (£)':    period_charge,
+            'Entry Type':           entry_type,
             'Reading':              r_type,
             'Units (kWh)':          units_used,
             'Standing Chg (p/day)': standing_charge,
+            'Attachment Name':      attachment_name or 'N/A',
             'Details':              detail[:60],
             'Logic Used':           strategy,
         })
+
+    def _classify_entry_type(self, text, pattern_idx, period_from, period_to, strategy):
+        """Classify a record as New Bill, Ongoing Balance, or Other based on content."""
+        text_lower = text.lower()
+
+        # If it has billing period dates AND charges/invoice details → New Bill
+        has_period = (period_from != 'N/A' and period_to != 'N/A')
+        has_bill_markers = bool(re.search(
+            r'(?:bill date|date issued|invoice number|total charges|your charges)',
+            text_lower
+        ))
+
+        if has_period and has_bill_markers:
+            return 'New Bill'
+
+        # Patterns 0-2 match current balance/total charges → these are new bill amounts
+        # Pattern 3 matches "your new account balance" → ongoing cumulative balance
+        if pattern_idx >= 0:
+            if pattern_idx <= 2:
+                return 'New Bill'
+            if pattern_idx == 3:
+                return 'Ongoing Balance'
+
+        # If matched via "balance" pattern or has "account balance" language → Ongoing Balance
+        if re.search(r'(?:account balance|running balance|balance brought forward)', text_lower):
+            return 'Ongoing Balance'
+
+        # If matched via total/amount to pay with period info → New Bill
+        if has_period:
+            return 'New Bill'
+
+        # Fallback strategy check
+        if strategy == 'Large Amount Fallback':
+            return 'Other'
+
+        # Default: if it looks like a bill (has kWh, standing charge) → New Bill
+        if re.search(r'(?:kwh|standing charge|tariff)', text_lower):
+            return 'New Bill'
+
+        return 'Ongoing Balance'
 
     # ------------------------------------------------------------------
     # PDF file processing — detects format automatically
     # ------------------------------------------------------------------
 
-    def process_pdf_file(self, path, source_label, detail_label, fallback_date):
+    def process_pdf_file(self, path, source_label, detail_label, fallback_date,
+                         sender='', attachment_name=''):
         if self.is_cancelled():
             return
         try:
@@ -538,14 +672,21 @@ class EvidenceEngine:
                 pdf_text = ' '.join([p.extract_text() or '' for p in pdf.pages])
             del raw
 
+            # Use original filename as attachment_name if not already set
+            if not attachment_name:
+                attachment_name = detail_label or ''
+
             fmt = detect_pdf_format(pdf_text)
 
             if fmt == 'new_invoice':
-                self._process_new_invoice(pdf_text, source_label, detail_label, fallback_date)
+                self._process_new_invoice(pdf_text, source_label, detail_label, fallback_date,
+                                          sender=sender, attachment_name=attachment_name)
             elif fmt == 'new_credit':
-                self._process_new_credit(pdf_text, source_label, detail_label, fallback_date)
+                self._process_new_credit(pdf_text, source_label, detail_label, fallback_date,
+                                         sender=sender, attachment_name=attachment_name)
             else:
-                self.process_text(pdf_text, source_label, detail_label, fallback_date)
+                self.process_text(pdf_text, source_label, detail_label, fallback_date,
+                                  sender=sender, attachment_name=attachment_name)
 
         except Exception as e:
             self.log_error(f'PDF: {detail_label}', str(e))
@@ -591,7 +732,21 @@ class EvidenceEngine:
                 if self.update_progress and i % 100 == 0:
                     self.update_progress(i + 1, msg_total, f'Scanning PST/OST folder: {i+1}/{msg_total}')
 
-                if any(k in subj.upper() for k in ['EDF', 'BILL', 'STATEMENT', 'ACCOUNT', 'INVOICE']):
+                # Extract sender email for domain filtering and spreadsheet
+                sender_email = _extract_sender_email(msg)
+
+                # Determine if this email should be processed
+                use_domain = self.config.get('use_domain_filter', False)
+                domain_str = self.config.get('domain_filter', '')
+                should_process = False
+                if use_domain and domain_str:
+                    if _matches_domain_filter(sender_email, domain_str):
+                        should_process = True
+                else:
+                    if any(k in subj.upper() for k in ['EDF', 'BILL', 'STATEMENT', 'ACCOUNT', 'INVOICE']):
+                        should_process = True
+
+                if should_process:
                     with self.lock:
                         self.email_count += 1
                     html  = msg.get_html_body()
@@ -599,9 +754,11 @@ class EvidenceEngine:
 
                     if html:
                         body_text = BeautifulSoup(html, 'html.parser').get_text(separator=' ')
-                        self.process_text(body_text, 'Email Body', subj, date_str)
+                        self.process_text(body_text, 'Email Body', subj, date_str,
+                                          sender=sender_email)
                     elif plain:
-                        self.process_text(plain.decode('utf-8', errors='ignore'), 'Email Body', subj, date_str)
+                        self.process_text(plain.decode('utf-8', errors='ignore'), 'Email Body', subj, date_str,
+                                          sender=sender_email)
                     else:
                         rtf_body = None
                         try:
@@ -613,37 +770,52 @@ class EvidenceEngine:
                                 rtf_str  = rtf_body.decode('utf-8', errors='replace')
                                 rtf_text = re.sub(r'\\[a-z]+[-\d]*\s?', ' ', rtf_str)
                                 rtf_text = re.sub(r'[{}\\]', ' ', rtf_text)
-                                self.process_text(rtf_text, 'Email Body (RTF)', subj, date_str)
+                                self.process_text(rtf_text, 'Email Body (RTF)', subj, date_str,
+                                                  sender=sender_email)
                             except Exception as e:
                                 self.log_error(f'Email: {subj}', f'RTF decode: {e}')
                         else:
                             self.log_error(f'Email: {subj} ({date_str})', 'No readable body')
 
-                for a_idx in range(msg.get_number_of_attachments()):
-                    if self.is_cancelled():
-                        return
-                    try:
-                        att  = msg.get_attachment(a_idx)
-                        size = att.get_size()
-                        if size > 4:
-                            buf = att.read_buffer(size)
-                            if buf and buf.startswith(b'%PDF'):
-                                with self.lock:
-                                    self.pdf_count += 1
-                                try:
-                                    att_name = att.get_long_filename() or att.get_short_filename() or f'Attachment_{self.pdf_count}.pdf'
-                                except Exception:
-                                    att_name = f'Attachment_{self.pdf_count}.pdf'
-                                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                                    tmp.write(buf)
-                                    tmp_path = tmp.name
-                                try:
-                                    self.process_pdf_file(tmp_path, 'PST PDF Attachment', att_name, date_str)
-                                finally:
-                                    if os.path.exists(tmp_path):
-                                        os.remove(tmp_path)
-                    except Exception as e:
-                        self.log_error(f'Attachment in "{subj}"', str(e))
+                    for a_idx in range(msg.get_number_of_attachments()):
+                        if self.is_cancelled():
+                            return
+                        try:
+                            att  = msg.get_attachment(a_idx)
+                            size = att.get_size()
+                            if size > 4:
+                                buf = att.read_buffer(size)
+                                if buf and buf.startswith(b'%PDF'):
+                                    with self.lock:
+                                        self.pdf_count += 1
+                                    att_name = None
+                                    # Try multiple pypff methods to get the real filename
+                                    for _getter in [
+                                        lambda: att.name,
+                                        lambda: att.get_name(),
+                                        lambda: att.get_long_filename(),
+                                        lambda: att.get_short_filename(),
+                                    ]:
+                                        try:
+                                            val = _getter()
+                                            if val:
+                                                att_name = val
+                                                break
+                                        except (AttributeError, TypeError, Exception):
+                                            continue
+                                    if not att_name:
+                                        att_name = f'Attachment_{self.pdf_count}.pdf'
+                                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                                        tmp.write(buf)
+                                        tmp_path = tmp.name
+                                    try:
+                                        self.process_pdf_file(tmp_path, 'PST PDF Attachment', att_name, date_str,
+                                                              sender=sender_email, attachment_name=att_name)
+                                    finally:
+                                        if os.path.exists(tmp_path):
+                                            os.remove(tmp_path)
+                        except Exception as e:
+                            self.log_error(f'Attachment in "{subj}"', str(e))
 
             except Exception as e:
                 self.log_error(f'PST message index {i}', str(e))
@@ -674,7 +846,8 @@ class EvidenceEngine:
             )
             with self.lock:
                 self.pdf_count += 1
-            self.process_pdf_file(file_path, 'Local PDF Folder', fname, fallback_date)
+            self.process_pdf_file(file_path, 'Local PDF Folder', fname, fallback_date,
+                                     attachment_name=fname)
             if self.update_progress:
                 self.update_progress(idx, total, f'Scanning local PDFs: {idx}/{total}')
 
@@ -747,13 +920,23 @@ def _section_hdr(ws, r, label, ncols=3, bg='10367A'):
 # ---------------------------------------------------------------------------
 
 def write_evidence_sheet(ws, df, is_duplicate=False):
-    # Columns: A=Source B=Date C=PeriodFrom D=PeriodTo E=Invoice
-    #          F=Amount G=%Change H=EntryType I=Reading J=Units
-    #          K=StandingChg L=Details M=LogicUsed N=AnomalyFlag
+    # Columns: A=Source B=Sender C=Date D=PeriodFrom E=PeriodTo F=Invoice
+    #          G=Amount H=PeriodCharge I=UnitRate J=%Change K=EntryType
+    #          L=Reading M=Units N=StandingChg O=AttachmentName P=Details
+    #          Q=LogicUsed R=AnomalyFlag
+    COL_AMOUNT       = 7   # G
+    COL_PERIOD_CHG   = 8   # H
+    COL_UNIT_RATE    = 9   # I
+    COL_PCT_CHANGE   = 10  # J
+    COL_READING_IDX  = 11  # 0-based index in row for Reading (col L, position 12, but 0-based=11)
+    COL_ANOMALY      = 18  # R
+
     headers = [
-        'Source', 'Date', 'Period From', 'Period To', 'Invoice #',
-        'Amount (£)', '% Change', 'Entry Type', 'Reading', 'Units (kWh)',
-        'Standing Chg (p/day)', 'Details', 'Logic Used', 'Anomaly Flag',
+        'Source', 'Sender', 'Date', 'Period From', 'Period To', 'Invoice #',
+        'Amount (£)', 'Period Charge (£)', 'Unit Rate (p/kWh)', '% Change',
+        'Entry Type', 'Reading', 'Units (kWh)',
+        'Standing Chg (p/day)', 'Attachment Name', 'Details', 'Logic Used',
+        'Anomaly Flag',
     ]
     bg = '888888' if is_duplicate else 'FE5716'
     for col, h in enumerate(headers, 1):
@@ -766,58 +949,63 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()
 
         for c_idx, val in enumerate(row, 1):
-            if c_idx == 7 and not is_duplicate:
-                # % Change as live formula (col G)
-                c = ws.cell(row=r_idx, column=7,
-                            value=f'=IFERROR((F{r_idx}-F{r_idx-1})/F{r_idx-1},"")')
+            if c_idx == COL_PCT_CHANGE and not is_duplicate:
+                # % Change as live formula — Amount is col G
+                c = ws.cell(row=r_idx, column=COL_PCT_CHANGE,
+                            value=f'=IFERROR((G{r_idx}-G{r_idx-1})/G{r_idx-1},"")')
                 c.number_format = '0.0%'
                 c.alignment     = Alignment(horizontal='right', vertical='top')
                 c.font          = Font(name='Calibri', size=10)
                 c.border        = CELL_BORDER
                 c.fill          = row_fill
             else:
-                # Convert date columns to real Excel date serials
+                # Convert date columns to real Excel date serials (C=3, D=4, E=5)
                 excel_val = val
-                if c_idx in (2, 3, 4):
+                if c_idx in (3, 4, 5):
                     dt = to_excel_date(val)
                     if dt is not None:
                         excel_val = dt
                 c = ws.cell(row=r_idx, column=c_idx, value=excel_val)
-                if c_idx == 6 and isinstance(val, (int, float)):
+                if c_idx == COL_AMOUNT and isinstance(val, (int, float)):
                     c.number_format = '£#,##0.00'
-                if c_idx in (2, 3, 4) and hasattr(excel_val, 'year'):
+                if c_idx == COL_PERIOD_CHG and isinstance(val, (int, float)):
+                    c.number_format = '£#,##0.00'
+                if c_idx == COL_UNIT_RATE and isinstance(val, (int, float)):
+                    c.number_format = '0.00'
+                if c_idx in (3, 4, 5) and hasattr(excel_val, 'year'):
                     c.number_format = 'dd/mm/yyyy'
                 c.font      = Font(name='Calibri', size=10)
                 c.fill      = row_fill if not is_duplicate else PatternFill('solid', start_color=DUP_GREY)
                 c.border    = CELL_BORDER
                 c.alignment = Alignment(vertical='top')
 
-            if not is_duplicate and len(row) > 8 and row[8] == 'Estimated':
+            # Highlight estimated readings (Reading is col L = 0-based index 11)
+            if not is_duplicate and len(row) > COL_READING_IDX and row[COL_READING_IDX] == 'Estimated':
                 c.fill = PatternFill('solid', start_color=EST_YELLOW)
 
-        # Anomaly flag col N (14)
+        # Anomaly flag col R (18) — Amount is col G
         if not is_duplicate and r_idx > 2:
-            c14 = ws.cell(row=r_idx, column=14,
-                          value=f'=IF(AND(F{r_idx-1}>0,F{r_idx}>F{r_idx-1}*2),"⚠ >100% INCREASE","")')
-            c14.font   = Font(name='Calibri', size=10, bold=True)
-            c14.border = CELL_BORDER
-            c14.fill   = row_fill
+            ca = ws.cell(row=r_idx, column=COL_ANOMALY,
+                         value=f'=IF(AND(G{r_idx-1}>0,G{r_idx}>G{r_idx-1}*2),"⚠ >100% INCREASE","")')
+            ca.font   = Font(name='Calibri', size=10, bold=True)
+            ca.border = CELL_BORDER
+            ca.fill   = row_fill
 
     # Conditional formatting: only colour anomaly column red when non-empty
     if not is_duplicate and r_idx > 2:
         ws.conditional_formatting.add(
-            f'N2:N{r_idx}',
+            f'R2:R{r_idx}',
             FormulaRule(
-                formula=['$N2<>""'],
+                formula=['$R2<>""'],
                 fill=PatternFill('solid', start_color=JUMP_RED),
                 font=Font(name='Calibri', size=10, bold=True),
             ),
         )
 
     widths = {
-        'A': 18, 'B': 13, 'C': 13, 'D': 13, 'E': 16,
-        'F': 13, 'G': 10, 'H': 12, 'I': 11, 'J': 12,
-        'K': 18, 'L': 38, 'M': 18, 'N': 20,
+        'A': 18, 'B': 26, 'C': 13, 'D': 13, 'E': 13, 'F': 16,
+        'G': 13, 'H': 15, 'I': 15, 'J': 10, 'K': 14, 'L': 11,
+        'M': 12, 'N': 18, 'O': 28, 'P': 38, 'Q': 18, 'R': 20,
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
@@ -841,8 +1029,8 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
     alt_fill = PatternFill('solid', start_color='EEF2FF')
     esn      = evidence_sheet_name
 
-    date_col = f"'{esn}'!$B$2:$B${last_data_row}"
-    amt_col  = f"'{esn}'!$F$2:$F${last_data_row}"
+    date_col = f"'{esn}'!$C$2:$C${last_data_row}"
+    amt_col  = f"'{esn}'!$G$2:$G${last_data_row}"
 
     for r_idx, year_val in enumerate(years, 2):
         row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()
@@ -967,10 +1155,28 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df     = df.drop(columns=['_sort'], errors='ignore')
     dup_df = dup_df.drop(columns=['_sort', '_src_pri', '_dedup_date'], errors='ignore') if not dup_df.empty else dup_df
 
+    # Compute Unit Rate (p/kWh) where both Period Charge and Units are available
+    def _compute_unit_rate(row):
+        pc = row.get('Period Charge (£)')
+        units = row.get('Units (kWh)')
+        try:
+            pc_f = float(pc)
+            u_f = float(str(units).replace(',', ''))
+            if u_f > 0 and pc_f > 0:
+                return round((pc_f / u_f) * 100, 2)
+        except (ValueError, TypeError):
+            pass
+        return 'N/A'
+
+    df['Unit Rate (p/kWh)'] = df.apply(_compute_unit_rate, axis=1)
+    if not dup_df.empty:
+        dup_df['Unit Rate (p/kWh)'] = dup_df.apply(_compute_unit_rate, axis=1)
+
     col_order = [
-        'Source', 'Date', 'Period From', 'Period To', 'Invoice #',
-        'Amount (£)', '% Change', 'Entry Type', 'Reading', 'Units (kWh)',
-        'Standing Chg (p/day)', 'Details', 'Logic Used',
+        'Source', 'Sender', 'Date', 'Period From', 'Period To', 'Invoice #',
+        'Amount (£)', 'Period Charge (£)', 'Unit Rate (p/kWh)', '% Change',
+        'Entry Type', 'Reading', 'Units (kWh)',
+        'Standing Chg (p/day)', 'Attachment Name', 'Details', 'Logic Used',
     ]
     df     = df.reindex(columns=col_order)
     dup_df = dup_df.reindex(columns=col_order) if not dup_df.empty else dup_df
@@ -1047,7 +1253,11 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df_an['_dt'] = df_an['Date'].apply(parse_to_sort_date)
     df_an        = df_an.sort_values('_dt').reset_index(drop=True)
     analysis_min = float(config.get('analysis_min', 5000.0))
-    dfc          = df_an[df_an['Amount (£)'] >= analysis_min].copy().reset_index(drop=True)
+    balance_types = ('New Bill', 'Ongoing Balance', 'Payment')
+    dfc          = df_an[
+        (df_an['Amount (£)'] >= analysis_min) &
+        (df_an['Entry Type'].isin(balance_types))
+    ].copy().reset_index(drop=True)
     dfc['year']  = dfc['_dt'].dt.year
     dfc['month'] = dfc['_dt'].dt.month
 
@@ -1093,6 +1303,14 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
             _money(ws_ks, r, 2, value, bold=bold, fill_hex=bg)
         elif fmt == '%':
             _num(ws_ks, r, 2, value, fmt='0.0%', bold=bold, fill_hex=bg)
+        elif fmt == 'date':
+            cell = ws_ks.cell(row=r, column=2, value=value)
+            cell.number_format = 'dd/mm/yyyy'
+            cell.font   = Font(name='Calibri', size=10, bold=bold)
+            cell.border = CELL_BORDER
+            cell.alignment = Alignment(horizontal='right', vertical='center')
+            if bg:
+                cell.fill = PatternFill('solid', start_color=bg)
         elif fmt:
             _num(ws_ks, r, 2, value, fmt=fmt, bold=bold, fill_hex=bg)
         else:
@@ -1104,13 +1322,13 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     r = 2;  _section_hdr(ws_ks, r, 'ACCOUNT OVERVIEW')
     r = 3;  ks_row(r, 'Account reference', acc_ref, alt=True)
     r = 4;  ks_row(r, 'First bill on record',    "='Balance Trend'!A2",
-                   note='From Balance Trend sheet')
+                   fmt='date', note='From Balance Trend sheet')
     r = 5;  ks_row(r, 'Most recent bill',
                    "=INDEX('Balance Trend'!A:A,MATCH(9.99E+307,'Balance Trend'!B:B)+1)",
-                   alt=True)
+                   fmt='date', alt=True)
     r = 6;  ks_row(r, 'Period covered (days)',
                    "=IFERROR(INT(INDEX('Balance Trend'!A:A,MATCH(9.99E+307,'Balance Trend'!B:B)+1)-'Balance Trend'!A2),\"\")",
-                   note='Days between first and last bill')
+                   fmt='#,##0', note='Days between first and last bill')
     r = 7;  ks_row(r, 'Total bills on record',
                    "=IFERROR(COUNT('Balance Trend'!B:B),\"\")",
                    fmt='#,##0', alt=True)
@@ -1157,14 +1375,24 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
 
     r = 25; _section_hdr(ws_ks, r, 'READING & DATA QUALITY')
     r = 26; ks_row(r, 'Estimated readings',
-                   "=IFERROR(COUNTIF('EDF Evidence Report'!I:I,\"Estimated\"),\"\")",
+                   "=IFERROR(COUNTIF('EDF Evidence Report'!L:L,\"Estimated\"),\"\")",
                    fmt='#,##0', alt=True)
     r = 27; ks_row(r, 'Actual / customer readings',
-                   "=IFERROR(COUNTIF('EDF Evidence Report'!I:I,\"Actual\"),\"\")", fmt='#,##0')
+                   "=IFERROR(COUNTIF('EDF Evidence Report'!L:L,\"Actual\"),\"\")", fmt='#,##0')
     r = 28; ks_row(r, 'Smart meter readings',
-                   "=IFERROR(COUNTIF('EDF Evidence Report'!I:I,\"Smart\"),\"\")", fmt='#,##0', alt=True)
+                   "=IFERROR(COUNTIF('EDF Evidence Report'!L:L,\"Smart\"),\"\")", fmt='#,##0', alt=True)
     r = 29; ks_row(r, '% of bills with estimated readings',
-                   "=IFERROR(B26/COUNT('EDF Evidence Report'!F:F),\"\")", fmt='%')
+                   "=IFERROR(B26/COUNT('EDF Evidence Report'!G:G),\"\")", fmt='%')
+
+    r = 30; _section_hdr(ws_ks, r, 'UNIT RATES')
+    r = 31; ks_row(r, 'Average unit rate (p/kWh)',
+                   "=IFERROR(AVERAGE('EDF Evidence Report'!I:I),\"\")", fmt='0.00', alt=True,
+                   note='Across all bills with valid period charge and kWh')
+    r = 32; ks_row(r, 'Maximum unit rate (p/kWh)',
+                   "=IFERROR(MAX('EDF Evidence Report'!I:I),\"\")", fmt='0.00',
+                   note='Highest effective rate — potential overcharge')
+    r = 33; ks_row(r, 'Minimum unit rate (p/kWh)',
+                   "=IFERROR(MIN('EDF Evidence Report'!I:I),\"\")", fmt='0.00', alt=True)
 
     ws_ks.freeze_panes = 'A2'
 
@@ -1523,6 +1751,28 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
                 f"Balance fell £{abs(chg):,.2f} (from £{p['Amount (£)']:,.2f} to £{c_['Amount (£)']:,.2f}).",
                 'INFO'))
 
+    # Reconciliation mismatch: where consecutive New Bill records have period_charge,
+    # compare balance delta vs stated period charge
+    if 'Period Charge (£)' in dfc.columns:
+        for i in range(1, n):
+            p  = dfc.iloc[i - 1]
+            c_ = dfc.iloc[i]
+            if str(c_.get('Entry Type', '')) == 'New Bill' and str(p.get('Entry Type', '')) in ('New Bill', 'Ongoing Balance'):
+                pc = c_.get('Period Charge (£)')
+                try:
+                    pc_val = float(pc)
+                except (ValueError, TypeError):
+                    continue
+                balance_delta = float(c_['Amount (£)']) - float(p['Amount (£)'])
+                diff = abs(balance_delta - pc_val)
+                threshold = max(pc_val * 0.10, 50.0) if pc_val > 0 else 50.0
+                if diff > threshold:
+                    flags.append(('RECONCILIATION MISMATCH', c_['Date'], c_['Amount (£)'],
+                        f"Balance delta £{balance_delta:,.2f} vs period charge £{pc_val:,.2f} "
+                        f"(difference: £{diff:,.2f}). Possible payment, credit, or billing error "
+                        f"between {p['Date']} and {c_['Date']}.",
+                        'HIGH' if diff > pc_val * 0.5 else 'MEDIUM'))
+
     sev_fill = {'HIGH': RED, 'MEDIUM': AMBER, 'INFO': GREEN}
     for fi, (ftype, date, amt, detail, sev) in enumerate(flags, hdr_row + 1):
         bg = sev_fill.get(sev, LGREY)
@@ -1549,6 +1799,94 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         ws_df.column_dimensions[col].width = w
     ws_df.freeze_panes = f'A{hdr_row + 1}'
 
+    # ----- TAB F: DISPUTE TIMELINE -----
+    ws_tl = wb.create_sheet(title='Dispute Timeline')
+    _banner(ws_tl, 1, 'EDF ENERGY DISPUTE  —  CHRONOLOGICAL TIMELINE', ORANGE)
+    ws_tl.cell(row=2, column=1,
+               value=f"Account: {acc_ref}  |  Period: {dates_lbl[0]} to {dates_lbl[-1]}")
+    ws_tl.cell(row=2, column=1).font = Font(name='Calibri', size=9, italic=True, color=DGREY)
+
+    for ci, h in enumerate(['Date', 'Event Type', 'Description'], 1):
+        _hcell(ws_tl, 4, ci, h, bg=NAVY)
+
+    timeline_events = []
+
+    # Bookend: first record
+    timeline_events.append((dates_lbl[0], 'ACCOUNT START',
+        f"First bill on record. Balance: £{amounts[0]:,.2f}."))
+
+    # Top 5 largest balance jumps
+    jumps = []
+    for i in range(1, n):
+        delta = float(amounts[i]) - float(amounts[i - 1])
+        days  = (dfc.iloc[i]['_dt'] - dfc.iloc[i - 1]['_dt']).days
+        if delta > 0:
+            jumps.append((delta, i, days))
+    jumps.sort(key=lambda x: x[0], reverse=True)
+    for delta, idx, days in jumps[:5]:
+        timeline_events.append((dfc.iloc[idx]['Date'], 'LARGE INCREASE',
+            f"Balance rose £{delta:,.2f} in {days} days "
+            f"(from £{amounts[idx-1]:,.2f} to £{amounts[idx]:,.2f})."))
+
+    # Billing gaps > 60 days
+    for i in range(1, n):
+        days = (dfc.iloc[i]['_dt'] - dfc.iloc[i - 1]['_dt']).days
+        if days > 60:
+            timeline_events.append((dfc.iloc[i]['Date'], 'BILLING GAP',
+                f"{days} days without a bill (previous: {dfc.iloc[i-1]['Date']}). "
+                f"Balance accumulated unchecked."))
+
+    # Estimated reading runs (reuse existing detection)
+    if 'Reading' in dfc.columns:
+        run = 0; run_start = None; run_start_date = None
+        for i, rv in enumerate(dfc['Reading'].tolist()):
+            if str(rv).lower() in ('estimated', 'est.'):
+                run += 1
+                if run == 1:
+                    run_start_date = dfc.iloc[i]['Date']
+            else:
+                if run >= 3:
+                    timeline_events.append((run_start_date, 'ESTIMATED READINGS',
+                        f"{run} consecutive bills used estimated meter readings."))
+                run = 0; run_start_date = None
+        if run >= 3:
+            timeline_events.append((run_start_date, 'ESTIMATED READINGS',
+                f"{run} consecutive estimated readings (ongoing)."))
+
+    # Payment events (balance reductions)
+    for i in range(1, n):
+        delta = float(amounts[i]) - float(amounts[i - 1])
+        if delta < -200:
+            timeline_events.append((dfc.iloc[i]['Date'], 'PAYMENT/CREDIT',
+                f"Balance reduced by £{abs(delta):,.2f} "
+                f"(from £{amounts[i-1]:,.2f} to £{amounts[i]:,.2f})."))
+
+    # Reconciliation mismatches (from flags)
+    for ftype, fdate, famt, fdetail, fsev in flags:
+        if ftype == 'RECONCILIATION MISMATCH':
+            timeline_events.append((fdate, 'RECONCILIATION',
+                fdetail))
+
+    # Bookend: latest record
+    timeline_events.append((dates_lbl[-1], 'CURRENT STATE',
+        f"Latest bill on record. Balance: £{amounts[-1]:,.2f}. "
+        f"Total increase from first record: £{amounts[-1] - amounts[0]:,.2f}."))
+
+    # Sort by date and write
+    timeline_events.sort(key=lambda e: parse_to_sort_date(e[0]) or pd.Timestamp.min)
+    tl_r = 5
+    for date, etype, desc in timeline_events:
+        bg_hex = LGREY if tl_r % 2 == 0 else None
+        _text(ws_tl, tl_r, 1, date, fill_hex=bg_hex)
+        _text(ws_tl, tl_r, 2, etype, bold=True, fill_hex=bg_hex)
+        _text(ws_tl, tl_r, 3, desc, fill_hex=bg_hex, wrap=True)
+        ws_tl.row_dimensions[tl_r].height = 40
+        tl_r += 1
+
+    for col, w in zip(['A', 'B', 'C'], [14, 22, 90]):
+        ws_tl.column_dimensions[col].width = w
+    ws_tl.freeze_panes = 'A5'
+
     wb.save(output_path)
 
 
@@ -1566,7 +1904,7 @@ class App:
         self.pst_path    = tk.StringVar()
         self.pdf_dir     = tk.StringVar()
         self.htm_path    = tk.StringVar()
-        self.acc_num     = tk.StringVar(value='671078701920')
+        self.acc_num     = tk.StringVar(value='')
         self.status      = tk.StringVar(value='Ready.')
         self.progress_v  = tk.DoubleVar(value=0)
 
@@ -1579,10 +1917,12 @@ class App:
         self.save_filtered           = tk.BooleanVar(value=True)
         self.use_dedup               = tk.BooleanVar(value=True)
         self.save_dups               = tk.BooleanVar(value=True)
-        self.min_amount              = tk.DoubleVar(value=1000.0)
-        self.analysis_min            = tk.DoubleVar(value=5000.0)
+        self.use_domain_filter       = tk.BooleanVar(value=True)
+        self.domain_filter           = tk.StringVar(value='edfenergy.com')
+        self.min_amount              = tk.DoubleVar(value=500.0)
+        self.analysis_min            = tk.DoubleVar(value=500.0)
         self.output_name             = tk.StringVar(value='EDF_Dispute_Evidence.xlsx')
-        self.report_account_ref      = tk.StringVar(value='671078701920')
+        self.report_account_ref      = tk.StringVar(value='')
 
         self.cancel_event  = threading.Event()
         self.build_ui()
@@ -1644,6 +1984,11 @@ class App:
         r3 = ttk.Frame(s2); r3.pack(fill=tk.X, pady=4)
         tk.Checkbutton(r3, text='Filter by Account #:', variable=self.use_acc_filt, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
         ttk.Entry(r3, textvariable=self.acc_num, width=16).pack(side=tk.LEFT, padx=5)
+
+        r3d = ttk.Frame(s2); r3d.pack(fill=tk.X, pady=4)
+        tk.Checkbutton(r3d, text='Filter PST emails by sender domain:', variable=self.use_domain_filter, bg=EDF_OFFWHITE).pack(side=tk.LEFT)
+        ttk.Entry(r3d, textvariable=self.domain_filter, width=40).pack(side=tk.LEFT, padx=5)
+        ttk.Label(r3d, text='(comma-separated domains/addresses)', font=('Calibri', 8)).pack(side=tk.LEFT)
 
         r4 = ttk.Frame(s2); r4.pack(fill=tk.X, pady=2)
         chk_filt = tk.Checkbutton(r4, text='Filter results below minimum £:', variable=self.filter_below, bg=EDF_OFFWHITE)
@@ -1782,6 +2127,8 @@ class App:
             'save_filtered':        self.save_filtered.get(),
             'use_dedup':            self.use_dedup.get(),
             'save_dups':            self.save_dups.get(),
+            'use_domain_filter':    self.use_domain_filter.get(),
+            'domain_filter':        self.domain_filter.get().strip(),
         }
 
         engine = EvidenceEngine(config, self.set_status, self.set_progress, self.cancel_event)
