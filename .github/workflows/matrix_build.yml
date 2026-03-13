@@ -1,15 +1,18 @@
 name: Build Executables
 
-on: [push]
+on:
+push:
 
 jobs:
 build:
-strategy:
-matrix:
-os: [macos-latest, windows-latest]
+runs-on: ${{ matrix.os }}
 
 ```
-runs-on: ${{ matrix.os }}
+strategy:
+  matrix:
+    os:
+      - macos-latest
+      - windows-latest
 
 steps:
   - name: Checkout Repository
@@ -18,15 +21,13 @@ steps:
   - name: Set up Python
     uses: actions/setup-python@v5
     with:
-      python-version: '3.10'
+      python-version: "3.10"
 
   - name: Install Dependencies
-    run: |
-      pip install libpff-python pandas pdfplumber beautifulsoup4 openpyxl numpy pyinstaller
+    run: pip install libpff-python pandas pdfplumber beautifulsoup4 openpyxl numpy pyinstaller
 
-  - name: Build App
-    run: |
-      pyinstaller --onefile --windowed --name "EDF_Forensic_Audit" edf_collector.py
+  - name: Build Executable
+    run: pyinstaller --onefile --windowed --name EDF_Forensic_Audit edf_collector.py
 
   - name: Upload Artifact
     uses: actions/upload-artifact@v4
