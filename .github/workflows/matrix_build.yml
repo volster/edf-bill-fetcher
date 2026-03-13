@@ -1,0 +1,50 @@
+name: Build Executables
+
+on: [push]
+
+jobs:
+build:
+strategy:
+matrix:
+os: [macos-latest, windows-latest]
+
+```
+runs-on: ${{ matrix.os }}
+
+steps:
+  - name: Checkout Repository
+    uses: actions/checkout@v4
+
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: '3.10'
+
+  - name: Install Dependencies
+    run: |
+      pip install libpff-python pandas pdfplumber beautifulsoup4 openpyxl numpy pyinstaller
+
+  - name: Build macOS App
+    if: matrix.os == 'macos-latest'
+    run: |
+      pyinstaller --onefile --windowed --name "EDF_Forensic_Audit" edf_collector.py
+
+  - name: Build Windows EXE
+    if: matrix.os == 'windows-latest'
+    run: |
+      pyinstaller --onefile --windowed --name "EDF_Forensic_Audit" edf_collector.py
+
+  - name: Upload macOS Artifact
+    if: matrix.os == 'macos-latest'
+    uses: actions/upload-artifact@v4
+    with:
+      name: Mac-App-Package
+      path: dist/EDF_Forensic_Audit*
+
+  - name: Upload Windows Artifact
+    if: matrix.os == 'windows-latest'
+    uses: actions/upload-artifact@v4
+    with:
+      name: Windows-App-Package
+      path: dist/EDF_Forensic_Audit.exe
+```
