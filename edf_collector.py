@@ -3528,6 +3528,17 @@ class App:
         self.run_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8)
         self.cancel_btn = ttk.Button(btns, text="Cancel", command=self._cancel, state="disabled")
         self.cancel_btn.pack(side=tk.LEFT, padx=8)
+        self.pdf_report_btn = tk.Button(
+            btns,
+            text="EXPORT PDF REPORT",
+            bg=EDF_NAVY,
+            fg="white",
+            font=("Calibri", 12, "bold"),
+            command=self.export_pdf_report,
+            relief="flat",
+            state="disabled" if not HAS_PDF_REPORT else "normal",
+        )
+        self.pdf_report_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(8, 0))
 
     # -- Helpers --
 
@@ -3581,9 +3592,78 @@ class App:
     def _finish(self):
         self.run_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
+        if hasattr(self, 'pdf_report_btn'):
+            self.pdf_report_btn.config(state="normal" if HAS_PDF_REPORT else "disabled")
         self.progress_v.set(0)
         self.set_status("Cancelled." if self.cancel_event.is_set() else "Ready.")
         gc.collect()
+
+    def export_pdf_report(self):
+        """Generate professional PDF report for Ombudsman submission."""
+        if not HAS_PDF_REPORT:
+            self._show("error", "PDF Report Unavailable",
+                       "PDF report generation requires the 'reportlab' package.\n"
+                       "Install with: pip install reportlab")
+            return
+
+        if not hasattr(self, 'engine') or not self.engine or not self.engine.records:
+            self._show("warning", "No Data", "No records available. Run extraction first.")
+            return
+
+        # Ask for output path
+        base_dir = (
+            os.path.dirname(self.pst_path.get().strip()) if self.pst_path.get().strip()
+            else self.pdf_dir.get().strip() if self.pdf_dir.get().strip()
+            else os.path.dirname(self.htm_path.get().strip()) if self.htm_path.get().strip()
+            else os.getcwd()
+        )
+        default_name = "EDF_Ombudsman_Report.pdf"
+        out_path = filedialog.asksaveasfilename(
+            initialdir=base_dir,
+            initialfile=default_name,
+            defaultextension=".pdf",
+            filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")],
+            title="Save Ombudsman PDF Report As",
+        )
+        if not out_path:
+            return  # User cancelled
+
+        self.set_status("Generating professional PDF report…")
+        self.pdf_report_btn.config(state="disabled")
+        self.run_btn.config(state="disabled")
+        self.cancel_btn.config(state="disabled")
+
+        # Run in background thread
+        def _generate():
+            try:
+                config = {
+                    "min_amount": self.min_amount.get(),
+                    "analysis_min": self.analysis_min.get(),
+                    "acc_num": self.acc_num.get(),
+                    "report_account_ref": self.report_account_ref.get().strip(),
+                }
+                success, msg = generate_pdf_from_gui(
+                    records=self.engine.records,
+                    output_path=out_path,
+                    config=config,
+                    engine=self.engine,
+                    filtered=self.engine.filtered_records,
+                )
+                if success:
+                    self.root.after(0, lambda: self._show("info", "Success", msg))
+                else:
+                    self.root.after(0, lambda: self._show("error", "PDF Generation Failed", msg))
+            except Exception as e:
+                self.root.after(0, lambda err=e: self._show("error", "Error", f"An error occurred:\\n\\n{err}"))
+            finally:
+                self.root.after(0, lambda: (
+                    self.pdf_report_btn.config(state="normal" if HAS_PDF_REPORT else "disabled"),
+                    self.run_btn.config(state="normal"),
+                    self.cancel_btn.config(state="disabled"),
+                    self.set_status("Ready.")
+                ))
+
+        threading.Thread(target=_generate, daemon=True).start()
 
     def _cancel(self):
         self.cancel_event.set()

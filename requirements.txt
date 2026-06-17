@@ -1,6 +1,22 @@
-libpff-python
-pandas
-pdfplumber
-beautifulsoup4
-openpyxl
-numpy
+# EDF Bill Fetcher - Core dependencies
+# Generated from pyproject.toml - keep in sync
+libpff-python>=20221211,<3
+pandas>=2.0,<3
+pdfplumber>=0.10,<1
+beautifulsoup4>=4.12,<5
+openpyxl>=3.1,<4
+numpy>=1.24,<2
+
+# PDF report generation (optional)
+reportlab>=4.5,<5
+
+# Forecasting (optional)
+statsmodels>=0.14,<1
+
+# Dev dependencies (for development only)
+# pytest>=7.4,<8
+# pytest-cov>=4.1,<5
+# ruff>=0.4,<1
+# mypy>=1.9,<2
+# types-beautifulsoup4>=4.12,<5
+# pyinstaller>=6.5,<7
