@@ -1856,7 +1856,9 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     bc.series[0].graphicalProperties.solidFill = ORANGE
     ws_yoy.add_chart(bc, "K2")
     for col, w in zip(
-        ["A", "B", "C", "D", "E", "F", "G", "H", "I"], [8, 8, 18, 18, 18, 16, 14, 14, 18], strict=False
+        ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
+        [8, 8, 18, 18, 18, 16, 14, 14, 18],
+        strict=False,
     ):
         ws_yoy.column_dimensions[col].width = w
     ws_yoy.freeze_panes = "A2"
@@ -1972,7 +1974,9 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         bc2.series[0].graphicalProperties.solidFill = NAVY
         ws_pc.add_chart(bc2, "J2")
 
-    for col, w in zip(["A", "B", "C", "D", "E", "F", "G", "H"], [13, 13, 7, 18, 18, 16, 14, 42], strict=False):
+    for col, w in zip(
+        ["A", "B", "C", "D", "E", "F", "G", "H"], [13, 13, 7, 18, 18, 16, 14, 42], strict=False
+    ):
         ws_pc.column_dimensions[col].width = w
     ws_pc.freeze_panes = "A2"
 

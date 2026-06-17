@@ -2,21 +2,21 @@ name: Build Executables
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches: [main, dev]
 
 jobs:
   build:
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-latest
-          - windows-latest
-          - ubuntu-latest
+        os: [windows-latest, macos-latest, ubuntu-latest]
 
     steps:
       - name: Checkout Repository
@@ -48,9 +48,19 @@ jobs:
         run: |
           pyinstaller --onefile --windowed --name EDF_Evidence_Collector edf_collector.py
 
+      - name: Verify executable exists
+        run: |
+          if [ -d "dist" ]; then
+            ls -la dist/
+          else
+            echo "ERROR: dist/ directory not found"
+            exit 1
+          fi
+        shell: bash
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-build
+          name: EDF_Evidence_Collector-${{ matrix.os }}
           path: dist/
           retention-days: 7
