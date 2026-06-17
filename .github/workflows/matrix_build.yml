@@ -45,6 +45,7 @@ jobs:
           pip install -e ".[build,pdf]"
 
       - name: Build Executable
+        shell: bash
         run: |
           pyinstaller --onefile --windowed --name EDF_Evidence_Collector \
             --hidden-import=reportlab \
