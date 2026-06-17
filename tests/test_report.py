@@ -45,6 +45,7 @@ from edf_report import (
 # FIXTURES
 # =============================================================================
 
+
 @pytest.fixture
 def sample_records():
     """Sample billing records for testing."""
@@ -156,6 +157,7 @@ def sample_config():
 # FORMATTER TESTS
 # =============================================================================
 
+
 class TestFormatters:
     """Tests for formatting functions."""
 
@@ -225,6 +227,7 @@ class TestFormatters:
 # TABLE STYLE TESTS
 # =============================================================================
 
+
 class TestTableStyle:
     """Tests for table style creation."""
 
@@ -251,6 +254,7 @@ class TestTableStyle:
 # BUILD STYLES TESTS
 # =============================================================================
 
+
 class TestBuildStyles:
     """Tests for style dictionary creation."""
 
@@ -259,11 +263,24 @@ class TestBuildStyles:
         assert isinstance(styles, dict)
         # Check key styles exist
         expected_keys = [
-            "CoverTitle", "CoverSubtitle", "CoverInfo",
-            "SectionHeader", "SubSectionHeader", "SubSubSectionHeader",
-            "BodyText", "BodyTextIndent", "BulletText", "SmallText",
-            "TableHeader", "TableCell", "TableCellCenter", "TableCellRight", "TableCellMoney",
-            "Footnote", "PageNumber", "Confidential",
+            "CoverTitle",
+            "CoverSubtitle",
+            "CoverInfo",
+            "SectionHeader",
+            "SubSectionHeader",
+            "SubSubSectionHeader",
+            "BodyText",
+            "BodyTextIndent",
+            "BulletText",
+            "SmallText",
+            "TableHeader",
+            "TableCell",
+            "TableCellCenter",
+            "TableCellRight",
+            "TableCellMoney",
+            "Footnote",
+            "PageNumber",
+            "Confidential",
         ]
         for key in expected_keys:
             assert key in styles, f"Missing style: {key}"
@@ -272,6 +289,7 @@ class TestBuildStyles:
 # =============================================================================
 # REPORT SECTION TESTS
 # =============================================================================
+
 
 class TestCoverPage:
     """Tests for cover page creation."""
@@ -427,10 +445,17 @@ class TestPaymentAnalysis:
         assert len(elements) > 0
 
     def test_create_payment_analysis_no_payments(self):
-        df = pd.DataFrame([
-            {"Date": "01/01/2023", "Amount (£)": 100, "Entry Type": "New Bill",
-             "Details": "", "Source": "HTM"},
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "Date": "01/01/2023",
+                    "Amount (£)": 100,
+                    "Entry Type": "New Bill",
+                    "Details": "",
+                    "Source": "HTM",
+                },
+            ]
+        )
         elements = create_payment_analysis(df)
         assert isinstance(elements, list)
         assert len(elements) > 0
@@ -454,11 +479,19 @@ class TestDataQuality:
         assert len(elements) > 0
 
     def test_create_data_quality_empty(self):
-        df = pd.DataFrame([
-            {"Date": "01/01/2023", "Amount (£)": 100, "Period From": "N/A",
-             "Period To": "N/A", "Source": "HTM", "Reading": "Actual",
-             "Entry Type": "New Bill"},
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "Date": "01/01/2023",
+                    "Amount (£)": 100,
+                    "Period From": "N/A",
+                    "Period To": "N/A",
+                    "Source": "HTM",
+                    "Reading": "Actual",
+                    "Entry Type": "New Bill",
+                },
+            ]
+        )
         elements = create_data_quality_section(df)
         assert isinstance(elements, list)
         assert len(elements) > 0
@@ -473,18 +506,27 @@ class TestTariffImpact:
         assert len(elements) > 0
 
     def test_create_tariff_impact_no_data(self):
-        df = pd.DataFrame([
-            {"Date": "01/01/2023", "Amount (£)": 100, "Tariff": "N/A",
-             "Unit Rate (p/kWh)": "N/A", "Period Charge (£)": "N/A"},
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "Date": "01/01/2023",
+                    "Amount (£)": 100,
+                    "Tariff": "N/A",
+                    "Unit Rate (p/kWh)": "N/A",
+                    "Period Charge (£)": "N/A",
+                },
+            ]
+        )
         elements = create_tariff_impact_section(df)
         assert isinstance(elements, list)
         assert len(elements) > 0
 
     def test_create_tariff_impact_missing_columns(self):
-        df = pd.DataFrame([
-            {"Date": "01/01/2023", "Amount (£)": 100},
-        ])
+        df = pd.DataFrame(
+            [
+                {"Date": "01/01/2023", "Amount (£)": 100},
+            ]
+        )
         elements = create_tariff_impact_section(df)
         assert isinstance(elements, list)
         assert len(elements) > 0
@@ -508,6 +550,7 @@ class TestAppendices:
 # MAIN REPORT GENERATION TESTS
 # =============================================================================
 
+
 class TestGeneratePDF:
     """Tests for main PDF generation functions."""
 
@@ -528,6 +571,7 @@ class TestGeneratePDF:
 # =============================================================================
 # CLI TESTS
 # =============================================================================
+
 
 class TestCLI:
     """Tests for CLI functions."""
@@ -552,11 +596,18 @@ class TestCLI:
             output_path = tmp.name
 
         try:
-            with patch.object(sys, "argv", [
-                "edf-collector", "--pdf-report",
-                "--records", "/nonexistent.json",
-                "--output", output_path,
-            ]):
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "edf-collector",
+                    "--pdf-report",
+                    "--records",
+                    "/nonexistent.json",
+                    "--output",
+                    output_path,
+                ],
+            ):
                 with pytest.raises(SystemExit) as exc_info:
                     run_cli_pdf_report(sys.argv[2:])
                 assert exc_info.value.code == 1
@@ -579,11 +630,18 @@ class TestCLI:
             with open(records_path, "w") as f:
                 json.dump(sample_records, f)
 
-            with patch.object(sys, "argv", [
-                "edf-collector", "--pdf-report",
-                "--records", records_path,
-                "--output", output_path,
-            ]):
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "edf-collector",
+                    "--pdf-report",
+                    "--records",
+                    records_path,
+                    "--output",
+                    output_path,
+                ],
+            ):
                 # This will try to generate PDF - just check it doesn't crash on arg parsing
                 try:
                     run_cli_pdf_report(sys.argv[2:])
@@ -599,6 +657,7 @@ class TestCLI:
 # =============================================================================
 # EDF_COLLECTOR FUNCTION TESTS
 # =============================================================================
+
 
 class TestEDFCollectorFunctions:
     """Tests for functions in edf_collector module."""
@@ -620,6 +679,7 @@ class TestEDFCollectorFunctions:
 # =============================================================================
 # INTEGRATION TESTS
 # =============================================================================
+
 
 class TestIntegration:
     """Integration tests for full workflow."""
@@ -653,12 +713,21 @@ class TestIntegration:
 
             # Just verify args parsing works
             import sys
-            with patch.object(sys, "argv", [
-                "edf-collector", "--pdf-report",
-                "--records", str(records_path),
-                "--output", str(output_path),
-                "--config", str(config_path),
-            ]):
+
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "edf-collector",
+                    "--pdf-report",
+                    "--records",
+                    str(records_path),
+                    "--output",
+                    str(output_path),
+                    "--config",
+                    str(config_path),
+                ],
+            ):
                 try:
                     run_cli_pdf_report(sys.argv[2:])
                 except SystemExit:
