@@ -1,6 +1,6 @@
 # EDF Energy Billing Evidence Collector
 
-A desktop application for collecting and analyzing EDF Energy billing data from multiple sources (PST/OST email archives, PDF bills, HTM account exports) to produce a comprehensive Excel evidence report for dispute resolution.
+A desktop application for collecting and analyzing EDF Energy billing data from multiple sources (PST/OST email archives, PDF bills, HTM account exports) to produce a comprehensive Excel evidence report and professional PDF report for Energy Ombudsman dispute resolution.
 
 ## Features
 
@@ -8,8 +8,10 @@ A desktop application for collecting and analyzing EDF Energy billing data from 
 - **Dual format support**: Parses both old-style and new-style (KI/KCR) EDF invoice formats
 - **Smart amount detection**: Multiple regex patterns with fallback strategies for finding billing amounts
 - **Deduplication**: Cross-source deduplication using billing period dates and amounts
-- **Comprehensive Excel output**: 9-sheet report with evidence, summaries, charts, and dispute analysis
-- **GUI interface**: Simple tkinter-based desktop application
+- **Comprehensive Excel output**: 14-sheet report with evidence, summaries, charts, and dispute analysis
+- **Professional PDF output**: 16-section Ombudsman-ready report with executive summary, evidence index, timeline, OFGEM comparison, statistical analysis, and methodology appendix
+- **GUI interface**: Simple tkinter-based desktop application with progress tracking
+- **CLI mode**: Headless PDF report generation for automation
 
 ## Output Sheets
 
@@ -26,6 +28,32 @@ A desktop application for collecting and analyzing EDF Energy billing data from 
 | **Period Charges** | Per-period charges with daily rates and flags |
 | **Dispute Flags** | Automated detection of anomalies (large jumps, billing gaps, estimated runs, reconciliation mismatches) |
 | **Dispute Timeline** | Chronological event timeline for dispute narrative |
+| **Statistical Analysis** | Descriptive stats, rolling 6-period stats, EMA, momentum, volatility, z-score/IQR anomalies, Shapiro-Wilk normality tests |
+| **Payment Analysis** | Payment/credit patterns, intervals, amounts, chronological detail with chart |
+| **Forecast & Projection** | Linear regression, Holt-Winters exponential smoothing, EMA projection, confidence intervals, accuracy metrics |
+
+## PDF Report Sections
+
+The PDF report (generated via **EXPORT PDF REPORT** button or CLI) contains:
+
+1. **Cover Page** — Account reference, period, confidentiality notice
+2. **Table of Contents** — Full section listing
+3. **Executive Summary** — Financial totals, key findings narrative, conclusion for Ombudsman
+4. **Key Findings** — Severity-grouped table (HIGH/MEDIUM/INFO) with detail
+5. **Evidence Index** — Source cross-reference (PST/HTM/PDF) with record counts
+6. **Detailed Anomalies** — Large Jumps, Billing Gaps, Estimated Runs, High Daily Rates, Reconciliation Mismatches
+7. **Timeline** — Chronological merged view of all bills + automated flags
+8. **OFGEM Price Cap Comparison** — Template for comparing bill unit rates against OFGEM caps
+9. **Statistical Analysis** — Descriptive stats, rolling stats, normality tests
+10. **Payment Analysis** — Payment patterns, intervals, chronology
+11. **Forecast & Projection** — Linear, Holt-Winters, EMA projections with confidence intervals
+12. **Data Quality Assessment** — Completeness, duplication, source distribution, pass/warn/fail status
+13. **Tariff Impact Analysis** — Unit rate stats by tariff, change detection, charge impact
+14. **Appendix A: Methodology** — Data sources, extraction logic, deduplication, config used
+15. **Appendix B: Glossary** — 10 key terms (MAPE, Holt-Winters, IQR Anomaly, etc.)
+16. **Professional Styling** — Navy/orange theme, headers/footers, page numbers, confidentiality headers
+
+The report is designed for direct submission to the **Energy Ombudsman**.
 
 ## Installation
 
@@ -66,17 +94,37 @@ Or run the built executable `EDF_Evidence_Collector.exe`.
    - **Domain Filter**: Filter PST emails by sender domain (default: edfenergy.com)
    - **Minimum Amount**: Filter out records below this threshold (default: £500)
    - **Analysis Threshold**: Minimum bill amount for analysis tabs (default: £500)
+   - **Report Account Ref**: Override account reference in report header
 
-3. **Click "EXTRACT TO EXCEL"**
+3. **Click "EXTRACT TO EXCEL"** — produces the 14-sheet Excel workbook
+
+4. **Click "EXPORT PDF REPORT"** — produces the professional Ombudsman-ready PDF (enabled after extraction completes)
 
 The report will be saved next to your source files.
 
-### Command Line
+### CLI Mode — PDF Report Generation
 
-The tool is primarily GUI-based. For headless operation, you can import and use the functions directly:
+For automated/pipeline generation of the PDF report:
+
+```bash
+# Generate PDF from previously extracted records
+python edf_collector.py --pdf-report -i records.json -o report.pdf
+
+# With optional config and engine data
+python edf_collector.py --pdf-report -i records.json -o report.pdf -c config.json -e engine.pkl
+```
+
+Options:
+- `-i, --records`: Path to extracted records JSON (required)
+- `-o, --output`: Output PDF file path (required)
+- `-c, --config`: Config JSON file (optional)
+- `-e, --engine-data`: Pickled EvidenceEngine for filtered records (optional)
+
+### Programmatic Usage
 
 ```python
 from edf_collector import EvidenceEngine, export_to_excel
+from edf_report import generate_pdf_from_gui
 
 config = {
     'use_anchors': True,
@@ -99,7 +147,17 @@ engine = EvidenceEngine(config, print)
 engine.crawl_local_pdfs('/path/to/pdfs')
 # ... process other sources ...
 
+# Excel export
 export_to_excel(engine.records, 'output.xlsx', engine.error_log, config, engine.filtered_records)
+
+# PDF export
+generate_pdf_from_gui(
+    records=engine.records,
+    output_path='report.pdf',
+    config=config,
+    engine=engine,
+    filtered=engine.filtered_records,
+)
 ```
 
 ## Supported EDF Formats
@@ -133,17 +191,23 @@ export_to_excel(engine.records, 'output.xlsx', engine.error_log, config, engine.
   - openpyxl
   - numpy
   - libpff-python (optional, for PST/OST support)
+  - reportlab (optional, for PDF report generation)
 
-### PST/OST Support
+### Optional Extras
 
-Requires `libpff-python` which may need system libraries:
-
-**Ubuntu/Debian**:
 ```bash
-sudo apt-get install libpff-dev python3-dev
-```
+# For PST/OST support
+pip install -e ".[pst]"
 
-**Windows/macOS**: Usually works via pip wheel.
+# For PDF report generation
+pip install -e ".[pdf]"
+
+# For development (test, lint, build)
+pip install -e ".[dev]"
+
+# All extras
+pip install -e ".[pst,pdf,dev]"
+```
 
 ## Development
 
