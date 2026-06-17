@@ -1,17 +1,22 @@
 name: Build Executables
 
 on:
+  workflow_dispatch:
   push:
+    tags:
+      - 'v*'
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
         os:
           - macos-latest
           - windows-latest
+          - ubuntu-latest
 
     steps:
       - name: Checkout Repository
@@ -20,16 +25,32 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk tk-dev
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install python-tk
 
       - name: Install Dependencies
-        run: pip install libpff-python pandas pdfplumber beautifulsoup4 openpyxl numpy pyinstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[build]"
 
       - name: Build Executable
-        run: pyinstaller --onefile --windowed --name EDF_Forensic_Audit edf_collector.py
+        run: |
+          pyinstaller --onefile --windowed --name EDF_Evidence_Collector edf_collector.py
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}-build
           path: dist/
+          retention-days: 7
