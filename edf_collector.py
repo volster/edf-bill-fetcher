@@ -3725,20 +3725,17 @@ def run_cli_pdf_report(args: list[str]) -> None:
         prog="edf-collector --pdf-report",
     )
     parser.add_argument(
-        "--records", "-i", required=True,
-        help="Path to extracted records JSON file (exported from GUI or script)"
+        "--records",
+        "-i",
+        required=True,
+        help="Path to extracted records JSON file (exported from GUI or script)",
     )
+    parser.add_argument("--output", "-o", required=True, help="Output PDF file path")
+    parser.add_argument("--config", "-c", help="Path to config JSON file (optional)")
     parser.add_argument(
-        "--output", "-o", required=True,
-        help="Output PDF file path"
-    )
-    parser.add_argument(
-        "--config", "-c",
-        help="Path to config JSON file (optional)"
-    )
-    parser.add_argument(
-        "--engine-data", "-e",
-        help="Path to engine data pickle file (optional, for filtered records)"
+        "--engine-data",
+        "-e",
+        help="Path to engine data pickle file (optional, for filtered records)",
     )
     parsed = parser.parse_args(args)
 
@@ -3755,6 +3752,7 @@ def run_cli_pdf_report(args: list[str]) -> None:
         filtered = None
         if parsed.engine_data:
             import pickle
+
             with open(parsed.engine_data, "rb") as f:
                 engine = pickle.load(f)
                 filtered = getattr(engine, "filtered_records", None)
@@ -3781,6 +3779,7 @@ def run_cli_pdf_report(args: list[str]) -> None:
 def main() -> None:
     """Entry point for the EDF Evidence Collector GUI."""
     import sys
+
     if len(sys.argv) > 1 and sys.argv[1] in ("--pdf-report", "--report", "-r"):
         run_cli_pdf_report(sys.argv[2:])
     else:
