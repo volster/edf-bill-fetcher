@@ -49,6 +49,14 @@ try:
 except ImportError:
     HAS_STATSMODELS = False
 
+# Optional import for PDF report generation
+try:
+    from edf_report import generate_pdf_from_gui
+
+    HAS_PDF_REPORT = True
+except ImportError:
+    HAS_PDF_REPORT = False
+
 
 # ---------------------------------------------------------------------------
 # Branding
@@ -3706,11 +3714,79 @@ class App:
             self.root.after(0, self._finish)
 
 
-def main():
+def run_cli_pdf_report(args: list[str]) -> None:
+    """Run PDF report generation from command line."""
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Generate professional PDF report for Energy Ombudsman submission",
+        prog="edf-collector --pdf-report",
+    )
+    parser.add_argument(
+        "--records", "-i", required=True,
+        help="Path to extracted records JSON file (exported from GUI or script)"
+    )
+    parser.add_argument(
+        "--output", "-o", required=True,
+        help="Output PDF file path"
+    )
+    parser.add_argument(
+        "--config", "-c",
+        help="Path to config JSON file (optional)"
+    )
+    parser.add_argument(
+        "--engine-data", "-e",
+        help="Path to engine data pickle file (optional, for filtered records)"
+    )
+    parsed = parser.parse_args(args)
+
+    try:
+        with open(parsed.records, encoding="utf-8") as f:
+            records = json.load(f)
+
+        config = {}
+        if parsed.config:
+            with open(parsed.config, encoding="utf-8") as f:
+                config = json.load(f)
+
+        engine = None
+        filtered = None
+        if parsed.engine_data:
+            import pickle
+            with open(parsed.engine_data, "rb") as f:
+                engine = pickle.load(f)
+                filtered = getattr(engine, "filtered_records", None)
+
+        success, msg = generate_pdf_from_gui(
+            records=records,
+            output_path=parsed.output,
+            config=config,
+            engine=engine,
+            filtered=filtered,
+        )
+        if success:
+            sys.stdout.write(msg + "\n")
+            sys.exit(0)
+        else:
+            sys.stderr.write(f"ERROR: {msg}\n")
+            sys.exit(1)
+
+    except Exception as e:
+        sys.stderr.write(f"ERROR: {e}\n")
+        sys.exit(1)
+
+
+def main() -> None:
     """Entry point for the EDF Evidence Collector GUI."""
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] in ("--pdf-report", "--report", "-r"):
+        run_cli_pdf_report(sys.argv[2:])
+    else:
+        root = tk.Tk()
+        App(root)
+        root.mainloop()
 
 
 if __name__ == "__main__":
