@@ -601,7 +601,7 @@ class EvidenceEngine:
         period_from, period_to = self.find_billing_period(clean_text)
 
         # Attempt to extract period charge separately from cumulative balance
-        period_charge = "N/A"
+        period_charge: str | float = "N/A"
         pc_m = re.search(
             r"total charges for this (?:period|bill|invoice)\s+£\s?([\d,]+(?:\.\d{2})?)",
             clean_text,
