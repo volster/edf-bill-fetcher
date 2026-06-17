@@ -53,3 +53,15 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+      - name: Trigger build workflow on success
+        if: success() && github.ref == 'refs/heads/dev' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'matrix_build.yml',
+              ref: 'dev'
+            });
