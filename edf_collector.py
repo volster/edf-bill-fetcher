@@ -2490,9 +2490,7 @@ def _analyze_tariff_impact(df):
         return {}
 
     # Convert unit rate to numeric
-    tariff_data["unit_rate_num"] = pd.to_numeric(
-        tariff_data["Unit Rate (p/kWh)"], errors="coerce"
-    )
+    tariff_data["unit_rate_num"] = pd.to_numeric(tariff_data["Unit Rate (p/kWh)"], errors="coerce")
     tariff_data = tariff_data.dropna(subset=["unit_rate_num"])
 
     if tariff_data.empty:
@@ -2642,9 +2640,26 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         ("Min (£)", float(amounts_series.min()), "£#,##0.00", "Minimum balance"),
         ("Max (£)", float(amounts_series.max()), "£#,##0.00", "Maximum balance"),
         ("Range (£)", float(amounts_series.max() - amounts_series.min()), "£#,##0.00", "Max - Min"),
-        ("Skewness", float(amounts_series.skew()) if hasattr(amounts_series, "skew") else 0, "0.00", "Asymmetry of distribution"),
-        ("Kurtosis", float(amounts_series.kurtosis()) if hasattr(amounts_series, "kurtosis") else 0, "0.00", "Tailedness of distribution"),
-        ("CV (%)", float(amounts_series.std() / amounts_series.mean() * 100) if amounts_series.mean() > 0 else 0, "0.00", "Coefficient of variation"),
+        (
+            "Skewness",
+            float(amounts_series.skew()) if hasattr(amounts_series, "skew") else 0,
+            "0.00",
+            "Asymmetry of distribution",
+        ),
+        (
+            "Kurtosis",
+            float(amounts_series.kurtosis()) if hasattr(amounts_series, "kurtosis") else 0,
+            "0.00",
+            "Tailedness of distribution",
+        ),
+        (
+            "CV (%)",
+            float(amounts_series.std() / amounts_series.mean() * 100)
+            if amounts_series.mean() > 0
+            else 0,
+            "0.00",
+            "Coefficient of variation",
+        ),
     ]
 
     for label, value, fmt, note in stats_data:
@@ -2709,7 +2724,11 @@ def write_statistical_analysis_sheet(ws, dfc, config):
     _money(ws, r, 2, mom)
 
     r += 1
-    vol = float(pd.Series(amounts).pct_change().rolling(6, min_periods=1).std().iloc[-1]) if n >= 3 else 0
+    vol = (
+        float(pd.Series(amounts).pct_change().rolling(6, min_periods=1).std().iloc[-1])
+        if n >= 3
+        else 0
+    )
     _text(ws, r, 1, "6-Period Volatility (σ of returns)", bold=True)
     _num(ws, r, 2, vol, fmt="0.00%")
 
@@ -2739,7 +2758,12 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         anom_dates = series[z_anoms].index
         for dt in anom_dates:
             r += 1
-            _text(ws, r, 1, f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({series[dt]:,.2f})")
+            _text(
+                ws,
+                r,
+                1,
+                f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({series[dt]:,.2f})",
+            )
 
     if iqr_count > 0:
         r += 1
@@ -2747,7 +2771,12 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         anom_dates = series[iqr_anoms].index
         for dt in anom_dates:
             r += 1
-            _text(ws, r, 1, f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({series[dt]:,.2f})")
+            _text(
+                ws,
+                r,
+                1,
+                f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({series[dt]:,.2f})",
+            )
 
     # Normality test (if scipy available)
     r += 1
@@ -2755,11 +2784,17 @@ def write_statistical_analysis_sheet(ws, dfc, config):
     if HAS_SCIPY:
         try:
             from scipy import stats as sp_stats
+
             shapiro_stat, shapiro_p = sp_stats.shapiro(amounts_series.dropna())
             r += 1
             _text(ws, r, 1, "Shapiro-Wilk Test (Normality)", bold=True)
             _num(ws, r, 2, shapiro_stat, fmt="0.0000")
-            _text(ws, r, 3, f"p-value: {shapiro_p:.4f} — {'Normal' if shapiro_p > 0.05 else 'Non-normal'}")
+            _text(
+                ws,
+                r,
+                3,
+                f"p-value: {shapiro_p:.4f} — {'Normal' if shapiro_p > 0.05 else 'Non-normal'}",
+            )
 
             # Jarque-Bera
             jb_stat, jb_p = sp_stats.jarque_bera(amounts_series.dropna())
@@ -2843,7 +2878,12 @@ def write_payment_analysis_sheet(ws, dfc):
     _section_hdr(ws, r, "PAYMENT TIMING")
     interval_items = [
         ("Avg Interval (days)", pat["avg_interval_days"], "#,##0.0", "Mean days between payments"),
-        ("Median Interval (days)", pat["median_interval_days"], "#,##0.0", "Median days between payments"),
+        (
+            "Median Interval (days)",
+            pat["median_interval_days"],
+            "#,##0.0",
+            "Median days between payments",
+        ),
     ]
     for label, value, fmt, note in interval_items:
         r += 1
@@ -2930,7 +2970,14 @@ def write_forecast_sheet(ws, dfc):
         ws.column_dimensions["A"].width = 60
         return
 
-    headers = ["Date", "Actual (£)", "Linear Forecast (£)", "Holt-Winters (£)", "EMA Projection (£)", "Confidence (±£)"]
+    headers = [
+        "Date",
+        "Actual (£)",
+        "Linear Forecast (£)",
+        "Holt-Winters (£)",
+        "EMA Projection (£)",
+        "Confidence (±£)",
+    ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 1, col, h, bg=NAVY)
     ws.row_dimensions[1].height = 28
@@ -2980,12 +3027,13 @@ def write_forecast_sheet(ws, dfc):
     forecast_dates = []
     last_date = parse_to_sort_date(dates[-1])
     from datetime import timedelta
+
     if not pd.isna(last_date):
         for i in range(1, forecast_steps + 1):
             next_date = last_date + timedelta(days=30 * i)  # Approximate monthly
             forecast_dates.append(next_date.strftime("%d/%m/%Y"))
     else:
-        forecast_dates = [f"Forecast +{i+1}" for i in range(forecast_steps)]
+        forecast_dates = [f"Forecast +{i + 1}" for i in range(forecast_steps)]
 
     for i in range(forecast_steps):
         bg = AMBER
@@ -3012,7 +3060,9 @@ def write_forecast_sheet(ws, dfc):
     _text(ws, r, 2, "Simple linear regression on time index")
     r += 1
     _text(ws, r, 1, "Holt-Winters", bold=True)
-    _text(ws, r, 2, "Exponential smoothing with trend" + (" + seasonality" if HAS_STATSMODELS else ""))
+    _text(
+        ws, r, 2, "Exponential smoothing with trend" + (" + seasonality" if HAS_STATSMODELS else "")
+    )
     r += 1
     _text(ws, r, 1, "EMA Projection", bold=True)
     _text(ws, r, 2, "Extends last Exponential Moving Average (span=6)")
@@ -3043,7 +3093,9 @@ def write_forecast_sheet(ws, dfc):
             _text(ws, r, 1, "Linear Forecast MAPE (%)", bold=True)
             _num(ws, r, 2, mape, fmt="0.00%")
 
-    for col_letter, width in zip(["A", "B", "C", "D", "E", "F"], [14, 16, 18, 18, 18, 16], strict=False):
+    for col_letter, width in zip(
+        ["A", "B", "C", "D", "E", "F"], [14, 16, 18, 18, 18, 16], strict=False
+    ):
         ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A2"
 
@@ -3105,11 +3157,40 @@ def write_data_quality_sheet(ws, df):
 
     checks = [
         ("Total Records", dq["total_records"], "—", "PASS" if dq["total_records"] > 0 else "FAIL"),
-        ("Date Parsing Success", dq["date_parsed"], f"{dq['date_parse_rate']:.1%}", "PASS" if dq["date_parse_rate"] > 0.8 else "WARN" if dq["date_parse_rate"] > 0.5 else "FAIL"),
-        ("Amount Complete", dq["amt_complete"], f"{(dq['amt_complete']/dq['total_records']):.1%}", "PASS" if dq["amt_complete"] == dq["total_records"] else "WARN"),
-        ("Period Info Complete", dq["period_complete"], f"{dq['period_completeness_rate']:.1%}", "PASS" if dq["period_completeness_rate"] > 0.7 else "WARN"),
-        ("Reading Classified", dq["reading_classified"], f"{dq['reading_classify_rate']:.1%}", "PASS" if dq["reading_classify_rate"] > 0.5 else "WARN"),
-        ("Unit Rate Computable", dq["ur_computable"], f"{dq['ur_computable_rate']:.1%}", "PASS" if dq["ur_computable_rate"] > 0.3 else "INFO"),
+        (
+            "Date Parsing Success",
+            dq["date_parsed"],
+            f"{dq['date_parse_rate']:.1%}",
+            "PASS"
+            if dq["date_parse_rate"] > 0.8
+            else "WARN"
+            if dq["date_parse_rate"] > 0.5
+            else "FAIL",
+        ),
+        (
+            "Amount Complete",
+            dq["amt_complete"],
+            f"{(dq['amt_complete'] / dq['total_records']):.1%}",
+            "PASS" if dq["amt_complete"] == dq["total_records"] else "WARN",
+        ),
+        (
+            "Period Info Complete",
+            dq["period_complete"],
+            f"{dq['period_completeness_rate']:.1%}",
+            "PASS" if dq["period_completeness_rate"] > 0.7 else "WARN",
+        ),
+        (
+            "Reading Classified",
+            dq["reading_classified"],
+            f"{dq['reading_classify_rate']:.1%}",
+            "PASS" if dq["reading_classify_rate"] > 0.5 else "WARN",
+        ),
+        (
+            "Unit Rate Computable",
+            dq["ur_computable"],
+            f"{dq['ur_computable_rate']:.1%}",
+            "PASS" if dq["ur_computable_rate"] > 0.3 else "INFO",
+        ),
     ]
     for check, result, rate, status in checks:
         _check_row(r, check, result, rate, status)
@@ -3118,29 +3199,55 @@ def write_data_quality_sheet(ws, df):
     r += 1
     _section_hdr(ws, r, "DUPLICATION CHECKS")
     r += 1
-    _check_row(r, "Duplicate Records (Date+Amount)", dq["duplicate_count"], f"{dq['duplicate_rate']:.2%}", "PASS" if dq["duplicate_rate"] < 0.05 else "WARN" if dq["duplicate_rate"] < 0.15 else "FAIL")
+    _check_row(
+        r,
+        "Duplicate Records (Date+Amount)",
+        dq["duplicate_count"],
+        f"{dq['duplicate_rate']:.2%}",
+        "PASS"
+        if dq["duplicate_rate"] < 0.05
+        else "WARN"
+        if dq["duplicate_rate"] < 0.15
+        else "FAIL",
+    )
     r += 1
 
     r += 1
     _section_hdr(ws, r, "SOURCE DISTRIBUTION")
     for src, cnt in dq.get("source_distribution", {}).items():
         r += 1
-        _check_row(r, f"Source: {src}", cnt, f"{cnt/dq['total_records']:.1%}", "INFO")
+        _check_row(r, f"Source: {src}", cnt, f"{cnt / dq['total_records']:.1%}", "INFO")
 
     r += 1
     _section_hdr(ws, r, "ENTRY TYPE DISTRIBUTION")
     for etype, cnt in dq.get("entry_type_distribution", {}).items():
         r += 1
-        _check_row(r, f"Type: {etype}", cnt, f"{cnt/dq['total_records']:.1%}", "INFO")
+        _check_row(r, f"Type: {etype}", cnt, f"{cnt / dq['total_records']:.1%}", "INFO")
 
     # Summary banner
     r += 2
-    total_checks = len(checks) + 1 + len(dq.get("source_distribution", {})) + len(dq.get("entry_type_distribution", {}))
-    pass_count = sum(1 for c in checks if c[3] == "PASS") + (1 if dq["duplicate_rate"] < 0.05 else 0)
-    warn_count = sum(1 for c in checks if c[3] == "WARN") + (1 if 0.05 <= dq["duplicate_rate"] < 0.15 else 0)
-    fail_count = sum(1 for c in checks if c[3] == "FAIL") + (1 if dq["duplicate_rate"] >= 0.15 else 0)
+    total_checks = (
+        len(checks)
+        + 1
+        + len(dq.get("source_distribution", {}))
+        + len(dq.get("entry_type_distribution", {}))
+    )
+    pass_count = sum(1 for c in checks if c[3] == "PASS") + (
+        1 if dq["duplicate_rate"] < 0.05 else 0
+    )
+    warn_count = sum(1 for c in checks if c[3] == "WARN") + (
+        1 if 0.05 <= dq["duplicate_rate"] < 0.15 else 0
+    )
+    fail_count = sum(1 for c in checks if c[3] == "FAIL") + (
+        1 if dq["duplicate_rate"] >= 0.15 else 0
+    )
 
-    _banner(ws, r, f"QUALITY SUMMARY: {total_checks} checks  |  PASS: {pass_count}  |  WARN: {warn_count}  |  FAIL: {fail_count}", NAVY)
+    _banner(
+        ws,
+        r,
+        f"QUALITY SUMMARY: {total_checks} checks  |  PASS: {pass_count}  |  WARN: {warn_count}  |  FAIL: {fail_count}",
+        NAVY,
+    )
 
     for col_letter, width in zip(["A", "B", "C", "D", "E"], [40, 20, 18, 12, 60], strict=False):
         ws.column_dimensions[col_letter].width = width
@@ -3162,7 +3269,15 @@ def write_tariff_analysis_sheet(ws, dfc):
         ws.column_dimensions["A"].width = 50
         return
 
-    headers = ["Tariff", "Records", "Avg Unit Rate (p/kWh)", "Median Unit Rate", "Min Rate", "Max Rate", "Avg Period Charge (£)"]
+    headers = [
+        "Tariff",
+        "Records",
+        "Avg Unit Rate (p/kWh)",
+        "Median Unit Rate",
+        "Min Rate",
+        "Max Rate",
+        "Avg Period Charge (£)",
+    ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 1, col, h, bg=NAVY)
     ws.row_dimensions[1].height = 28
@@ -3201,7 +3316,9 @@ def write_tariff_analysis_sheet(ws, dfc):
     _text(ws, r, 1, "Tariff Changes Detected")
     _num(ws, r, 2, tariff_info.get("tariff_changes", 0), fmt="#,##0")
 
-    for col_letter, width in zip(["A", "B", "C", "D", "E", "F", "G"], [28, 10, 22, 18, 16, 16, 20], strict=False):
+    for col_letter, width in zip(
+        ["A", "B", "C", "D", "E", "F", "G"], [28, 10, 22, 18, 16, 16, 20], strict=False
+    ):
         ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A2"
 
