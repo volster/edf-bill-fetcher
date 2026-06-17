@@ -3592,7 +3592,7 @@ class App:
     def _finish(self):
         self.run_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
-        if hasattr(self, 'pdf_report_btn'):
+        if hasattr(self, "pdf_report_btn"):
             self.pdf_report_btn.config(state="normal" if HAS_PDF_REPORT else "disabled")
         self.progress_v.set(0)
         self.set_status("Cancelled." if self.cancel_event.is_set() else "Ready.")
@@ -3601,20 +3601,26 @@ class App:
     def export_pdf_report(self):
         """Generate professional PDF report for Ombudsman submission."""
         if not HAS_PDF_REPORT:
-            self._show("error", "PDF Report Unavailable",
-                       "PDF report generation requires the 'reportlab' package.\n"
-                       "Install with: pip install reportlab")
+            self._show(
+                "error",
+                "PDF Report Unavailable",
+                "PDF report generation requires the 'reportlab' package.\n"
+                "Install with: pip install reportlab",
+            )
             return
 
-        if not hasattr(self, 'engine') or not self.engine or not self.engine.records:
+        if not hasattr(self, "engine") or not self.engine or not self.engine.records:
             self._show("warning", "No Data", "No records available. Run extraction first.")
             return
 
         # Ask for output path
         base_dir = (
-            os.path.dirname(self.pst_path.get().strip()) if self.pst_path.get().strip()
-            else self.pdf_dir.get().strip() if self.pdf_dir.get().strip()
-            else os.path.dirname(self.htm_path.get().strip()) if self.htm_path.get().strip()
+            os.path.dirname(self.pst_path.get().strip())
+            if self.pst_path.get().strip()
+            else self.pdf_dir.get().strip()
+            if self.pdf_dir.get().strip()
+            else os.path.dirname(self.htm_path.get().strip())
+            if self.htm_path.get().strip()
             else os.getcwd()
         )
         default_name = "EDF_Ombudsman_Report.pdf"
@@ -3654,14 +3660,21 @@ class App:
                 else:
                     self.root.after(0, lambda: self._show("error", "PDF Generation Failed", msg))
             except Exception as e:
-                self.root.after(0, lambda err=e: self._show("error", "Error", f"An error occurred:\\n\\n{err}"))
+                self.root.after(
+                    0, lambda err=e: self._show("error", "Error", f"An error occurred:\\n\\n{err}")
+                )
             finally:
-                self.root.after(0, lambda: (
-                    self.pdf_report_btn.config(state="normal" if HAS_PDF_REPORT else "disabled"),
-                    self.run_btn.config(state="normal"),
-                    self.cancel_btn.config(state="disabled"),
-                    self.set_status("Ready.")
-                ))
+                self.root.after(
+                    0,
+                    lambda: (
+                        self.pdf_report_btn.config(
+                            state="normal" if HAS_PDF_REPORT else "disabled"
+                        ),
+                        self.run_btn.config(state="normal"),
+                        self.cancel_btn.config(state="disabled"),
+                        self.set_status("Ready."),
+                    ),
+                )
 
         threading.Thread(target=_generate, daemon=True).start()
 
