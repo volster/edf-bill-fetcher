@@ -16,6 +16,7 @@ import traceback
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
+import numpy as np
 import openpyxl
 import pandas as pd
 import pdfplumber
@@ -31,6 +32,22 @@ try:
     HAS_PYPFF = True
 except ImportError:
     HAS_PYPFF = False
+
+# Try to import scipy for advanced stats (graceful fallback)
+try:
+    import importlib.util
+
+    HAS_SCIPY = importlib.util.find_spec("scipy") is not None
+except ImportError:
+    HAS_SCIPY = False
+
+# Try to import statsmodels for forecasting (graceful fallback)
+try:
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+    HAS_STATSMODELS = True
+except ImportError:
+    HAS_STATSMODELS = False
 
 
 # ---------------------------------------------------------------------------
@@ -2303,7 +2320,890 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         ws_tl.column_dimensions[col].width = w
     ws_tl.freeze_panes = "A5"
 
+    # =====================================================================
+    # NEW ANALYSIS TABS (added after Dispute Timeline)
+    # =====================================================================
+
+    # Statistical Analysis
+    write_statistical_analysis_sheet(wb.create_sheet(title="Statistical Analysis"), dfc, config)
+
+    # Payment Analysis
+    write_payment_analysis_sheet(wb.create_sheet(title="Payment Analysis"), dfc)
+
+    # Forecast & Projection
+    write_forecast_sheet(wb.create_sheet(title="Forecast & Projection"), dfc)
+
+    # Data Quality Report
+    write_data_quality_sheet(wb.create_sheet(title="Data Quality Report"), df)
+
+    # Tariff Analysis (if data available)
+    write_tariff_analysis_sheet(wb.create_sheet(title="Tariff Analysis"), dfc)
+
     wb.save(output_path)
+
+
+# =====================================================================
+# NEW ANALYSIS FUNCTIONS (pandas-powered enhancements)
+# =====================================================================
+
+
+def _compute_rolling_stats(series, window=6):
+    """Compute rolling statistics for a time series."""
+    return {
+        "mean": series.rolling(window=window, min_periods=1).mean(),
+        "std": series.rolling(window=window, min_periods=1).std(),
+        "min": series.rolling(window=window, min_periods=1).min(),
+        "max": series.rolling(window=window, min_periods=1).max(),
+        "median": series.rolling(window=window, min_periods=1).median(),
+    }
+
+
+def _compute_ema(series, span=6):
+    """Compute Exponential Moving Average."""
+    return series.ewm(span=span, adjust=False).mean()
+
+
+def _compute_momentum(series, period=3):
+    """Compute momentum (rate of change)."""
+    return series.diff(period)
+
+
+def _compute_volatility(series, window=6):
+    """Compute rolling volatility (std of returns)."""
+    returns = series.pct_change()
+    return returns.rolling(window=window, min_periods=1).std()
+
+
+def _zscore_anomalies(series, threshold=2.5):
+    """Detect anomalies using z-score method."""
+    if len(series) < 3:
+        return pd.Series(False, index=series.index)
+    mean = series.mean()
+    std = series.std()
+    if std == 0:
+        return pd.Series(False, index=series.index)
+    z_scores = np.abs((series - mean) / std)
+    return z_scores > threshold
+
+
+def _iqr_anomalies(series, multiplier=1.5):
+    """Detect anomalies using IQR method."""
+    if len(series) < 4:
+        return pd.Series(False, index=series.index)
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    if iqr == 0:
+        return pd.Series(False, index=series.index)
+    lower = q1 - multiplier * iqr
+    upper = q3 + multiplier * iqr
+    return (series < lower) | (series > upper)
+
+
+def _linear_forecast(series, steps=6):
+    """Simple linear regression forecast."""
+    if len(series) < 3:
+        return None
+    x = np.arange(len(series))
+    y = series.values
+    # Handle NaN values
+    mask = ~np.isnan(y)
+    if mask.sum() < 3:
+        return None
+    x_clean = x[mask]
+    y_clean = y[mask]
+    try:
+        coeffs = np.polyfit(x_clean, y_clean, 1)
+        future_x = np.arange(len(series), len(series) + steps)
+        forecast = np.polyval(coeffs, future_x)
+        return forecast
+    except Exception:
+        return None
+
+
+def _holt_winters_forecast(series, steps=6, seasonal_periods=None):
+    """Holt-Winters exponential smoothing forecast (if statsmodels available)."""
+    if not HAS_STATSMODELS or len(series) < 4:
+        return None
+    try:
+        # Clean series
+        clean_series = series.dropna()
+        if len(clean_series) < 4:
+            return None
+
+        # Determine seasonal periods from data frequency if not provided
+        if seasonal_periods is None:
+            # Guess from data length
+            seasonal_periods = min(12, len(clean_series) // 2) if len(clean_series) >= 8 else None
+
+        model = ExponentialSmoothing(
+            clean_series,
+            trend="add",
+            seasonal="add" if seasonal_periods else None,
+            seasonal_periods=seasonal_periods,
+            initialization_method="estimated",
+        )
+        fitted = model.fit(optimized=True)
+        forecast = fitted.forecast(steps)
+        return forecast.values
+    except Exception:
+        return None
+
+
+def _detect_payment_patterns(df):
+    """Analyze payment/credit patterns in the data."""
+    payments = df[df["Entry Type"].isin(["Payment", "Credit"])].copy()
+    if payments.empty:
+        return {}
+
+    payments["_dt"] = payments["Date"].apply(parse_to_sort_date)
+    payments = payments.sort_values("_dt")
+
+    # Calculate days between payments
+    pay_dates = payments["_dt"].dropna()
+    intervals = pay_dates.diff().dt.days.dropna()
+
+    # Payment amounts (negative values for credits/payments)
+    pay_amounts = payments["Amount (£)"].astype(float)
+
+    return {
+        "count": len(payments),
+        "total_paid": abs(pay_amounts.sum()),
+        "avg_payment": abs(pay_amounts.mean()),
+        "median_payment": abs(pay_amounts.median()),
+        "max_payment": abs(pay_amounts.max()),
+        "min_payment": abs(pay_amounts.min()),
+        "avg_interval_days": float(intervals.mean()) if len(intervals) > 0 else None,
+        "median_interval_days": float(intervals.median()) if len(intervals) > 0 else None,
+        "last_payment_date": payments.iloc[-1]["Date"] if len(payments) > 0 else None,
+        "last_payment_amount": abs(pay_amounts.iloc[-1]) if len(pay_amounts) > 0 else None,
+    }
+
+
+def _analyze_tariff_impact(df):
+    """Analyze the impact of tariff changes on unit rates and charges."""
+    if "Tariff" not in df.columns or "Unit Rate (p/kWh)" not in df.columns:
+        return {}
+
+    tariff_data = df[df["Tariff"].notna() & (df["Tariff"] != "N/A")].copy()
+    if tariff_data.empty:
+        return {}
+
+    # Convert unit rate to numeric
+    tariff_data["unit_rate_num"] = pd.to_numeric(
+        tariff_data["Unit Rate (p/kWh)"], errors="coerce"
+    )
+    tariff_data = tariff_data.dropna(subset=["unit_rate_num"])
+
+    if tariff_data.empty:
+        return {}
+
+    # Group by tariff
+    tariff_stats = (
+        tariff_data.groupby("Tariff")
+        .agg(
+            count=("unit_rate_num", "count"),
+            avg_unit_rate=("unit_rate_num", "mean"),
+            median_unit_rate=("unit_rate_num", "median"),
+            min_unit_rate=("unit_rate_num", "min"),
+            max_unit_rate=("unit_rate_num", "max"),
+            avg_charge=("Period Charge (£)", lambda x: pd.to_numeric(x, errors="coerce").mean()),
+        )
+        .reset_index()
+    )
+
+    # Find tariff changes
+    tariff_data = tariff_data.sort_values("_dt" if "_dt" in tariff_data.columns else "Date")
+    tariff_changes = tariff_data["Tariff"].ne(tariff_data["Tariff"].shift()).cumsum()
+
+    return {
+        "tariff_stats": tariff_stats,
+        "num_tariffs": tariff_data["Tariff"].nunique(),
+        "tariff_changes": int(tariff_changes.max()) if not tariff_changes.empty else 0,
+    }
+
+
+def _data_quality_report(df):
+    """Generate a comprehensive data quality report."""
+    total_records = len(df)
+    if total_records == 0:
+        return {}
+
+    # Date parsing success
+    df["_dt_parsed"] = df["Date"].apply(parse_to_sort_date)
+    date_parsed = df["_dt_parsed"].notna().sum()
+    date_failed = total_records - date_parsed
+
+    # Amount completeness
+    amt_complete = df["Amount (£)"].notna().sum()
+    amt_missing = total_records - amt_complete
+
+    # Period info completeness
+    period_from_complete = (df["Period From"] != "N/A").sum()
+    _ = (df["Period To"] != "N/A").sum()  # Not used, but computed for completeness
+    period_complete = period_from_complete  # At least from date
+
+    # Reading classification
+    reading_classified = (df["Reading"] != "Unknown").sum() if "Reading" in df.columns else 0
+
+    # Unit rate computable
+    ur_computable = (
+        df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, (int, float)) and x != "N/A")
+    ).sum()
+
+    # Duplicates (same date + amount)
+    dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
+
+    # Source distribution
+    source_dist = df["Source"].value_counts().to_dict()
+
+    # Entry type distribution
+    entry_dist = df["Entry Type"].value_counts().to_dict() if "Entry Type" in df.columns else {}
+
+    return {
+        "total_records": total_records,
+        "date_parsed": date_parsed,
+        "date_failed": date_failed,
+        "date_parse_rate": date_parsed / total_records if total_records > 0 else 0,
+        "amt_complete": amt_complete,
+        "amt_missing": amt_missing,
+        "period_complete": period_complete,
+        "period_completeness_rate": period_complete / total_records if total_records > 0 else 0,
+        "reading_classified": reading_classified,
+        "reading_classify_rate": reading_classified / total_records if total_records > 0 else 0,
+        "ur_computable": ur_computable,
+        "ur_computable_rate": ur_computable / total_records if total_records > 0 else 0,
+        "duplicate_count": int(dup_count),
+        "duplicate_rate": dup_count / total_records if total_records > 0 else 0,
+        "source_distribution": source_dist,
+        "entry_type_distribution": entry_dist,
+    }
+
+
+# ---------------------------------------------------------------------------
+# NEW ANALYSIS TAB WRITERS
+# ---------------------------------------------------------------------------
+
+
+def write_statistical_analysis_sheet(ws, dfc, config):
+    """Write Statistical Analysis tab with advanced pandas analytics."""
+    ws.title = "Statistical Analysis"
+
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+    AMBER = "FFD166"
+    LGREY = "F0F0F0"
+    DGREY = "888888"
+
+    # Prepare data
+    dfc = dfc.copy()
+    dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
+    dfc = dfc.sort_values("_dt").reset_index(drop=True)
+    amounts = dfc["Amount (£)"].astype(float).values
+    dates = dfc["Date"].tolist()
+    n = len(amounts)
+
+    if n < 3:
+        _hcell(ws, 1, 1, "Insufficient data for statistical analysis", bg=NAVY)
+        ws.column_dimensions["A"].width = 50
+        return
+
+    # Headers
+    headers = [
+        "Metric",
+        "Value",
+        "Notes",
+    ]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 1, col, h, bg=NAVY)
+    ws.row_dimensions[1].height = 28
+
+    # Title
+    tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  STATISTICAL ANALYSIS")
+    tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    tc.fill = PatternFill("solid", start_color=ORANGE)
+    tc.border = CELL_BORDER
+    tc.alignment = Alignment(horizontal="left", vertical="center")
+    for c in [2, 3]:
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+
+    # Summary stats
+    r = 2
+    _section_hdr(ws, r, "DESCRIPTIVE STATISTICS")
+
+    amounts_series = pd.Series(amounts)
+    stats_data = [
+        ("Count", len(amounts), "#,##0", "Number of billing records"),
+        ("Mean (£)", float(amounts_series.mean()), "£#,##0.00", "Average balance"),
+        ("Median (£)", float(amounts_series.median()), "£#,##0.00", "Median balance"),
+        ("Std Dev (£)", float(amounts_series.std()), "£#,##0.00", "Standard deviation"),
+        ("Min (£)", float(amounts_series.min()), "£#,##0.00", "Minimum balance"),
+        ("Max (£)", float(amounts_series.max()), "£#,##0.00", "Maximum balance"),
+        ("Range (£)", float(amounts_series.max() - amounts_series.min()), "£#,##0.00", "Max - Min"),
+        ("Skewness", float(amounts_series.skew()) if hasattr(amounts_series, "skew") else 0, "0.00", "Asymmetry of distribution"),
+        ("Kurtosis", float(amounts_series.kurtosis()) if hasattr(amounts_series, "kurtosis") else 0, "0.00", "Tailedness of distribution"),
+        ("CV (%)", float(amounts_series.std() / amounts_series.mean() * 100) if amounts_series.mean() > 0 else 0, "0.00", "Coefficient of variation"),
+    ]
+
+    for label, value, fmt, note in stats_data:
+        r += 1
+        bg = LGREY if r % 2 == 0 else None
+        _text(ws, r, 1, label, fill_hex=bg)
+        if fmt == "£":
+            _money(ws, r, 2, value, fill_hex=bg)
+        elif fmt == "%":
+            _num(ws, r, 2, value, fmt="0.0%", fill_hex=bg)
+        else:
+            _num(ws, r, 2, value, fmt=fmt, fill_hex=bg)
+        _text(ws, r, 3, note, fill_hex=bg, color=DGREY)
+
+    # Rolling statistics
+    r += 1
+    _section_hdr(ws, r, "ROLLING STATISTICS (6-period window)")
+    r += 1
+    _text(ws, r, 1, "Current 6-Period Rolling Mean (£)", bold=True)
+    rolling_mean = float(pd.Series(amounts).rolling(6, min_periods=1).mean().iloc[-1])
+    _money(ws, r, 2, rolling_mean)
+
+    r += 1
+    _text(ws, r, 1, "Current 6-Period Rolling Std (£)", bold=True)
+    rolling_std = float(pd.Series(amounts).rolling(6, min_periods=1).std().iloc[-1])
+    _money(ws, r, 2, rolling_std)
+
+    r += 1
+    _text(ws, r, 1, "Current 6-Period Rolling Min (£)", bold=True)
+    rolling_min = float(pd.Series(amounts).rolling(6, min_periods=1).min().iloc[-1])
+    _money(ws, r, 2, rolling_min)
+
+    r += 1
+    _text(ws, r, 1, "Current 6-Period Rolling Max (£)", bold=True)
+    rolling_max = float(pd.Series(amounts).rolling(6, min_periods=1).max().iloc[-1])
+    _money(ws, r, 2, rolling_max)
+
+    r += 1
+    _text(ws, r, 1, "Current 6-Period Rolling Median (£)", bold=True)
+    rolling_median = float(pd.Series(amounts).rolling(6, min_periods=1).median().iloc[-1])
+    _money(ws, r, 2, rolling_median)
+
+    # Exponential Moving Average
+    r += 1
+    _section_hdr(ws, r, "EXPONENTIAL MOVING AVERAGE")
+    r += 1
+    _text(ws, r, 1, "Current EMA (span=6) (£)", bold=True)
+    ema = float(pd.Series(amounts).ewm(span=6, adjust=False).mean().iloc[-1])
+    _money(ws, r, 2, ema)
+
+    r += 1
+    _text(ws, r, 1, "EMA vs Simple SMA Difference (£)", bold=True)
+    sma = float(pd.Series(amounts).rolling(6, min_periods=1).mean().iloc[-1])
+    _money(ws, r, 2, ema - sma)
+
+    # Momentum & Volatility
+    r += 1
+    _section_hdr(ws, r, "MOMENTUM & VOLATILITY")
+    r += 1
+    mom = float(pd.Series(amounts).diff(3).iloc[-1]) if n >= 4 else 0
+    _text(ws, r, 1, "3-Period Momentum (£)", bold=True)
+    _money(ws, r, 2, mom)
+
+    r += 1
+    vol = float(pd.Series(amounts).pct_change().rolling(6, min_periods=1).std().iloc[-1]) if n >= 3 else 0
+    _text(ws, r, 1, "6-Period Volatility (σ of returns)", bold=True)
+    _num(ws, r, 2, vol, fmt="0.00%")
+
+    # Anomaly Detection
+    r += 1
+    _section_hdr(ws, r, "ANOMALY DETECTION")
+    series = pd.Series(amounts, index=pd.to_datetime(dates, dayfirst=True, errors="coerce"))
+
+    z_anoms = _zscore_anomalies(series, threshold=2.5)
+    iqr_anoms = _iqr_anomalies(series, multiplier=1.5)
+
+    z_count = int(z_anoms.sum())
+    iqr_count = int(iqr_anoms.sum())
+
+    r += 1
+    _text(ws, r, 1, "Z-Score Anomalies (threshold=2.5σ)", bold=True)
+    _num(ws, r, 2, z_count, fmt="#,##0")
+
+    r += 1
+    _text(ws, r, 1, "IQR Anomalies (multiplier=1.5)", bold=True)
+    _num(ws, r, 2, iqr_count, fmt="#,##0")
+
+    # List detected anomalies
+    if z_count > 0:
+        r += 1
+        _text(ws, r, 1, "Z-Score Anomaly Dates:", bold=True)
+        anom_dates = series[z_anoms].index
+        for dt in anom_dates:
+            r += 1
+            _text(ws, r, 1, f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({series[dt]:,.2f})")
+
+    if iqr_count > 0:
+        r += 1
+        _text(ws, r, 1, "IQR Anomaly Dates:", bold=True)
+        anom_dates = series[iqr_anoms].index
+        for dt in anom_dates:
+            r += 1
+            _text(ws, r, 1, f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({series[dt]:,.2f})")
+
+    # Normality test (if scipy available)
+    r += 1
+    _section_hdr(ws, r, "DISTRIBUTION TESTS")
+    if HAS_SCIPY:
+        try:
+            from scipy import stats as sp_stats
+            shapiro_stat, shapiro_p = sp_stats.shapiro(amounts_series.dropna())
+            r += 1
+            _text(ws, r, 1, "Shapiro-Wilk Test (Normality)", bold=True)
+            _num(ws, r, 2, shapiro_stat, fmt="0.0000")
+            _text(ws, r, 3, f"p-value: {shapiro_p:.4f} — {'Normal' if shapiro_p > 0.05 else 'Non-normal'}")
+
+            # Jarque-Bera
+            jb_stat, jb_p = sp_stats.jarque_bera(amounts_series.dropna())
+            r += 1
+            _text(ws, r, 1, "Jarque-Bera Test (Normality)", bold=True)
+            _num(ws, r, 2, jb_stat, fmt="0.00")
+            _text(ws, r, 3, f"p-value: {jb_p:.4f} — {'Normal' if jb_p > 0.05 else 'Non-normal'}")
+        except Exception:
+            r += 1
+            _text(ws, r, 1, "Scipy tests failed", fill_hex=AMBER)
+    else:
+        r += 1
+        _text(ws, r, 1, "Scipy not available — install for normality tests", fill_hex=AMBER)
+
+    # Column widths
+    for col_letter, width in zip(["A", "B", "C"], [45, 22, 80], strict=False):
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A2"
+
+
+def write_payment_analysis_sheet(ws, dfc):
+    """Write Payment/Credit Analysis tab."""
+    ws.title = "Payment Analysis"
+
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+    GREEN = "06D6A0"
+    LGREY = "F0F0F0"
+    DGREY = "888888"
+
+    payments = dfc[dfc["Entry Type"].isin(["Payment", "Credit"])].copy()
+    if payments.empty:
+        _hcell(ws, 1, 1, "No payment/credit records found", bg=NAVY)
+        ws.column_dimensions["A"].width = 50
+        return
+
+    payments["_dt"] = payments["Date"].apply(parse_to_sort_date)
+    payments = payments.sort_values("_dt").reset_index(drop=True)
+
+    headers = ["Metric", "Value", "Notes"]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 1, col, h, bg=NAVY)
+    ws.row_dimensions[1].height = 28
+
+    tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  PAYMENT & CREDIT ANALYSIS")
+    tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    tc.fill = PatternFill("solid", start_color=ORANGE)
+    tc.border = CELL_BORDER
+    tc.alignment = Alignment(horizontal="left", vertical="center")
+    for c in [2, 3]:
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+
+    pat = _detect_payment_patterns(dfc)
+
+    r = 2
+    _section_hdr(ws, r, "PAYMENT SUMMARY")
+
+    payment_items = [
+        ("Total Payments/Credits", pat["count"], "#,##0", "Number of payment events"),
+        ("Total Amount Paid (£)", pat["total_paid"], "£#,##0.00", "Sum of all payments/credits"),
+        ("Average Payment (£)", pat["avg_payment"], "£#,##0.00", "Mean payment amount"),
+        ("Median Payment (£)", pat["median_payment"], "£#,##0.00", "Median payment amount"),
+        ("Largest Payment (£)", pat["max_payment"], "£#,##0.00", "Maximum single payment"),
+        ("Smallest Payment (£)", pat["min_payment"], "£#,##0.00", "Minimum single payment"),
+    ]
+
+    for label, value, fmt, note in payment_items:
+        r += 1
+        bg = LGREY if r % 2 == 0 else None
+        _text(ws, r, 1, label, fill_hex=bg)
+        if fmt == "£":
+            _money(ws, r, 2, value, fill_hex=bg)
+        else:
+            _num(ws, r, 2, value, fmt=fmt, fill_hex=bg)
+        _text(ws, r, 3, note, fill_hex=bg, color=DGREY)
+
+    # Payment intervals
+    r += 1
+    _section_hdr(ws, r, "PAYMENT TIMING")
+    interval_items = [
+        ("Avg Interval (days)", pat["avg_interval_days"], "#,##0.0", "Mean days between payments"),
+        ("Median Interval (days)", pat["median_interval_days"], "#,##0.0", "Median days between payments"),
+    ]
+    for label, value, fmt, note in interval_items:
+        r += 1
+        bg = LGREY if r % 2 == 0 else None
+        _text(ws, r, 1, label, fill_hex=bg)
+        if value is not None:
+            _num(ws, r, 2, value, fmt=fmt, fill_hex=bg)
+        else:
+            _text(ws, r, 2, "N/A", fill_hex=bg)
+        _text(ws, r, 3, note, fill_hex=bg, color=DGREY)
+
+    # Last payment
+    r += 1
+    _section_hdr(ws, r, "LAST PAYMENT")
+    r += 1
+    _text(ws, r, 1, "Last Payment Date", bold=True)
+    _text(ws, r, 2, pat["last_payment_date"] or "N/A")
+
+    r += 1
+    _text(ws, r, 1, "Last Payment Amount (£)", bold=True)
+    _money(ws, r, 2, pat["last_payment_amount"] or 0)
+
+    # Payment detail table
+    r += 2
+    _section_hdr(ws, r, "ALL PAYMENTS & CREDITS (Chronological)")
+    r += 1
+    pay_headers = ["Date", "Entry Type", "Amount (£)", "Balance After (£)", "Details"]
+    for ci, h in enumerate(pay_headers, 1):
+        _hcell(ws, r, ci, h, bg=NAVY)
+
+    for i, (_, row) in enumerate(payments.iterrows()):
+        r += 1
+        bg = LGREY if i % 2 == 0 else None
+        _text(ws, r, 1, row["Date"], fill_hex=bg)
+        _text(ws, r, 2, row["Entry Type"], fill_hex=bg, bold=True)
+        _money(ws, r, 3, float(row["Amount (£)"]), fill_hex=bg)
+        _money(ws, r, 4, float(row["Amount (£)"]), fill_hex=bg)  # Balance after = current amount
+        _text(ws, r, 5, str(row.get("Details", ""))[:60], fill_hex=bg, wrap=True)
+
+    # Chart - Payment amounts over time
+    if len(payments) > 1:
+        bc = BarChart()
+        bc.type = "col"
+        bc.title = "Payment/Credit Amounts Over Time"
+        bc.y_axis.title = "Amount (£)"
+        bc.x_axis.title = "Payment Date"
+        bc.style = 10
+        bc.width, bc.height = 28, 14
+        # Add data
+        pay_amounts = payments["Amount (£)"].astype(float).tolist()
+        for i, amt in enumerate(pay_amounts):
+            ws.cell(row=r - len(payments) + i + 1, column=6, value=amt)
+        chg_ref = Reference(ws, min_col=6, min_row=r - len(payments) + 1, max_row=r)
+        date_ref = Reference(ws, min_col=1, min_row=r - len(payments) + 1, max_row=r)
+        bc.add_data(chg_ref, titles_from_data=False)
+        bc.set_categories(date_ref)
+        bc.series[0].graphicalProperties.solidFill = GREEN
+        ws.add_chart(bc, f"H{r + 2}")
+
+    for col_letter, width in zip(["A", "B", "C", "D", "E"], [14, 16, 16, 16, 60], strict=False):
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = f"A{r - len(payments)}"
+
+
+def write_forecast_sheet(ws, dfc):
+    """Write Forecast/Projection tab with multiple forecasting methods."""
+    ws.title = "Forecast & Projection"
+
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+    AMBER = "FFD166"
+    LGREY = "F0F0F0"
+    DGREY = "888888"
+
+    dfc = dfc.copy()
+    dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
+    dfc = dfc.sort_values("_dt").reset_index(drop=True)
+    amounts = dfc["Amount (£)"].astype(float).values
+    dates = dfc["Date"].tolist()
+    n = len(amounts)
+
+    if n < 3:
+        _hcell(ws, 1, 1, "Insufficient data for forecasting (need 3+ records)", bg=NAVY)
+        ws.column_dimensions["A"].width = 60
+        return
+
+    headers = ["Date", "Actual (£)", "Linear Forecast (£)", "Holt-Winters (£)", "EMA Projection (£)", "Confidence (±£)"]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 1, col, h, bg=NAVY)
+    ws.row_dimensions[1].height = 28
+
+    tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  BALANCE FORECAST")
+    tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    tc.fill = PatternFill("solid", start_color=ORANGE)
+    tc.border = CELL_BORDER
+    tc.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, 7):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+
+    # Generate forecasts (6 steps ahead)
+    forecast_steps = 6
+    series = pd.Series(amounts, index=pd.to_datetime(dates, dayfirst=True, errors="coerce"))
+
+    linear_fc = _linear_forecast(series, forecast_steps)
+    hw_fc = _holt_winters_forecast(series, forecast_steps)
+    ema_fc = _compute_ema(series, span=6).iloc[-1] if n >= 2 else amounts[-1]
+    # Simple EMA projection (extend last EMA)
+    ema_vals = [ema_fc] * forecast_steps
+
+    # Historical volatility for confidence intervals
+    returns = pd.Series(amounts).pct_change().dropna()
+    hist_vol = returns.std() if len(returns) > 1 else 0.05
+
+    # Write historical data + forecasts
+    r = 2
+    # Historical
+    for i in range(n):
+        bg = LGREY if i % 2 == 0 else None
+        _text(ws, r, 1, dates[i], fill_hex=bg)
+        _money(ws, r, 2, float(amounts[i]), fill_hex=bg)
+        _text(ws, r, 3, "—", fill_hex=bg)
+        _text(ws, r, 4, "—", fill_hex=bg)
+        _text(ws, r, 5, "—", fill_hex=bg)
+        _text(ws, r, 6, "—", fill_hex=bg)
+        r += 1
+
+    # Separator
+    ws.cell(row=r, column=1, value="—" * 20).font = Font(bold=True, color=DGREY)
+    r += 1
+
+    # Forecasts
+    forecast_dates = []
+    last_date = parse_to_sort_date(dates[-1])
+    from datetime import timedelta
+    if not pd.isna(last_date):
+        for i in range(1, forecast_steps + 1):
+            next_date = last_date + timedelta(days=30 * i)  # Approximate monthly
+            forecast_dates.append(next_date.strftime("%d/%m/%Y"))
+    else:
+        forecast_dates = [f"Forecast +{i+1}" for i in range(forecast_steps)]
+
+    for i in range(forecast_steps):
+        bg = AMBER
+        _text(ws, r, 1, forecast_dates[i], fill_hex=bg, bold=True)
+        _text(ws, r, 2, "—", fill_hex=bg)  # No actual
+        lin_val = linear_fc[i] if linear_fc is not None else "N/A"
+        hw_val = hw_fc[i] if hw_fc is not None else "N/A"
+        _money(ws, r, 3, lin_val, fill_hex=bg)
+        _money(ws, r, 4, hw_val, fill_hex=bg)
+        _money(ws, r, 5, ema_vals[i], fill_hex=bg)
+        # Confidence interval ±2σ
+        if linear_fc is not None:
+            conf = linear_fc[i] * hist_vol * 2
+            _money(ws, r, 6, conf, fill_hex=bg)
+        else:
+            _text(ws, r, 6, "N/A", fill_hex=bg)
+        r += 1
+
+    # Model comparison
+    r += 1
+    _section_hdr(ws, r, "MODEL COMPARISON")
+    r += 1
+    _text(ws, r, 1, "Linear Trend", bold=True)
+    _text(ws, r, 2, "Simple linear regression on time index")
+    r += 1
+    _text(ws, r, 1, "Holt-Winters", bold=True)
+    _text(ws, r, 2, "Exponential smoothing with trend" + (" + seasonality" if HAS_STATSMODELS else ""))
+    r += 1
+    _text(ws, r, 1, "EMA Projection", bold=True)
+    _text(ws, r, 2, "Extends last Exponential Moving Average (span=6)")
+    r += 1
+    _text(ws, r, 1, "Historical Volatility", bold=True)
+    _num(ws, r, 2, hist_vol, fmt="0.00%")
+    _text(ws, r, 3, "Monthly return std used for confidence bands")
+
+    # Accuracy metrics (in-sample)
+    r += 1
+    _section_hdr(ws, r, "IN-SAMPLE ACCURACY (Last 6 periods)")
+    if n >= 7:
+        test_series = pd.Series(amounts[:-6])
+        true_vals = amounts[-6:]
+        lin_hist = _linear_forecast(test_series, 6)
+        if lin_hist is not None:
+            mae = np.mean(np.abs(lin_hist - true_vals))
+            rmse = np.sqrt(np.mean((lin_hist - true_vals) ** 2))
+            mape = np.mean(np.abs((lin_hist - true_vals) / true_vals)) * 100
+
+            r += 1
+            _text(ws, r, 1, "Linear Forecast MAE (£)", bold=True)
+            _money(ws, r, 2, mae)
+            r += 1
+            _text(ws, r, 1, "Linear Forecast RMSE (£)", bold=True)
+            _money(ws, r, 2, rmse)
+            r += 1
+            _text(ws, r, 1, "Linear Forecast MAPE (%)", bold=True)
+            _num(ws, r, 2, mape, fmt="0.00%")
+
+    for col_letter, width in zip(["A", "B", "C", "D", "E", "F"], [14, 16, 18, 18, 18, 16], strict=False):
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A2"
+
+
+def write_data_quality_sheet(ws, df):
+    """Write Data Quality Report tab."""
+    ws.title = "Data Quality Report"
+
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+    LGREY = "F0F0F0"
+    DGREY = "888888"
+
+    def _banner(ws, r, text, bg):
+        c = ws.cell(row=r, column=1, value=text)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", start_color=bg)
+        c.border = CELL_BORDER
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        for col in range(2, 6):
+            x = ws.cell(row=r, column=col)
+            x.fill = PatternFill("solid", start_color=bg)
+            x.border = CELL_BORDER
+        ws.row_dimensions[r].height = 20
+
+    dq = _data_quality_report(df)
+
+    if not dq:
+        _hcell(ws, 1, 1, "No data to analyze", bg=NAVY)
+        ws.column_dimensions["A"].width = 40
+        return
+
+    headers = ["Check", "Result", "Rate/Count", "Status"]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 1, col, h, bg=NAVY)
+    ws.row_dimensions[1].height = 28
+
+    tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  DATA QUALITY REPORT")
+    tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    tc.fill = PatternFill("solid", start_color=ORANGE)
+    tc.border = CELL_BORDER
+    tc.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, 5):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+
+    def _check_row(r, check, result, rate, status, note=""):
+        bg = LGREY if r % 2 == 0 else None
+        _text(ws, r, 1, check, fill_hex=bg)
+        _text(ws, r, 2, str(result), fill_hex=bg)
+        _text(ws, r, 3, str(rate), fill_hex=bg)
+        _text(ws, r, 4, status, bold=True, fill_hex=bg)
+        if note:
+            ws.cell(row=r, column=5, value=note).font = Font(name="Calibri", size=9, color=DGREY)
+
+    r = 2
+    _section_hdr(ws, r, "COMPLETENESS CHECKS")
+
+    checks = [
+        ("Total Records", dq["total_records"], "—", "PASS" if dq["total_records"] > 0 else "FAIL"),
+        ("Date Parsing Success", dq["date_parsed"], f"{dq['date_parse_rate']:.1%}", "PASS" if dq["date_parse_rate"] > 0.8 else "WARN" if dq["date_parse_rate"] > 0.5 else "FAIL"),
+        ("Amount Complete", dq["amt_complete"], f"{(dq['amt_complete']/dq['total_records']):.1%}", "PASS" if dq["amt_complete"] == dq["total_records"] else "WARN"),
+        ("Period Info Complete", dq["period_complete"], f"{dq['period_completeness_rate']:.1%}", "PASS" if dq["period_completeness_rate"] > 0.7 else "WARN"),
+        ("Reading Classified", dq["reading_classified"], f"{dq['reading_classify_rate']:.1%}", "PASS" if dq["reading_classify_rate"] > 0.5 else "WARN"),
+        ("Unit Rate Computable", dq["ur_computable"], f"{dq['ur_computable_rate']:.1%}", "PASS" if dq["ur_computable_rate"] > 0.3 else "INFO"),
+    ]
+    for check, result, rate, status in checks:
+        _check_row(r, check, result, rate, status)
+        r += 1
+
+    r += 1
+    _section_hdr(ws, r, "DUPLICATION CHECKS")
+    r += 1
+    _check_row(r, "Duplicate Records (Date+Amount)", dq["duplicate_count"], f"{dq['duplicate_rate']:.2%}", "PASS" if dq["duplicate_rate"] < 0.05 else "WARN" if dq["duplicate_rate"] < 0.15 else "FAIL")
+    r += 1
+
+    r += 1
+    _section_hdr(ws, r, "SOURCE DISTRIBUTION")
+    for src, cnt in dq.get("source_distribution", {}).items():
+        r += 1
+        _check_row(r, f"Source: {src}", cnt, f"{cnt/dq['total_records']:.1%}", "INFO")
+
+    r += 1
+    _section_hdr(ws, r, "ENTRY TYPE DISTRIBUTION")
+    for etype, cnt in dq.get("entry_type_distribution", {}).items():
+        r += 1
+        _check_row(r, f"Type: {etype}", cnt, f"{cnt/dq['total_records']:.1%}", "INFO")
+
+    # Summary banner
+    r += 2
+    total_checks = len(checks) + 1 + len(dq.get("source_distribution", {})) + len(dq.get("entry_type_distribution", {}))
+    pass_count = sum(1 for c in checks if c[3] == "PASS") + (1 if dq["duplicate_rate"] < 0.05 else 0)
+    warn_count = sum(1 for c in checks if c[3] == "WARN") + (1 if 0.05 <= dq["duplicate_rate"] < 0.15 else 0)
+    fail_count = sum(1 for c in checks if c[3] == "FAIL") + (1 if dq["duplicate_rate"] >= 0.15 else 0)
+
+    _banner(ws, r, f"QUALITY SUMMARY: {total_checks} checks  |  PASS: {pass_count}  |  WARN: {warn_count}  |  FAIL: {fail_count}", NAVY)
+
+    for col_letter, width in zip(["A", "B", "C", "D", "E"], [40, 20, 18, 12, 60], strict=False):
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A2"
+
+
+def write_tariff_analysis_sheet(ws, dfc):
+    """Write Tariff Impact Analysis tab."""
+    ws.title = "Tariff Analysis"
+
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+    LGREY = "F0F0F0"
+
+    tariff_info = _analyze_tariff_impact(dfc)
+
+    if not tariff_info:
+        _hcell(ws, 1, 1, "No tariff data available in records", bg=NAVY)
+        ws.column_dimensions["A"].width = 50
+        return
+
+    headers = ["Tariff", "Records", "Avg Unit Rate (p/kWh)", "Median Unit Rate", "Min Rate", "Max Rate", "Avg Period Charge (£)"]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 1, col, h, bg=NAVY)
+    ws.row_dimensions[1].height = 28
+
+    tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  TARIFF IMPACT ANALYSIS")
+    tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    tc.fill = PatternFill("solid", start_color=ORANGE)
+    tc.border = CELL_BORDER
+    tc.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, 8):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+
+    tariff_stats = tariff_info.get("tariff_stats")
+    if tariff_stats is not None and not tariff_stats.empty:
+        r = 2
+        for _, row in tariff_stats.iterrows():
+            bg = LGREY if r % 2 == 0 else None
+            _text(ws, r, 1, str(row["Tariff"]), fill_hex=bg)
+            _num(ws, r, 2, int(row["count"]), fmt="#,##0", fill_hex=bg)
+            _num(ws, r, 3, float(row["avg_unit_rate"]), fmt="0.00", fill_hex=bg)
+            _num(ws, r, 4, float(row["median_unit_rate"]), fmt="0.00", fill_hex=bg)
+            _num(ws, r, 5, float(row["min_unit_rate"]), fmt="0.00", fill_hex=bg)
+            _num(ws, r, 6, float(row["max_unit_rate"]), fmt="0.00", fill_hex=bg)
+            avg_chg = row["avg_charge"]
+            _money(ws, r, 7, float(avg_chg) if pd.notna(avg_chg) else 0, fill_hex=bg)
+            r += 1
+
+    r += 1
+    _section_hdr(ws, r, "SUMMARY")
+    r += 1
+    _text(ws, r, 1, "Unique Tariffs Identified")
+    _num(ws, r, 2, tariff_info.get("num_tariffs", 0), fmt="#,##0")
+    r += 1
+    _text(ws, r, 1, "Tariff Changes Detected")
+    _num(ws, r, 2, tariff_info.get("tariff_changes", 0), fmt="#,##0")
+
+    for col_letter, width in zip(["A", "B", "C", "D", "E", "F", "G"], [28, 10, 22, 18, 16, 16, 20], strict=False):
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A2"
 
 
 # ---------------------------------------------------------------------------
