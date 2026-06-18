@@ -1547,12 +1547,37 @@ def generate_ombudsman_pdf(
         ofgem_data: Optional OFGEM price cap data
 
     Returns:
+    Records:
         Path to generated PDF
     """
     if not records:
         raise ValueError("No records to report on")
 
     df = pd.DataFrame(records)
+    if df.empty:
+        raise ValueError("Records DataFrame is empty")
+
+    # Ensure required columns exist with defaults
+    required_cols = {
+        "Date": "01/01/1970",
+        "Source": "Unknown",
+        "Amount (£)": 0.0,
+        "Period From": "N/A",
+        "Period To": "N/A",
+        "Invoice #": "N/A",
+        "Period Charge (£)": "N/A",
+        "Entry Type": "Unknown",
+        "Reading": "Unknown",
+        "Units (kWh)": "N/A",
+        "Standing Chg (p/day)": "N/A",
+        "Attachment Name": "N/A",
+        "Details": "",
+        "Logic Used": "",
+    }
+    for col, default in required_cols.items():
+        if col not in df.columns:
+            df[col] = default
+
     df["_sort"] = df["Date"].apply(parse_to_sort_date)
     df = df.sort_values("_sort").reset_index(drop=True)
 
