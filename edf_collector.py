@@ -3512,17 +3512,21 @@ class ReportOptionsDialog:
         cancel_btn = ttk.Button(action_frame, text="Cancel", command=self._cancel, width=14)
         cancel_btn.pack(side=tk.RIGHT)
 
-        generate_btn = tk.Button(
+        ok_btn = tk.Button(
             action_frame,
-            text="Generate Report",
+            text="OK — Generate Report",
             bg=EDF_ORANGE,
             fg="white",
             font=("Calibri", 11, "bold"),
             command=self._generate,
             relief="flat",
-            width=18,
+            width=22,
         )
-        generate_btn.pack(side=tk.RIGHT, padx=(0, 12))
+        ok_btn.pack(side=tk.RIGHT, padx=(0, 12))
+
+        # Bind Enter key to OK, Escape to Cancel
+        self.dialog.bind("<Return>", lambda e: self._generate())
+        self.dialog.bind("<Escape>", lambda e: self._cancel())
 
     def _select_all(self):
         for var in self.section_vars.values():
