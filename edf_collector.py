@@ -3391,8 +3391,9 @@ class ReportOptionsDialog:
         """Show the dialog and return the selected options."""
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Report Options")
-        self.dialog.geometry("500x680")
-        self.dialog.resizable(False, False)
+        self.dialog.geometry("600x800")
+        self.dialog.minsize(500, 500)
+        self.dialog.resizable(True, True)
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
 
@@ -3408,8 +3409,30 @@ class ReportOptionsDialog:
 
     def _build_ui(self):
         """Build the dialog UI."""
-        main = ttk.Frame(self.dialog, padding=20)
-        main.pack(fill=tk.BOTH, expand=True)
+        # Create scrollable main area
+        canvas = tk.Canvas(self.dialog, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.dialog, orient="vertical", command=canvas.yview)
+        main = ttk.Frame(canvas, padding=20)
+
+        main.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=main, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Bind mousewheel
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        if self.dialog is not None:
+            self.dialog.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        # Also allow resizing canvas window width
+        def _on_canvas_configure(event):
+            canvas.itemconfig(canvas.find_all()[0], width=event.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
 
         # Header
         hdr = ttk.Frame(main)
@@ -3460,7 +3483,7 @@ class ReportOptionsDialog:
 
         # Section checkboxes
         sec_frame = ttk.LabelFrame(main, text=" Report Sections ", padding=12)
-        sec_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 16))
+        sec_frame.pack(fill=tk.X, pady=(0, 16))
 
         # Select All / None buttons
         btn_frame = ttk.Frame(sec_frame)
@@ -3476,31 +3499,12 @@ class ReportOptionsDialog:
             side=tk.LEFT, padx=(8, 0)
         )
 
-        # Scrollable checkbox area
-        canvas = tk.Canvas(sec_frame, highlightthickness=0, bg=EDF_OFFWHITE)
-        scrollbar = ttk.Scrollbar(sec_frame, orient="vertical", command=canvas.yview)
-        scrollable = ttk.Frame(canvas, padding=4)
-
-        scrollable.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scrollable, anchor="nw", width=440)
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Bind mousewheel
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        if self.dialog is not None:
-            self.dialog.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
-
+        # Checkboxes (main dialog is now scrollable, so no nested scrollbar needed)
         self.section_vars = {}
         for key, label, default in self.SECTIONS:
             var = tk.BooleanVar(value=default)
             self.section_vars[key] = var
-            cb = ttk.Checkbutton(scrollable, text=label, variable=var)
+            cb = ttk.Checkbutton(sec_frame, text=label, variable=var)
             cb.pack(anchor=tk.W, pady=1)
 
         ttk.Separator(main, orient="horizontal").pack(fill=tk.X, pady=(8, 16))
