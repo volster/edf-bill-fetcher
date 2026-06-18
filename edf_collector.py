@@ -747,7 +747,9 @@ class EvidenceEngine:
                         if page_text:
                             pdf_text_parts.append(page_text)
                     except Exception as page_err:
-                        self.log_error(f"PDF page {detail_label}", f"Page extraction failed: {page_err}")
+                        self.log_error(
+                            f"PDF page {detail_label}", f"Page extraction failed: {page_err}"
+                        )
                 pdf_text = " ".join(pdf_text_parts)
             del raw
 
@@ -3450,7 +3452,9 @@ class ReportOptionsDialog:
             lbl_frame = ttk.Frame(r)
             lbl_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
             ttk.Label(lbl_frame, text=label, font=("Calibri", 10, "bold")).pack(anchor=tk.W)
-            ttk.Label(lbl_frame, text=desc, font=("Calibri", 8), foreground=MEDIUM_GREY).pack(anchor=tk.W)
+            ttk.Label(lbl_frame, text=desc, font=("Calibri", 8), foreground=MEDIUM_GREY).pack(
+                anchor=tk.W
+            )
 
         ttk.Separator(main, orient="horizontal").pack(fill=tk.X, pady=(8, 16))
 
@@ -3462,9 +3466,15 @@ class ReportOptionsDialog:
         btn_frame = ttk.Frame(sec_frame)
         btn_frame.pack(fill=tk.X, pady=(0, 8))
 
-        ttk.Button(btn_frame, text="Select All", command=self._select_all, width=12).pack(side=tk.LEFT)
-        ttk.Button(btn_frame, text="Select None", command=self._select_none, width=12).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(btn_frame, text="Defaults", command=self._select_defaults, width=12).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(btn_frame, text="Select All", command=self._select_all, width=12).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(btn_frame, text="Select None", command=self._select_none, width=12).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(btn_frame, text="Defaults", command=self._select_defaults, width=12).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
 
         # Scrollable checkbox area
         canvas = tk.Canvas(sec_frame, highlightthickness=0, bg=EDF_OFFWHITE)
@@ -3862,7 +3872,11 @@ class App:
 
         if fmt in ("pdf", "both"):
             if not HAS_PDF_REPORT:
-                self._show("warning", "PDF Unavailable", "PDF generation requires 'reportlab'. Install with: pip install reportlab")
+                self._show(
+                    "warning",
+                    "PDF Unavailable",
+                    "PDF generation requires 'reportlab'. Install with: pip install reportlab",
+                )
             else:
                 default_name = "EDF_Ombudsman_Report.pdf"
                 out_path = filedialog.asksaveasfilename(
@@ -3879,7 +3893,11 @@ class App:
 
         if fmt in ("docx", "both"):
             if not HAS_DOCX_REPORT:
-                self._show("warning", "DOCX Unavailable", "DOCX generation requires 'python-docx'. Install with: pip install python-docx")
+                self._show(
+                    "warning",
+                    "DOCX Unavailable",
+                    "DOCX generation requires 'python-docx'. Install with: pip install python-docx",
+                )
             else:
                 default_name = "EDF_Ombudsman_Report.docx"
                 out_path = filedialog.asksaveasfilename(
@@ -3939,7 +3957,12 @@ class App:
                     if success:
                         self.root.after(0, lambda m=msg: self._show("info", "Success", m))
                     else:
-                        self.root.after(0, lambda m=msg, f=fmt_label: self._show("error", f"{f} Generation Failed", m))
+                        self.root.after(
+                            0,
+                            lambda m=msg, f=fmt_label: self._show(
+                                "error", f"{f} Generation Failed", m
+                            ),
+                        )
 
             except Exception as e:
                 self.root.after(
@@ -3975,10 +3998,18 @@ class App:
     def _export_legacy(self, fmt: str) -> None:
         """Legacy single-format export with all sections."""
         if fmt == "pdf" and not HAS_PDF_REPORT:
-            self._show("error", "PDF Unavailable", "PDF generation requires 'reportlab'.\nInstall with: pip install reportlab")
+            self._show(
+                "error",
+                "PDF Unavailable",
+                "PDF generation requires 'reportlab'.\nInstall with: pip install reportlab",
+            )
             return
         if fmt == "docx" and not HAS_DOCX_REPORT:
-            self._show("error", "DOCX Unavailable", "DOCX generation requires 'python-docx'.\nInstall with: pip install python-docx")
+            self._show(
+                "error",
+                "DOCX Unavailable",
+                "DOCX generation requires 'python-docx'.\nInstall with: pip install python-docx",
+            )
             return
 
         if not hasattr(self, "engine") or not self.engine or not self.engine.records:
@@ -4046,7 +4077,9 @@ class App:
                 if success:
                     self.root.after(0, lambda: self._show("info", "Success", msg))
                 else:
-                    self.root.after(0, lambda: self._show("error", f"{fmt.upper()} Generation Failed", msg))
+                    self.root.after(
+                        0, lambda: self._show("error", f"{fmt.upper()} Generation Failed", msg)
+                    )
             except Exception as e:
                 self.root.after(
                     0, lambda err=e: self._show("error", "Error", f"An error occurred:\n\n{err}")
@@ -4056,7 +4089,9 @@ class App:
                     0,
                     lambda: (
                         getattr(self, f"{fmt}_report_btn").config(
-                            state="normal" if (HAS_PDF_REPORT if fmt == "pdf" else HAS_DOCX_REPORT) else "disabled"
+                            state="normal"
+                            if (HAS_PDF_REPORT if fmt == "pdf" else HAS_DOCX_REPORT)
+                            else "disabled"
                         ),
                         self.run_btn.config(state="normal"),
                         self.cancel_btn.config(state="disabled"),
