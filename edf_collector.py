@@ -3740,7 +3740,13 @@ class App:
                     self._show("warning", "PST", "pypff not installed — PST/OST scanning skipped.")
                 else:
                     self.set_status("Scanning PST/OST…")
-                    pff = pypff.file()
+                    # Handle pypff API differences: some versions use .file(), others .File()
+                    if hasattr(pypff, "file"):
+                        pff = pypff.file()
+                    elif hasattr(pypff, "File"):
+                        pff = pypff.File()
+                    else:
+                        raise AttributeError("pypff module has no 'file' or 'File' attribute")
                     pff.open(os.path.abspath(pst_path))
                     try:
                         engine.crawl_pst(pff.get_root_folder())
@@ -3892,7 +3898,13 @@ def run_cli_extract(args: list[str]) -> None:
     try:
         if parsed.pst and os.path.exists(parsed.pst):
             print(f"Scanning PST/OST: {parsed.pst}")
-            pff = pypff.file()
+            # Handle pypff API differences: some versions use .file(), others .File()
+            if hasattr(pypff, "file"):
+                pff = pypff.file()
+            elif hasattr(pypff, "File"):
+                pff = pypff.File()
+            else:
+                raise AttributeError("pypff module has no 'file' or 'File' attribute")
             pff.open(os.path.abspath(parsed.pst))
             try:
                 engine.crawl_pst(pff.get_root_folder())
