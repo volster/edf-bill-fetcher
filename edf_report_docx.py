@@ -182,7 +182,7 @@ def _set_cell_shading(cell, color):
     else:
         # Fallback
         hex_str = str(color).lstrip("#")
-    
+
     shading_elm = cell._element.get_or_add_tcPr()
     shading = shading_elm.makeelement(
         qn("w:shd"),

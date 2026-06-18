@@ -325,12 +325,12 @@ def make_table_style(
         ("TEXTCOLOR", (0, 1), (-1, -1), Colors.DARK_GREY),
         ("ALIGN", (0, 1), (-1, -1), "LEFT"),
     ]
-    
+
     # Alternating rows - only for existing rows
     if num_rows > 1:
         for i in range(1, num_rows, 2):
             style_commands.append(("BACKGROUND", (0, i), (-1, i), alt_row_color))
-    
+
     style_commands.extend([
         # Grid
         ("GRID", (0, 0), (-1, -1), 0.5, grid_color),
@@ -341,7 +341,7 @@ def make_table_style(
         ("LEFTPADDING", (0, 0), (-1, -1), 5),
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
     ])
-    
+
     return TableStyle(style_commands)
 
 
@@ -1023,7 +1023,7 @@ def create_statistical_analysis(dfc: pd.DataFrame) -> list:
     roll_std = rolling.std().iloc[-1]
     roll_min = rolling.min().iloc[-1]
     roll_max = rolling.max().iloc[-1]
-    
+
     # Handle NaN values
     if pd.isna(roll_std):
         roll_std = 0.0
@@ -1033,7 +1033,7 @@ def create_statistical_analysis(dfc: pd.DataFrame) -> list:
         roll_min = float(amounts_series.min())
     if pd.isna(roll_max):
         roll_max = float(amounts_series.max())
-        
+
     roll_data = [
         ["Metric", "Value"],
         ["Rolling Mean (£)", fmt_money(float(roll_mean))],
