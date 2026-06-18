@@ -1,24 +1,21 @@
 """Tests for statistical analysis functions to improve coverage."""
 
 import sys
+
 sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
 
-import pytest
 import pandas as pd
-import numpy as np
+import pytest
 
 from edf_collector import (
-    _compute_rolling_stats,
     _compute_ema,
     _compute_momentum,
+    _compute_rolling_stats,
     _compute_volatility,
-    _zscore_anomalies,
+    _holt_winters_forecast,
     _iqr_anomalies,
     _linear_forecast,
-    _holt_winters_forecast,
-    _detect_payment_patterns,
-    _analyze_tariff_impact,
-    _data_quality_report,
+    _zscore_anomalies,
 )
 
 
@@ -58,7 +55,7 @@ class TestStatisticalFunctions:
     def test_compute_ema_basic(self, sample_series):
         result = _compute_ema(sample_series, span=3)
         assert len(result) == len(sample_series)
-        assert result.iloc[0] == sample_series.iloc[0]  # First value unchanged
+        assert result.iloc[0] == sample_series.iloc[0]
 
     def test_compute_ema_flat_series(self, flat_series):
         result = _compute_ema(flat_series, span=3)
@@ -67,7 +64,7 @@ class TestStatisticalFunctions:
     def test_compute_momentum_basic(self, sample_series):
         result = _compute_momentum(sample_series, period=2)
         assert len(result) == len(sample_series)
-        assert pd.isna(result.iloc[0])  # First period is NaN
+        assert pd.isna(result.iloc[0])
 
     def test_compute_momentum_flat_series(self, flat_series):
         result = _compute_momentum(flat_series, period=2)
@@ -84,13 +81,11 @@ class TestStatisticalFunctions:
 
     def test_zscore_anomalies_no_outliers(self, sample_series):
         result = _zscore_anomalies(sample_series, threshold=2.5)
-        # Sample series has no extreme outliers
         assert isinstance(result, pd.Series)
         assert len(result) == len(sample_series)
 
     def test_zscore_anomalies_with_outliers(self, anomaly_series):
         result = _zscore_anomalies(anomaly_series, threshold=2.0)
-        # Should detect the 1000.0 as anomaly
         assert bool(result.iloc[4]) is True
 
     def test_zscore_anomalies_flat_series(self, flat_series):
@@ -99,7 +94,6 @@ class TestStatisticalFunctions:
 
     def test_iqr_anomalies_with_outliers(self, anomaly_series):
         result = _iqr_anomalies(anomaly_series, multiplier=1.5)
-        # Should detect the 1000.0 as anomaly
         assert bool(result.iloc[4]) is True
 
     def test_linear_forecast_basic(self, sample_series):
@@ -113,8 +107,6 @@ class TestStatisticalFunctions:
 
     def test_holt_winters_forecast_basic(self, sample_series):
         result = _holt_winters_forecast(sample_series, steps=3, seasonal_periods=None)
-        # May return None if insufficient data or statsmodels not configured
-        # Just verify it doesn't crash
         assert result is None or len(result) == 3
 
     def test_holt_winters_forecast_with_seasonal(self, sample_series):

@@ -1,11 +1,13 @@
 """Tests for EvidenceEngine PDF/PST/HTM processing methods."""
 
 import sys
-import io
+
 sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
 
+from unittest.mock import MagicMock, Mock, mock_open, patch
+
 import pytest
-from unittest.mock import Mock, MagicMock, patch, mock_open
+
 from edf_collector import EvidenceEngine
 
 
@@ -221,10 +223,12 @@ class TestEvidenceEngineLocalPDFs:
         mock_pdf.__exit__.return_value = None
         mock_pdf_open.return_value = mock_pdf
 
-        with patch("os.path.exists", return_value=True), \
-             patch("os.listdir", return_value=["bill1.pdf", "bill2.pdf"]), \
-             patch("os.path.getmtime", return_value=1704067200), \
-             patch("builtins.open", mock_open(read_data=b"fake pdf content")):
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("os.listdir", return_value=["bill1.pdf", "bill2.pdf"]),
+            patch("os.path.getmtime", return_value=1704067200),
+            patch("builtins.open", mock_open(read_data=b"fake pdf content")),
+        ):
             engine = self._make_engine()
             engine.crawl_local_pdfs("/fake/path")
 
