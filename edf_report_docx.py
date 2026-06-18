@@ -14,6 +14,7 @@ import pandas as pd
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import parse_xml
 from docx.oxml.ns import qn
 from docx.shared import (
     Cm,
@@ -401,8 +402,8 @@ def create_key_findings_table(doc, styles, flags):
         for i, flag in enumerate(flags, 1):
             row = table.rows[i]
             row.cells[0].text = flag[0] if len(flag) > 0 else ""
-            row.cells[1].text = flag[1] if len(flag) > 1 else ""
-            row.cells[2].text = flag[2] if len(flag) > 2 else ""
+            row.cells[1].text = fmt_date(flag[1]) if len(flag) > 1 else ""
+            row.cells[2].text = fmt_money(flag[2]) if len(flag) > 2 else ""
             row.cells[3].text = str(flag[3]) if len(flag) > 3 else ""
 
         _format_table(table)
@@ -850,6 +851,131 @@ def create_appendix_glossary(doc, styles):
     doc.add_page_break()
 
 
+def create_appendix_full_evidence(doc, styles, df, filtered=None):
+    """Create Appendix C: Full Evidence Table with all records."""
+    doc.add_paragraph("APPENDIX C: FULL EVIDENCE TABLE", style=styles["SectionHeader"])
+
+    doc.add_paragraph(
+        "This appendix contains the complete set of billing records used in this analysis. "
+        "Records are sorted chronologically by date.",
+        style=styles["BodyText"],
+    )
+
+    if df.empty:
+        doc.add_paragraph("No records available.", style=styles["BodyText"])
+        doc.add_page_break()
+        return
+
+    # Ensure _dt column for sorting
+    if "_dt" not in df.columns:
+        df["_dt"] = df["Date"].apply(parse_to_sort_date)
+    df_sorted = df.sort_values("_dt").reset_index(drop=True)
+
+    # Table header
+    evidence_header = [
+        "Date", "Source", "Entry Type", "Amount (£)", "Period Charge (£)",
+        "Period From", "Period To", "Invoice #", "Reading", "Units (kWh)",
+        "Standing Chg (p/day)", "Attachment", "Details"
+    ]
+
+    evidence_data = [evidence_header]
+
+    for _, row in df_sorted.iterrows():
+        evidence_data.append([
+            fmt_date(row.get("Date", "")),
+            str(row.get("Source", ""))[:30],
+            str(row.get("Entry Type", "")),
+            fmt_money(row.get("Amount (£)", 0)),
+            fmt_money(row.get("Period Charge (£)", 0)) if row.get("Period Charge (£)") not in ("", "N/A", None) else "N/A",
+            fmt_date(row.get("Period From", "")),
+            fmt_date(row.get("Period To", "")),
+            str(row.get("Invoice #", ""))[:15],
+            str(row.get("Reading", ""))[:15],
+            str(row.get("Units (kWh)", ""))[:10],
+            str(row.get("Standing Chg (p/day)", ""))[:10],
+            str(row.get("Attachment Name", ""))[:20],
+            str(row.get("Details", ""))[:50],
+        ])
+
+    table = doc.add_table(rows=len(evidence_data), cols=len(evidence_header))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.style = "Table Grid"
+
+    # Set header row
+    for j, header in enumerate(evidence_header):
+        table.rows[0].cells[j].text = header
+        for paragraph in table.rows[0].cells[j].paragraphs:
+            for run in paragraph.runs:
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        table.rows[0].cells[j]._element.get_or_add_tcPr().append(
+            parse_xml('<w:shd {} w:fill="10367A"/>'.format('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'))
+        )
+
+    # Fill data rows
+    for i, row_data in enumerate(evidence_data[1:], 1):
+        for j, cell_text in enumerate(row_data):
+            table.rows[i].cells[j].text = str(cell_text)
+            if i % 2 == 0:
+                table.rows[i].cells[j]._element.get_or_add_tcPr().append(
+                    parse_xml('<w:shd {} w:fill="EBF3FA"/>'.format('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'))
+                )
+
+    doc.add_page_break()
+
+    # Add filtered records if provided
+    if filtered:
+        doc.add_paragraph(
+            "APPENDIX C (CONT.): FILTERED RECORDS",
+            style=styles["SectionHeader"]
+        )
+
+        filt_data = [["Date", "Source", "Entry Type", "Amount (£)", "Period Charge (£)",
+                      "Period From", "Period To", "Invoice #", "Reading", "Units (kWh)",
+                      "Standing Chg (p/day)", "Attachment", "Details"]]
+        for row in filtered:
+            filt_data.append([
+                fmt_date(row.get("Date", "")),
+                str(row.get("Source", ""))[:30],
+                str(row.get("Entry Type", "")),
+                fmt_money(row.get("Amount (£)", 0)),
+                fmt_money(row.get("Period Charge (£)", 0)) if row.get("Period Charge (£)") not in ("", "N/A", None) else "N/A",
+                fmt_date(row.get("Period From", "")),
+                fmt_date(row.get("Period To", "")),
+                str(row.get("Invoice #", ""))[:15],
+                str(row.get("Reading", ""))[:15],
+                str(row.get("Units (kWh)", ""))[:10],
+                str(row.get("Standing Chg (p/day)", ""))[:10],
+                str(row.get("Attachment Name", ""))[:20],
+                str(row.get("Details", ""))[:50],
+            ])
+
+        if len(filt_data) > 1:
+            table2 = doc.add_table(rows=len(filt_data), cols=len(filt_data[0]))
+            table2.alignment = WD_TABLE_ALIGNMENT.CENTER
+            table2.style = "Table Grid"
+
+            for j, header in enumerate(filt_data[0]):
+                table2.rows[0].cells[j].text = header
+                for paragraph in table2.rows[0].cells[j].paragraphs:
+                    for run in paragraph.runs:
+                        run.font.bold = True
+                        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                table2.rows[0].cells[j]._element.get_or_add_tcPr().append(
+                    parse_xml('<w:shd {} w:fill="FFA500"/>'.format('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'))
+                )
+
+            for i, row_data in enumerate(filt_data[1:], 1):
+                for j, cell_text in enumerate(row_data):
+                    table2.rows[i].cells[j].text = str(cell_text)
+                    if i % 2 == 0:
+                        table2.rows[i].cells[j]._element.get_or_add_tcPr().append(
+                            parse_xml('<w:shd {} w:fill="EBF3FA"/>'.format('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'))
+                        )
+
+        doc.add_page_break()
+
+
 # =============================================================================
 # MAIN GENERATOR
 # =============================================================================
@@ -1020,6 +1146,7 @@ def generate_ombudsman_docx(
     # === APPENDICES ===
     create_appendix_methodology(doc, styles, config)
     create_appendix_glossary(doc, styles)
+    create_appendix_full_evidence(doc, styles, df, filtered)
 
     # Save
     doc.save(output_path)
