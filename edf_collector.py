@@ -3819,42 +3819,22 @@ def run_cli_extract(args: list[str]) -> None:
         description="Extract EDF billing data from PST/OST, PDF folder, or HTM export",
         prog="edf-collector --extract",
     )
+    parser.add_argument("--pst", help="Path to PST/OST file")
+    parser.add_argument("--pdf-dir", help="Path to directory containing PDF bills")
+    parser.add_argument("--htm", help="Path to HTM account history export")
+    parser.add_argument("--output", "-o", required=True, help="Output Excel file path")
+    parser.add_argument("--records-json", help="Also save extracted records as JSON")
+    parser.add_argument("--config", "-c", help="Path to config JSON file (optional)")
+    parser.add_argument("--acc-filter", help="Filter by account number (e.g., A-12345678)")
     parser.add_argument(
-        "--pst", help="Path to PST/OST file"
+        "--domain-filter",
+        default="edfenergy.com",
+        help="Comma-separated sender domains for PST filtering",
     )
-    parser.add_argument(
-        "--pdf-dir", help="Path to directory containing PDF bills"
-    )
-    parser.add_argument(
-        "--htm", help="Path to HTM account history export"
-    )
-    parser.add_argument(
-        "--output", "-o", required=True, help="Output Excel file path"
-    )
-    parser.add_argument(
-        "--records-json", help="Also save extracted records as JSON"
-    )
-    parser.add_argument(
-        "--config", "-c", help="Path to config JSON file (optional)"
-    )
-    parser.add_argument(
-        "--acc-filter", help="Filter by account number (e.g., A-12345678)"
-    )
-    parser.add_argument(
-        "--domain-filter", default="edfenergy.com", help="Comma-separated sender domains for PST filtering"
-    )
-    parser.add_argument(
-        "--min-amount", type=float, default=500.0, help="Minimum amount threshold"
-    )
-    parser.add_argument(
-        "--no-dedup", action="store_true", help="Disable deduplication"
-    )
-    parser.add_argument(
-        "--no-anchors", action="store_true", help="Disable smart context search"
-    )
-    parser.add_argument(
-        "--no-large", action="store_true", help="Disable large amount fallback"
-    )
+    parser.add_argument("--min-amount", type=float, default=500.0, help="Minimum amount threshold")
+    parser.add_argument("--no-dedup", action="store_true", help="Disable deduplication")
+    parser.add_argument("--no-anchors", action="store_true", help="Disable smart context search")
+    parser.add_argument("--no-large", action="store_true", help="Disable large amount fallback")
     parser.add_argument(
         "--no-reading-class", action="store_true", help="Disable reading classification"
     )
@@ -3882,25 +3862,29 @@ def run_cli_extract(args: list[str]) -> None:
             sys.exit(1)
 
     # Override with CLI args
-    config.update({
-        "use_acc_filter": bool(parsed.acc_filter),
-        "acc_num": parsed.acc_filter or "",
-        "use_domain_filter": True,
-        "domain_filter": parsed.domain_filter,
-        "min_amount": parsed.min_amount,
-        "filter_below": not parsed.no_filter_below,
-        "use_dedup": not parsed.no_dedup,
-        "use_anchors": not parsed.no_anchors,
-        "use_large": not parsed.no_large,
-        "use_reading_classification": not parsed.no_reading_class,
-        "use_pdf_fields": not parsed.no_pdf_fields,
-        "save_filtered": True,
-        "save_dups": True,
-    })
+    config.update(
+        {
+            "use_acc_filter": bool(parsed.acc_filter),
+            "acc_num": parsed.acc_filter or "",
+            "use_domain_filter": True,
+            "domain_filter": parsed.domain_filter,
+            "min_amount": parsed.min_amount,
+            "filter_below": not parsed.no_filter_below,
+            "use_dedup": not parsed.no_dedup,
+            "use_anchors": not parsed.no_anchors,
+            "use_large": not parsed.no_large,
+            "use_reading_classification": not parsed.no_reading_class,
+            "use_pdf_fields": not parsed.no_pdf_fields,
+            "save_filtered": True,
+            "save_dups": True,
+        }
+    )
 
     # Check PST dependency
     if parsed.pst and not HAS_PYPFF:
-        sys.stderr.write("ERROR: PST/OST support requires 'libpff-python'. Install with: pip install libpff-python\n")
+        sys.stderr.write(
+            "ERROR: PST/OST support requires 'libpff-python'. Install with: pip install libpff-python\n"
+        )
         sys.exit(1)
 
     engine = EvidenceEngine(config, print, None, None)
@@ -3940,6 +3924,7 @@ def run_cli_extract(args: list[str]) -> None:
         # Optionally save records as JSON
         if parsed.records_json:
             import datetime
+
             output_data = {
                 "extracted_at": datetime.datetime.now().isoformat(),
                 "config": config,
@@ -3961,6 +3946,7 @@ def run_cli_extract(args: list[str]) -> None:
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
