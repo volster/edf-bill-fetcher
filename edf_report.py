@@ -517,21 +517,23 @@ def create_table_of_contents() -> list:
         toc_data.append([num, title, page])
 
     toc_table = Table(toc_data, colWidths=[1.5 * cm, CONTENT_WIDTH - 3 * cm, 1.5 * cm])
-    style = TableStyle([
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
-        ("ALIGN", (0, 0), (0, -1), "LEFT"),
-        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),  # Header row bold
-        ("BACKGROUND", (0, 0), (-1, 0), Colors.NAVY),
-        ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
-        ("LINEBELOW", (0, 0), (-1, 0), 1.5, Colors.NAVY),
-    ])
+    style = TableStyle(
+        [
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),  # Header row bold
+            ("BACKGROUND", (0, 0), (-1, 0), Colors.NAVY),
+            ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
+            ("LINEBELOW", (0, 0), (-1, 0), 1.5, Colors.NAVY),
+        ]
+    )
 
     # Bold for main sections, indent for subsections
     for i, (num, _title, _page) in enumerate(toc_items, 1):
