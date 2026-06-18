@@ -3764,18 +3764,6 @@ class App:
         )
         self.pdf_report_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(8, 0))
 
-        self.docx_report_btn = tk.Button(
-            btns,
-            text="EXPORT WORD REPORT",
-            bg=EDF_ORANGE,
-            fg="white",
-            font=("Calibri", 12, "bold"),
-            command=self.export_docx_report,
-            relief="flat",
-            state="disabled",
-        )
-        self.docx_report_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(8, 0))
-
     # -- Helpers --
 
     def _pick_pst(self):
@@ -3917,7 +3905,6 @@ class App:
 
         self.set_status("Generating report…")
         self.pdf_report_btn.config(state="disabled")
-        self.docx_report_btn.config(state="disabled")
         self.run_btn.config(state="disabled")
         self.cancel_btn.config(state="disabled")
 
@@ -3974,9 +3961,6 @@ class App:
                     lambda: (
                         self.pdf_report_btn.config(
                             state="normal" if HAS_PDF_REPORT else "disabled"
-                        ),
-                        self.docx_report_btn.config(
-                            state="normal" if HAS_DOCX_REPORT else "disabled"
                         ),
                         self.run_btn.config(state="normal"),
                         self.cancel_btn.config(state="disabled"),
