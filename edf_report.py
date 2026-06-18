@@ -331,16 +331,18 @@ def make_table_style(
         for i in range(1, num_rows, 2):
             style_commands.append(("BACKGROUND", (0, i), (-1, i), alt_row_color))
 
-    style_commands.extend([
-        # Grid
-        ("GRID", (0, 0), (-1, -1), 0.5, grid_color),
-        ("LINEBELOW", (0, 0), (-1, 0), 1.5, header_color),
-        # Padding
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-    ])
+    style_commands.extend(
+        [
+            # Grid
+            ("GRID", (0, 0), (-1, -1), 0.5, grid_color),
+            ("LINEBELOW", (0, 0), (-1, 0), 1.5, header_color),
+            # Padding
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ]
+    )
 
     return TableStyle(style_commands)
 
@@ -1134,7 +1136,8 @@ def create_payment_analysis(dfc: pd.DataFrame) -> list:
                 ]
             )
         t = Table(
-            pay_detail, colWidths=[2.5 * cm, 2.5 * cm, 3 * cm, 3 * cm, max(2 * cm, CONTENT_WIDTH - 11 * cm)]
+            pay_detail,
+            colWidths=[2.5 * cm, 2.5 * cm, 3 * cm, 3 * cm, max(2 * cm, CONTENT_WIDTH - 11 * cm)],
         )
         t.setStyle(make_table_style(num_rows=len(pay_detail), font_size=7))
         elements.append(t)
@@ -1581,7 +1584,9 @@ def generate_ombudsman_pdf(
 
     # Validate required parameters
     if engine is None:
-        raise ValueError("Engine is required for report generation (contains PDF count, email count metadata)")
+        raise ValueError(
+            "Engine is required for report generation (contains PDF count, email count metadata)"
+        )
 
     # Ensure required columns exist with defaults
     required_cols = {
