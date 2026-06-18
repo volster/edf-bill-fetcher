@@ -72,7 +72,10 @@ def fmt_money(val):
 # STYLE HELPERS
 # =============================================================================
 
-def _add_heading_style(doc, level, name, font_size, color=NAVY, bold=True, space_before=12, space_after=6):
+
+def _add_heading_style(
+    doc, level, name, font_size, color=NAVY, bold=True, space_before=12, space_after=6
+):
     """Add a heading style to the document."""
     style = doc.styles.add_style(name, 1)  # WD_STYLE_TYPE.PARAGRAPH
     style.font.size = Pt(font_size)
@@ -170,10 +173,13 @@ def _add_footer(doc, text="EDF Energy Billing Evidence Report — Confidential")
 def _set_cell_shading(cell, color_hex):
     """Set background color for table cell."""
     shading_elm = cell._element.get_or_add_tcPr()
-    shading = shading_elm.makeelement(qn("w:shd"), {
-        qn("w:fill"): color_hex.lstrip("#"),
-        qn("w:val"): "clear",
-    })
+    shading = shading_elm.makeelement(
+        qn("w:shd"),
+        {
+            qn("w:fill"): color_hex.lstrip("#"),
+            qn("w:val"): "clear",
+        },
+    )
     shading_elm.append(shading)
 
 
@@ -206,6 +212,7 @@ def _format_table(table, header_color="#10367A", font_size=8):
 # =============================================================================
 # SECTION CREATORS
 # =============================================================================
+
 
 def create_cover_page(doc, styles, acc_ref, period_start, period_end, report_date):
     """Create cover page elements."""
@@ -281,7 +288,19 @@ def create_table_of_contents(doc, styles):
     doc.add_page_break()
 
 
-def create_executive_summary(doc, styles, df, config, acc_ref, flag_counts, n_records, charges, payments, period_start, period_end):
+def create_executive_summary(
+    doc,
+    styles,
+    df,
+    config,
+    acc_ref,
+    flag_counts,
+    n_records,
+    charges,
+    payments,
+    period_start,
+    period_end,
+):
     """Create executive summary section."""
     doc.add_paragraph("1. EXECUTIVE SUMMARY", style=styles["SectionHeader"])
 
@@ -442,7 +461,10 @@ def create_anomaly_detail_section(doc, styles, flags, df):
         )
     else:
         for i, flag in enumerate(flags, 1):
-            doc.add_paragraph(f"Finding {i}: {flag[1] if len(flag) > 1 else 'Unknown'}", style=styles["SubSectionHeader"])
+            doc.add_paragraph(
+                f"Finding {i}: {flag[1] if len(flag) > 1 else 'Unknown'}",
+                style=styles["SubSectionHeader"],
+            )
             doc.add_paragraph(
                 f"Severity: {flag[0] if len(flag) > 0 else 'Unknown'}",
                 style=styles["BodyText"],
@@ -523,8 +545,13 @@ def create_ofgem_comparison(doc, styles, df):
     avg_rate = df_rates["rate_num"].mean()
     median_rate = df_rates["rate_num"].median()
 
-    doc.add_paragraph(f"Average unit rate across all records: {fmt_number(avg_rate, 2)} p/kWh", style=styles["BodyText"])
-    doc.add_paragraph(f"Median unit rate: {fmt_number(median_rate, 2)} p/kWh", style=styles["BodyText"])
+    doc.add_paragraph(
+        f"Average unit rate across all records: {fmt_number(avg_rate, 2)} p/kWh",
+        style=styles["BodyText"],
+    )
+    doc.add_paragraph(
+        f"Median unit rate: {fmt_number(median_rate, 2)} p/kWh", style=styles["BodyText"]
+    )
 
     # OFGEM caps reference table
     table = doc.add_table(rows=8, cols=3)
@@ -597,8 +624,12 @@ def create_payment_analysis(doc, styles, df):
         pay_amounts = pd.to_numeric(payments["Amount (£)"], errors="coerce").dropna()
         if not pay_amounts.empty:
             doc.add_paragraph(f"Number of payments: {len(pay_amounts)}", style=styles["BodyText"])
-            doc.add_paragraph(f"Total paid: {fmt_money(abs(pay_amounts.sum()))}", style=styles["BodyText"])
-            doc.add_paragraph(f"Average payment: {fmt_money(abs(pay_amounts.mean()))}", style=styles["BodyText"])
+            doc.add_paragraph(
+                f"Total paid: {fmt_money(abs(pay_amounts.sum()))}", style=styles["BodyText"]
+            )
+            doc.add_paragraph(
+                f"Average payment: {fmt_money(abs(pay_amounts.mean()))}", style=styles["BodyText"]
+            )
 
             # Payment frequency
             if "Date" in payments.columns:
@@ -606,7 +637,10 @@ def create_payment_analysis(doc, styles, df):
                 if len(pay_dates) > 1:
                     diffs = pay_dates.sort_values().diff().dt.days.dropna()
                     if not diffs.empty:
-                        doc.add_paragraph(f"Average days between payments: {diffs.mean():.1f}", style=styles["BodyText"])
+                        doc.add_paragraph(
+                            f"Average days between payments: {diffs.mean():.1f}",
+                            style=styles["BodyText"],
+                        )
 
     doc.add_page_break()
 
@@ -625,7 +659,9 @@ def create_forecast_section(doc, styles, df):
         amounts = pd.to_numeric(df["Amount (£)"], errors="coerce").dropna()
         if len(amounts) >= 3:
             recent_avg = amounts.tail(min(6, len(amounts))).mean()
-            doc.add_paragraph(f"6-bill rolling average: {fmt_money(recent_avg)}", style=styles["BodyText"])
+            doc.add_paragraph(
+                f"6-bill rolling average: {fmt_money(recent_avg)}", style=styles["BodyText"]
+            )
             doc.add_paragraph(
                 f"Estimated annual cost (12 bills): {fmt_money(recent_avg * 12)}",
                 style=styles["BodyText"],
@@ -807,6 +843,7 @@ def create_appendix_glossary(doc, styles):
 # MAIN GENERATOR
 # =============================================================================
 
+
 def generate_ombudsman_docx(
     records: list[dict],
     output_path: str,
@@ -894,15 +931,26 @@ def generate_ombudsman_docx(
     _add_footer(doc)
 
     # === COVER PAGE ===
-    create_cover_page(doc, styles, acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y"))
+    create_cover_page(
+        doc, styles, acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y")
+    )
 
     # === TABLE OF CONTENTS ===
     create_table_of_contents(doc, styles)
 
     # === EXECUTIVE SUMMARY ===
     create_executive_summary(
-        doc, styles, df, config, acc_ref, flag_counts,
-        len(records), charges, payments, period_start, period_end
+        doc,
+        styles,
+        df,
+        config,
+        acc_ref,
+        flag_counts,
+        len(records),
+        charges,
+        payments,
+        period_start,
+        period_end,
     )
 
     # === KEY FINDINGS ===
