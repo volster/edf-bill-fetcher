@@ -483,7 +483,7 @@ def create_cover_page(
 
 
 def create_table_of_contents() -> list:
-    """Create table of contents."""
+    """Create table of contents as a single table."""
     elements = []
     elements.append(Paragraph("Table of Contents", STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.5 * cm))
@@ -511,37 +511,38 @@ def create_table_of_contents() -> list:
         ("C", "Full Evidence Table", "19"),
     ]
 
-    TableStyle(
-        [
-            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-            ("FONTSIZE", (0, 0), (-1, -1), 10),
-            ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
-            ("ALIGN", (0, 0), (0, -1), "LEFT"),
-            ("ALIGN", (2, 0), (2, -1), "RIGHT"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-            ("TOPPADDING", (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ]
-    )
-
+    # Build all rows into a single table
+    toc_data = [["No.", "Section", "Page"]]
     for num, title, page in toc_items:
+        toc_data.append([num, title, page])
+
+    toc_table = Table(toc_data, colWidths=[1.5 * cm, CONTENT_WIDTH - 3 * cm, 1.5 * cm])
+    style = TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),  # Header row bold
+        ("BACKGROUND", (0, 0), (-1, 0), Colors.NAVY),
+        ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
+        ("LINEBELOW", (0, 0), (-1, 0), 1.5, Colors.NAVY),
+    ])
+
+    # Bold for main sections, indent for subsections
+    for i, (num, _title, _page) in enumerate(toc_items, 1):
         is_section = not num.startswith("  ") and num
         weight = "Helvetica-Bold" if is_section else "Helvetica"
         indent = 0 if is_section else 1.5 * cm
-        row_style = TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), weight),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
-                ("LEFTPADDING", (0, 0), (0, 0), indent),
-            ]
-        )
-        t = Table([[num, title, page]], colWidths=[1.5 * cm, CONTENT_WIDTH - 3 * cm, 1.5 * cm])
-        t.setStyle(row_style)
-        elements.append(t)
-        elements.append(Spacer(1, 0.1 * cm))
+        style.add("FONTNAME", (0, i), (-1, i), weight)
+        style.add("LEFTPADDING", (0, i), (0, i), indent)
 
+    toc_table.setStyle(style)
+    elements.append(toc_table)
     elements.append(PageBreak())
     return elements
 
@@ -764,7 +765,7 @@ def create_evidence_index(df: pd.DataFrame, engine: Any) -> list:
 
         # Summary table for this source
         detail_data = [["Date", "Invoice #", "Amount", "Period", "Entry Type", "Reading"]]
-        for _, row in src_df.head(20).iterrows():  # Limit to first 20
+        for _, row in src_df.iterrows():
             detail_data.append(
                 [
                     fmt_date(row.get("Date")),
@@ -775,9 +776,6 @@ def create_evidence_index(df: pd.DataFrame, engine: Any) -> list:
                     str(row.get("Reading", "")),
                 ]
             )
-
-        if len(src_df) > 20:
-            detail_data.append(["...", f"({len(src_df) - 20} more records)", "", "", "", ""])
 
         t = Table(detail_data, colWidths=[2.5 * cm, 3 * cm, 3 * cm, 4 * cm, 3 * cm, 2 * cm])
         t.setStyle(make_table_style(num_rows=len(detail_data), font_size=7))
@@ -1974,10 +1972,8 @@ def generate_ombudsman_pdf(
     config: dict,
     engine: Any,
     filtered: list | None = None,
-    ofgem_data: dict | None = None,
 ) -> str:
-    """
-    Generate a professional PDF report for Energy Ombudsman submission.
+    """Generate a professional PDF report for Energy Ombudsman submission.
 
     Args:
         records: List of extracted billing records
@@ -1985,10 +1981,8 @@ def generate_ombudsman_pdf(
         config: Configuration dictionary
         engine: EvidenceEngine instance (for metadata)
         filtered: Filtered-out records (below threshold)
-        ofgem_data: Optional OFGEM price cap data
 
     Returns:
-    Records:
         Path to generated PDF
     """
     if not records:
