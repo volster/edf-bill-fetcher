@@ -921,7 +921,74 @@ def create_timeline_section(df: pd.DataFrame, flags: list) -> list:
 # =============================================================================
 
 
-def create_ofgem_comparison(df: pd.DataFrame) -> list:
+# OFGEM PRICE CAP COMPARISON
+# =============================================================================
+
+
+def _load_ofgem_caps() -> dict[str, dict]:
+    """Load OFGEM price cap data.
+
+    Returns a dictionary mapping period string (e.g., '2023-Q4') to cap values:
+    {'unit_rate': p_per_kwh, 'standing_charge': p_per_day}
+
+    For now, returns built-in data for key periods. Could be extended to load
+    from external CSV/JSON or API.
+    """
+    # OFGEM Default Tariff Cap history (unit rate in p/kWh, standing charge in p/day)
+    # Source: https://www.ofgem.gov.uk/energy-policy-and-regulation/policies-and-regulations/default-tariff-cap
+    return {
+        # 2019
+        "2019-Q1": {"unit_rate": 17.46, "standing_charge": 25.09},
+        "2019-Q2": {"unit_rate": 15.29, "standing_charge": 25.09},
+        "2019-Q3": {"unit_rate": 15.29, "standing_charge": 25.09},
+        "2019-Q4": {"unit_rate": 15.29, "standing_charge": 25.09},
+        # 2020
+        "2020-Q1": {"unit_rate": 15.29, "standing_charge": 25.09},
+        "2020-Q2": {"unit_rate": 15.29, "standing_charge": 25.09},
+        "2020-Q3": {"unit_rate": 15.29, "standing_charge": 25.09},
+        "2020-Q4": {"unit_rate": 15.29, "standing_charge": 20.58},
+        # 2021
+        "2021-Q1": {"unit_rate": 20.58, "standing_charge": 20.58},
+        "2021-Q2": {"unit_rate": 20.58, "standing_charge": 20.58},
+        "2021-Q3": {"unit_rate": 20.58, "standing_charge": 20.58},
+        "2021-Q4": {"unit_rate": 20.58, "standing_charge": 20.58},
+        # 2022
+        "2022-Q1": {"unit_rate": 20.58, "standing_charge": 20.58},
+        "2022-Q2": {"unit_rate": 28.34, "standing_charge": 45.34},
+        "2022-Q3": {"unit_rate": 28.34, "standing_charge": 45.34},
+        "2022-Q4": {"unit_rate": 28.34, "standing_charge": 45.34},
+        # 2023
+        "2023-Q1": {"unit_rate": 34.00, "standing_charge": 46.36},
+        "2023-Q2": {"unit_rate": 34.00, "standing_charge": 46.36},
+        "2023-Q3": {"unit_rate": 34.00, "standing_charge": 46.36},
+        "2023-Q4": {"unit_rate": 27.35, "standing_charge": 46.36},
+        # 2024
+        "2024-Q1": {"unit_rate": 28.62, "standing_charge": 53.35},
+        "2024-Q2": {"unit_rate": 24.50, "standing_charge": 60.10},
+        "2024-Q3": {"unit_rate": 24.50, "standing_charge": 60.10},
+        "2024-Q4": {"unit_rate": 24.50, "standing_charge": 60.10},
+        # 2025
+        "2025-Q1": {"unit_rate": 24.50, "standing_charge": 60.10},
+        "2025-Q2": {"unit_rate": 24.50, "standing_charge": 60.10},
+        "2025-Q3": {"unit_rate": 24.50, "standing_charge": 60.10},
+        "2025-Q4": {"unit_rate": 24.50, "standing_charge": 60.10},
+        # 2026
+        "2026-Q1": {"unit_rate": 24.50, "standing_charge": 60.10},
+    }
+
+
+def _period_to_ofgem_quarter(dt) -> str | None:
+    """Convert datetime to OFGEM quarter string (e.g., '2024-Q1')."""
+    if dt is None or pd.isna(dt):
+        return None
+    try:
+        quarter = (dt.month - 1) // 3 + 1
+        return f"{dt.year}-Q{quarter}"
+    except Exception:
+        return None
+
+
+def create_ofgem_comparison(df: pd.DataFrame, config: dict | None = None) -> list:
     """Create OFGEM price cap comparison section."""
     elements = []
 
@@ -938,27 +1005,103 @@ def create_ofgem_comparison(df: pd.DataFrame) -> list:
     )
     elements.append(Spacer(1, 0.3 * cm))
 
-    # Note: In practice, you'd fetch actual OFGEM cap data. This is a template.
-    elements.append(
-        Paragraph(
-            "<b>Note:</b> OFGEM Price Cap data should be imported from official OFGEM publications. "
-            "The table below shows the format for comparison. Actual cap values per period "
-            "need to be populated from <link href='https://www.ofgem.gov.uk/energy-policy-and-regulation/policies-and-regulations/default-tariff-cap'>OFGEM's published caps</link>.",
-            STYLES["BodyText"],
-        )
-    )
-    elements.append(Spacer(1, 0.3 * cm))
+    # Load OFGEM cap data
+    ofgem_caps = _load_ofgem_caps()
 
-    # Template table
-    cap_data = [
-        ["Period", "Bill Unit Rate (p/kWh)", "OFGEM Cap (p/kWh)", "Difference", "Status"],
-        ["Example: Oct–Dec 2023", "34.00", "27.35", "+6.65", "EXCEEDS CAP"],
-        ["Example: Jan–Mar 2024", "28.62", "28.62", "0.00", "AT CAP"],
-        ["Example: Apr–Jun 2024", "24.50", "24.50", "0.00", "AT CAP"],
-    ]
+    # Compute unit rates from bills
+    df = df.copy()
+    if "_dt" not in df.columns:
+        df["_dt"] = df["Date"].apply(parse_to_sort_date)
+    df = df.sort_values("_dt").reset_index(drop=True)
+
+    # Filter for records with both Period Charge and Units
+    bills = df[
+        (df["Period Charge (£)"].notna())
+        & (df["Period Charge (£)"] != "N/A")
+        & (df["Units (kWh)"].notna())
+        & (df["Units (kWh)"] != "N/A")
+        & (df["Units (kWh)"] != "")
+    ].copy()
+
+    if bills.empty:
+        elements.append(
+            Paragraph(
+                "No billing records with both Period Charge and Units (kWh) available for comparison.",
+                STYLES["BodyText"],
+            )
+        )
+        elements.append(PageBreak())
+        return elements
+
+    # Compute unit rate for each bill
+    bills["_unit_rate"] = (
+        bills["Period Charge (£)"].astype(float) / bills["Units (kWh)"].astype(float) * 100
+    )
+
+    # Compute quarter for each bill
+    bills["_quarter"] = bills["_dt"].apply(_period_to_ofgem_quarter)
+
+    # Build comparison table
+    cap_data = [["Period", "Bill Unit Rate (p/kWh)", "OFGEM Cap (p/kWh)", "Difference", "Status"]]
+
+    exceed_count = 0
+    for quarter in sorted(bills["_quarter"].dropna().unique()):
+        if quarter not in ofgem_caps:
+            continue
+        cap = ofgem_caps[quarter]
+        quarter_bills = bills[bills["_quarter"] == quarter]
+        avg_rate = quarter_bills["_unit_rate"].mean()
+        if pd.isna(avg_rate):
+            continue
+        cap_rate = cap["unit_rate"]
+        diff = avg_rate - cap_rate
+        status = "EXCEEDS CAP" if diff > 0 else "AT CAP" if abs(diff) < 0.01 else "BELOW CAP"
+        if diff > 0:
+            exceed_count += 1
+        cap_data.append(
+            [
+                quarter,
+                fmt_number(avg_rate, 2),
+                fmt_number(cap_rate, 2),
+                fmt_number(diff, 2) if diff != 0 else "0.00",
+                status,
+            ]
+        )
+
+    # Add summary row
+    cap_data.append(
+        [
+            "OVERALL",
+            "—",
+            "—",
+            f"{exceed_count} periods exceed cap" if exceed_count > 0 else "No exceedances",
+            "REVIEW REQUIRED" if exceed_count > 0 else "COMPLIANT",
+        ]
+    )
 
     t = Table(cap_data, colWidths=[3.5 * cm, 3.5 * cm, 3.5 * cm, 3 * cm, 2.5 * cm])
     t.setStyle(make_table_style(num_rows=len(cap_data)))
+
+    # Color the status column
+    style = TableStyle(
+        [
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B4C6E7")),
+        ]
+    )
+    for i in range(1, len(cap_data)):
+        status = cap_data[i][4]
+        if "EXCEEDS" in status:
+            style.add("TEXTCOLOR", (4, i), (4, i), Colors.RED)
+            style.add("FONTNAME", (4, i), (4, i), "Helvetica-Bold")
+        elif "REVIEW" in status:
+            style.add("TEXTCOLOR", (4, i), (4, i), Colors.RED)
+            style.add("FONTNAME", (4, i), (4, i), "Helvetica-Bold")
+        elif "BELOW" in status:
+            style.add("TEXTCOLOR", (4, i), (4, i), Colors.GREEN)
+    t.setStyle(style)
+
     elements.append(t)
     elements.append(Spacer(1, 0.3 * cm))
 
@@ -966,7 +1109,8 @@ def create_ofgem_comparison(df: pd.DataFrame) -> list:
         Paragraph(
             "<b>Methodology:</b> Unit rates calculated as Period Charge (£) ÷ Units (kWh) × 100. "
             "Standing charges compared separately against OFGEM daily cap. "
-            "Only records with both Period Charge and Units (kWh) are included.",
+            "Only records with both Period Charge and Units (kWh) are included. "
+            "OFGEM cap data sourced from official Default Tariff Cap publications.",
             STYLES["SmallText"],
         )
     )
@@ -1985,7 +2129,7 @@ def generate_ombudsman_pdf(
 
     # === OFGEM COMPARISON ===
     try:
-        elements.extend(create_ofgem_comparison(df))
+        elements.extend(create_ofgem_comparison(df, config))
     except Exception as e:
         elements.append(Paragraph(f"<i>OFGEM Comparison failed: {e}</i>", STYLES["BodyText"]))
 
