@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
@@ -1158,6 +1159,11 @@ def create_payment_analysis(dfc: pd.DataFrame) -> list:
 # =============================================================================
 
 
+# =============================================================================
+# FORECAST SECTION
+# =============================================================================
+
+
 def create_forecast_section(dfc: pd.DataFrame) -> list:
     """Create forecast & projection section."""
     elements = []
@@ -1175,29 +1181,107 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
     )
     elements.append(Spacer(1, 0.3 * cm))
 
-    # Linear forecast table (simplified)
-    elements.append(
-        Paragraph("<b>Next 6 Periods — Linear Trend Projection</b>", STYLES["SubSectionHeader"])
-    )
+    # Prepare data for forecasting
+    dfc = dfc.copy()
+    dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
+    dfc = dfc.sort_values("_dt").reset_index(drop=True)
+    amounts = dfc["Amount (£)"].astype(float).values
+    n = len(amounts)
 
-    forecast_data = [
-        ["Forecast Period", "Projected Balance (£)", "Method"],
-        ["+1 Period", "—", "Linear Regression"],
-        ["+2 Periods", "—", "Linear Regression"],
-        ["+3 Periods", "—", "Linear Regression"],
-        ["+4 Periods", "—", "Linear Regression"],
-        ["+5 Periods", "—", "Linear Regression"],
-        ["+6 Periods", "—", "Linear Regression"],
-    ]
-    t = Table(forecast_data, colWidths=[5 * cm, 5 * cm, 5 * cm])
+    if n < 3:
+        elements.append(Paragraph("Insufficient data for forecasting (need at least 3 periods).", STYLES["BodyText"]))
+        elements.append(PageBreak())
+        return elements
+
+    # Try to import scipy for linear regression
+    has_scipy = False
+    try:
+        from scipy import stats as sp_stats
+        has_scipy = True
+    except ImportError:
+        has_scipy = False
+
+    # Try to import statsmodels for Holt-Winters
+    has_statsmodels = False
+    try:
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+        has_statsmodels = True
+    except ImportError:
+        has_statsmodels = False
+
+    # 1. Linear Regression Forecast
+    linear_forecast = []
+    model_info = []
+    if has_scipy:
+        x = np.arange(n)
+        slope, intercept, r_value, p_value, std_err = sp_stats.linregress(x, amounts)
+        linear_forecast = [intercept + slope * (n + i) for i in range(1, 7)]
+        model_info = [
+            f"<b>Linear Regression:</b> slope={slope:.2f}, intercept={intercept:.2f}, R²={r_value**2:.4f}, p={p_value:.4f}",
+        ]
+    else:
+        # Fallback: simple average
+        linear_forecast = [float(np.mean(amounts))] * 6
+        model_info = ["<b>Linear Regression:</b> not available (install scipy) - using mean"]
+
+    # 2. EMA (Exponential Moving Average) Forecast
+    alpha = 0.3  # smoothing factor
+    ema = amounts[0]
+    for val in amounts[1:]:
+        ema = alpha * val + (1 - alpha) * ema
+    ema_forecast = [ema] * 6
+    model_info.append(f"<b>EMA (α={alpha}):</b> current level={ema:.2f}")
+
+    # 3. Holt-Winters Forecast (if statsmodels available)
+    hw_forecast = None
+    if has_statsmodels and n >= 6:
+        try:
+            # Use additive trend, no seasonality (need at least 2 seasons for seasonality)
+            model = ExponentialSmoothing(amounts, trend="add", seasonal=None)
+            hw_fit = model.fit(smoothing_level=alpha, smoothing_trend=0.1, optimized=True)
+            hw_forecast = hw_fit.forecast(6).tolist()
+        except Exception:
+            hw_forecast = None
+
+    # Build forecast table
+    forecast_header = ["Forecast Period", "Linear Reg. (£)", "EMA (£)"]
+    if hw_forecast:
+        forecast_header.append("Holt-Winters (£)")
+
+    forecast_data = [forecast_header]
+    for i in range(6):
+        row = [f"+{i+1} Period", fmt_money(linear_forecast[i]), fmt_money(ema_forecast[i])]
+        if hw_forecast:
+            row.append(fmt_money(hw_forecast[i]))
+        forecast_data.append(row)
+
+    # Calculate column widths
+    num_cols = len(forecast_header)
+    col_width = CONTENT_WIDTH / num_cols
+    col_widths = [col_width] * num_cols
+
+    t = Table(forecast_data, colWidths=col_widths)
     t.setStyle(make_table_style(num_rows=len(forecast_data)))
+    elements.append(Paragraph("<b>Next 6 Periods — Multi-Method Projection</b>", STYLES["SubSectionHeader"]))
+    elements.append(Spacer(1, 0.2 * cm))
     elements.append(t)
+    elements.append(Spacer(1, 0.3 * cm))
+
+    if hw_forecast:
+        model_info.append("<b>Holt-Winters:</b> additive trend, no seasonality (fitted via statsmodels)")
+    else:
+        model_info.append("<b>Holt-Winters:</b> not available (install statsmodels)")
+
+    for info in model_info:
+        elements.append(Paragraph(info, STYLES["SmallText"]))
+
     elements.append(Spacer(1, 0.3 * cm))
 
     elements.append(
         Paragraph(
-            "<i>Note: Full forecasting with Holt-Winters exponential smoothing and confidence intervals "
-            "available in the Excel workbook (Forecast &amp; Projection tab).</i>",
+            "<i>Note: Projections assume continuation of current trends and do not account for "
+            "seasonal variations, tariff changes, or policy changes. "
+            "Full forecasting with confidence intervals available in the Excel workbook (Forecast &amp; Projection tab).</i>",
             STYLES["SmallText"],
         )
     )
@@ -1486,6 +1570,165 @@ def create_appendix_methodology(config: dict) -> list:
     return elements
 
 
+def create_appendix_full_evidence(df: pd.DataFrame, filtered: list | None = None, config: dict | None = None) -> list:
+    """Create Appendix C: Full Evidence Table with all records."""
+    elements = []
+
+    elements.append(Paragraph("Appendix C: Full Evidence Table", STYLES["SectionHeader"]))
+    elements.append(Spacer(1, 0.3 * cm))
+
+    elements.append(
+        Paragraph(
+            "This appendix contains the complete set of billing records used in this analysis. "
+            "Records are sorted chronologically by date.",
+            STYLES["BodyText"],
+        )
+    )
+    elements.append(Spacer(1, 0.3 * cm))
+
+    if df.empty:
+        elements.append(Paragraph("No records available.", STYLES["BodyText"]))
+        elements.append(PageBreak())
+        return elements
+
+    # Ensure _dt column for sorting
+    if "_dt" not in df.columns:
+        df["_dt"] = df["Date"].apply(parse_to_sort_date)
+    df_sorted = df.sort_values("_dt").reset_index(drop=True)
+
+    # Table header
+    evidence_header = [
+        "Date",
+        "Source",
+        "Entry Type",
+        "Amount (£)",
+        "Period Charge (£)",
+        "Period From",
+        "Period To",
+        "Invoice #",
+        "Reading",
+        "Units (kWh)",
+        "Standing Chg (p/day)",
+        "Attachment",
+        "Details",
+    ]
+
+    evidence_data = [evidence_header]
+
+    for _, row in df_sorted.iterrows():
+        evidence_data.append([
+            fmt_date(row.get("Date", "")),
+            str(row.get("Source", ""))[:30],
+            str(row.get("Entry Type", "")),
+            fmt_money(row.get("Amount (£)", 0)),
+            fmt_money(row.get("Period Charge (£)", 0)) if row.get("Period Charge (£)") not in ("", "N/A", None) else "N/A",
+            str(row.get("Period From", "")),
+            str(row.get("Period To", "")),
+            str(row.get("Invoice #", ""))[:15],
+            str(row.get("Reading", ""))[:15],
+            str(row.get("Units (kWh)", ""))[:10],
+            str(row.get("Standing Chg (p/day)", ""))[:10],
+            str(row.get("Attachment Name", ""))[:20],
+            str(row.get("Details", ""))[:50],
+        ])
+
+    # Calculate column widths
+    col_widths = [
+        2.0 * cm,   # Date
+        2.5 * cm,   # Source
+        2.0 * cm,   # Entry Type
+        2.0 * cm,   # Amount
+        2.0 * cm,   # Period Charge
+        2.0 * cm,   # Period From
+        2.0 * cm,   # Period To
+        1.5 * cm,   # Invoice
+        1.5 * cm,   # Reading
+        1.5 * cm,   # Units
+        1.5 * cm,   # Standing
+        2.0 * cm,   # Attachment
+        CONTENT_WIDTH - sum([2.0, 2.5, 2.0, 2.0, 2.0, 2.0, 2.0, 1.5, 1.5, 1.5, 1.5, 2.0]) * cm,
+    ]
+
+    t = Table(evidence_data, colWidths=col_widths, repeatRows=1)
+    t.setStyle(
+        TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 6),
+            ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("BACKGROUND", (0, 0), (-1, 0), Colors.NAVY),
+            ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B4C6E7")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            *[
+                ("BACKGROUND", (0, i), (-1, i), Colors.VERY_LIGHT_BLUE)
+                for i in range(1, len(evidence_data), 2)
+            ],
+        ])
+    )
+    elements.append(t)
+    elements.append(Spacer(1, 0.3 * cm))
+
+    # Add filtered records if provided
+    if filtered:
+        elements.append(PageBreak())
+        min_amt = fmt_money(config.get('min_amount', 500)) if config else "£500"
+        elements.append(Paragraph(
+            f"Appendix C (cont.): Filtered Records (Below {min_amt} Threshold)",
+            STYLES["SectionHeader"]
+        ))
+        elements.append(Spacer(1, 0.3 * cm))
+
+        filt_data = [evidence_header]
+        for row in filtered:
+            filt_data.append([
+                fmt_date(row.get("Date", "")),
+                str(row.get("Source", ""))[:30],
+                str(row.get("Entry Type", "")),
+                fmt_money(row.get("Amount (£)", 0)),
+                fmt_money(row.get("Period Charge (£)", 0)) if row.get("Period Charge (£)") not in ("", "N/A", None) else "N/A",
+                str(row.get("Period From", "")),
+                str(row.get("Period To", "")),
+                str(row.get("Invoice #", ""))[:15],
+                str(row.get("Reading", ""))[:15],
+                str(row.get("Units (kWh)", ""))[:10],
+                str(row.get("Standing Chg (p/day)", ""))[:10],
+                str(row.get("Attachment Name", ""))[:20],
+                str(row.get("Details", ""))[:50],
+            ])
+
+        if len(filt_data) > 1:
+            t2 = Table(filt_data, colWidths=col_widths, repeatRows=1)
+            t2.setStyle(
+                TableStyle([
+                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 6),
+                    ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("BACKGROUND", (0, 0), (-1, 0), Colors.AMBER),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B4C6E7")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                    *[
+                        ("BACKGROUND", (0, i), (-1, i), Colors.VERY_LIGHT_BLUE)
+                        for i in range(1, len(filt_data), 2)
+                    ],
+                ])
+            )
+            elements.append(t2)
+
+    elements.append(PageBreak())
+    return elements
+
+
 def create_appendix_glossary() -> list:
     """Create Appendix B: Glossary."""
     elements = []
@@ -1760,6 +2003,11 @@ def generate_ombudsman_pdf(
         elements.extend(create_appendix_glossary())
     except Exception as e:
         elements.append(Paragraph(f"<i>Appendix Glossary failed: {e}</i>", STYLES["BodyText"]))
+
+    try:
+        elements.extend(create_appendix_full_evidence(df, filtered, config))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Appendix Full Evidence failed: {e}</i>", STYLES["BodyText"]))
 
     # Build
     doc.build(elements)
