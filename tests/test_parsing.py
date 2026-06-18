@@ -1,22 +1,24 @@
 """Tests for core parsing functions to improve coverage."""
 
+import re
 import sys
+
+import pytest
 
 sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
 
-import pytest
 from edf_collector import (
-    parse_to_sort_date,
-    parse_to_display_date,
-    to_excel_date,
-    detect_pdf_format,
-    extract_new_invoice_fields,
-    extract_new_credit_fields,
-    parse_htm_account_history,
-    AMOUNT_PATTERNS,
-    READING_PATTERNS,
-    PERIOD_RE,
     _ISO_DATE_RE,
+    AMOUNT_PATTERNS,
+    PERIOD_RE,
+    READING_PATTERNS,
+    detect_pdf_format,
+    extract_new_credit_fields,
+    extract_new_invoice_fields,
+    parse_htm_account_history,
+    parse_to_display_date,
+    parse_to_sort_date,
+    to_excel_date,
 )
 
 
@@ -226,48 +228,36 @@ class TestAmountPatterns:
             else None
         )
         # Direct test of first pattern
-        import re
-
         m = re.search(AMOUNT_PATTERNS[0], text, re.IGNORECASE)
         assert m
         assert float(m.group(1).replace(",", "")) == 1234.56
 
     def test_pattern_total_charges_period_debit(self):
         text = "Total charges for this period £89.99 debit"
-        import re
-
         m = re.search(AMOUNT_PATTERNS[1], text, re.IGNORECASE)
         assert m
         assert float(m.group(1).replace(",", "")) == 89.99
 
     def test_pattern_total_credits_bill(self):
         text = "Total credits for this bill £150.00"
-        import re
-
         m = re.search(AMOUNT_PATTERNS[2], text, re.IGNORECASE)
         assert m
         assert float(m.group(1).replace(",", "")) == 150.00
 
     def test_pattern_your_new_account_balance(self):
         text = "Your new account balance £999.99"
-        import re
-
         m = re.search(AMOUNT_PATTERNS[3], text, re.IGNORECASE)
         assert m
         assert float(m.group(1).replace(",", "")) == 999.99
 
     def test_pattern_balance_with_context(self):
         text = "Account balance £500.00 in debit"
-        import re
-
         m = re.search(AMOUNT_PATTERNS[4], text, re.IGNORECASE)
         assert m
         assert float(m.group(1).replace(",", "")) == 500.00
 
     def test_pattern_pound_amount_debit(self):
         text = "£99.99 debit"
-        import re
-
         m = re.search(AMOUNT_PATTERNS[8], text, re.IGNORECASE)
         assert m
         assert float(m.group(1).replace(",", "")) == 99.99
