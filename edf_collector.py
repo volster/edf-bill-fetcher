@@ -1042,6 +1042,173 @@ def _section_hdr(ws, r, label, ncols=3, bg="10367A"):
         cell.alignment = Alignment(horizontal="left", vertical="center")
 
 
+def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
+    """Compute dispute flags from a sorted DataFrame.
+
+    Returns:
+        tuple: (flags_list, flag_counts_dict)
+        - flags_list: list of (type, date, amount, detail, severity) tuples
+        - flag_counts_dict: dict with HIGH, MEDIUM, INFO counts
+    """
+    flags = []
+    n = len(dfc)
+    if n < 2:
+        return flags, {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
+
+    # 1. LARGE JUMP: >25% increase within 90 days
+    for i in range(1, n):
+        p = dfc.iloc[i - 1]
+        c_ = dfc.iloc[i]
+        try:
+            chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+            pct = chg / float(p["Amount (£)"]) if float(p["Amount (£)"]) > 0 else 0
+            days = (c_["_dt"] - p["_dt"]).days
+            if pct > 0.25 and 0 < days <= 90:
+                flags.append(
+                    (
+                        "LARGE JUMP",
+                        c_["Date"],
+                        c_["Amount (£)"],
+                        f"+£{chg:,.2f} (+{pct * 100:.1f}%) in {days} days (from {p['Date']}: £{p['Amount (£)']:,.2f})",
+                        "HIGH" if pct > 0.5 else "MEDIUM",
+                    )
+                )
+        except (ValueError, TypeError, KeyError):
+            pass
+
+    # 2. BILLING GAP: >60 days without a bill
+    for i in range(1, n):
+        p = dfc.iloc[i - 1]
+        c_ = dfc.iloc[i]
+        try:
+            days = (c_["_dt"] - p["_dt"]).days
+            if days > 60:
+                flags.append(
+                    (
+                        "BILLING GAP",
+                        c_["Date"],
+                        c_["Amount (£)"],
+                        f"{days} days without a bill (previous: {p['Date']}). Balance accumulated unchecked.",
+                        "HIGH" if days > 120 else "MEDIUM",
+                    )
+                )
+        except (ValueError, TypeError, KeyError):
+            pass
+
+    # 3. ESTIMATED RUN: 3+ consecutive estimated readings
+    if "Reading" in dfc.columns:
+        run = 0
+        run_start = None
+        for i, rv in enumerate(dfc["Reading"].tolist()):
+            if str(rv).lower() in ("estimated", "est."):
+                run += 1
+                if run == 1:
+                    run_start = dfc.iloc[i]["Date"]
+            else:
+                if run >= 3:
+                    flags.append(
+                        (
+                            "ESTIMATED RUN",
+                            run_start,
+                            None,
+                            f"{run} consecutive estimated readings from {run_start}.",
+                            "HIGH",
+                        )
+                    )
+                run = 0
+                run_start = None
+        if run >= 3:
+            flags.append(
+                (
+                    "ESTIMATED RUN",
+                    run_start,
+                    None,
+                    f"{run} consecutive estimated readings from {run_start} (ongoing).",
+                    "HIGH",
+                )
+            )
+
+    # 4. HIGH DAILY RATE: daily rate significantly above average
+    if mean_daily > 0:
+        for i in range(1, n):
+            p = dfc.iloc[i - 1]
+            c_ = dfc.iloc[i]
+            try:
+                days = (c_["_dt"] - p["_dt"]).days
+                charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+                if days > 0 and charge > 0:
+                    daily = charge / days
+                    ratio = daily / mean_daily
+                    if ratio > 2.5:
+                        flags.append(
+                            (
+                                "HIGH DAILY RATE",
+                                c_["Date"],
+                                c_["Amount (£)"],
+                                f"£{daily:,.2f}/day ({ratio:.1f}× avg £{mean_daily:,.2f}/day) over {days} days",
+                                "HIGH" if ratio > 4 else "MEDIUM",
+                            )
+                        )
+            except (ValueError, TypeError, KeyError, ZeroDivisionError):
+                pass
+
+    # 5. BALANCE REDUCTION: payment/credit > £500
+    for i in range(1, n):
+        p = dfc.iloc[i - 1]
+        c_ = dfc.iloc[i]
+        try:
+            chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+            if chg < -500:
+                flags.append(
+                    (
+                        "BALANCE REDUCTION",
+                        c_["Date"],
+                        c_["Amount (£)"],
+                        f"Balance fell £{abs(chg):,.2f} (from £{p['Amount (£)']:,.2f} to £{c_['Amount (£)']:,.2f}).",
+                        "INFO",
+                    )
+                )
+        except (ValueError, TypeError, KeyError):
+            pass
+
+    # 6. RECONCILIATION MISMATCH: balance delta vs period charge
+    if "Period Charge (£)" in dfc.columns:
+        for i in range(1, n):
+            p = dfc.iloc[i - 1]
+            c_ = dfc.iloc[i]
+            try:
+                if str(c_.get("Entry Type", "")) == "New Bill" and str(p.get("Entry Type", "")) in (
+                    "New Bill",
+                    "Ongoing Balance",
+                ):
+                    pc = c_.get("Period Charge (£)")
+                    try:
+                        pc_val = float(pc)
+                    except (ValueError, TypeError):
+                        continue
+                    balance_delta = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+                    diff = abs(balance_delta - pc_val)
+                    threshold = max(pc_val * 0.10, 50.0) if pc_val > 0 else 50.0
+                    if diff > threshold:
+                        flags.append(
+                            (
+                                "RECONCILIATION MISMATCH",
+                                c_["Date"],
+                                c_["Amount (£)"],
+                                f"Balance delta £{balance_delta:,.2f} vs period charge £{pc_val:,.2f} "
+                                f"(difference: £{diff:,.2f}). Possible payment, credit, or billing error "
+                                f"between {p['Date']} and {c_['Date']}.",
+                                "HIGH" if diff > pc_val * 0.5 else "MEDIUM",
+                            )
+                        )
+            except (ValueError, TypeError, KeyError):
+                pass
+
+    # Count by severity
+    counts = {s: sum(1 for f in flags if f[4] == s) for s in ("HIGH", "MEDIUM", "INFO")}
+    return flags, counts
+
+
 # ---------------------------------------------------------------------------
 # Write evidence sheet
 # ---------------------------------------------------------------------------
@@ -2070,137 +2237,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     for ci, h in enumerate(["#", "Date", "Balance (£)", "Flag Type", "Detail", "Severity"], 1):
         _hcell(ws_df, hdr_row, ci, h, bg=NAVY)
 
-    flags = []
-
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-        pct = chg / float(p["Amount (£)"]) if float(p["Amount (£)"]) > 0 else 0
-        days = (c_["_dt"] - p["_dt"]).days
-        if pct > 0.25 and 0 < days <= 90:
-            flags.append(
-                (
-                    "LARGE JUMP",
-                    c_["Date"],
-                    c_["Amount (£)"],
-                    f"+£{chg:,.2f} (+{pct * 100:.1f}%) in {days} days (from {p['Date']}: £{p['Amount (£)']:,.2f})",
-                    "HIGH" if pct > 0.5 else "MEDIUM",
-                )
-            )
-
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        days = (c_["_dt"] - p["_dt"]).days
-        if days > 60:
-            flags.append(
-                (
-                    "BILLING GAP",
-                    c_["Date"],
-                    c_["Amount (£)"],
-                    f"{days} days without a bill (previous: {p['Date']}). Balance accumulated unchecked.",
-                    "HIGH" if days > 120 else "MEDIUM",
-                )
-            )
-
-    if "Reading" in dfc.columns:
-        run = 0
-        run_start = None
-        for i, rv in enumerate(dfc["Reading"].tolist()):
-            if str(rv).lower() in ("estimated", "est."):
-                run += 1
-                if run == 1:
-                    run_start = dfc.iloc[i]["Date"]
-            else:
-                if run >= 3:
-                    flags.append(
-                        (
-                            "ESTIMATED RUN",
-                            run_start,
-                            None,
-                            f"{run} consecutive estimated readings from {run_start}.",
-                            "HIGH",
-                        )
-                    )
-                run = 0
-                run_start = None
-        if run >= 3:
-            flags.append(
-                (
-                    "ESTIMATED RUN",
-                    run_start,
-                    None,
-                    f"{run} consecutive estimated readings from {run_start} (ongoing).",
-                    "HIGH",
-                )
-            )
-
-    if mean_daily > 0:
-        for i in range(1, n):
-            p = dfc.iloc[i - 1]
-            c_ = dfc.iloc[i]
-            days = (c_["_dt"] - p["_dt"]).days
-            charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-            if days > 0 and charge > 0:
-                daily = charge / days
-                ratio = daily / mean_daily
-                if ratio > 2.5:
-                    flags.append(
-                        (
-                            "HIGH DAILY RATE",
-                            c_["Date"],
-                            c_["Amount (£)"],
-                            f"£{daily:,.2f}/day ({ratio:.1f}× avg £{mean_daily:,.2f}/day) over {days} days",
-                            "HIGH" if ratio > 4 else "MEDIUM",
-                        )
-                    )
-
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-        if chg < -500:
-            flags.append(
-                (
-                    "BALANCE REDUCTION",
-                    c_["Date"],
-                    c_["Amount (£)"],
-                    f"Balance fell £{abs(chg):,.2f} (from £{p['Amount (£)']:,.2f} to £{c_['Amount (£)']:,.2f}).",
-                    "INFO",
-                )
-            )
-
-    # Reconciliation mismatch: where consecutive New Bill records have period_charge,
-    # compare balance delta vs stated period charge
-    if "Period Charge (£)" in dfc.columns:
-        for i in range(1, n):
-            p = dfc.iloc[i - 1]
-            c_ = dfc.iloc[i]
-            if str(c_.get("Entry Type", "")) == "New Bill" and str(p.get("Entry Type", "")) in (
-                "New Bill",
-                "Ongoing Balance",
-            ):
-                pc = c_.get("Period Charge (£)")
-                try:
-                    pc_val = float(pc)
-                except (ValueError, TypeError):
-                    continue
-                balance_delta = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-                diff = abs(balance_delta - pc_val)
-                threshold = max(pc_val * 0.10, 50.0) if pc_val > 0 else 50.0
-                if diff > threshold:
-                    flags.append(
-                        (
-                            "RECONCILIATION MISMATCH",
-                            c_["Date"],
-                            c_["Amount (£)"],
-                            f"Balance delta £{balance_delta:,.2f} vs period charge £{pc_val:,.2f} "
-                            f"(difference: £{diff:,.2f}). Possible payment, credit, or billing error "
-                            f"between {p['Date']} and {c_['Date']}.",
-                            "HIGH" if diff > pc_val * 0.5 else "MEDIUM",
-                        )
-                    )
+    flags, counts = compute_dispute_flags(dfc, mean_daily)
 
     sev_fill = {"HIGH": RED, "MEDIUM": AMBER, "INFO": GREEN}
     for fi, (ftype, date, amt, detail, sev) in enumerate(flags, hdr_row + 1):
@@ -2283,7 +2320,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # Estimated reading runs (reuse existing detection)
     if "Reading" in dfc.columns:
         run = 0
-        run_start = None
         run_start_date = None
         for i, rv in enumerate(dfc["Reading"].tolist()):
             if str(rv).lower() in ("estimated", "est."):
@@ -3386,6 +3422,7 @@ class ReportOptionsDialog:
         self.parent = parent
         self.result = None
         self.dialog = None
+
     def show(self):
         """Show the dialog and return the selected options."""
         self.dialog = tk.Toplevel(self.parent)
@@ -3432,6 +3469,7 @@ class ReportOptionsDialog:
         # Also allow resizing canvas window width
         def _on_canvas_configure(event):
             canvas.itemconfig(canvas.find_all()[0], width=event.width)
+
         canvas.bind("<Configure>", _on_canvas_configure)
 
         # Header
@@ -3964,7 +4002,9 @@ class App:
                 all_success = True
                 for fmt_label, success, msg in messages:
                     if success:
-                        combined_msgs.append(f"✓ {fmt_label}: {msg.split(chr(10))[-1] if msg else 'Generated'}")
+                        combined_msgs.append(
+                            f"✓ {fmt_label}: {msg.split(chr(10))[-1] if msg else 'Generated'}"
+                        )
                     else:
                         all_success = False
                         self.root.after(
@@ -3975,9 +4015,12 @@ class App:
                         )
 
                 if all_success and combined_msgs:
-                    self.root.after(0, lambda msgs=combined_msgs: self._show(
-                        "info", "Reports Generated", "\n\n".join(msgs)
-                    ))
+                    self.root.after(
+                        0,
+                        lambda msgs=combined_msgs: self._show(
+                            "info", "Reports Generated", "\n\n".join(msgs)
+                        ),
+                    )
 
             except Exception as e:
                 self.root.after(
@@ -4025,14 +4068,19 @@ class App:
             # Load the spreadsheet
             df = pd.read_excel(file_path, sheet_name="EDF Evidence Report")
             if df.empty:
-                self._show("warning", "No Data", "The selected spreadsheet has no records in 'EDF Evidence Report' sheet.")
+                self._show(
+                    "warning",
+                    "No Data",
+                    "The selected spreadsheet has no records in 'EDF Evidence Report' sheet.",
+                )
                 return
 
-            records = df.to_dict('records')
+            records = df.to_dict("records")
 
             # Create a minimal engine-like object for metadata
             class MockEngine:
                 pass
+
             engine = MockEngine()
             engine.records = records
             engine.filtered_records = []
@@ -4056,7 +4104,7 @@ class App:
                     self._show(
                         "warning",
                         "PDF Unavailable",
-                        "PDF generation requires 'reportlab'. Install with: pip install reportlab"
+                        "PDF generation requires 'reportlab'. Install with: pip install reportlab",
                     )
                 else:
                     default_name = os.path.basename(file_path).replace(".xlsx", "_Report.pdf")
@@ -4077,7 +4125,7 @@ class App:
                     self._show(
                         "warning",
                         "DOCX Unavailable",
-                        "DOCX generation requires 'python-docx'. Install with: pip install python-docx"
+                        "DOCX generation requires 'python-docx'. Install with: pip install python-docx",
                     )
                 else:
                     default_name = os.path.basename(file_path).replace(".xlsx", "_Report.docx")
@@ -4136,7 +4184,9 @@ class App:
                     all_success = True
                     for fmt_label, success, msg in messages:
                         if success:
-                            combined_msgs.append(f"✓ {fmt_label}: {msg.split(chr(10))[-1] if msg else 'Generated'}")
+                            combined_msgs.append(
+                                f"✓ {fmt_label}: {msg.split(chr(10))[-1] if msg else 'Generated'}"
+                            )
                         else:
                             all_success = False
                             self.root.after(
@@ -4147,20 +4197,26 @@ class App:
                             )
 
                     if all_success and combined_msgs:
-                        self.root.after(0, lambda msgs=combined_msgs: self._show(
-                            "info", "Reports Generated", "\n\n".join(msgs)
-                        ))
+                        self.root.after(
+                            0,
+                            lambda msgs=combined_msgs: self._show(
+                                "info", "Reports Generated", "\n\n".join(msgs)
+                            ),
+                        )
 
                 except Exception as e:
                     self.root.after(
-                        0, lambda err=e: self._show("error", "Error", f"An error occurred:\n\n{err}")
+                        0,
+                        lambda err=e: self._show("error", "Error", f"An error occurred:\n\n{err}"),
                     )
                 finally:
                     self.root.after(
                         0,
                         lambda: (
                             self.pdf_report_btn.config(
-                                state="normal" if (HAS_PDF_REPORT or HAS_DOCX_REPORT) else "disabled"
+                                state="normal"
+                                if (HAS_PDF_REPORT or HAS_DOCX_REPORT)
+                                else "disabled"
                             ),
                             self.load_report_btn.config(state="normal"),
                             self.set_status("Ready."),

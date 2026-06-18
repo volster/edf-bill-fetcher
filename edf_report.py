@@ -1628,9 +1628,32 @@ def generate_ombudsman_pdf(
     charges = df[df["Amount (£)"] > 0]["Amount (£)"].astype(float).sum()
     payments = df[df["Amount (£)"] < 0]["Amount (£)"].astype(float).sum() * -1
 
-    # Flag counts (would come from analysis)
-    flag_counts = {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
-    flags: list[tuple] = []  # Would be populated from analysis
+    # Compute dispute flags from the data
+    from edf_collector import compute_dispute_flags
+
+    # Ensure _dt column exists for the analysis
+    if "_dt" not in df.columns:
+        df["_dt"] = df["Date"].apply(parse_to_sort_date)
+    df_sorted = df.sort_values("_dt").reset_index(drop=True)
+
+    # Compute mean daily rate for HIGH DAILY RATE detection
+    mean_daily = 0.0
+    try:
+        for i in range(1, len(df_sorted)):
+            p = df_sorted.iloc[i - 1]
+            c_ = df_sorted.iloc[i]
+            days = (c_["_dt"] - p["_dt"]).days
+            charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+            if days > 0 and charge > 0:
+                daily = charge / days
+                if mean_daily == 0.0:
+                    mean_daily = daily
+                else:
+                    mean_daily = (mean_daily + daily) / 2
+    except Exception:
+        mean_daily = 0.0
+
+    flags, flag_counts = compute_dispute_flags(df_sorted, mean_daily)
 
     # Build document
     doc = build_doc_template(output_path)
