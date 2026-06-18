@@ -170,13 +170,24 @@ def _add_footer(doc, text="EDF Energy Billing Evidence Report — Confidential")
         p.text = text
 
 
-def _set_cell_shading(cell, color_hex):
-    """Set background color for table cell."""
+def _set_cell_shading(cell, color):
+    """Set background color for table cell. Accepts hex string (e.g., '#FF0000') or RGBColor object."""
+    # Convert RGBColor to hex string if needed
+    if hasattr(color, 'rgb'):
+        # RGBColor object
+        hex_str = f"{color.rgb:06X}"
+    elif isinstance(color, str):
+        # Hex string
+        hex_str = color.lstrip("#")
+    else:
+        # Fallback
+        hex_str = str(color).lstrip("#")
+    
     shading_elm = cell._element.get_or_add_tcPr()
     shading = shading_elm.makeelement(
         qn("w:shd"),
         {
-            qn("w:fill"): color_hex.lstrip("#"),
+            qn("w:fill"): hex_str,
             qn("w:val"): "clear",
         },
     )
