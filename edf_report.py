@@ -977,7 +977,7 @@ def _load_ofgem_caps() -> dict[str, dict]:
     }
 
 
-def _period_to_ofgem_quarter(dt) -> str | None:
+def _period_to_ofgem_quarter(dt: datetime | None) -> str | None:
     """Convert datetime to OFGEM quarter string (e.g., '2024-Q1')."""
     if dt is None or pd.isna(dt):
         return None
