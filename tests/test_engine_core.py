@@ -1,6 +1,7 @@
 """Tests for EvidenceEngine core methods to improve coverage."""
 
 import sys
+
 sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
 
 import pytest
@@ -29,7 +30,9 @@ class TestEvidenceEngineCore:
         }
         engine = EvidenceEngine(config, lambda x: None)
 
-        period_from, period_to = engine.find_billing_period("Your charges: 01 Jan 2024 - 31 Jan 2024")
+        period_from, period_to = engine.find_billing_period(
+            "Your charges: 01 Jan 2024 - 31 Jan 2024"
+        )
         assert period_from == "01/01/2024"
         assert period_to == "31/01/2024"
 
@@ -56,13 +59,15 @@ class TestEvidenceEngineCore:
         }
         engine = EvidenceEngine(config, lambda x: None)
 
-        engine._add_record({
-            "Source": "Test",
-            "Date": "01/01/2024",
-            "Amount (£)": 100.0,  # Below min_amount
-            "Details": "Test record",
-            "Logic Used": "Test",
-        })
+        engine._add_record(
+            {
+                "Source": "Test",
+                "Date": "01/01/2024",
+                "Amount (£)": 100.0,  # Below min_amount
+                "Details": "Test record",
+                "Logic Used": "Test",
+            }
+        )
 
         assert len(engine.records) == 0
         assert len(engine.filtered_records) == 1
@@ -87,13 +92,15 @@ class TestEvidenceEngineCore:
         }
         engine = EvidenceEngine(config, lambda x: None)
 
-        engine._add_record({
-            "Source": "Test",
-            "Date": "01/01/2024",
-            "Amount (£)": 1000.0,  # Above min_amount
-            "Details": "Test record",
-            "Logic Used": "Test",
-        })
+        engine._add_record(
+            {
+                "Source": "Test",
+                "Date": "01/01/2024",
+                "Amount (£)": 1000.0,  # Above min_amount
+                "Details": "Test record",
+                "Logic Used": "Test",
+            }
+        )
 
         assert len(engine.records) == 1
         assert len(engine.filtered_records) == 0
@@ -116,6 +123,7 @@ class TestEvidenceEngineCore:
             "domain_filter": "edfenergy.com",
         }
         import threading
+
         cancel_event = threading.Event()
         engine = EvidenceEngine(config, lambda x: None, cancel_event=cancel_event)
 
