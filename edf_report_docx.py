@@ -1032,7 +1032,6 @@ def generate_ombudsman_docx(
     config: dict,
     engine: Any,
     filtered: list | None = None,
-    ofgem_data: dict | None = None,
 ) -> str:
     """
     Generate a professional DOCX report for Energy Ombudsman submission.
@@ -1043,7 +1042,6 @@ def generate_ombudsman_docx(
         config: Configuration dictionary
         engine: EvidenceEngine instance (for metadata)
         filtered: Filtered-out records (below threshold)
-        ofgem_data: Optional OFGEM price cap data
 
     Returns:
         Path to generated DOCX

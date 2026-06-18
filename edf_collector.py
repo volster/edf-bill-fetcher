@@ -49,22 +49,14 @@ try:
 except ImportError:
     HAS_STATSMODELS = False
 
-# Optional import for PDF report generation
-try:
-    from edf_report import generate_pdf_from_gui
-
-    HAS_PDF_REPORT = True
-except ImportError:
-    HAS_PDF_REPORT = False
-
-# Optional import for DOCX report generation
+# Check for optional report dependencies (without importing to avoid circular imports)
 try:
     from importlib.util import find_spec
 
-    from edf_report_docx import generate_docx_from_gui
-
+    HAS_PDF_REPORT = find_spec("edf_report") is not None
     HAS_DOCX_REPORT = find_spec("edf_report_docx") is not None
 except ImportError:
+    HAS_PDF_REPORT = False
     HAS_DOCX_REPORT = False
 
 
@@ -3980,6 +3972,10 @@ class App:
         }
 
         def _generate():
+            # Lazy import to avoid circular import
+            from edf_report import generate_pdf_from_gui
+            from edf_report_docx import generate_docx_from_gui
+
             try:
                 messages = []
                 if "pdf" in output_paths:
@@ -4165,6 +4161,10 @@ class App:
             }
 
             def _generate():
+                # Lazy import to avoid circular import
+                from edf_report import generate_pdf_from_gui
+                from edf_report_docx import generate_docx_from_gui
+
                 try:
                     messages = []
                     if "pdf" in output_paths:
@@ -4306,6 +4306,10 @@ class App:
         }
 
         def _generate():
+            # Lazy import to avoid circular import
+            from edf_report import generate_pdf_from_gui
+            from edf_report_docx import generate_docx_from_gui
+
             try:
                 if fmt == "pdf":
                     success, msg = generate_pdf_from_gui(
@@ -4645,6 +4649,8 @@ def run_cli_pdf_report(args: list[str]) -> None:
     import json
     import sys
 
+    from edf_report import generate_pdf_from_gui
+
     parser = argparse.ArgumentParser(
         description="Generate professional PDF report for Energy Ombudsman submission",
         prog="edf-collector --pdf-report",
@@ -4707,6 +4713,8 @@ def run_cli_docx_report(args: list[str]) -> None:
     import json
     import sys
 
+    from edf_report_docx import generate_docx_from_gui
+
     parser = argparse.ArgumentParser(
         description="Generate professional Word DOCX report for Energy Ombudsman submission",
         prog="edf-collector --docx-report",
@@ -4757,14 +4765,13 @@ def run_cli_docx_report(args: list[str]) -> None:
         else:
             sys.stderr.write(f"ERROR: {msg}\n")
             sys.exit(1)
-
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
         sys.exit(1)
 
 
 def main() -> None:
-    """Entry point for the EDF Evidence Collector GUI."""
+    """Entry point for the EDF Evidence Collector CLI."""
     import sys
 
     if len(sys.argv) > 1:
