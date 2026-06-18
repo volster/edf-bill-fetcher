@@ -1189,7 +1189,11 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
     n = len(amounts)
 
     if n < 3:
-        elements.append(Paragraph("Insufficient data for forecasting (need at least 3 periods).", STYLES["BodyText"]))
+        elements.append(
+            Paragraph(
+                "Insufficient data for forecasting (need at least 3 periods).", STYLES["BodyText"]
+            )
+        )
         elements.append(PageBreak())
         return elements
 
@@ -1197,6 +1201,7 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
     has_scipy = False
     try:
         from scipy import stats as sp_stats
+
         has_scipy = True
     except ImportError:
         has_scipy = False
@@ -1205,6 +1210,7 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
     has_statsmodels = False
     try:
         from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
         has_statsmodels = True
     except ImportError:
         has_statsmodels = False
@@ -1250,7 +1256,7 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
 
     forecast_data = [forecast_header]
     for i in range(6):
-        row = [f"+{i+1} Period", fmt_money(linear_forecast[i]), fmt_money(ema_forecast[i])]
+        row = [f"+{i + 1} Period", fmt_money(linear_forecast[i]), fmt_money(ema_forecast[i])]
         if hw_forecast:
             row.append(fmt_money(hw_forecast[i]))
         forecast_data.append(row)
@@ -1262,13 +1268,17 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
 
     t = Table(forecast_data, colWidths=col_widths)
     t.setStyle(make_table_style(num_rows=len(forecast_data)))
-    elements.append(Paragraph("<b>Next 6 Periods — Multi-Method Projection</b>", STYLES["SubSectionHeader"]))
+    elements.append(
+        Paragraph("<b>Next 6 Periods — Multi-Method Projection</b>", STYLES["SubSectionHeader"])
+    )
     elements.append(Spacer(1, 0.2 * cm))
     elements.append(t)
     elements.append(Spacer(1, 0.3 * cm))
 
     if hw_forecast:
-        model_info.append("<b>Holt-Winters:</b> additive trend, no seasonality (fitted via statsmodels)")
+        model_info.append(
+            "<b>Holt-Winters:</b> additive trend, no seasonality (fitted via statsmodels)"
+        )
     else:
         model_info.append("<b>Holt-Winters:</b> not available (install statsmodels)")
 
@@ -1570,7 +1580,9 @@ def create_appendix_methodology(config: dict) -> list:
     return elements
 
 
-def create_appendix_full_evidence(df: pd.DataFrame, filtered: list | None = None, config: dict | None = None) -> list:
+def create_appendix_full_evidence(
+    df: pd.DataFrame, filtered: list | None = None, config: dict | None = None
+) -> list:
     """Create Appendix C: Full Evidence Table with all records."""
     elements = []
 
@@ -1616,81 +1628,15 @@ def create_appendix_full_evidence(df: pd.DataFrame, filtered: list | None = None
     evidence_data = [evidence_header]
 
     for _, row in df_sorted.iterrows():
-        evidence_data.append([
-            fmt_date(row.get("Date", "")),
-            str(row.get("Source", ""))[:30],
-            str(row.get("Entry Type", "")),
-            fmt_money(row.get("Amount (£)", 0)),
-            fmt_money(row.get("Period Charge (£)", 0)) if row.get("Period Charge (£)") not in ("", "N/A", None) else "N/A",
-            str(row.get("Period From", "")),
-            str(row.get("Period To", "")),
-            str(row.get("Invoice #", ""))[:15],
-            str(row.get("Reading", ""))[:15],
-            str(row.get("Units (kWh)", ""))[:10],
-            str(row.get("Standing Chg (p/day)", ""))[:10],
-            str(row.get("Attachment Name", ""))[:20],
-            str(row.get("Details", ""))[:50],
-        ])
-
-    # Calculate column widths
-    col_widths = [
-        2.0 * cm,   # Date
-        2.5 * cm,   # Source
-        2.0 * cm,   # Entry Type
-        2.0 * cm,   # Amount
-        2.0 * cm,   # Period Charge
-        2.0 * cm,   # Period From
-        2.0 * cm,   # Period To
-        1.5 * cm,   # Invoice
-        1.5 * cm,   # Reading
-        1.5 * cm,   # Units
-        1.5 * cm,   # Standing
-        2.0 * cm,   # Attachment
-        CONTENT_WIDTH - sum([2.0, 2.5, 2.0, 2.0, 2.0, 2.0, 2.0, 1.5, 1.5, 1.5, 1.5, 2.0]) * cm,
-    ]
-
-    t = Table(evidence_data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(
-        TableStyle([
-            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-            ("FONTSIZE", (0, 0), (-1, -1), 6),
-            ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("BACKGROUND", (0, 0), (-1, 0), Colors.NAVY),
-            ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
-            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B4C6E7")),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ("LEFTPADDING", (0, 0), (-1, -1), 2),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-            *[
-                ("BACKGROUND", (0, i), (-1, i), Colors.VERY_LIGHT_BLUE)
-                for i in range(1, len(evidence_data), 2)
-            ],
-        ])
-    )
-    elements.append(t)
-    elements.append(Spacer(1, 0.3 * cm))
-
-    # Add filtered records if provided
-    if filtered:
-        elements.append(PageBreak())
-        min_amt = fmt_money(config.get('min_amount', 500)) if config else "£500"
-        elements.append(Paragraph(
-            f"Appendix C (cont.): Filtered Records (Below {min_amt} Threshold)",
-            STYLES["SectionHeader"]
-        ))
-        elements.append(Spacer(1, 0.3 * cm))
-
-        filt_data = [evidence_header]
-        for row in filtered:
-            filt_data.append([
+        evidence_data.append(
+            [
                 fmt_date(row.get("Date", "")),
                 str(row.get("Source", ""))[:30],
                 str(row.get("Entry Type", "")),
                 fmt_money(row.get("Amount (£)", 0)),
-                fmt_money(row.get("Period Charge (£)", 0)) if row.get("Period Charge (£)") not in ("", "N/A", None) else "N/A",
+                fmt_money(row.get("Period Charge (£)", 0))
+                if row.get("Period Charge (£)") not in ("", "N/A", None)
+                else "N/A",
                 str(row.get("Period From", "")),
                 str(row.get("Period To", "")),
                 str(row.get("Invoice #", ""))[:15],
@@ -1699,29 +1645,109 @@ def create_appendix_full_evidence(df: pd.DataFrame, filtered: list | None = None
                 str(row.get("Standing Chg (p/day)", ""))[:10],
                 str(row.get("Attachment Name", ""))[:20],
                 str(row.get("Details", ""))[:50],
-            ])
+            ]
+        )
+
+    # Calculate column widths
+    col_widths = [
+        2.0 * cm,  # Date
+        2.5 * cm,  # Source
+        2.0 * cm,  # Entry Type
+        2.0 * cm,  # Amount
+        2.0 * cm,  # Period Charge
+        2.0 * cm,  # Period From
+        2.0 * cm,  # Period To
+        1.5 * cm,  # Invoice
+        1.5 * cm,  # Reading
+        1.5 * cm,  # Units
+        1.5 * cm,  # Standing
+        2.0 * cm,  # Attachment
+        CONTENT_WIDTH - sum([2.0, 2.5, 2.0, 2.0, 2.0, 2.0, 2.0, 1.5, 1.5, 1.5, 1.5, 2.0]) * cm,
+    ]
+
+    t = Table(evidence_data, colWidths=col_widths, repeatRows=1)
+    t.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 6),
+                ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("BACKGROUND", (0, 0), (-1, 0), Colors.NAVY),
+                ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B4C6E7")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                *[
+                    ("BACKGROUND", (0, i), (-1, i), Colors.VERY_LIGHT_BLUE)
+                    for i in range(1, len(evidence_data), 2)
+                ],
+            ]
+        )
+    )
+    elements.append(t)
+    elements.append(Spacer(1, 0.3 * cm))
+
+    # Add filtered records if provided
+    if filtered:
+        elements.append(PageBreak())
+        min_amt = fmt_money(config.get("min_amount", 500)) if config else "£500"
+        elements.append(
+            Paragraph(
+                f"Appendix C (cont.): Filtered Records (Below {min_amt} Threshold)",
+                STYLES["SectionHeader"],
+            )
+        )
+        elements.append(Spacer(1, 0.3 * cm))
+
+        filt_data = [evidence_header]
+        for row in filtered:
+            filt_data.append(
+                [
+                    fmt_date(row.get("Date", "")),
+                    str(row.get("Source", ""))[:30],
+                    str(row.get("Entry Type", "")),
+                    fmt_money(row.get("Amount (£)", 0)),
+                    fmt_money(row.get("Period Charge (£)", 0))
+                    if row.get("Period Charge (£)") not in ("", "N/A", None)
+                    else "N/A",
+                    str(row.get("Period From", "")),
+                    str(row.get("Period To", "")),
+                    str(row.get("Invoice #", ""))[:15],
+                    str(row.get("Reading", ""))[:15],
+                    str(row.get("Units (kWh)", ""))[:10],
+                    str(row.get("Standing Chg (p/day)", ""))[:10],
+                    str(row.get("Attachment Name", ""))[:20],
+                    str(row.get("Details", ""))[:50],
+                ]
+            )
 
         if len(filt_data) > 1:
             t2 = Table(filt_data, colWidths=col_widths, repeatRows=1)
             t2.setStyle(
-                TableStyle([
-                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 6),
-                    ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("BACKGROUND", (0, 0), (-1, 0), Colors.AMBER),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B4C6E7")),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("TOPPADDING", (0, 0), (-1, -1), 2),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 2),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-                    *[
-                        ("BACKGROUND", (0, i), (-1, i), Colors.VERY_LIGHT_BLUE)
-                        for i in range(1, len(filt_data), 2)
-                    ],
-                ])
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 6),
+                        ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("BACKGROUND", (0, 0), (-1, 0), Colors.AMBER),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
+                        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B4C6E7")),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("TOPPADDING", (0, 0), (-1, -1), 2),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                        *[
+                            ("BACKGROUND", (0, i), (-1, i), Colors.VERY_LIGHT_BLUE)
+                            for i in range(1, len(filt_data), 2)
+                        ],
+                    ]
+                )
             )
             elements.append(t2)
 

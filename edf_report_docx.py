@@ -873,29 +873,43 @@ def create_appendix_full_evidence(doc, styles, df, filtered=None):
 
     # Table header
     evidence_header = [
-        "Date", "Source", "Entry Type", "Amount (£)", "Period Charge (£)",
-        "Period From", "Period To", "Invoice #", "Reading", "Units (kWh)",
-        "Standing Chg (p/day)", "Attachment", "Details"
+        "Date",
+        "Source",
+        "Entry Type",
+        "Amount (£)",
+        "Period Charge (£)",
+        "Period From",
+        "Period To",
+        "Invoice #",
+        "Reading",
+        "Units (kWh)",
+        "Standing Chg (p/day)",
+        "Attachment",
+        "Details",
     ]
 
     evidence_data = [evidence_header]
 
     for _, row in df_sorted.iterrows():
-        evidence_data.append([
-            fmt_date(row.get("Date", "")),
-            str(row.get("Source", ""))[:30],
-            str(row.get("Entry Type", "")),
-            fmt_money(row.get("Amount (£)", 0)),
-            fmt_money(row.get("Period Charge (£)", 0)) if row.get("Period Charge (£)") not in ("", "N/A", None) else "N/A",
-            fmt_date(row.get("Period From", "")),
-            fmt_date(row.get("Period To", "")),
-            str(row.get("Invoice #", ""))[:15],
-            str(row.get("Reading", ""))[:15],
-            str(row.get("Units (kWh)", ""))[:10],
-            str(row.get("Standing Chg (p/day)", ""))[:10],
-            str(row.get("Attachment Name", ""))[:20],
-            str(row.get("Details", ""))[:50],
-        ])
+        evidence_data.append(
+            [
+                fmt_date(row.get("Date", "")),
+                str(row.get("Source", ""))[:30],
+                str(row.get("Entry Type", "")),
+                fmt_money(row.get("Amount (£)", 0)),
+                fmt_money(row.get("Period Charge (£)", 0))
+                if row.get("Period Charge (£)") not in ("", "N/A", None)
+                else "N/A",
+                fmt_date(row.get("Period From", "")),
+                fmt_date(row.get("Period To", "")),
+                str(row.get("Invoice #", ""))[:15],
+                str(row.get("Reading", ""))[:15],
+                str(row.get("Units (kWh)", ""))[:10],
+                str(row.get("Standing Chg (p/day)", ""))[:10],
+                str(row.get("Attachment Name", ""))[:20],
+                str(row.get("Details", ""))[:50],
+            ]
+        )
 
     table = doc.add_table(rows=len(evidence_data), cols=len(evidence_header))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -909,7 +923,11 @@ def create_appendix_full_evidence(doc, styles, df, filtered=None):
                 run.font.bold = True
                 run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
         table.rows[0].cells[j]._element.get_or_add_tcPr().append(
-            parse_xml('<w:shd {} w:fill="10367A"/>'.format('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'))
+            parse_xml(
+                '<w:shd {} w:fill="10367A"/>'.format(
+                    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+                )
+            )
         )
 
     # Fill data rows
@@ -918,37 +936,56 @@ def create_appendix_full_evidence(doc, styles, df, filtered=None):
             table.rows[i].cells[j].text = str(cell_text)
             if i % 2 == 0:
                 table.rows[i].cells[j]._element.get_or_add_tcPr().append(
-                    parse_xml('<w:shd {} w:fill="EBF3FA"/>'.format('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'))
+                    parse_xml(
+                        '<w:shd {} w:fill="EBF3FA"/>'.format(
+                            'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+                        )
+                    )
                 )
 
     doc.add_page_break()
 
     # Add filtered records if provided
     if filtered:
-        doc.add_paragraph(
-            "APPENDIX C (CONT.): FILTERED RECORDS",
-            style=styles["SectionHeader"]
-        )
+        doc.add_paragraph("APPENDIX C (CONT.): FILTERED RECORDS", style=styles["SectionHeader"])
 
-        filt_data = [["Date", "Source", "Entry Type", "Amount (£)", "Period Charge (£)",
-                      "Period From", "Period To", "Invoice #", "Reading", "Units (kWh)",
-                      "Standing Chg (p/day)", "Attachment", "Details"]]
+        filt_data = [
+            [
+                "Date",
+                "Source",
+                "Entry Type",
+                "Amount (£)",
+                "Period Charge (£)",
+                "Period From",
+                "Period To",
+                "Invoice #",
+                "Reading",
+                "Units (kWh)",
+                "Standing Chg (p/day)",
+                "Attachment",
+                "Details",
+            ]
+        ]
         for row in filtered:
-            filt_data.append([
-                fmt_date(row.get("Date", "")),
-                str(row.get("Source", ""))[:30],
-                str(row.get("Entry Type", "")),
-                fmt_money(row.get("Amount (£)", 0)),
-                fmt_money(row.get("Period Charge (£)", 0)) if row.get("Period Charge (£)") not in ("", "N/A", None) else "N/A",
-                fmt_date(row.get("Period From", "")),
-                fmt_date(row.get("Period To", "")),
-                str(row.get("Invoice #", ""))[:15],
-                str(row.get("Reading", ""))[:15],
-                str(row.get("Units (kWh)", ""))[:10],
-                str(row.get("Standing Chg (p/day)", ""))[:10],
-                str(row.get("Attachment Name", ""))[:20],
-                str(row.get("Details", ""))[:50],
-            ])
+            filt_data.append(
+                [
+                    fmt_date(row.get("Date", "")),
+                    str(row.get("Source", ""))[:30],
+                    str(row.get("Entry Type", "")),
+                    fmt_money(row.get("Amount (£)", 0)),
+                    fmt_money(row.get("Period Charge (£)", 0))
+                    if row.get("Period Charge (£)") not in ("", "N/A", None)
+                    else "N/A",
+                    fmt_date(row.get("Period From", "")),
+                    fmt_date(row.get("Period To", "")),
+                    str(row.get("Invoice #", ""))[:15],
+                    str(row.get("Reading", ""))[:15],
+                    str(row.get("Units (kWh)", ""))[:10],
+                    str(row.get("Standing Chg (p/day)", ""))[:10],
+                    str(row.get("Attachment Name", ""))[:20],
+                    str(row.get("Details", ""))[:50],
+                ]
+            )
 
         if len(filt_data) > 1:
             table2 = doc.add_table(rows=len(filt_data), cols=len(filt_data[0]))
@@ -962,7 +999,11 @@ def create_appendix_full_evidence(doc, styles, df, filtered=None):
                         run.font.bold = True
                         run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
                 table2.rows[0].cells[j]._element.get_or_add_tcPr().append(
-                    parse_xml('<w:shd {} w:fill="FFA500"/>'.format('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'))
+                    parse_xml(
+                        '<w:shd {} w:fill="FFA500"/>'.format(
+                            'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+                        )
+                    )
                 )
 
             for i, row_data in enumerate(filt_data[1:], 1):
@@ -970,7 +1011,11 @@ def create_appendix_full_evidence(doc, styles, df, filtered=None):
                     table2.rows[i].cells[j].text = str(cell_text)
                     if i % 2 == 0:
                         table2.rows[i].cells[j]._element.get_or_add_tcPr().append(
-                            parse_xml('<w:shd {} w:fill="EBF3FA"/>'.format('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'))
+                            parse_xml(
+                                '<w:shd {} w:fill="EBF3FA"/>'.format(
+                                    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+                                )
+                            )
                         )
 
         doc.add_page_break()
