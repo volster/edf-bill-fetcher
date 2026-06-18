@@ -57,6 +57,16 @@ try:
 except ImportError:
     HAS_PDF_REPORT = False
 
+# Optional import for DOCX report generation
+try:
+    from importlib.util import find_spec
+
+    from edf_report_docx import generate_docx_from_gui
+
+    HAS_DOCX_REPORT = find_spec("edf_report_docx") is not None
+except ImportError:
+    HAS_DOCX_REPORT = False
+
 
 # ---------------------------------------------------------------------------
 # Branding
@@ -67,6 +77,7 @@ EDF_OFFWHITE = "#F5F5F5"
 EST_YELLOW = "FFFF99"
 JUMP_RED = "FF9999"
 DUP_GREY = "E0E0E0"
+MEDIUM_GREY = "#666666"
 
 # ---------------------------------------------------------------------------
 # Extraction patterns
@@ -725,7 +736,19 @@ class EvidenceEngine:
                 self.seen_pdf_hashes.add(pdf_hash)
 
             with pdfplumber.open(io.BytesIO(raw)) as pdf:
-                pdf_text = " ".join([p.extract_text() or "" for p in pdf.pages])
+                # Handle empty or corrupt PDFs gracefully
+                if not pdf.pages:
+                    self.log_error(f"PDF: {detail_label}", "PDF has no pages")
+                    return
+                pdf_text_parts = []
+                for p in pdf.pages:
+                    try:
+                        page_text = p.extract_text()
+                        if page_text:
+                            pdf_text_parts.append(page_text)
+                    except Exception as page_err:
+                        self.log_error(f"PDF page {detail_label}", f"Page extraction failed: {page_err}")
+                pdf_text = " ".join(pdf_text_parts)
             del raw
 
             # Use original filename as attachment_name if not already set
@@ -3336,6 +3359,197 @@ def write_tariff_analysis_sheet(ws, dfc):
 # ---------------------------------------------------------------------------
 
 
+class ReportOptionsDialog:
+    """Modern report options dialog with format selection and section checkboxes."""
+
+    SECTIONS = [
+        ("cover", "Cover Page", True),
+        ("toc", "Table of Contents", True),
+        ("exec_summary", "Executive Summary", True),
+        ("key_findings", "Key Findings", True),
+        ("evidence_index", "Evidence Index", True),
+        ("detailed_findings", "Detailed Findings", True),
+        ("timeline", "Timeline", True),
+        ("ofgem", "OFGEM Price Cap Comparison", True),
+        ("statistical", "Statistical Analysis", True),
+        ("payment", "Payment Analysis", True),
+        ("forecast", "Forecast", True),
+        ("data_quality", "Data Quality", True),
+        ("tariff", "Tariff Impact Analysis", True),
+        ("appendix_methodology", "Appendix: Methodology", True),
+        ("appendix_glossary", "Appendix: Glossary", True),
+    ]
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.result = None
+        self.dialog = None
+
+    def show(self):
+        """Show the dialog and return the selected options."""
+        self.dialog = tk.Toplevel(self.parent)
+        self.dialog.title("Report Options")
+        self.dialog.geometry("500x680")
+        self.dialog.resizable(False, False)
+        self.dialog.transient(self.parent)
+        self.dialog.grab_set()
+
+        # Center on parent
+        self.dialog.update_idletasks()
+        x = self.parent.winfo_rootx() + (self.parent.winfo_width() // 2) - 250
+        y = self.parent.winfo_rooty() + (self.parent.winfo_height() // 2) - 340
+        self.dialog.geometry(f"+{x}+{y}")
+
+        self._build_ui()
+        self.dialog.wait_window()
+        return self.result
+
+    def _build_ui(self):
+        """Build the dialog UI."""
+        main = ttk.Frame(self.dialog, padding=20)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        # Header
+        hdr = ttk.Frame(main)
+        hdr.pack(fill=tk.X, pady=(0, 20))
+
+        title_lbl = ttk.Label(
+            hdr,
+            text="Generate Ombudsman Report",
+            font=("Calibri", 18, "bold"),
+            foreground=EDF_NAVY,
+        )
+        title_lbl.pack(anchor=tk.W)
+
+        subtitle = ttk.Label(
+            hdr,
+            text="Choose format and select sections to include",
+            font=("Calibri", 10),
+            foreground=MEDIUM_GREY,
+        )
+        subtitle.pack(anchor=tk.W, pady=(4, 0))
+
+        ttk.Separator(main, orient="horizontal").pack(fill=tk.X, pady=(0, 16))
+
+        # Format selection
+        fmt_frame = ttk.LabelFrame(main, text=" Output Format ", padding=12)
+        fmt_frame.pack(fill=tk.X, pady=(0, 16))
+
+        self.format_var = tk.StringVar(value="both")
+        formats = [
+            ("both", "Both (PDF + Word)", "Generate both PDF and DOCX reports"),
+            ("pdf", "PDF Only", "Professional PDF report (reportlab)"),
+            ("docx", "Word Document Only", "Editable Word document (python-docx)"),
+        ]
+
+        for val, label, desc in formats:
+            r = ttk.Frame(fmt_frame)
+            r.pack(fill=tk.X, pady=3)
+            rb = ttk.Radiobutton(r, variable=self.format_var, value=val)
+            rb.pack(side=tk.LEFT)
+            lbl_frame = ttk.Frame(r)
+            lbl_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+            ttk.Label(lbl_frame, text=label, font=("Calibri", 10, "bold")).pack(anchor=tk.W)
+            ttk.Label(lbl_frame, text=desc, font=("Calibri", 8), foreground=MEDIUM_GREY).pack(anchor=tk.W)
+
+        ttk.Separator(main, orient="horizontal").pack(fill=tk.X, pady=(8, 16))
+
+        # Section checkboxes
+        sec_frame = ttk.LabelFrame(main, text=" Report Sections ", padding=12)
+        sec_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 16))
+
+        # Select All / None buttons
+        btn_frame = ttk.Frame(sec_frame)
+        btn_frame.pack(fill=tk.X, pady=(0, 8))
+
+        ttk.Button(btn_frame, text="Select All", command=self._select_all, width=12).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="Select None", command=self._select_none, width=12).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(btn_frame, text="Defaults", command=self._select_defaults, width=12).pack(side=tk.LEFT, padx=(8, 0))
+
+        # Scrollable checkbox area
+        canvas = tk.Canvas(sec_frame, highlightthickness=0, bg=EDF_OFFWHITE)
+        scrollbar = ttk.Scrollbar(sec_frame, orient="vertical", command=canvas.yview)
+        scrollable = ttk.Frame(canvas, padding=4)
+
+        scrollable.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable, anchor="nw", width=440)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Bind mousewheel
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        if self.dialog is not None:
+            self.dialog.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        self.section_vars = {}
+        for key, label, default in self.SECTIONS:
+            var = tk.BooleanVar(value=default)
+            self.section_vars[key] = var
+            cb = ttk.Checkbutton(scrollable, text=label, variable=var)
+            cb.pack(anchor=tk.W, pady=1)
+
+        ttk.Separator(main, orient="horizontal").pack(fill=tk.X, pady=(8, 16))
+
+        # Action buttons
+        action_frame = ttk.Frame(main)
+        action_frame.pack(fill=tk.X)
+
+        cancel_btn = ttk.Button(action_frame, text="Cancel", command=self._cancel, width=14)
+        cancel_btn.pack(side=tk.RIGHT)
+
+        generate_btn = tk.Button(
+            action_frame,
+            text="Generate Report",
+            bg=EDF_ORANGE,
+            fg="white",
+            font=("Calibri", 11, "bold"),
+            command=self._generate,
+            relief="flat",
+            width=18,
+        )
+        generate_btn.pack(side=tk.RIGHT, padx=(0, 12))
+
+    def _select_all(self):
+        for var in self.section_vars.values():
+            var.set(True)
+
+    def _select_none(self):
+        for var in self.section_vars.values():
+            var.set(False)
+
+    def _select_defaults(self):
+        for key, var in self.section_vars.items():
+            # Find default from SECTIONS
+            for k, _, default in self.SECTIONS:
+                if k == key:
+                    var.set(default)
+                    break
+
+    def _generate(self):
+        """Collect results and close dialog."""
+        selected_sections = [key for key, var in self.section_vars.items() if var.get()]
+        if not selected_sections:
+            messagebox.showwarning("No Sections", "Please select at least one report section.")
+            return
+
+        self.result = {
+            "format": self.format_var.get(),
+            "sections": selected_sections,
+        }
+        if self.dialog is not None:
+            self.dialog.destroy()
+
+    def _cancel(self):
+        self.result = None
+        if self.dialog is not None:
+            self.dialog.destroy()
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -3530,15 +3744,27 @@ class App:
         self.cancel_btn.pack(side=tk.LEFT, padx=8)
         self.pdf_report_btn = tk.Button(
             btns,
-            text="EXPORT PDF REPORT",
+            text="EXPORT REPORT",
             bg=EDF_NAVY,
             fg="white",
             font=("Calibri", 12, "bold"),
-            command=self.export_pdf_report,
+            command=self.export_report,
             relief="flat",
-            state="disabled" if not HAS_PDF_REPORT else "normal",
+            state="disabled" if not (HAS_PDF_REPORT or HAS_DOCX_REPORT) else "normal",
         )
         self.pdf_report_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(8, 0))
+
+        self.docx_report_btn = tk.Button(
+            btns,
+            text="EXPORT WORD REPORT",
+            bg=EDF_ORANGE,
+            fg="white",
+            font=("Calibri", 12, "bold"),
+            command=self.export_docx_report,
+            relief="flat",
+            state="disabled",
+        )
+        self.docx_report_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(8, 0))
 
     # -- Helpers --
 
@@ -3598,14 +3824,14 @@ class App:
         self.set_status("Cancelled." if self.cancel_event.is_set() else "Ready.")
         gc.collect()
 
-    def export_pdf_report(self):
-        """Generate professional PDF report for Ombudsman submission."""
-        if not HAS_PDF_REPORT:
+    def export_report(self):
+        """Unified report export — opens modern options dialog."""
+        if not HAS_PDF_REPORT and not HAS_DOCX_REPORT:
             self._show(
                 "error",
-                "PDF Report Unavailable",
-                "PDF report generation requires the 'reportlab' package.\n"
-                "Install with: pip install reportlab",
+                "Report Unavailable",
+                "Report generation requires 'reportlab' (PDF) and/or 'python-docx' (Word).\n"
+                "Install with: pip install reportlab python-docx",
             )
             return
 
@@ -3613,7 +3839,14 @@ class App:
             self._show("warning", "No Data", "No records available. Run extraction first.")
             return
 
-        # Ask for output path
+        # Show modern options dialog
+        dialog = ReportOptionsDialog(self.root)
+        options = dialog.show()
+
+        if not options:
+            return  # User cancelled
+
+        # Ask for output path(s)
         base_dir = (
             os.path.dirname(self.pst_path.get().strip())
             if self.pst_path.get().strip()
@@ -3623,45 +3856,94 @@ class App:
             if self.htm_path.get().strip()
             else os.getcwd()
         )
-        default_name = "EDF_Ombudsman_Report.pdf"
-        out_path = filedialog.asksaveasfilename(
-            initialdir=base_dir,
-            initialfile=default_name,
-            defaultextension=".pdf",
-            filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")],
-            title="Save Ombudsman PDF Report As",
-        )
-        if not out_path:
-            return  # User cancelled
 
-        self.set_status("Generating professional PDF report…")
+        output_paths = {}
+        fmt = options["format"]
+
+        if fmt in ("pdf", "both"):
+            if not HAS_PDF_REPORT:
+                self._show("warning", "PDF Unavailable", "PDF generation requires 'reportlab'. Install with: pip install reportlab")
+            else:
+                default_name = "EDF_Ombudsman_Report.pdf"
+                out_path = filedialog.asksaveasfilename(
+                    initialdir=base_dir,
+                    initialfile=default_name,
+                    defaultextension=".pdf",
+                    filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")],
+                    title="Save Ombudsman PDF Report As",
+                )
+                if out_path:
+                    output_paths["pdf"] = out_path
+                elif fmt == "pdf":
+                    return  # User cancelled PDF-only
+
+        if fmt in ("docx", "both"):
+            if not HAS_DOCX_REPORT:
+                self._show("warning", "DOCX Unavailable", "DOCX generation requires 'python-docx'. Install with: pip install python-docx")
+            else:
+                default_name = "EDF_Ombudsman_Report.docx"
+                out_path = filedialog.asksaveasfilename(
+                    initialdir=base_dir,
+                    initialfile=default_name,
+                    defaultextension=".docx",
+                    filetypes=[("Word Documents", "*.docx"), ("All Files", "*.*")],
+                    title="Save Ombudsman Word Report As",
+                )
+                if out_path:
+                    output_paths["docx"] = out_path
+                elif fmt == "docx":
+                    return  # User cancelled DOCX-only
+
+        if not output_paths:
+            return  # User cancelled all
+
+        self.set_status("Generating report…")
         self.pdf_report_btn.config(state="disabled")
+        self.docx_report_btn.config(state="disabled")
         self.run_btn.config(state="disabled")
         self.cancel_btn.config(state="disabled")
 
-        # Run in background thread
+        config = {
+            "min_amount": self.min_amount.get(),
+            "analysis_min": self.analysis_min.get(),
+            "acc_num": self.acc_num.get(),
+            "report_account_ref": self.report_account_ref.get().strip(),
+            "report_sections": options["sections"],
+        }
+
         def _generate():
             try:
-                config = {
-                    "min_amount": self.min_amount.get(),
-                    "analysis_min": self.analysis_min.get(),
-                    "acc_num": self.acc_num.get(),
-                    "report_account_ref": self.report_account_ref.get().strip(),
-                }
-                success, msg = generate_pdf_from_gui(
-                    records=self.engine.records,
-                    output_path=out_path,
-                    config=config,
-                    engine=self.engine,
-                    filtered=self.engine.filtered_records,
-                )
-                if success:
-                    self.root.after(0, lambda: self._show("info", "Success", msg))
-                else:
-                    self.root.after(0, lambda: self._show("error", "PDF Generation Failed", msg))
+                messages = []
+                if "pdf" in output_paths:
+                    success, msg = generate_pdf_from_gui(
+                        records=self.engine.records,
+                        output_path=output_paths["pdf"],
+                        config=config,
+                        engine=self.engine,
+                        filtered=self.engine.filtered_records,
+                    )
+                    messages.append(("PDF", success, msg))
+
+                if "docx" in output_paths:
+                    success, msg = generate_docx_from_gui(
+                        records=self.engine.records,
+                        output_path=output_paths["docx"],
+                        config=config,
+                        engine=self.engine,
+                        filtered=self.engine.filtered_records,
+                    )
+                    messages.append(("DOCX", success, msg))
+
+                # Report results
+                for fmt_label, success, msg in messages:
+                    if success:
+                        self.root.after(0, lambda m=msg: self._show("info", "Success", m))
+                    else:
+                        self.root.after(0, lambda m=msg, f=fmt_label: self._show("error", f"{f} Generation Failed", m))
+
             except Exception as e:
                 self.root.after(
-                    0, lambda err=e: self._show("error", "Error", f"An error occurred:\\n\\n{err}")
+                    0, lambda err=e: self._show("error", "Error", f"An error occurred:\n\n{err}")
                 )
             finally:
                 self.root.after(
@@ -3669,6 +3951,112 @@ class App:
                     lambda: (
                         self.pdf_report_btn.config(
                             state="normal" if HAS_PDF_REPORT else "disabled"
+                        ),
+                        self.docx_report_btn.config(
+                            state="normal" if HAS_DOCX_REPORT else "disabled"
+                        ),
+                        self.run_btn.config(state="normal"),
+                        self.cancel_btn.config(state="disabled"),
+                        self.set_status("Ready."),
+                    ),
+                )
+
+        threading.Thread(target=_generate, daemon=True).start()
+
+    # Keep old methods for backward compatibility (they now call the unified one)
+    def export_pdf_report(self):
+        """Legacy method — PDF only with default sections."""
+        self._export_legacy("pdf")
+
+    def export_docx_report(self):
+        """Legacy method — DOCX only with default sections."""
+        self._export_legacy("docx")
+
+    def _export_legacy(self, fmt: str) -> None:
+        """Legacy single-format export with all sections."""
+        if fmt == "pdf" and not HAS_PDF_REPORT:
+            self._show("error", "PDF Unavailable", "PDF generation requires 'reportlab'.\nInstall with: pip install reportlab")
+            return
+        if fmt == "docx" and not HAS_DOCX_REPORT:
+            self._show("error", "DOCX Unavailable", "DOCX generation requires 'python-docx'.\nInstall with: pip install python-docx")
+            return
+
+        if not hasattr(self, "engine") or not self.engine or not self.engine.records:
+            self._show("warning", "No Data", "No records available. Run extraction first.")
+            return
+
+        base_dir = (
+            os.path.dirname(self.pst_path.get().strip())
+            if self.pst_path.get().strip()
+            else self.pdf_dir.get().strip()
+            if self.pdf_dir.get().strip()
+            else os.path.dirname(self.htm_path.get().strip())
+            if self.htm_path.get().strip()
+            else os.getcwd()
+        )
+
+        ext = ".pdf" if fmt == "pdf" else ".docx"
+        default_name = f"EDF_Ombudsman_Report{ext}"
+        filetypes = [("PDF Files", "*.pdf")] if fmt == "pdf" else [("Word Documents", "*.docx")]
+        title = f"Save Ombudsman {'PDF' if fmt == 'pdf' else 'Word'} Report As"
+
+        out_path = filedialog.asksaveasfilename(
+            initialdir=base_dir,
+            initialfile=default_name,
+            defaultextension=ext,
+            filetypes=filetypes + [("All Files", "*.*")],
+            title=title,
+        )
+        if not out_path:
+            return
+
+        self.set_status(f"Generating professional {'PDF' if fmt == 'pdf' else 'Word'} report…")
+        getattr(self, f"{fmt}_report_btn").config(state="disabled")
+        self.run_btn.config(state="disabled")
+        self.cancel_btn.config(state="disabled")
+
+        # Use all sections for legacy
+        config = {
+            "min_amount": self.min_amount.get(),
+            "analysis_min": self.analysis_min.get(),
+            "acc_num": self.acc_num.get(),
+            "report_account_ref": self.report_account_ref.get().strip(),
+            "report_sections": [s[0] for s in ReportOptionsDialog.SECTIONS],
+        }
+
+        def _generate():
+            try:
+                if fmt == "pdf":
+                    success, msg = generate_pdf_from_gui(
+                        records=self.engine.records,
+                        output_path=out_path,
+                        config=config,
+                        engine=self.engine,
+                        filtered=self.engine.filtered_records,
+                    )
+                else:
+                    success, msg = generate_docx_from_gui(
+                        records=self.engine.records,
+                        output_path=out_path,
+                        config=config,
+                        engine=self.engine,
+                        filtered=self.engine.filtered_records,
+                    )
+
+                if success:
+                    self.root.after(0, lambda: self._show("info", "Success", msg))
+                else:
+                    self.root.after(0, lambda: self._show("error", f"{fmt.upper()} Generation Failed", msg))
+            except Exception as e:
+                self.root.after(
+                    0, lambda err=e: self._show("error", "Error", f"An error occurred:\n\n{err}")
+                )
+            finally:
+                self.root.after(
+                    0,
+                    lambda: (
+                        getattr(self, f"{fmt}_report_btn").config(
+                            state="normal" if (HAS_PDF_REPORT if fmt == "pdf" else HAS_DOCX_REPORT) else "disabled"
                         ),
                         self.run_btn.config(state="normal"),
                         self.cancel_btn.config(state="disabled"),
@@ -4028,6 +4416,68 @@ def run_cli_pdf_report(args: list[str]) -> None:
         sys.exit(1)
 
 
+def run_cli_docx_report(args: list[str]) -> None:
+    """Run DOCX report generation from command line."""
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Generate professional Word DOCX report for Energy Ombudsman submission",
+        prog="edf-collector --docx-report",
+    )
+    parser.add_argument(
+        "--records",
+        "-i",
+        required=True,
+        help="Path to extracted records JSON file (exported from GUI or script)",
+    )
+    parser.add_argument("--output", "-o", required=True, help="Output DOCX file path")
+    parser.add_argument("--config", "-c", help="Path to config JSON file (optional)")
+    parser.add_argument(
+        "--engine-data",
+        "-e",
+        help="Path to engine data pickle file (optional, for filtered records)",
+    )
+    parsed = parser.parse_args(args)
+
+    try:
+        with open(parsed.records, encoding="utf-8") as f:
+            records = json.load(f)
+
+        config = {}
+        if parsed.config:
+            with open(parsed.config, encoding="utf-8") as f:
+                config = json.load(f)
+
+        engine = None
+        filtered = None
+        if parsed.engine_data:
+            import pickle
+
+            with open(parsed.engine_data, "rb") as f:
+                engine = pickle.load(f)
+                filtered = getattr(engine, "filtered_records", None)
+
+        success, msg = generate_docx_from_gui(
+            records=records,
+            output_path=parsed.output,
+            config=config,
+            engine=engine,
+            filtered=filtered,
+        )
+        if success:
+            sys.stdout.write(msg + "\n")
+            sys.exit(0)
+        else:
+            sys.stderr.write(f"ERROR: {msg}\n")
+            sys.exit(1)
+
+    except Exception as e:
+        sys.stderr.write(f"ERROR: {e}\n")
+        sys.exit(1)
+
+
 def main() -> None:
     """Entry point for the EDF Evidence Collector GUI."""
     import sys
@@ -4035,6 +4485,9 @@ def main() -> None:
     if len(sys.argv) > 1:
         if sys.argv[1] in ("--pdf-report", "--report", "-r"):
             run_cli_pdf_report(sys.argv[2:])
+            return
+        elif sys.argv[1] in ("--docx-report", "--word-report", "-w"):
+            run_cli_docx_report(sys.argv[2:])
             return
         elif sys.argv[1] in ("--extract", "-e"):
             run_cli_extract(sys.argv[2:])
