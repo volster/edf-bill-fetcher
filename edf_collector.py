@@ -1050,7 +1050,9 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
         - flags_list: list of (type, date, amount, detail, severity) tuples
         - flag_counts_dict: dict with HIGH, MEDIUM, INFO counts
     """
-    flags = []
+    from typing import Any
+
+    flags: list[tuple[str, Any, Any, str, str]] = []
     n = len(dfc)
     if n < 2:
         return flags, {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
@@ -3567,8 +3569,9 @@ class ReportOptionsDialog:
         ok_btn.pack(side=tk.RIGHT, padx=(0, 12))
 
         # Bind Enter key to OK, Escape to Cancel
-        self.dialog.bind("<Return>", lambda e: self._generate())
-        self.dialog.bind("<Escape>", lambda e: self._cancel())
+        if self.dialog:
+            self.dialog.bind("<Return>", lambda e: self._generate())
+            self.dialog.bind("<Escape>", lambda e: self._cancel())
 
     def _select_all(self):
         for var in self.section_vars.values():
@@ -4079,7 +4082,10 @@ class App:
 
             # Create a minimal engine-like object for metadata
             class MockEngine:
-                pass
+                records: list
+                filtered_records: list
+                pdf_count: int
+                email_count: int
 
             engine = MockEngine()
             engine.records = records
