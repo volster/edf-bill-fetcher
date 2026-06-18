@@ -1,6 +1,6 @@
 # EDF Bill Fetcher - Core dependencies
 # Generated from pyproject.toml - keep in sync
-libpff-python>=20221211,<3
+libpff-python>=20211114
 pandas>=2.0,<3
 pdfplumber>=0.10,<1
 beautifulsoup4>=4.12,<5

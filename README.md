@@ -62,14 +62,38 @@ The report is designed for direct submission to the **Energy Ombudsman**.
 ```bash
 git clone https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
-pip install -e ".[dev]"
+# Core dependencies only
+pip install -e .
+# With PST/OST support (Windows: requires Visual C++ Build Tools)
+pip install -e ".[pst]"
+# With PDF report generation
+pip install -e ".[pdf]"
+# Full development setup (test, lint, build, pdf, pst)
+pip install -e ".[dev,pst,pdf]"
 ```
 
 ### Build Executable
 
 ```bash
-pip install -e ".[build]"
-pyinstaller --onefile --windowed --name EDF_Evidence_Collector edf_collector.py
+pip install -e ".[build,pdf,pst]"
+pyinstaller --onefile --windowed --name EDF_Evidence_Collector \
+  --hidden-import=reportlab \
+  --hidden-import=reportlab.platypus \
+  --hidden-import=reportlab.lib \
+  --hidden-import=reportlab.lib.colors \
+  --hidden-import=reportlab.lib.styles \
+  --hidden-import=reportlab.lib.units \
+  --hidden-import=reportlab.lib.pagesizes \
+  --hidden-import=reportlab.lib.enums \
+  --hidden-import=reportlab.pdfbase \
+  --hidden-import=reportlab.pdfbase.pdfmetrics \
+  --hidden-import=reportlab.pdfbase.ttfonts \
+  --hidden-import=PIL \
+  --hidden-import=PIL.Image \
+  --hidden-import=statsmodels \
+  --hidden-import=statsmodels.tsa.holtwinters \
+  --hidden-import=pypff \
+  edf_collector.py
 ```
 
 The executable will be in `dist/`.
