@@ -311,7 +311,10 @@ def make_table_style(
     num_rows: int = 0,
 ) -> TableStyle:
     """Create a consistent table style. Pass num_rows to enable correct alternating row colors."""
-    style_commands = [
+    style_commands: list[
+        tuple[str, tuple[int, int], tuple[int, int], Any]
+        | tuple[str, tuple[int, int], tuple[int, int], float, Any]
+    ] = [
         # Header
         ("BACKGROUND", (0, 0), (-1, 0), header_color),
         ("TEXTCOLOR", (0, 0), (-1, 0), header_text_color),
