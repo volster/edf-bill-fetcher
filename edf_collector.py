@@ -1613,19 +1613,21 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
 
     # =====================================================================
     # ANALYSIS SUITE
-    # Uses bills above analysis_min threshold only.
+    # Uses bills above analysis_min threshold only (payments/credits always included).
     # =====================================================================
 
     df_an = df.copy()
     df_an["_dt"] = df_an["Date"].apply(parse_to_sort_date)
     df_an = df_an.sort_values("_dt").reset_index(drop=True)
     analysis_min = float(config.get("analysis_min", 500.0))
-    balance_types = ("New Bill", "Ongoing Balance", "Payment")
-    dfc = (
-        df_an[(df_an["Amount (£)"] >= analysis_min) & (df_an["Entry Type"].isin(balance_types))]
-        .copy()
-        .reset_index(drop=True)
-    )
+
+    # For balance-affecting entries: include all Payments/Credits, but filter
+    # New Bill/Ongoing Balance by analysis_min threshold
+    payment_credit_mask = df_an["Entry Type"].isin(("Payment", "Credit"))
+    bill_mask = df_an["Entry Type"].isin(("New Bill", "Ongoing Balance"))
+    amount_mask = df_an["Amount (£)"] >= analysis_min
+
+    dfc = df_an[(payment_credit_mask) | (bill_mask & amount_mask)].copy().reset_index(drop=True)
     dfc["year"] = dfc["_dt"].dt.year
     dfc["month"] = dfc["_dt"].dt.month
 
