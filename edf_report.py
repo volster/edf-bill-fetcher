@@ -308,34 +308,41 @@ def make_table_style(
     header_text_color: colors.Color = Colors.WHITE,
     grid_color: colors.Color = colors.HexColor("#B4C6E7"),
     font_size: int = 8,
+    num_rows: int = 0,
 ) -> TableStyle:
-    """Create a consistent table style."""
-    return TableStyle(
-        [
-            # Header
-            ("BACKGROUND", (0, 0), (-1, 0), header_color),
-            ("TEXTCOLOR", (0, 0), (-1, 0), header_text_color),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, 0), font_size),
-            ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            # Body
-            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-            ("FONTSIZE", (0, 1), (-1, -1), font_size),
-            ("TEXTCOLOR", (0, 1), (-1, -1), Colors.DARK_GREY),
-            ("ALIGN", (0, 1), (-1, -1), "LEFT"),
-            # Alternating rows
-            *[("BACKGROUND", (0, i), (-1, i), alt_row_color) for i in range(1, 100, 2)],
-            # Grid
-            ("GRID", (0, 0), (-1, -1), 0.5, grid_color),
-            ("LINEBELOW", (0, 0), (-1, 0), 1.5, header_color),
-            # Padding
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ]
-    )
+    """Create a consistent table style. Pass num_rows to enable correct alternating row colors."""
+    style_commands = [
+        # Header
+        ("BACKGROUND", (0, 0), (-1, 0), header_color),
+        ("TEXTCOLOR", (0, 0), (-1, 0), header_text_color),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), font_size),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        # Body
+        ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 1), (-1, -1), font_size),
+        ("TEXTCOLOR", (0, 1), (-1, -1), Colors.DARK_GREY),
+        ("ALIGN", (0, 1), (-1, -1), "LEFT"),
+    ]
+    
+    # Alternating rows - only for existing rows
+    if num_rows > 1:
+        for i in range(1, num_rows, 2):
+            style_commands.append(("BACKGROUND", (0, i), (-1, i), alt_row_color))
+    
+    style_commands.extend([
+        # Grid
+        ("GRID", (0, 0), (-1, -1), 0.5, grid_color),
+        ("LINEBELOW", (0, 0), (-1, 0), 1.5, header_color),
+        # Padding
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+    ])
+    
+    return TableStyle(style_commands)
 
 
 # =============================================================================
@@ -579,7 +586,7 @@ def create_executive_summary(
         ["Closing Balance (Latest Record)", "—"],  # Would need last record
     ]
     fin_table = Table(fin_data, colWidths=[8 * cm, 5 * cm])
-    fin_table.setStyle(make_table_style())
+    fin_table.setStyle(make_table_style(num_rows=6))
     elements.append(fin_table)
     elements.append(Spacer(1, 0.3 * cm))
 
@@ -668,7 +675,7 @@ def create_key_findings_table(flags: list) -> list:
 
     # Color-code severity cells
     t = Table(summary_data, colWidths=[3 * cm, 2 * cm, CONTENT_WIDTH - 5 * cm])
-    style = make_table_style()
+    style = make_table_style(num_rows=5)
     style.add("BACKGROUND", (0, 1), (0, 1), Colors.RED)
     style.add("BACKGROUND", (0, 2), (0, 2), Colors.AMBER)
     style.add("BACKGROUND", (0, 3), (0, 3), Colors.GREEN)
@@ -731,7 +738,7 @@ def create_evidence_index(df: pd.DataFrame, engine: Any) -> list:
     source_data.append(["TOTAL", str(total), "100.0%"])
 
     t = Table(source_data, colWidths=[8 * cm, 3 * cm, 3 * cm])
-    t.setStyle(make_table_style())
+    t.setStyle(make_table_style(num_rows=len(source_data)))
     elements.append(t)
     elements.append(Spacer(1, 0.5 * cm))
 
@@ -767,7 +774,7 @@ def create_evidence_index(df: pd.DataFrame, engine: Any) -> list:
             detail_data.append(["...", f"({len(src_df) - 20} more records)", "", "", "", ""])
 
         t = Table(detail_data, colWidths=[2.5 * cm, 3 * cm, 3 * cm, 4 * cm, 3 * cm, 2 * cm])
-        t.setStyle(make_table_style(font_size=7))
+        t.setStyle(make_table_style(num_rows=len(detail_data), font_size=7))
         elements.append(t)
         elements.append(Spacer(1, 0.3 * cm))
 
@@ -830,7 +837,7 @@ def create_anomaly_detail_section(flags: list, df: pd.DataFrame) -> list:
         t = Table(
             detail_data, colWidths=[0.8 * cm, 2.5 * cm, 3 * cm, 2 * cm, CONTENT_WIDTH - 8.3 * cm]
         )
-        style = make_table_style(font_size=7)
+        style = make_table_style(num_rows=len(detail_data), font_size=7)
         # Color severity column
         for row_idx, (_, _, _, sev, _) in enumerate(cat_flags, 1):
             style.add("TEXTCOLOR", (3, row_idx), (3, row_idx), severity_color(sev))
@@ -896,7 +903,7 @@ def create_timeline_section(df: pd.DataFrame, flags: list) -> list:
         )
 
     t = Table(timeline_data, colWidths=[2.5 * cm, 3.5 * cm, 3 * cm, CONTENT_WIDTH - 9 * cm])
-    t.setStyle(make_table_style(font_size=7))
+    t.setStyle(make_table_style(num_rows=len(timeline_data), font_size=7))
     elements.append(t)
 
     elements.append(PageBreak())
@@ -945,7 +952,7 @@ def create_ofgem_comparison(df: pd.DataFrame) -> list:
     ]
 
     t = Table(cap_data, colWidths=[3.5 * cm, 3.5 * cm, 3.5 * cm, 3 * cm, 2.5 * cm])
-    t.setStyle(make_table_style())
+    t.setStyle(make_table_style(num_rows=len(cap_data)))
     elements.append(t)
     elements.append(Spacer(1, 0.3 * cm))
 
@@ -1003,7 +1010,7 @@ def create_statistical_analysis(dfc: pd.DataFrame) -> list:
     ]
 
     t = Table(stats_data, colWidths=[10 * cm, 5 * cm])
-    t.setStyle(make_table_style())
+    t.setStyle(make_table_style(num_rows=len(stats_data)))
     elements.append(t)
     elements.append(Spacer(1, 0.5 * cm))
 
@@ -1012,15 +1019,30 @@ def create_statistical_analysis(dfc: pd.DataFrame) -> list:
         Paragraph("<b>6-Period Rolling Statistics (Latest)</b>", STYLES["SubSectionHeader"])
     )
     rolling = amounts_series.rolling(6, min_periods=1)
+    roll_mean = rolling.mean().iloc[-1]
+    roll_std = rolling.std().iloc[-1]
+    roll_min = rolling.min().iloc[-1]
+    roll_max = rolling.max().iloc[-1]
+    
+    # Handle NaN values
+    if pd.isna(roll_std):
+        roll_std = 0.0
+    if pd.isna(roll_mean):
+        roll_mean = float(amounts_series.iloc[-1])
+    if pd.isna(roll_min):
+        roll_min = float(amounts_series.min())
+    if pd.isna(roll_max):
+        roll_max = float(amounts_series.max())
+        
     roll_data = [
         ["Metric", "Value"],
-        ["Rolling Mean (£)", fmt_money(float(rolling.mean().iloc[-1]))],
-        ["Rolling Std Dev (£)", fmt_money(float(rolling.std().iloc[-1]))],
-        ["Rolling Min (£)", fmt_money(float(rolling.min().iloc[-1]))],
-        ["Rolling Max (£)", fmt_money(float(rolling.max().iloc[-1]))],
+        ["Rolling Mean (£)", fmt_money(float(roll_mean))],
+        ["Rolling Std Dev (£)", fmt_money(float(roll_std))],
+        ["Rolling Min (£)", fmt_money(float(roll_min))],
+        ["Rolling Max (£)", fmt_money(float(roll_max))],
     ]
     t = Table(roll_data, colWidths=[10 * cm, 5 * cm])
-    t.setStyle(make_table_style())
+    t.setStyle(make_table_style(num_rows=len(roll_data)))
     elements.append(t)
     elements.append(Spacer(1, 0.5 * cm))
 
@@ -1042,7 +1064,7 @@ def create_statistical_analysis(dfc: pd.DataFrame) -> list:
             ],
         ]
         t = Table(norm_data, colWidths=[4 * cm, 3 * cm, 3 * cm, 3 * cm])
-        t.setStyle(make_table_style())
+        t.setStyle(make_table_style(num_rows=len(norm_data)))
         elements.append(t)
     except ImportError:
         elements.append(
@@ -1094,7 +1116,7 @@ def create_payment_analysis(dfc: pd.DataFrame) -> list:
                 )
 
         t = Table(pay_data, colWidths=[10 * cm, 5 * cm])
-        t.setStyle(make_table_style())
+        t.setStyle(make_table_style(num_rows=len(pay_data)))
         elements.append(t)
         elements.append(Spacer(1, 0.5 * cm))
 
@@ -1112,9 +1134,9 @@ def create_payment_analysis(dfc: pd.DataFrame) -> list:
                 ]
             )
         t = Table(
-            pay_detail, colWidths=[2.5 * cm, 2.5 * cm, 3 * cm, 3 * cm, CONTENT_WIDTH - 11 * cm]
+            pay_detail, colWidths=[2.5 * cm, 2.5 * cm, 3 * cm, 3 * cm, max(2 * cm, CONTENT_WIDTH - 11 * cm)]
         )
-        t.setStyle(make_table_style(font_size=7))
+        t.setStyle(make_table_style(num_rows=len(pay_detail), font_size=7))
         elements.append(t)
     else:
         elements.append(
@@ -1162,7 +1184,7 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
         ["+6 Periods", "—", "Linear Regression"],
     ]
     t = Table(forecast_data, colWidths=[5 * cm, 5 * cm, 5 * cm])
-    t.setStyle(make_table_style())
+    t.setStyle(make_table_style(num_rows=len(forecast_data)))
     elements.append(t)
     elements.append(Spacer(1, 0.3 * cm))
 
@@ -1245,7 +1267,7 @@ def create_data_quality_section(df: pd.DataFrame) -> list:
     ]
 
     t = Table(quality_data, colWidths=[5 * cm, 2 * cm, 2 * cm, 2.5 * cm, CONTENT_WIDTH - 12 * cm])
-    style = make_table_style()
+    style = make_table_style(num_rows=len(quality_data))
     # Color status column
     for i in range(1, len(quality_data)):
         status = quality_data[i][4]
@@ -1271,7 +1293,7 @@ def create_data_quality_section(df: pd.DataFrame) -> list:
     src_data.append(["TOTAL", str(len(df)), "100.0%"])
 
     t = Table(src_data, colWidths=[8 * cm, 3 * cm, 3 * cm])
-    t.setStyle(make_table_style())
+    t.setStyle(make_table_style(num_rows=len(src_data)))
     elements.append(t)
 
     elements.append(PageBreak())
@@ -1354,7 +1376,7 @@ def create_tariff_impact_section(dfc: pd.DataFrame) -> list:
     t = Table(
         tariff_table, colWidths=[4 * cm, 2 * cm, 3 * cm, 2.5 * cm, 2.5 * cm, 2.5 * cm, 3 * cm]
     )
-    t.setStyle(make_table_style(font_size=8))
+    t.setStyle(make_table_style(num_rows=len(tariff_table), font_size=8))
     elements.append(t)
     elements.append(Spacer(1, 0.5 * cm))
 
@@ -1557,6 +1579,10 @@ def generate_ombudsman_pdf(
     if df.empty:
         raise ValueError("Records DataFrame is empty")
 
+    # Validate required parameters
+    if engine is None:
+        raise ValueError("Engine is required for report generation (contains PDF count, email count metadata)")
+
     # Ensure required columns exist with defaults
     required_cols = {
         "Date": "01/01/1970",
@@ -1610,56 +1636,99 @@ def generate_ombudsman_pdf(
     elements.append(PageBreak())
 
     # === TABLE OF CONTENTS ===
-    elements.extend(create_table_of_contents())
+    try:
+        elements.extend(create_table_of_contents())
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Table of Contents failed: {e}</i>", STYLES["BodyText"]))
 
     # === EXECUTIVE SUMMARY ===
-    elements.extend(
-        create_executive_summary(
-            df,
-            config,
-            acc_ref,
-            flag_counts,
-            len(records),
-            charges,
-            payments,
-            period_start,
-            period_end,
+    try:
+        elements.extend(
+            create_executive_summary(
+                df,
+                config,
+                acc_ref,
+                flag_counts,
+                len(records),
+                charges,
+                payments,
+                period_start,
+                period_end,
+            )
         )
-    )
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Executive Summary failed: {e}</i>", STYLES["BodyText"]))
 
     # === KEY FINDINGS ===
-    elements.extend(create_key_findings_table(flags))
+    try:
+        elements.extend(create_key_findings_table(flags))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Key Findings failed: {e}</i>", STYLES["BodyText"]))
 
     # === EVIDENCE INDEX ===
-    elements.extend(create_evidence_index(df, engine))
+    try:
+        elements.extend(create_evidence_index(df, engine))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Evidence Index failed: {e}</i>", STYLES["BodyText"]))
 
     # === DETAILED FINDINGS ===
-    elements.extend(create_anomaly_detail_section(flags, df))
+    try:
+        elements.extend(create_anomaly_detail_section(flags, df))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Detailed Findings failed: {e}</i>", STYLES["BodyText"]))
 
     # === TIMELINE ===
-    elements.extend(create_timeline_section(df, flags))
+    try:
+        elements.extend(create_timeline_section(df, flags))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Timeline failed: {e}</i>", STYLES["BodyText"]))
 
     # === OFGEM COMPARISON ===
-    elements.extend(create_ofgem_comparison(df))
+    try:
+        elements.extend(create_ofgem_comparison(df))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>OFGEM Comparison failed: {e}</i>", STYLES["BodyText"]))
 
     # === STATISTICAL ANALYSIS ===
-    elements.extend(create_statistical_analysis(df))
+    try:
+        elements.extend(create_statistical_analysis(df))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Statistical Analysis failed: {e}</i>", STYLES["BodyText"]))
 
     # === PAYMENT ANALYSIS ===
-    elements.extend(create_payment_analysis(df))
+    try:
+        elements.extend(create_payment_analysis(df))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Payment Analysis failed: {e}</i>", STYLES["BodyText"]))
 
     # === FORECAST ===
-    elements.extend(create_forecast_section(df))
+    try:
+        elements.extend(create_forecast_section(df))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Forecast failed: {e}</i>", STYLES["BodyText"]))
 
     # === DATA QUALITY ===
-    elements.extend(create_data_quality_section(df))
+    try:
+        elements.extend(create_data_quality_section(df))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Data Quality failed: {e}</i>", STYLES["BodyText"]))
 
     # === TARIFF IMPACT ===
-    elements.extend(create_tariff_impact_section(df))
+    try:
+        elements.extend(create_tariff_impact_section(df))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Tariff Impact failed: {e}</i>", STYLES["BodyText"]))
 
     # === APPENDICES ===
-    elements.extend(create_appendix_methodology(config))
-    elements.extend(create_appendix_glossary())
+    try:
+        elements.extend(create_appendix_methodology(config))
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Appendix Methodology failed: {e}</i>", STYLES["BodyText"]))
+
+    try:
+        elements.extend(create_appendix_glossary())
+    except Exception as e:
+        elements.append(Paragraph(f"<i>Appendix Glossary failed: {e}</i>", STYLES["BodyText"]))
 
     # Build
     doc.build(elements)

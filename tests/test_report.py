@@ -232,7 +232,7 @@ class TestTableStyle:
     """Tests for table style creation."""
 
     def test_make_table_style_default(self):
-        style = make_table_style()
+        style = make_table_style(num_rows=5)
         assert isinstance(style, TableStyle)
         # Check some default values
         commands = style._cmds
@@ -246,6 +246,7 @@ class TestTableStyle:
             header_text_color=Colors.BLACK,
             grid_color=Colors.MEDIUM_BLUE,
             font_size=10,
+            num_rows=5,
         )
         assert isinstance(style, TableStyle)
 
