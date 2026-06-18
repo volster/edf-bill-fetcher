@@ -2,9 +2,10 @@
 
 import sys
 
+import pytest
+
 sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
 
-import pytest
 from edf_collector import EvidenceEngine
 
 
