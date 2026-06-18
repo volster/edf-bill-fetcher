@@ -3746,7 +3746,9 @@ class App:
                         # Fallback for different pypff API versions
                         pff = getattr(pypff, "File", None)
                         if pff is None:
-                            raise AttributeError("pypff module has no 'file' or 'File' attribute") from None
+                            raise AttributeError(
+                                "pypff module has no 'file' or 'File' attribute"
+                            ) from None
                         pff = pff()
                     pff.open(os.path.abspath(pst_path))
                     try:
