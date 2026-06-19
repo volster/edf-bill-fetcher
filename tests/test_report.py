@@ -42,6 +42,55 @@ from edf_report import (
 )
 
 # =============================================================================
+# HELPER: extract searchable text from reportlab platypus elements
+# =============================================================================
+
+
+def _elements_to_text(elements):
+    """Walk a list of reportlab Platypus elements and return a single
+    searchable string.
+
+    Implements the minimum reportlab traversal needed for our test suite:
+    - Paragraph.text: returned verbatim
+    - Table: every cell walked (paragraph inside cells are flattened too)
+    - Spacer / PageBreak / anything else: ignored (no text content)
+
+    This lets tests assert ``assert "Account Reference: ACC-12345" in text``
+    instead of the vacuous ``len(elements) > 0`` smoke.
+    """
+    parts = []
+    for el in elements:
+        cls_name = type(el).__name__
+        if cls_name == "Paragraph":
+            parts.append(str(getattr(el, "text", "")))
+        elif cls_name == "Table":
+            for row in getattr(el, "_cellvalues", []) or []:
+                for cell in (row if isinstance(row, list) else [row]):
+                    if cell is None:
+                        continue
+                    cls = type(cell).__name__
+                    if cls == "Paragraph":
+                        parts.append(str(getattr(cell, "text", "")))
+                    elif isinstance(cell, str):
+                        parts.append(cell)
+        # Treat anything else (Spacer, PageBreak, KeepTogether, ...) as
+        # structurally invisible — they carry no searchable content.
+    return "\n".join(parts)
+
+
+# =============================================================================
+# HELPERS
+# =============================================================================
+
+
+def _assert_contains(elements, *needles):
+    """Assert every needle is present in the flattened element text."""
+    text = _elements_to_text(elements)
+    for n in needles:
+        assert n in text, f"Missing {n!r} in generated report text:\n{text}"
+
+
+# =============================================================================
 # FIXTURES
 # =============================================================================
 
@@ -302,12 +351,19 @@ class TestCoverPage:
             period_end="31/03/2023",
             report_date="17 June 2026",
         )
-        assert isinstance(elements, list)
-        assert len(elements) > 0
+        _assert_contains(
+            elements,
+            "EDF Energy Billing Dispute",
+            "ACC-12345",
+            "01/01/2023",
+            "31/03/2023",
+            "17 June 2026",
+        )
 
     def test_create_cover_page_empty_fields(self):
+        """Cover page renders even with empty inputs — fallback placeholders."""
         elements = create_cover_page("", "", "", "")
-        assert isinstance(elements, list)
+        _assert_contains(elements, "EDF Energy Billing Dispute")
 
 
 class TestTableOfContents:
@@ -359,8 +415,8 @@ class TestKeyFindings:
 
     def test_create_key_findings_empty(self):
         elements = create_key_findings_table([])
-        assert isinstance(elements, list)
-        assert len(elements) > 0
+        # Empty findings still emits the section header.
+        _assert_contains(elements, "Key Findings")
 
     def test_create_key_findings_with_flags(self):
         flags = [
@@ -369,8 +425,13 @@ class TestKeyFindings:
             ("BALANCE REDUCTION", "01/03/2023", -100.0, "Payment received", "INFO"),
         ]
         elements = create_key_findings_table(flags)
-        assert isinstance(elements, list)
-        assert len(elements) > 0
+        _assert_contains(
+            elements,
+            "LARGE JUMP",
+            "BILLING GAP",
+            "Big jump detected",
+            "Gap of 90 days",
+        )
 
 
 class TestEvidenceIndex:
@@ -378,18 +439,16 @@ class TestEvidenceIndex:
 
     def test_create_evidence_index(self, sample_df, mock_engine):
         elements = create_evidence_index(sample_df, mock_engine)
-        assert isinstance(elements, list)
-        assert len(elements) > 0
+        _assert_contains(elements, "Evidence")  # catches "Evidence Index"
 
 
 class TestAnomalyDetail:
     """Tests for anomaly detail section."""
 
     def test_create_anomaly_detail_empty(self, sample_df):
+        """Empty flags still emit the section header (no stuffing skipped)."""
         elements = create_anomaly_detail_section([], sample_df)
-        assert isinstance(elements, list)
-        # Should still have the section header
-        assert len(elements) > 0
+        _assert_contains(elements, "Detailed Findings")
 
     def test_create_anomaly_detail_with_flags(self, sample_df):
         flags = [
@@ -399,8 +458,14 @@ class TestAnomalyDetail:
             ("ESTIMATED RUN", "01/04/2023", 100.0, "3 estimated readings", "MEDIUM"),
         ]
         elements = create_anomaly_detail_section(flags, sample_df)
-        assert isinstance(elements, list)
-        assert len(elements) > 0
+        _assert_contains(
+            elements,
+            "Large Jump",
+            "Billing Gap",
+            "Estimated Run",
+            # Description text from the fixed flags should appear too
+            "Big jump detected",
+        )
 
 
 class TestTimeline:
