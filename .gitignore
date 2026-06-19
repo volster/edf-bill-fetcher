@@ -26,6 +26,9 @@ output/
 .idea/
 *.swp
 *.swo
+.claude/
+.hermes/
+.coverage*
 
 # OS
 .DS_Store
@@ -40,5 +43,4 @@ htmlcov/
 # Local data
 *.pst
 *.ost
-*.pdf
 data/

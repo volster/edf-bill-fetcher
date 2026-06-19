@@ -1436,8 +1436,6 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
 
 
 def export_to_excel(data, output_path, error_log, config, filtered=None):
-    import numpy as np
-
     NAVY = "10367A"
     ORANGE = "FE5716"
     RED = "FF6B6B"

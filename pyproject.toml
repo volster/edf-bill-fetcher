@@ -23,16 +23,21 @@ classifiers = [
     "Topic :: Office/Business :: Financial",
 ]
 dependencies = [
+    # === Runtime core (required for any functional report — Excel + PDF + DOCX) ===
     "pandas>=2.0,<3",
     "pdfplumber>=0.10,<1",
     "beautifulsoup4>=4.12,<5",
     "openpyxl>=3.1,<4",
     "numpy>=1.24,<3",
+    "reportlab>=4.5,<5",        # PDF report generation
+    "python-docx>=1.1,<2",      # DOCX report generation
+    "scipy>=1.10,<2",           # rolling stats, normality tests, linregress
 ]
 
 [project.optional-dependencies]
-pst = ["libpff-python>=20211114"]
-pdf = ["reportlab>=4.5,<5", "python-docx>=1.1,<2"]
+# Optional deps that install only the heavy / platform-specific bits.
+pst = ["libpff-python>=20211114"]            # Outlook PST/OST archive parsing
+statsmodels = ["statsmodels>=0.14,<1"]       # Holt-Winters forecasting (otherwise EMA-only)
 build = [
     "pyinstaller>=6.0,<7",
 ]
@@ -42,7 +47,6 @@ dev = [
     "ruff>=0.4,<1",
     "mypy>=1.9,<2",
     "types-beautifulsoup4>=4.12,<5",
-    "pyinstaller>=6.5,<7",
 ]
 
 [project.urls]
@@ -71,6 +75,8 @@ markers = [
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -87,7 +93,7 @@ ignore = [
     "B008",  # function calls in default args (intentional in some cases)
 ]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "tests/*" = ["T20", "PT011", "PT012"]
 "edf_collector.py" = ["T201"]
 

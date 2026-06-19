@@ -1,102 +1,37 @@
 # EDF Energy Billing Evidence Collector
 
-A desktop application for collecting and analyzing EDF Energy billing data from multiple sources (PST/OST email archives, PDF bills, HTM account exports) to produce a comprehensive Excel evidence report and professional PDF report for Energy Ombudsman dispute resolution.
+A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, local PDF bills, and HTM account history exports. Produces a comprehensive Excel evidence workbook and a professional PDF **or** DOCX report designed for direct submission to the **Energy Ombudsman** for dispute resolution.
 
 ## Features
 
-- **Multi-source extraction**: PST/OST email files, local PDF folders, HTM account history exports
-- **Dual format support**: Parses both old-style and new-style (KI/KCR) EDF invoice formats
-- **Smart amount detection**: Multiple regex patterns with fallback strategies for finding billing amounts
-- **Deduplication**: Cross-source deduplication using billing period dates and amounts
-- **Comprehensive Excel output**: 14-sheet report with evidence, summaries, charts, and dispute analysis
-- **Professional PDF output**: 16-section Ombudsman-ready report with executive summary, evidence index, timeline, OFGEM comparison, statistical analysis, and methodology appendix
-- **GUI interface**: Simple tkinter-based desktop application with progress tracking
-- **CLI mode**: Headless PDF report generation for automation
-
-## Output Sheets
-
-| Sheet | Description |
-|-------|-------------|
-| **Annual Summary** | Yearly balance range, average, peak, low |
-| **EDF Evidence Report** | All extracted records with live formulas |
-| **Duplicate Entries** | Deduplicated records (if enabled) |
-| **Filtered (Below Min)** | Records below minimum threshold |
-| **Parse Errors** | Any extraction errors encountered |
-| **Key Statistics** | Account overview, balance figures, periodic charges, reading quality, unit rates |
-| **Balance Trend** | Time-series chart with rolling average and linear trend |
-| **Year-on-Year** | Yearly comparison with YoY changes |
-| **Period Charges** | Per-period charges with daily rates and flags |
-| **Dispute Flags** | Automated detection of anomalies (large jumps, billing gaps, estimated runs, reconciliation mismatches) |
-| **Dispute Timeline** | Chronological event timeline for dispute narrative |
-| **Statistical Analysis** | Descriptive stats, rolling 6-period stats, EMA, momentum, volatility, z-score/IQR anomalies, Shapiro-Wilk normality tests |
-| **Payment Analysis** | Payment/credit patterns, intervals, amounts, chronological detail with chart |
-| **Forecast & Projection** | Linear regression, Holt-Winters exponential smoothing, EMA projection, confidence intervals, accuracy metrics |
-
-## PDF Report Sections
-
-The PDF report (generated via **EXPORT PDF REPORT** button or CLI) contains:
-
-1. **Cover Page** — Account reference, period, confidentiality notice
-2. **Table of Contents** — Full section listing
-3. **Executive Summary** — Financial totals, key findings narrative, conclusion for Ombudsman
-4. **Key Findings** — Severity-grouped table (HIGH/MEDIUM/INFO) with detail
-5. **Evidence Index** — Source cross-reference (PST/HTM/PDF) with record counts
-6. **Detailed Anomalies** — Large Jumps, Billing Gaps, Estimated Runs, High Daily Rates, Reconciliation Mismatches
-7. **Timeline** — Chronological merged view of all bills + automated flags
-8. **OFGEM Price Cap Comparison** — Template for comparing bill unit rates against OFGEM caps
-9. **Statistical Analysis** — Descriptive stats, rolling stats, normality tests
-10. **Payment Analysis** — Payment patterns, intervals, chronology
-11. **Forecast & Projection** — Linear, Holt-Winters, EMA projections with confidence intervals
-12. **Data Quality Assessment** — Completeness, duplication, source distribution, pass/warn/fail status
-13. **Tariff Impact Analysis** — Unit rate stats by tariff, change detection, charge impact
-14. **Appendix A: Methodology** — Data sources, extraction logic, deduplication, config used
-15. **Appendix B: Glossary** — 10 key terms (MAPE, Holt-Winters, IQR Anomaly, etc.)
-16. **Professional Styling** — Navy/orange theme, headers/footers, page numbers, confidentiality headers
-
-The report is designed for direct submission to the **Energy Ombudsman**.
+- **Multi-source extraction**: PST/OST email files, local PDF folders, HTM account exports.
+- **Dual format support**: Parses both old-style and new-style (KI/KCR) EDF invoice formats.
+- **Smart amount detection**: Prioritized regex patterns with configurable fallback.
+- **Cross-source deduplication**: Two-pass dedup — Period To + Amount (primary), Amount within a 60-day window (secondary).
+- **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets.
+- **Professional PDF + DOCX output**: 14 dynamically-numbered sections. Numbering is **derived from `REPORT_SECTIONS` so the Table of Contents and body always agree**, regardless of which sections a user selects in the report options dialog.
+- **GUI interface**: tkinter-based desktop application with progress tracking.
+- **CLI mode**: Headless batch/report generation for automation.
 
 ## Installation
-
-### From Source (Development)
 
 ```bash
 git clone https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
-# Core dependencies only
+
+# Required runtime — Excel + PDF + DOCX reports all work out of the box:
 pip install -e .
-# With PST/OST support (Windows: requires Visual C++ Build Tools)
-pip install -e ".[pst]"
-# With PDF report generation
-pip install -e ".[pdf]"
-# Full development setup (test, lint, build, pdf, pst)
-pip install -e ".[dev,pst,pdf]"
+
+# Optional heavy deps:
+#   [pst]         Outlook PST/OST archive parsing (Windows: requires libpff)
+#   [statsmodels] Holt-Winters forecasting (without it, forecast degrades to linear + EMA)
+#   [dev]         test/lint/typecheck toolchain
+#   [build]       PyInstaller for one-file Windows/macOS/Linux executables
+pip install -e ".[pst,statsmodels]"      # recommended for real use
+pip install -e ".[dev,build]"            # recommended for contributors
 ```
 
-### Build Executable
-
-```bash
-pip install -e ".[build,pdf,pst]"
-pyinstaller --onefile --windowed --name EDF_Evidence_Collector \
-  --hidden-import=reportlab \
-  --hidden-import=reportlab.platypus \
-  --hidden-import=reportlab.lib \
-  --hidden-import=reportlab.lib.colors \
-  --hidden-import=reportlab.lib.styles \
-  --hidden-import=reportlab.lib.units \
-  --hidden-import=reportlab.lib.pagesizes \
-  --hidden-import=reportlab.lib.enums \
-  --hidden-import=reportlab.pdfbase \
-  --hidden-import=reportlab.pdfbase.pdfmetrics \
-  --hidden-import=reportlab.pdfbase.ttfonts \
-  --hidden-import=PIL \
-  --hidden-import=PIL.Image \
-  --hidden-import=statsmodels \
-  --hidden-import=statsmodels.tsa.holtwinters \
-  --hidden-import=pypff \
-  edf_collector.py
-```
-
-The executable will be in `dist/`.
+`-e .` already pulls in pandas, pdfplumber, beautifulsoup4, openpyxl, numpy, reportlab, python-docx, and scipy — every report feature works without opting into extras.
 
 ## Usage
 
@@ -109,80 +44,128 @@ python edf_collector.py
 Or run the built executable `EDF_Evidence_Collector.exe`.
 
 1. **Select Sources** (at least one required):
-   - **PST/OST File**: Outlook email archive containing EDF emails
+   - **PST/OST File**: Outlook email archive containing EDF emails (needs `[pst]` extra)
    - **PDF Folder**: Directory containing EDF bill PDFs
    - **HTM Export**: EDF MyAccount "Payments and Invoices" HTM export
-
 2. **Configure Options**:
    - **Account Filter**: Filter by EDF account number (A-XXXXXXXX)
    - **Domain Filter**: Filter PST emails by sender domain (default: edfenergy.com)
    - **Minimum Amount**: Filter out records below this threshold (default: £500)
    - **Analysis Threshold**: Minimum bill amount for analysis tabs (default: £500)
    - **Report Account Ref**: Override account reference in report header
+3. **Click "EXTRACT TO EXCEL"** — produces the evidence workbook.
+4. **Click "EXPORT PDF REPORT" / "EXPORT WORD REPORT"** — produces the Ombudsman-grade report.
 
-3. **Click "EXTRACT TO EXCEL"** — produces the 14-sheet Excel workbook
+When launching either report you can also click **"LOAD & REPORT"** to extract and report in one step.
 
-4. **Click "EXPORT PDF REPORT"** — produces the professional Ombudsman-ready PDF (enabled after extraction completes)
-
-The report will be saved next to your source files.
-
-### CLI Mode — PDF Report Generation
-
-For automated/pipeline generation of the PDF report:
+### CLI Mode — headless report generation
 
 ```bash
-# Generate PDF from previously extracted records
+# Generate a PDF report from already-extracted records
 python edf_collector.py --pdf-report -i records.json -o report.pdf
 
-# With optional config and engine data
-python edf_collector.py --pdf-report -i records.json -o report.pdf -c config.json -e engine.pkl
+# DOCX variant
+python edf_collector.py --docx-report -i records.json -o report.docx
 ```
 
-Options:
-- `-i, --records`: Path to extracted records JSON (required)
-- `-o, --output`: Output PDF file path (required)
-- `-c, --config`: Config JSON file (optional)
-- `-e, --engine-data`: Pickled EvidenceEngine for filtered records (optional)
+Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records state.
 
 ### Programmatic Usage
 
 ```python
 from edf_collector import EvidenceEngine, export_to_excel
 from edf_report import generate_pdf_from_gui
+from edf_report_docx import generate_docx_from_gui
 
 config = {
-    'use_anchors': True,
-    'use_large': True,
-    'use_reading_classification': True,
-    'use_pdf_fields': True,
-    'use_acc_filter': False,
-    'acc_num': '',
-    'min_amount': 500.0,
-    'analysis_min': 500.0,
-    'filter_below': True,
-    'save_filtered': True,
-    'use_dedup': True,
-    'save_dups': True,
-    'use_domain_filter': True,
-    'domain_filter': 'edfenergy.com',
+    "use_anchors": True,
+    "use_large": True,
+    "use_reading_classification": True,
+    "use_pdf_fields": True,
+    "use_acc_filter": False,
+    "acc_num": "",
+    "min_amount": 500.0,
+    "analysis_min": 500.0,
+    "filter_below": True,
+    "save_filtered": True,
+    "use_dedup": True,
+    "save_dups": True,
+    "use_domain_filter": True,
+    "domain_filter": "edfenergy.com",
+    # report_sections tells the report generator which sections to include.
+    # If absent, every section in `edf_report.REPORT_SECTIONS` is selected.
+    "report_sections": [
+        "exec_summary", "key_findings", "evidence_index", "detailed_findings",
+        "timeline", "ofgem", "statistical", "payment", "forecast",
+        "data_quality", "tariff",
+        "appendix_methodology", "appendix_glossary", "appendix_full_evidence",
+    ],
 }
 
 engine = EvidenceEngine(config, print)
-engine.crawl_local_pdfs('/path/to/pdfs')
+engine.crawl_local_pdfs("/path/to/pdfs")
 # ... process other sources ...
 
 # Excel export
-export_to_excel(engine.records, 'output.xlsx', engine.error_log, config, engine.filtered_records)
+export_to_excel(engine.records, "output.xlsx", engine.error_log, config, engine.filtered_records)
 
 # PDF export
 generate_pdf_from_gui(
     records=engine.records,
-    output_path='report.pdf',
+    output_path="report.pdf",
+    config=config,
+    engine=engine,
+    filtered=engine.filtered_records,
+)
+
+# DOCX export — same arguments, sees the same config / same registry
+generate_docx_from_gui(
+    records=engine.records,
+    output_path="report.docx",
     config=config,
     engine=engine,
     filtered=engine.filtered_records,
 )
 ```
+
+## Report Section Layout
+
+The PDF and DOCX reports are both built from a single section-registry so the titles and numbering always line up. The registry lives in `edf_report.REPORT_SECTIONS`:
+
+| Class          | Sections                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------ |
+| Main (numeric) | Executive Summary · Key Findings Summary · Evidence Index & Source Cross-Reference · Detailed Findings · Timeline of Events · OFGEM Price Cap Comparison · Statistical Analysis · Payment & Credit Analysis · Forecast & Projection · Data Quality Assessment · Tariff Impact Analysis |
+| Appendix       | Methodology & Data Sources · Glossary · Full Evidence Table                                            |
+
+Main sections are numbered **1, 2, 3, …** and appendices are lettered **A, B, C, …**, computed at render time based on the user's `report_sections` selection.
+
+### Adding a new section
+
+1. Add an entry to `REPORT_SECTIONS` in `edf_report.py` with `key`, `title`, and optionally `is_appendix`.
+2. Add the matching key to `ReportOptionsDialog.SECTIONS` in `edf_collector.py` so it shows up in the GUI options dialog.
+3. Add a `def create_<name>(...)` builder function in `edf_report.py`.
+4. Wire the builder into the `section_builders` dispatch dict in **both** `generate_ombudsman_pdf` and `generate_ombudsman_docx`. Forgetting this raises a clear `RuntimeError` at report-render time — that's the loud-failure mode that keeps the dispatch in lockstep with the registry.
+
+Removing a section: same steps in reverse.
+
+## Output Sheets (Excel)
+
+| Sheet              | Description |
+| ------------------ | ----------- |
+| **Annual Summary** | Yearly balance range, average, peak, low |
+| **EDF Evidence Report** | All extracted records with live formulas |
+| **Duplicate Entries** | Deduplicated records (if enabled) |
+| **Filtered (Below Min)** | Records below the minimum-threshold |
+| **Parse Errors** | Any extraction errors encountered |
+| **Key Statistics** | Account overview, balance figures, periodic charges, reading quality, unit rates |
+| **Balance Trend** | Time-series chart with rolling average and linear trend |
+| **Year-on-Year** | Yearly comparison with YoY changes |
+| **Period Charges** | Per-period charges with daily rates and dispute flags |
+| **Dispute Flags** | Automated detection of anomalies (large jumps, billing gaps, estimated runs, reconciliation mismatches) |
+| **Dispute Timeline** | Chronological event timeline for the dispute narrative |
+| **Statistical Analysis** | Descriptive stats, rolling 6-period stats, EMA, momentum, volatility, z-score/IQR anomalies, Shapiro-Wilk normality tests |
+| **Payment Analysis** | Payment/credit patterns, intervals, amounts, chronological detail with chart |
+| **Forecast & Projection** | Linear regression, Holt-Winters exponential smoothing, EMA projection, confidence intervals, accuracy metrics |
 
 ## Supported EDF Formats
 
@@ -207,51 +190,22 @@ generate_pdf_from_gui(
 ## Requirements
 
 - Python 3.10+
-- tkinter (usually included with Python)
-- Dependencies (see `pyproject.toml`):
-  - pandas
-  - pdfplumber
-  - beautifulsoup4
-  - openpyxl
-  - numpy
-  - libpff-python (optional, for PST/OST support)
-  - reportlab (optional, for PDF report generation)
-
-### Optional Extras
-
-```bash
-# For PST/OST support
-pip install -e ".[pst]"
-
-# For PDF report generation
-pip install -e ".[pdf]"
-
-# For development (test, lint, build)
-pip install -e ".[dev]"
-
-# All extras
-pip install -e ".[pst,pdf,dev]"
-```
+- tkinter (bundled with most Python installers)
+- Runtime: pandas, pdfplumber, beautifulsoup4, openpyxl, numpy, reportlab, python-docx, scipy (all installed by `pip install -e .`)
+- Optional: libpff-python (`[pst]`), statsmodels (`[statsmodels]`)
 
 ## Development
-
-### Run Tests
 
 ```bash
 pip install -e ".[dev]"
 pytest -v
 ```
 
-### Linting & Formatting
+### Linting / formatting / type-checking
 
 ```bash
 ruff check .
 ruff format .
-```
-
-### Type Checking
-
-```bash
 mypy .
 ```
 
@@ -259,20 +213,21 @@ mypy .
 
 All options are available in the GUI. For programmatic use, see the `config` dict in the usage example above.
 
-Key config options:
-- `use_anchors`: Enable smart context amount patterns
-- `use_large`: Enable large amount fallback
-- `use_reading_classification`: Classify readings (Estimated/Actual/Smart)
-- `use_pdf_fields`: Extract kWh, standing charge, invoice number
-- `use_acc_filter`: Filter by account number
-- `min_amount`: Minimum amount threshold
-- `analysis_min`: Threshold for analysis tabs
-- `use_dedup`: Enable cross-source deduplication
-- `use_domain_filter`: Filter PST emails by sender domain
+Key options:
+- `use_anchors`: enable smart-context amount patterns
+- `use_large`: enable large-amount fallback
+- `use_reading_classification`: classify Estimated/Actual/Smart readings
+- `use_pdf_fields`: extract kWh, standing charge, invoice number
+- `use_acc_filter`: filter by account number
+- `min_amount`: minimum amount threshold
+- `analysis_min`: threshold for analysis tabs
+- `use_dedup`: enable cross-source deduplication
+- `use_domain_filter`: filter PST emails by sender domain
+- `report_sections`: list of registry keys to include in PDF/DOCX reports — if absent or empty, every section is included
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License — see `LICENSE` for details.
 
 ## Disclaimer
 
