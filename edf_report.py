@@ -2067,10 +2067,23 @@ def generate_ombudsman_pdf(
     enabled_sections = set(config.get("report_sections", []))
     # Backward compatibility: if not specified, enable all
     all_sections = {
-        "cover", "toc", "exec_summary", "key_findings", "evidence_index",
-        "detailed_findings", "timeline", "ofgem", "statistical", "payment",
-        "forecast", "data_quality", "tariff", "appendix_methodology", "appendix_glossary",
-        "appendix_full_evidence", "appendix_filtered",
+        "cover",
+        "toc",
+        "exec_summary",
+        "key_findings",
+        "evidence_index",
+        "detailed_findings",
+        "timeline",
+        "ofgem",
+        "statistical",
+        "payment",
+        "forecast",
+        "data_quality",
+        "tariff",
+        "appendix_methodology",
+        "appendix_glossary",
+        "appendix_full_evidence",
+        "appendix_filtered",
     }
     if not enabled_sections:
         enabled_sections = all_sections
@@ -2085,7 +2098,9 @@ def generate_ombudsman_pdf(
     # === COVER PAGE ===
     if section_enabled("cover"):
         elements.extend(
-            create_cover_page(acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y"))
+            create_cover_page(
+                acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y")
+            )
         )
         elements.append(NextPageTemplate("content"))
         elements.append(PageBreak())
@@ -2156,7 +2171,9 @@ def generate_ombudsman_pdf(
         try:
             elements.extend(create_statistical_analysis(df))
         except Exception as e:
-            elements.append(Paragraph(f"<i>Statistical Analysis failed: {e}</i>", STYLES["BodyText"]))
+            elements.append(
+                Paragraph(f"<i>Statistical Analysis failed: {e}</i>", STYLES["BodyText"])
+            )
 
     # === PAYMENT ANALYSIS ===
     if section_enabled("payment"):
@@ -2191,7 +2208,9 @@ def generate_ombudsman_pdf(
         try:
             elements.extend(create_appendix_methodology(config))
         except Exception as e:
-            elements.append(Paragraph(f"<i>Appendix Methodology failed: {e}</i>", STYLES["BodyText"]))
+            elements.append(
+                Paragraph(f"<i>Appendix Methodology failed: {e}</i>", STYLES["BodyText"])
+            )
 
     if section_enabled("appendix_glossary"):
         try:
@@ -2203,7 +2222,9 @@ def generate_ombudsman_pdf(
         try:
             elements.extend(create_appendix_full_evidence(df, filtered, config))
         except Exception as e:
-            elements.append(Paragraph(f"<i>Appendix Full Evidence failed: {e}</i>", STYLES["BodyText"]))
+            elements.append(
+                Paragraph(f"<i>Appendix Full Evidence failed: {e}</i>", STYLES["BodyText"])
+            )
 
     # Build
     doc.build(elements)
