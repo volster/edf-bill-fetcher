@@ -494,12 +494,20 @@ class RenderContext:
     """
 
     def __init__(self, selected: set[str] | list[str] | None = None) -> None:
-        # Default: every section selected, so context-free usage produces the
-        # legacy full-numbering layout (back-compat with old static tests).
-        if selected:
-            self.selected = set(selected)
-        else:
+        # Distinguish three cases:
+        #   * ``selected is None`` — no explicit choice; default to every
+        #     section so legacy context-free tests/CI still see the
+        #     full registry with the 1..11 + A..C layout.
+        #   * ``selected`` is any other iterable (including an empty set) —
+        #     use it verbatim. An empty set produces an empty context.
+        # We previously conflated "no argument" with "empty set",
+        # which silently swallowed intent and made it impossible to
+        # render an empty report from the GUI dialog. Now empty set
+        # is honoured.
+        if selected is None:
             self.selected = {s.key for s in REPORT_SECTIONS}
+        else:
+            self.selected = set(selected)
 
         # Compute numeric/alphabetic labels only for selected & visible sections,
         # skipping framing sections (cover, toc) which are not listed in
