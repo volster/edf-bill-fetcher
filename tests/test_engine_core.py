@@ -1,10 +1,6 @@
 """Tests for EvidenceEngine core methods to improve coverage."""
 
-import sys
-
 import pytest
-
-sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
 
 from edf_collector import EvidenceEngine
 

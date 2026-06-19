@@ -1,9 +1,5 @@
 """Tests for payment/tariff/data quality analysis functions."""
 
-import sys
-
-sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
-
 import numpy as np
 import pandas as pd
 import pytest

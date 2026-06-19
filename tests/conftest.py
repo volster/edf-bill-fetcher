@@ -1,8 +1,10 @@
-"""Pytest configuration and shared fixtures."""
+"""Pytest configuration and shared fixtures.
 
-import sys
-
-sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
+The project root is added to ``sys.path`` automatically via
+``pythonpath = ["."]`` in ``pyproject.toml``'s
+``[tool.pytest.ini_options]`` block — no manual path manipulation
+needed here.
+"""
 
 import pytest
 
