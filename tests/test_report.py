@@ -314,7 +314,9 @@ class TestTableOfContents:
     """Tests for table of contents creation."""
 
     def test_create_table_of_contents(self):
-        elements = create_table_of_contents()
+        from edf_report import RenderContext  # local: avoid disturbing imports at top
+
+        elements = create_table_of_contents(RenderContext())
         assert isinstance(elements, list)
         assert len(elements) > 0
 

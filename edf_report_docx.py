@@ -25,6 +25,7 @@ from docx.shared import (
 
 # Import from main module
 from edf_collector import parse_to_sort_date
+from edf_report import REPORT_SECTIONS, RenderContext
 
 # =============================================================================
 # CONSTANTS
@@ -274,31 +275,36 @@ def create_cover_page(doc, styles, acc_ref, period_start, period_end, report_dat
     return elements
 
 
-def create_table_of_contents(doc, styles):
-    """Create table of contents."""
+def create_table_of_contents(doc, styles, ctx=None):
+    """Create a single-column TOC driven by the registry.
+
+    Same numbering rules as ``edf_report.create_table_of_contents``: main
+    sections numbered 1, 2, 3...; appendices lettered A, B, C...; both
+    derived from REPORT_SECTIONS plus the user's selected_sections.
+    """
     doc.add_paragraph("TABLE OF CONTENTS", style=styles["SectionHeader"])
 
-    toc_items = [
-        "1. Executive Summary",
-        "2. Key Findings",
-        "3. Evidence Index",
-        "4. Detailed Findings",
-        "5. Timeline",
-        "6. OFGEM Price Cap Comparison",
-        "7. Statistical Analysis",
-        "8. Payment Analysis",
-        "9. Forecast",
-        "10. Data Quality",
-        "11. Tariff Impact Analysis",
-        "Appendix A: Methodology",
-        "Appendix B: Glossary",
-    ]
+    if ctx is None:
+        ctx = RenderContext()
+    sections = [(spec.label, spec.section.title) for spec in ctx.sections_in_order]
 
-    for item in toc_items:
+    if not sections:
         p = doc.add_paragraph(style=styles["BodyText"])
-        p.add_run(item).font.size = Pt(11)
+        p.add_run("No report sections selected.").italic = True
+        doc.add_page_break()
+        return
+
+    for label, title in sections:
+        p = doc.add_paragraph(style=styles["BodyText"])
+        run = p.add_run(f"{label} {title}")
+        run.font.size = Pt(11)
+        run.font.bold = True
 
     doc.add_page_break()
+
+
+def _add_banner_heading(doc, text):
+    doc.add_paragraph(text, style="Heading 1")
 
 
 def create_executive_summary(
@@ -313,9 +319,12 @@ def create_executive_summary(
     payments,
     period_start,
     period_end,
+    ctx: RenderContext | None = None,
 ):
     """Create executive summary section."""
-    doc.add_paragraph("1. EXECUTIVE SUMMARY", style=styles["SectionHeader"])
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("exec_summary"), style=styles["SectionHeader"])
 
     doc.add_paragraph(
         f"This report presents a comprehensive analysis of EDF Energy billing records "
@@ -381,9 +390,11 @@ def create_executive_summary(
     doc.add_paragraph("")
 
 
-def create_key_findings_table(doc, styles, flags):
-    """Create key findings table."""
-    doc.add_paragraph("2. KEY FINDINGS", style=styles["SectionHeader"])
+def create_key_findings_table(doc, styles, flags, ctx: RenderContext | None = None):
+    """Create key findings summary table from flags."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("key_findings"), style=styles["SectionHeader"])
 
     if not flags:
         doc.add_paragraph(
@@ -415,9 +426,11 @@ def create_key_findings_table(doc, styles, flags):
     doc.add_page_break()
 
 
-def create_evidence_index(doc, styles, df, engine):
-    """Create evidence index section."""
-    doc.add_paragraph("3. EVIDENCE INDEX", style=styles["SectionHeader"])
+def create_evidence_index(doc, styles, df, engine, ctx: RenderContext | None = None):
+    """Create evidence index with source cross-references."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("evidence_index"), style=styles["SectionHeader"])
 
     doc.add_paragraph(
         "The following table summarizes all source documents processed during extraction.",
@@ -464,9 +477,11 @@ def create_evidence_index(doc, styles, df, engine):
     doc.add_page_break()
 
 
-def create_anomaly_detail_section(doc, styles, flags, df):
-    """Create detailed findings section."""
-    doc.add_paragraph("4. DETAILED FINDINGS", style=styles["SectionHeader"])
+def create_anomaly_detail_section(doc, styles, flags, df, ctx: RenderContext | None = None):
+    """Create detailed anomaly findings section."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("detailed_findings"), style=styles["SectionHeader"])
 
     if not flags:
         doc.add_paragraph(
@@ -498,9 +513,11 @@ def create_anomaly_detail_section(doc, styles, flags, df):
     doc.add_page_break()
 
 
-def create_timeline_section(doc, styles, df, flags):
-    """Create timeline section."""
-    doc.add_paragraph("5. TIMELINE", style=styles["SectionHeader"])
+def create_timeline_section(doc, styles, df, flags, ctx: RenderContext | None = None):
+    """Create chronological timeline of events."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("timeline"), style=styles["SectionHeader"])
 
     # Sort by date
     df_sorted = df.copy()
@@ -533,9 +550,11 @@ def create_timeline_section(doc, styles, df, flags):
     doc.add_page_break()
 
 
-def create_ofgem_comparison(doc, styles, df):
-    """Create OFGEM comparison section."""
-    doc.add_paragraph("6. OFGEM PRICE CAP COMPARISON", style=styles["SectionHeader"])
+def create_ofgem_comparison(doc, styles, df, ctx: RenderContext | None = None):
+    """Create OFGEM price cap comparison section."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("ofgem"), style=styles["SectionHeader"])
 
     doc.add_paragraph(
         "This section compares extracted unit rates against OFGEM price caps "
@@ -599,9 +618,11 @@ def create_ofgem_comparison(doc, styles, df):
     doc.add_page_break()
 
 
-def create_statistical_analysis(doc, styles, df):
+def create_statistical_analysis(doc, styles, df, ctx: RenderContext | None = None):
     """Create statistical analysis section."""
-    doc.add_paragraph("7. STATISTICAL ANALYSIS", style=styles["SectionHeader"])
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("statistical"), style=styles["SectionHeader"])
 
     if "Amount (£)" in df.columns:
         amounts = pd.to_numeric(df["Amount (£)"], errors="coerce").dropna()
@@ -631,9 +652,11 @@ def create_statistical_analysis(doc, styles, df):
     doc.add_page_break()
 
 
-def create_payment_analysis(doc, styles, df):
-    """Create payment analysis section."""
-    doc.add_paragraph("8. PAYMENT ANALYSIS", style=styles["SectionHeader"])
+def create_payment_analysis(doc, styles, df, ctx: RenderContext | None = None):
+    """Create payment & credit analysis section."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("payment"), style=styles["SectionHeader"])
 
     payments = df[df["Entry Type"] == "Payment"].copy()
     if not payments.empty and "Amount (£)" in payments.columns:
@@ -661,9 +684,11 @@ def create_payment_analysis(doc, styles, df):
     doc.add_page_break()
 
 
-def create_forecast_section(doc, styles, df):
-    """Create forecast section."""
-    doc.add_paragraph("9. FORECAST", style=styles["SectionHeader"])
+def create_forecast_section(doc, styles, df, ctx: RenderContext | None = None):
+    """Create forecast & projection section."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("forecast"), style=styles["SectionHeader"])
 
     doc.add_paragraph(
         "Based on historical billing patterns, the following projections are provided. "
@@ -686,9 +711,11 @@ def create_forecast_section(doc, styles, df):
     doc.add_page_break()
 
 
-def create_data_quality_section(doc, styles, df):
-    """Create data quality section."""
-    doc.add_paragraph("10. DATA QUALITY", style=styles["SectionHeader"])
+def create_data_quality_section(doc, styles, df, ctx: RenderContext | None = None):
+    """Create data quality assessment section."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("data_quality"), style=styles["SectionHeader"])
 
     total = len(df)
     missing = {}
@@ -716,9 +743,11 @@ def create_data_quality_section(doc, styles, df):
     doc.add_page_break()
 
 
-def create_tariff_impact_section(doc, styles, df):
-    """Create tariff impact section."""
-    doc.add_paragraph("11. TARIFF IMPACT ANALYSIS", style=styles["SectionHeader"])
+def create_tariff_impact_section(doc, styles, df, ctx: RenderContext | None = None):
+    """Create tariff impact analysis section."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("tariff"), style=styles["SectionHeader"])
 
     if "Tariff" not in df.columns or df["Tariff"].isna().all() or (df["Tariff"] == "N/A").all():
         doc.add_paragraph(
@@ -791,9 +820,11 @@ def create_tariff_impact_section(doc, styles, df):
     doc.add_page_break()
 
 
-def create_appendix_methodology(doc, styles, config):
-    """Create methodology appendix."""
-    doc.add_paragraph("APPENDIX A: METHODOLOGY & DATA SOURCES", style=styles["SectionHeader"])
+def create_appendix_methodology(doc, styles, config, ctx: RenderContext | None = None):
+    """Create Methodology appendix."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("appendix_methodology"), style=styles["SectionHeader"])
 
     doc.add_paragraph(
         "All billing records were extracted from three primary source types:",
@@ -826,10 +857,11 @@ def create_appendix_methodology(doc, styles, config):
         doc.add_paragraph(f"• {key}: {val}", style=styles["BodyText"])
 
 
-def create_appendix_glossary(doc, styles):
-    """Create glossary appendix."""
-    doc.add_paragraph("APPENDIX B: GLOSSARY", style=styles["SectionHeader"])
-
+def create_appendix_glossary(doc, styles, ctx: RenderContext | None = None):
+    """Create Glossary appendix."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("appendix_glossary"), style=styles["SectionHeader"])
     glossary = {
         "KI-": "New-style EDF invoice reference prefix (e.g., KI-12345678)",
         "KCR-": "New-style EDF credit note reference prefix (e.g., KCR-87654321)",
@@ -855,9 +887,11 @@ def create_appendix_glossary(doc, styles):
     doc.add_page_break()
 
 
-def create_appendix_full_evidence(doc, styles, df, filtered=None):
-    """Create Appendix C: Full Evidence Table with all records."""
-    doc.add_paragraph("APPENDIX C: FULL EVIDENCE TABLE", style=styles["SectionHeader"])
+def create_appendix_full_evidence(doc, styles, df, filtered=None, ctx: RenderContext | None = None):
+    """Create Full Evidence Table appendix, plus an optional Filtered Records sub-table."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("appendix_full_evidence"), style=styles["SectionHeader"])
 
     doc.add_paragraph(
         "This appendix contains the complete set of billing records used in this analysis. "
@@ -925,7 +959,7 @@ def create_appendix_full_evidence(doc, styles, df, filtered=None):
         for paragraph in table.rows[0].cells[j].paragraphs:
             for run in paragraph.runs:
                 run.font.bold = True
-                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                run.font.color.rgb = WHITE
         table.rows[0].cells[j]._element.get_or_add_tcPr().append(
             parse_xml(
                 '<w:shd {} w:fill="10367A"/>'.format(
@@ -951,7 +985,13 @@ def create_appendix_full_evidence(doc, styles, df, filtered=None):
 
     # Add filtered records if provided
     if filtered:
-        doc.add_paragraph("APPENDIX C (CONT.): FILTERED RECORDS", style=styles["SectionHeader"])
+        cont_label = ctx.short_label("appendix_full_evidence").rstrip(".")
+        cont_heading = (
+            f"{cont_label}. (cont.) Filtered Records (Below £500 Threshold)"
+            if cont_label
+            else "Filtered Records (Below £500 Threshold)"
+        )
+        doc.add_paragraph(cont_heading, style=styles["SectionHeader"])
 
         filt_data = [
             [
@@ -1001,7 +1041,7 @@ def create_appendix_full_evidence(doc, styles, df, filtered=None):
                 for paragraph in table2.rows[0].cells[j].paragraphs:
                     for run in paragraph.runs:
                         run.font.bold = True
-                        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                        run.font.color.rgb = WHITE
                 table2.rows[0].cells[j]._element.get_or_add_tcPr().append(
                     parse_xml(
                         '<w:shd {} w:fill="FFA500"/>'.format(
@@ -1147,6 +1187,11 @@ def generate_ombudsman_docx(
     def section_enabled(key: str) -> bool:
         return key in enabled_sections
 
+    # RenderContext derives every section's number/letter label from the
+    # registry and the user's selection. The TOC and every section body
+    # consume the same context so headline numbers and headings match.
+    render_ctx = RenderContext(enabled_sections)
+
     # Build document
     doc = Document()
 
@@ -1171,73 +1216,93 @@ def generate_ombudsman_docx(
 
     # === TABLE OF CONTENTS ===
     if section_enabled("toc"):
-        create_table_of_contents(doc, styles)
+        create_table_of_contents(doc, styles, render_ctx)
 
-    # === EXECUTIVE SUMMARY ===
-    if section_enabled("exec_summary"):
-        create_executive_summary(
-            doc,
-            styles,
-            df,
-            config,
-            acc_ref,
-            flag_counts,
-            len(records),
-            charges,
-            payments,
-            period_start,
-            period_end,
-        )
+    # === SECTION DISPATCH (data-driven — keys/ordering live in REPORT_SECTIONS) ===
+    section_builders: dict[str, tuple] = {
+        "exec_summary": (
+            lambda: {
+                "doc": doc,
+                "styles": styles,
+                "df": df,
+                "config": config,
+                "acc_ref": acc_ref,
+                "flag_counts": flag_counts,
+                "n_records": len(records),
+                "charges": charges,
+                "payments": payments,
+                "period_start": period_start,
+                "period_end": period_end,
+            },
+            lambda kwargs: create_executive_summary(**kwargs),
+        ),
+        "key_findings": (
+            lambda: {"doc": doc, "styles": styles, "flags": flags},
+            lambda kwargs: create_key_findings_table(**kwargs),
+        ),
+        "evidence_index": (
+            lambda: {"doc": doc, "styles": styles, "df": df, "engine": engine},
+            lambda kwargs: create_evidence_index(**kwargs),
+        ),
+        "detailed_findings": (
+            lambda: {"doc": doc, "styles": styles, "flags": flags, "df": df},
+            lambda kwargs: create_anomaly_detail_section(**kwargs),
+        ),
+        "timeline": (
+            lambda: {"doc": doc, "styles": styles, "df": df, "flags": flags},
+            lambda kwargs: create_timeline_section(**kwargs),
+        ),
+        "ofgem": (
+            lambda: {"doc": doc, "styles": styles, "df": df},
+            lambda kwargs: create_ofgem_comparison(**kwargs),
+        ),
+        "statistical": (
+            lambda: {"doc": doc, "styles": styles, "df": df},
+            lambda kwargs: create_statistical_analysis(**kwargs),
+        ),
+        "payment": (
+            lambda: {"doc": doc, "styles": styles, "df": df},
+            lambda kwargs: create_payment_analysis(**kwargs),
+        ),
+        "forecast": (
+            lambda: {"doc": doc, "styles": styles, "df": df},
+            lambda kwargs: create_forecast_section(**kwargs),
+        ),
+        "data_quality": (
+            lambda: {"doc": doc, "styles": styles, "df": df},
+            lambda kwargs: create_data_quality_section(**kwargs),
+        ),
+        "tariff": (
+            lambda: {"doc": doc, "styles": styles, "df": df},
+            lambda kwargs: create_tariff_impact_section(**kwargs),
+        ),
+        "appendix_methodology": (
+            lambda: {"doc": doc, "styles": styles, "config": config},
+            lambda kwargs: create_appendix_methodology(**kwargs),
+        ),
+        "appendix_glossary": (
+            lambda: {"doc": doc, "styles": styles},
+            lambda kwargs: create_appendix_glossary(**kwargs),
+        ),
+        "appendix_full_evidence": (
+            lambda: {"doc": doc, "styles": styles, "df": df, "filtered": filtered},
+            lambda kwargs: create_appendix_full_evidence(**kwargs),
+        ),
+    }
 
-    # === KEY FINDINGS ===
-    if section_enabled("key_findings"):
-        create_key_findings_table(doc, styles, flags)
-
-    # === EVIDENCE INDEX ===
-    if section_enabled("evidence_index"):
-        create_evidence_index(doc, styles, df, engine)
-
-    # === DETAILED FINDINGS ===
-    if section_enabled("detailed_findings"):
-        create_anomaly_detail_section(doc, styles, flags, df)
-
-    # === TIMELINE ===
-    if section_enabled("timeline"):
-        create_timeline_section(doc, styles, df, flags)
-
-    # === OFGEM COMPARISON ===
-    if section_enabled("ofgem"):
-        create_ofgem_comparison(doc, styles, df)
-
-    # === STATISTICAL ANALYSIS ===
-    if section_enabled("statistical"):
-        create_statistical_analysis(doc, styles, df)
-
-    # === PAYMENT ANALYSIS ===
-    if section_enabled("payment"):
-        create_payment_analysis(doc, styles, df)
-
-    # === FORECAST ===
-    if section_enabled("forecast"):
-        create_forecast_section(doc, styles, df)
-
-    # === DATA QUALITY ===
-    if section_enabled("data_quality"):
-        create_data_quality_section(doc, styles, df)
-
-    # === TARIFF IMPACT ===
-    if section_enabled("tariff"):
-        create_tariff_impact_section(doc, styles, df)
-
-    # === APPENDICES ===
-    if section_enabled("appendix_methodology"):
-        create_appendix_methodology(doc, styles, config)
-
-    if section_enabled("appendix_glossary"):
-        create_appendix_glossary(doc, styles)
-
-    if section_enabled("appendix_full_evidence"):
-        create_appendix_full_evidence(doc, styles, df, filtered)
+    for spec in REPORT_SECTIONS:
+        if not section_enabled(spec.key):
+            continue
+        entry = section_builders.get(spec.key)
+        if entry is None:
+            raise RuntimeError(
+                f"REPORT_SECTIONS lists '{spec.key}' but no DOCX builder is wired "
+                f"in generate_ombudsman_docx. Add it to section_builders."
+            )
+        arg_factory, invoke = entry
+        kwargs = arg_factory()
+        kwargs["ctx"] = render_ctx
+        invoke(kwargs)
 
     # Save
     doc.save(output_path)

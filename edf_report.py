@@ -8,6 +8,7 @@ OFGEM Price Cap Comparison, and full Evidence Appendix.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -31,7 +32,7 @@ from reportlab.platypus import (
 )
 
 # Import from main module
-from edf_collector import parse_to_display_date, parse_to_sort_date
+from edf_collector import HAS_SCIPY, parse_to_display_date, parse_to_sort_date
 
 # =============================================================================
 # COLOR PALETTE & CONSTANTS
@@ -430,6 +431,124 @@ def build_doc_template(output_path: str) -> BaseDocTemplate:
 # =============================================================================
 
 
+# Single source of truth for the report section layout. Both the PDF and DOCX
+# generators consume this list to produce the Table of Contents AND to derive
+# every body heading at render time. Adding a new section:
+#
+#   1. Add an entry to ``REPORT_SECTIONS`` below with its key, title, is_appendix.
+#   2. Add a matching key to ``ReportOptionsDialog.SECTIONS`` in
+#      edf_collector.py so the user can toggle it from the GUI.
+#   3. Add a ``def create_<name>(...)`` builder function in this module.
+#   4. Add the builder to the ``section_builders`` dict in BOTH
+#      ``generate_ombudsman_pdf`` (PDF) and ``generate_ombudsman_docx`` (DOCX).
+#      Stepping on a missing build entry will raise RuntimeError at dispatch —
+#      that's intentional; it's how the registry stays in lockstep with the
+#      dispatch.
+#
+# Sections whose key is in ``config["report_sections"]`` are included. Main
+# sections are numbered 1, 2, 3... and appendices are lettered A, B, C..., all
+# computed at render time based on the user's selection. So the body's heading
+# text and the TOC ALWAYS match, regardless of which sections are toggled.
+@dataclass(frozen=True)
+class ReportSectionMeta:
+    """Manifest entry for one report section."""
+
+    key: str
+    title: str
+    is_appendix: bool = False
+
+
+REPORT_SECTIONS: list[ReportSectionMeta] = [
+    ReportSectionMeta("exec_summary", "Executive Summary"),
+    ReportSectionMeta("key_findings", "Key Findings Summary"),
+    ReportSectionMeta("evidence_index", "Evidence Index & Source Cross-Reference"),
+    ReportSectionMeta("detailed_findings", "Detailed Findings"),
+    ReportSectionMeta("timeline", "Timeline of Events"),
+    ReportSectionMeta("ofgem", "OFGEM Price Cap Comparison"),
+    ReportSectionMeta("statistical", "Statistical Analysis"),
+    ReportSectionMeta("payment", "Payment & Credit Analysis"),
+    ReportSectionMeta("forecast", "Forecast & Projection"),
+    ReportSectionMeta("data_quality", "Data Quality Assessment"),
+    ReportSectionMeta("tariff", "Tariff Impact Analysis"),
+    ReportSectionMeta("appendix_methodology", "Methodology & Data Sources", is_appendix=True),
+    ReportSectionMeta("appendix_glossary", "Glossary", is_appendix=True),
+    ReportSectionMeta("appendix_full_evidence", "Full Evidence Table", is_appendix=True),
+]
+
+
+@dataclass(frozen=True)
+class _LabelledSection:
+    """A section after numbering has been resolved for the selected report."""
+
+    section: ReportSectionMeta
+    label: str  # e.g. "1." or "A."
+    index: int  # within main (or appendix) list
+
+
+class RenderContext:
+    """Per-render state used to derive headings consistently.
+
+    The body builders call ``ctx.heading(key)`` to get the heading string for
+    the section they own. The TOC builder iterates ``ctx.sections_in_order``
+    to produce the matching TOC.
+    """
+
+    def __init__(self, selected: set[str] | list[str] | None = None) -> None:
+        # Default: every section selected, so context-free usage produces the
+        # legacy full-numbering layout (back-compat with old static tests).
+        if selected:
+            self.selected = set(selected)
+        else:
+            self.selected = {s.key for s in REPORT_SECTIONS}
+
+        # Compute numeric/alphabetic labels only for selected & visible sections,
+        # skipping framing sections (cover, toc) which are not listed in
+        # REPORT_SECTIONS — they never appear in the body nor the TOC.
+        visible = [s for s in REPORT_SECTIONS if s.key in self.selected]
+        main = [s for s in visible if not s.is_appendix]
+        appendix = [s for s in visible if s.is_appendix]
+        self._labelled: dict[str, _LabelledSection] = {}
+        for i, section in enumerate(main, start=1):
+            self._labelled[section.key] = _LabelledSection(section=section, label=f"{i}.", index=i)
+        for i, section in enumerate(appendix):
+            label = chr(ord("A") + i) + "."
+            self._labelled[section.key] = _LabelledSection(
+                section=section, label=label, index=i + 1
+            )
+
+    @property
+    def sections_in_order(self) -> list[_LabelledSection]:
+        """All sections that should appear in the TOC, in order."""
+        main = [v for v in self._labelled.values() if not v.section.is_appendix]
+        appendix = [v for v in self._labelled.values() if v.section.is_appendix]
+        return main + appendix
+
+    def heading(self, key: str) -> str:
+        """Return the full heading line for the given section key.
+
+        e.g. ``ctx.heading('timeline')`` returns ``"5. Timeline of Events"`` if
+        timeline is the 5th selected main section. Raises KeyError if the key
+        is not in REPORT_SECTIONS.
+        """
+        section = next((s for s in REPORT_SECTIONS if s.key == key), None)
+        if section is None:
+            raise KeyError(f"Unknown section key: {key!r}")
+        labelled = self._labelled.get(key)
+        if labelled is None:
+            # Section was present but not selected — use its natural title
+            # (no number) so we never produce "0. Title" or similar.
+            return section.title
+        return f"{labelled.label} {section.title}"
+
+    def short_label(self, key: str) -> str:
+        """Just the numeric / alphabetic marker, e.g. ``"3."`` or ``"A."``.
+
+        Returns ``""`` if the section is not selected or unrecognised.
+        """
+        labelled = self._labelled.get(key)
+        return labelled.label if labelled else ""
+
+
 def create_cover_page(
     account_ref: str, period_start: str, period_end: str, report_date: str
 ) -> list:
@@ -482,48 +601,33 @@ def create_cover_page(
     return elements
 
 
-def create_table_of_contents() -> list:
-    """Create table of contents as a single table."""
+def create_table_of_contents(ctx: RenderContext) -> list:
+    """Create table of contents as a single table, driven by ``ctx``.
+
+    Numbers and titles come straight from the RenderContext — same registry
+    as the body builders — so the TOC will always line up with the body
+    regardless of which sections the user toggled in the GUI.
+    """
     elements = []
     elements.append(Paragraph("Table of Contents", STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.5 * cm))
 
-    toc_items = [
-        ("1.", "Executive Summary", "3"),
-        ("2.", "Key Findings Summary", "4"),
-        ("3.", "Evidence Index &amp; Source Cross-Reference", "5"),
-        ("4.", "Detailed Findings", "6"),
-        ("  4.1", "Billing Anomalies &amp; Discrepancies", "6"),
-        ("  4.2", "Billing Gaps &amp; Missing Periods", "7"),
-        ("  4.3", "Meter Reading Quality Issues", "7"),
-        ("  4.3", "Reconciliation Mismatches", "8"),
-        ("  4.4", "Payment &amp; Credit Analysis", "8"),
-        ("5.", "Timeline of Events", "9"),
-        ("6.", "OFGEM Price Cap Comparison", "10"),
-        ("7.", "Statistical Analysis", "11"),
-        ("8.", "Payment &amp; Credit Analysis", "12"),
-        ("9.", "Forecast &amp; Projection", "13"),
-        ("10.", "Data Quality Assessment", "14"),
-        ("11.", "Tariff Impact Analysis", "15"),
-        ("", "Appendices", "15"),
-        ("A", "Methodology &amp; Data Sources", "16"),
-        ("B", "Glossary", "18"),
-        ("C", "Full Evidence Table", "19"),
-    ]
+    if not ctx.sections_in_order:
+        elements.append(Paragraph("<i>No report sections selected.</i>", STYLES["BodyText"]))
+        elements.append(PageBreak())
+        return elements
 
-    # Build all rows into a single table
-    toc_data = [["No.", "Section", "Page"]]
-    for num, title, page in toc_items:
-        toc_data.append([num, title, page])
+    toc_data = [["No.", "Section"]]
+    for spec in ctx.sections_in_order:
+        toc_data.append([spec.label, spec.section.title])
 
-    toc_table = Table(toc_data, colWidths=[1.5 * cm, CONTENT_WIDTH - 3 * cm, 1.5 * cm])
+    toc_table = Table(toc_data, colWidths=[1.5 * cm, CONTENT_WIDTH - 1.5 * cm])
     style = TableStyle(
         [
             ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
             ("FONTSIZE", (0, 0), (-1, -1), 10),
             ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
             ("ALIGN", (0, 0), (0, -1), "LEFT"),
-            ("ALIGN", (2, 0), (2, -1), "RIGHT"),
             ("LEFTPADDING", (0, 0), (-1, -1), 0),
             ("RIGHTPADDING", (0, 0), (-1, -1), 0),
             ("TOPPADDING", (0, 0), (-1, -1), 3),
@@ -535,14 +639,7 @@ def create_table_of_contents() -> list:
         ]
     )
 
-    # Bold for main sections, indent for subsections
-    for i, (num, _title, _page) in enumerate(toc_items, 1):
-        is_section = not num.startswith("  ") and num
-        weight = "Helvetica-Bold" if is_section else "Helvetica"
-        indent = 0 if is_section else 1.5 * cm
-        style.add("FONTNAME", (0, i), (-1, i), weight)
-        style.add("LEFTPADDING", (0, i), (0, i), indent)
-
+    # Header row already styled above; nothing per-row needed beyond defaults
     toc_table.setStyle(style)
     elements.append(toc_table)
     elements.append(PageBreak())
@@ -564,11 +661,15 @@ def create_executive_summary(
     total_payments: float,
     period_start: str,
     period_end: str,
+    ctx: RenderContext | None = None,
 ) -> list:
     """Create executive summary section."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("exec_summary")
 
-    elements.append(Paragraph("1. Executive Summary", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     # Overview paragraph
@@ -650,11 +751,14 @@ def create_executive_summary(
 # =============================================================================
 
 
-def create_key_findings_table(flags: list) -> list:
+def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> list:
     """Create key findings summary table from flags."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("key_findings")
 
-    elements.append(Paragraph("2. Key Findings Summary", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     if not flags:
@@ -729,13 +833,14 @@ def create_key_findings_table(flags: list) -> list:
 # =============================================================================
 
 
-def create_evidence_index(df: pd.DataFrame, engine: Any) -> list:
+def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | None = None) -> list:
     """Create evidence index with source cross-references."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("evidence_index")
 
-    elements.append(
-        Paragraph("3. Evidence Index &amp; Source Cross-Reference", STYLES["SectionHeader"])
-    )
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     # Source summary
@@ -793,11 +898,18 @@ def create_evidence_index(df: pd.DataFrame, engine: Any) -> list:
 # =============================================================================
 
 
-def create_anomaly_detail_section(flags: list, df: pd.DataFrame) -> list:
+def create_anomaly_detail_section(
+    flags: list, df: pd.DataFrame, ctx: RenderContext | None = None
+) -> list:
     """Create detailed anomaly findings section."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("detailed_findings")
+    # Used for the dynamic 4.x subsection labels under this section.
+    parent_label = ctx.short_label("detailed_findings").rstrip(".")  # e.g. "4"
 
-    elements.append(Paragraph("4. Detailed Findings", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     # Group by category
@@ -815,13 +927,16 @@ def create_anomaly_detail_section(flags: list, df: pd.DataFrame) -> list:
         if ftype in categories:
             categories[ftype].append(f)
 
-    for cat, cat_flags in categories.items():
+    for cat_idx, (cat, cat_flags) in enumerate(categories.items(), 1):
         if not cat_flags:
             continue
 
+        # Subsections under "Detailed Findings" — number is dynamic: 4.1, 4.2,
+        # ... or whatever the parent label resolves to in the live report.
+        sub_label = f"{parent_label}.{cat_idx}" if parent_label else str(cat_idx)
         elements.append(
             Paragraph(
-                f"4.{list(categories.keys()).index(cat) + 1} {cat.replace('_', ' ').title()}",
+                f"{sub_label} {cat.replace('_', ' ').title()}",
                 STYLES["SubSectionHeader"],
             )
         )
@@ -856,11 +971,16 @@ def create_anomaly_detail_section(flags: list, df: pd.DataFrame) -> list:
     return elements
 
 
-def create_timeline_section(df: pd.DataFrame, flags: list) -> list:
+def create_timeline_section(
+    df: pd.DataFrame, flags: list, ctx: RenderContext | None = None
+) -> list:
     """Create chronological timeline of events."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("timeline")
 
-    elements.append(Paragraph("5. Timeline of Events", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     # Build timeline events
@@ -988,11 +1108,16 @@ def _period_to_ofgem_quarter(dt: datetime | None) -> str | None:
         return None
 
 
-def create_ofgem_comparison(df: pd.DataFrame, config: dict | None = None) -> list:
+def create_ofgem_comparison(
+    df: pd.DataFrame, config: dict | None = None, ctx: RenderContext | None = None
+) -> list:
     """Create OFGEM price cap comparison section."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("ofgem")
 
-    elements.append(Paragraph("6. OFGEM Price Cap Comparison", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     elements.append(
@@ -1124,11 +1249,14 @@ def create_ofgem_comparison(df: pd.DataFrame, config: dict | None = None) -> lis
 # =============================================================================
 
 
-def create_statistical_analysis(dfc: pd.DataFrame) -> list:
+def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create statistical analysis section."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("statistical")
 
-    elements.append(Paragraph("7. Statistical Analysis", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     dfc = dfc.copy()
@@ -1232,11 +1360,14 @@ def create_statistical_analysis(dfc: pd.DataFrame) -> list:
 # =============================================================================
 
 
-def create_payment_analysis(dfc: pd.DataFrame) -> list:
+def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create payment & credit analysis section."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("payment")
 
-    elements.append(Paragraph("8. Payment &amp; Credit Analysis", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     payments = dfc[dfc["Entry Type"].isin(["Payment", "Credit"])].copy()
@@ -1308,11 +1439,14 @@ def create_payment_analysis(dfc: pd.DataFrame) -> list:
 # =============================================================================
 
 
-def create_forecast_section(dfc: pd.DataFrame) -> list:
+def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create forecast & projection section."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("forecast")
 
-    elements.append(Paragraph("9. Forecast &amp; Projection", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     elements.append(
@@ -1341,28 +1475,9 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
         elements.append(PageBreak())
         return elements
 
-    # Try to import scipy for linear regression
-    has_scipy = False
-    try:
+    if HAS_SCIPY:
         from scipy import stats as sp_stats
 
-        has_scipy = True
-    except ImportError:
-        has_scipy = False
-
-    # Try to import statsmodels for Holt-Winters
-    has_statsmodels = False
-    try:
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing
-
-        has_statsmodels = True
-    except ImportError:
-        has_statsmodels = False
-
-    # 1. Linear Regression Forecast
-    linear_forecast = []
-    model_info = []
-    if has_scipy:
         x = np.arange(n)
         slope, intercept, r_value, p_value, std_err = sp_stats.linregress(x, amounts)
         linear_forecast = [intercept + slope * (n + i) for i in range(1, 7)]
@@ -1373,6 +1488,14 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
         # Fallback: simple average
         linear_forecast = [float(np.mean(amounts))] * 6
         model_info = ["<b>Linear Regression:</b> not available (install scipy) - using mean"]
+
+    # Try to import statsmodels for Holt-Winters
+    try:
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+        has_statsmodels = True
+    except ImportError:
+        has_statsmodels = False
 
     # 2. EMA (Exponential Moving Average) Forecast
     alpha = 0.3  # smoothing factor
@@ -1449,11 +1572,14 @@ def create_forecast_section(dfc: pd.DataFrame) -> list:
 # =============================================================================
 
 
-def create_data_quality_section(df: pd.DataFrame) -> list:
+def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create data quality assessment section."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("data_quality")
 
-    elements.append(Paragraph("10. Data Quality Assessment", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     total = len(df)
@@ -1549,11 +1675,14 @@ def create_data_quality_section(df: pd.DataFrame) -> list:
 # =============================================================================
 
 
-def create_tariff_impact_section(dfc: pd.DataFrame) -> list:
+def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create tariff impact analysis section."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("tariff")
 
-    elements.append(Paragraph("11. Tariff Impact Analysis", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     if "Tariff" not in dfc.columns or dfc["Tariff"].isna().all():
@@ -1643,14 +1772,15 @@ def create_tariff_impact_section(dfc: pd.DataFrame) -> list:
 # =============================================================================
 
 
-def create_appendix_methodology(config: dict) -> list:
-    """Create Appendix A: Methodology."""
+def create_appendix_methodology(config: dict, ctx: RenderContext | None = None) -> list:
+    """Create Methodology appendix."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("appendix_methodology")
 
     elements.append(PageBreak())
-    elements.append(
-        Paragraph("Appendix A: Methodology &amp; Data Sources", STYLES["SectionHeader"])
-    )
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     sections = [
@@ -1725,12 +1855,18 @@ def create_appendix_methodology(config: dict) -> list:
 
 
 def create_appendix_full_evidence(
-    df: pd.DataFrame, filtered: list | None = None, config: dict | None = None
+    df: pd.DataFrame,
+    filtered: list | None = None,
+    config: dict | None = None,
+    ctx: RenderContext | None = None,
 ) -> list:
-    """Create Appendix C: Full Evidence Table with all records."""
+    """Create Full Evidence Table appendix, plus optional Filtered Records sub-table."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("appendix_full_evidence")
 
-    elements.append(Paragraph("Appendix C: Full Evidence Table", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     elements.append(
@@ -1839,12 +1975,15 @@ def create_appendix_full_evidence(
     if filtered:
         elements.append(PageBreak())
         min_amt = fmt_money(config.get("min_amount", 500)) if config else "£500"
-        elements.append(
-            Paragraph(
-                f"Appendix C (cont.): Filtered Records (Below {min_amt} Threshold)",
-                STYLES["SectionHeader"],
-            )
+        # Continuation of the same appendix, not a new section. Use the same
+        # alphabetic label as the parent (e.g. "A." for methodology).
+        cont_label = ctx.short_label("appendix_full_evidence").rstrip(".")
+        cont_heading = (
+            f"{cont_label}. (cont.) Filtered Records (Below {min_amt} Threshold)"
+            if cont_label
+            else f"Filtered Records (Below {min_amt} Threshold)"
         )
+        elements.append(Paragraph(cont_heading, STYLES["SectionHeader"]))
         elements.append(Spacer(1, 0.3 * cm))
 
         filt_data = [evidence_header]
@@ -1899,11 +2038,14 @@ def create_appendix_full_evidence(
     return elements
 
 
-def create_appendix_glossary() -> list:
-    """Create Appendix B: Glossary."""
+def create_appendix_glossary(ctx: RenderContext | None = None) -> list:
+    """Create Glossary appendix."""
     elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("appendix_glossary")
 
-    elements.append(Paragraph("Appendix B: Glossary", STYLES["SectionHeader"]))
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     terms = {
@@ -2088,8 +2230,15 @@ def generate_ombudsman_pdf(
     if not enabled_sections:
         enabled_sections = all_sections
 
+    # === DISCIPLINED SECTION DISPATCH ===
+    # Walk every enabled section in REGISTRY ORDER so TOC and body always
+    # agree on numbering. Each branch is a one-liner that delegates to the
+    # appropriate ``create_*`` function plus its RenderContext.
     def section_enabled(key: str) -> bool:
         return key in enabled_sections
+
+    # RenderContext derives all number/letter labels once, from the registry.
+    render_ctx = RenderContext(enabled_sections)
 
     # Build document
     doc = build_doc_template(output_path)
@@ -2108,123 +2257,102 @@ def generate_ombudsman_pdf(
     # === TABLE OF CONTENTS ===
     if section_enabled("toc"):
         try:
-            elements.extend(create_table_of_contents())
+            elements.extend(create_table_of_contents(render_ctx))
         except Exception as e:
             elements.append(Paragraph(f"<i>Table of Contents failed: {e}</i>", STYLES["BodyText"]))
 
-    # === EXECUTIVE SUMMARY ===
-    if section_enabled("exec_summary"):
-        try:
-            elements.extend(
-                create_executive_summary(
-                    df,
-                    config,
-                    acc_ref,
-                    flag_counts,
-                    len(records),
-                    charges,
-                    payments,
-                    period_start,
-                    period_end,
-                )
+    # === SECTION DISPATCH (data-driven — keys/ordering live in REPORT_SECTIONS) ===
+    # Each entry: (key, required_factory(ctx) -> dict of kwargs, builder_callable)
+    # ``required_factory`` returns the kwargs the builder needs; ``builder_callable``
+    # is invoked with those kwargs to produce the reportlab elements. Adding a new
+    # node to REPORT_SECTIONS without an entry here will raise at dispatch time —
+    # keep them in sync. Build registry mirrors ``REPORT_SECTIONS``.
+    section_builders: dict[str, tuple] = {
+        "exec_summary": (
+            lambda: {
+                "df": df,
+                "config": config,
+                "account_ref": acc_ref,
+                "flag_count": flag_counts,
+                "total_records": len(records),
+                "total_charges": charges,
+                "total_payments": payments,
+                "period_start": period_start,
+                "period_end": period_end,
+            },
+            lambda kwargs: create_executive_summary(**kwargs),
+        ),
+        "key_findings": (
+            lambda: {"flags": flags},
+            lambda kwargs: create_key_findings_table(**kwargs),
+        ),
+        "evidence_index": (
+            lambda: {"df": df, "engine": engine},
+            lambda kwargs: create_evidence_index(**kwargs),
+        ),
+        "detailed_findings": (
+            lambda: {"flags": flags, "df": df},
+            lambda kwargs: create_anomaly_detail_section(**kwargs),
+        ),
+        "timeline": (
+            lambda: {"df": df, "flags": flags},
+            lambda kwargs: create_timeline_section(**kwargs),
+        ),
+        "ofgem": (
+            lambda: {"df": df, "config": config},
+            lambda kwargs: create_ofgem_comparison(**kwargs),
+        ),
+        "statistical": (
+            lambda: {"dfc": df},
+            lambda kwargs: create_statistical_analysis(**kwargs),
+        ),
+        "payment": (
+            lambda: {"dfc": df},
+            lambda kwargs: create_payment_analysis(**kwargs),
+        ),
+        "forecast": (
+            lambda: {"dfc": df},
+            lambda kwargs: create_forecast_section(**kwargs),
+        ),
+        "data_quality": (
+            lambda: {"df": df},
+            lambda kwargs: create_data_quality_section(**kwargs),
+        ),
+        "tariff": (
+            lambda: {"dfc": df},
+            lambda kwargs: create_tariff_impact_section(**kwargs),
+        ),
+        "appendix_methodology": (
+            lambda: {"config": config},
+            lambda kwargs: create_appendix_methodology(**kwargs),
+        ),
+        "appendix_glossary": (
+            lambda: {},
+            lambda kwargs: create_appendix_glossary(**kwargs),
+        ),
+        "appendix_full_evidence": (
+            lambda: {"df": df, "filtered": filtered, "config": config},
+            lambda kwargs: create_appendix_full_evidence(**kwargs),
+        ),
+    }
+
+    # Sections missing a builder entry here will fail loudly rather than skip.
+    for section in REPORT_SECTIONS:
+        if not section_enabled(section.key):
+            continue
+        entry = section_builders.get(section.key)
+        if entry is None:
+            raise RuntimeError(
+                f"REPORT_SECTIONS lists '{section.key}' but no builder is wired "
+                f"in generate_ombudsman_pdf. Add it to section_builders."
             )
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Executive Summary failed: {e}</i>", STYLES["BodyText"]))
-
-    # === KEY FINDINGS ===
-    if section_enabled("key_findings"):
+        arg_factory, invoke = entry
         try:
-            elements.extend(create_key_findings_table(flags))
+            kwargs = arg_factory()
+            kwargs["ctx"] = render_ctx
+            elements.extend(invoke(kwargs))
         except Exception as e:
-            elements.append(Paragraph(f"<i>Key Findings failed: {e}</i>", STYLES["BodyText"]))
-
-    # === EVIDENCE INDEX ===
-    if section_enabled("evidence_index"):
-        try:
-            elements.extend(create_evidence_index(df, engine))
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Evidence Index failed: {e}</i>", STYLES["BodyText"]))
-
-    # === DETAILED FINDINGS ===
-    if section_enabled("detailed_findings"):
-        try:
-            elements.extend(create_anomaly_detail_section(flags, df))
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Detailed Findings failed: {e}</i>", STYLES["BodyText"]))
-
-    # === TIMELINE ===
-    if section_enabled("timeline"):
-        try:
-            elements.extend(create_timeline_section(df, flags))
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Timeline failed: {e}</i>", STYLES["BodyText"]))
-
-    # === OFGEM COMPARISON ===
-    if section_enabled("ofgem"):
-        try:
-            elements.extend(create_ofgem_comparison(df, config))
-        except Exception as e:
-            elements.append(Paragraph(f"<i>OFGEM Comparison failed: {e}</i>", STYLES["BodyText"]))
-
-    # === STATISTICAL ANALYSIS ===
-    if section_enabled("statistical"):
-        try:
-            elements.extend(create_statistical_analysis(df))
-        except Exception as e:
-            elements.append(
-                Paragraph(f"<i>Statistical Analysis failed: {e}</i>", STYLES["BodyText"])
-            )
-
-    # === PAYMENT ANALYSIS ===
-    if section_enabled("payment"):
-        try:
-            elements.extend(create_payment_analysis(df))
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Payment Analysis failed: {e}</i>", STYLES["BodyText"]))
-
-    # === FORECAST ===
-    if section_enabled("forecast"):
-        try:
-            elements.extend(create_forecast_section(df))
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Forecast failed: {e}</i>", STYLES["BodyText"]))
-
-    # === DATA QUALITY ===
-    if section_enabled("data_quality"):
-        try:
-            elements.extend(create_data_quality_section(df))
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Data Quality failed: {e}</i>", STYLES["BodyText"]))
-
-    # === TARIFF IMPACT ===
-    if section_enabled("tariff"):
-        try:
-            elements.extend(create_tariff_impact_section(df))
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Tariff Impact failed: {e}</i>", STYLES["BodyText"]))
-
-    # === APPENDICES ===
-    if section_enabled("appendix_methodology"):
-        try:
-            elements.extend(create_appendix_methodology(config))
-        except Exception as e:
-            elements.append(
-                Paragraph(f"<i>Appendix Methodology failed: {e}</i>", STYLES["BodyText"])
-            )
-
-    if section_enabled("appendix_glossary"):
-        try:
-            elements.extend(create_appendix_glossary())
-        except Exception as e:
-            elements.append(Paragraph(f"<i>Appendix Glossary failed: {e}</i>", STYLES["BodyText"]))
-
-    if section_enabled("appendix_full_evidence"):
-        try:
-            elements.extend(create_appendix_full_evidence(df, filtered, config))
-        except Exception as e:
-            elements.append(
-                Paragraph(f"<i>Appendix Full Evidence failed: {e}</i>", STYLES["BodyText"])
-            )
+            elements.append(Paragraph(f"<i>{section.title} failed: {e}</i>", STYLES["BodyText"]))
 
     # Build
     doc.build(elements)
