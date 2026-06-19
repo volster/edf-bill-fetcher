@@ -91,9 +91,7 @@ class TestRenderContextNumbering:
         ctx = RenderContext()
 
         # Walk by registry order; convert to (label, title) pairs.
-        labels_titles = [
-            (spec.label, spec.section.title) for spec in ctx.sections_in_order
-        ]
+        labels_titles = [(spec.label, spec.section.title) for spec in ctx.sections_in_order]
 
         # First 11 entries are numeric (main). The keys match the
         # first 11 entries of REPORT_SECTIONS in registry order.
@@ -124,15 +122,24 @@ class TestRenderContextNumbering:
         regardless.
         """
         ctx = RenderContext(
-            selected={"exec_summary", "key_findings", "evidence_index",
-                      "detailed_findings", "timeline", "ofgem",
-                      "payment", "forecast", "data_quality", "tariff",
-                      "appendix_methodology", "appendix_glossary", "appendix_full_evidence"}
+            selected={
+                "exec_summary",
+                "key_findings",
+                "evidence_index",
+                "detailed_findings",
+                "timeline",
+                "ofgem",
+                "payment",
+                "forecast",
+                "data_quality",
+                "tariff",
+                "appendix_methodology",
+                "appendix_glossary",
+                "appendix_full_evidence",
+            }
         )
 
-        labels_by_key = {
-            spec.section.key: spec.label for spec in ctx.sections_in_order
-        }
+        labels_by_key = {spec.section.key: spec.label for spec in ctx.sections_in_order}
 
         # payment moves to slot 7 after statistical is dropped.
         assert labels_by_key["payment"] == "7.", "payment should renumber to 7."
@@ -148,9 +155,7 @@ class TestRenderContextNumbering:
     def test_only_appendices_selected(self):
         """If the user enables only appendices, the TOC contains only
         letter entries — no numeric ones."""
-        ctx = RenderContext({
-            "appendix_methodology", "appendix_glossary", "appendix_full_evidence"
-        })
+        ctx = RenderContext({"appendix_methodology", "appendix_glossary", "appendix_full_evidence"})
 
         labels = [s.label for s in ctx.sections_in_order]
         assert labels == ["A.", "B.", "C."]
@@ -257,13 +262,9 @@ class TestRenderContextDispatchGuard:
     def _make_minimal_engine(self):
         from types import SimpleNamespace
 
-        return SimpleNamespace(
-            pdf_count=0, email_count=0, records=[], filtered_records=[]
-        )
+        return SimpleNamespace(pdf_count=0, email_count=0, records=[], filtered_records=[])
 
-    def test_pdf_dispatcher_raises_when_registry_missing_builder(
-        self, tmp_path, monkeypatch
-    ):
+    def test_pdf_dispatcher_raises_when_registry_missing_builder(self, tmp_path, monkeypatch):
         """Adding a section to ``REPORT_SECTIONS`` without wiring it
         into the PDF dispatch table must blow up loud-and-fast.
 
