@@ -151,67 +151,160 @@ class TestNewCreditExtraction:
 
 
 class TestAmountPatterns:
-    """Tests for the AMOUNT_PATTERNS regex list."""
+    """Tests for the AMOUNT_PATTERNS regex list.
 
-    def test_pattern_current_balance_debit(self):
-        text = "Current balance £1,234.56 debit"
-        for p in AMOUNT_PATTERNS:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                assert float(m.group(1).replace(",", "")) == 1234.56
-                break
-        else:
-            pytest.fail("No pattern matched 'Current balance £1,234.56 debit'")
+    Each pattern in ``AMOUNT_PATTERNS`` is a (name, regex) tuple. These
+    tests pin the contract that:
 
-    def test_pattern_total_charges_period_debit(self):
-        text = "Total charges for this period £500.00 debit"
-        for p in AMOUNT_PATTERNS:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                assert float(m.group(1).replace(",", "")) == 500.00
-                break
-        else:
-            pytest.fail("No pattern matched 'Total charges for this period £500.00 debit'")
+    1. Each pattern matches its documented anchor text (the example).
+    2. The pattern's name correctly maps to a known route in
+       ``_classify_entry_type`` — "New Bill" or "Ongoing Balance".
+    3. Every pattern is unique (i.e. the canonical example matches
+       exactly one of them).
 
-    def test_pattern_total_credits_bill(self):
-        text = "Total credits for this bill £250.00"
-        for p in AMOUNT_PATTERNS:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                assert float(m.group(1).replace(",", "")) == 250.00
-                break
-        else:
-            pytest.fail("No pattern matched 'Total credits for this bill £250.00'")
+    Tests are written against names, not indices — reordering patterns
+    no longer breaks them, but adding/removing a real pattern still does
+    (intentional: that update forces the contributor to update the
+    tests AND the bucket sets together).
+    """
 
-    def test_pattern_your_new_account_balance(self):
-        text = "Your new account balance £800.00"
-        for p in AMOUNT_PATTERNS:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                assert float(m.group(1).replace(",", "")) == 800.00
-                break
-        else:
-            pytest.fail("No pattern matched 'Your new account balance £800.00'")
+    # Each entry is (pattern_name, anchor_text, expected_amount_as_float,
+    # expected_classification).
+    # Data-driven so adding new patterns is a one-line append.
+    NAMED_PATTERN_CASES: list[tuple[str, str, float, str]] = [
+        # New-style KI / KCR invoices (New Bill route)
+        ("current_balance_debit",
+         "Current balance £1,234.56 debit", 1234.56, "New Bill"),
+        ("total_charges_period",
+         "Total charges for this period £500.00 debit", 500.00, "New Bill"),
+        ("total_credits_bill",
+         "Total credits for this bill £250.00", 250.00, "New Bill"),
+        # Old-style cumulative balance (Ongoing Balance route)
+        ("your_new_account_balance",
+         "Your new account balance £800.00", 800.00, "Ongoing Balance"),
+        # Generic anchors (mixed, see below)
+        ("balance_within",
+         "Account balance £600.00 in debit", 600.00, "Ongoing Balance"),
+        ("total_charges_within",
+         "Your total charges £75.00 today", 75.00, "New Bill"),
+        ("total_amount_due_within",
+         "Your total amount due is £42.10", 42.10, "New Bill"),
+        ("amount_to_pay_within",
+         "Amount to pay £19.99", 19.99, "New Bill"),
+        ("pound_amount_debit",
+         "£99.99 in debit", 99.99, "New Bill"),
+        ("current_balance_within",
+         "Your current balance is £33.33", 33.33, "Ongoing Balance"),
+    ]
 
-    def test_pattern_balance_with_context(self):
-        text = "Balance brought forward £1,000.00"
-        for p in AMOUNT_PATTERNS:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                assert float(m.group(1).replace(",", "")) == 1000.00
-                break
-        else:
-            pytest.fail("No pattern matched 'Balance brought forward £1,000.00'")
+    def test_each_named_pattern_matches_its_anchor(self):
+        """For every (name, anchor) pair, exactly one AMOUNT_PATTERN
+        matches and it's the one whose name matches the input name.
 
-    def test_pattern_pound_amount_debit(self):
-        text = "£1,500.00 in debit"
-        for p in AMOUNT_PATTERNS:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                assert float(m.group(1).replace(",", "")) == 1500.00
-                break
-        else:
-            pytest.fail("No pattern matched '£1,500.00 in debit'")
+        This locks both: (a) the pattern exists in the registry, and
+        (b) it actually fires against its documented example.
+        """
+        from edf_collector import _AMOUNT_PATTERN_NEW_BILL, _AMOUNT_PATTERN_ONGOING_BALANCE
+
+        for name, anchor, expected_amount, expected_classification in self.NAMED_PATTERN_CASES:
+            matches = [
+                (n, m)
+                for n, p in AMOUNT_PATTERNS
+                if (m := re.search(p, anchor, re.IGNORECASE))
+            ]
+            assert matches, (
+                f"Anchor {anchor!r} matched no pattern (expected "
+                f"pattern {name!r} to match)."
+            )
+            matching_names = [n for n, _ in matches]
+            assert name in matching_names, (
+                f"Anchor {anchor!r} was matched by {matching_names} but "
+                f"expected {name!r} to be among them."
+            )
+            # Verify the captured amount is right.
+            primary = matches[0][1]
+            amount = float(primary.group(1).replace(",", ""))
+            assert amount == expected_amount, (
+                f"Anchor {anchor!r} captured {amount!r} for pattern "
+                f"{name!r}, expected {expected_amount!r}."
+            )
+            # Verify the name maps to the right classification bucket.
+            if expected_classification == "New Bill":
+                assert name in _AMOUNT_PATTERN_NEW_BILL, (
+                    f"Pattern {name!r} is not in the New Bill bucket — "
+                    f"the classifier would route it incorrectly."
+                )
+            else:
+                assert expected_classification == "Ongoing Balance", (
+                    "Test data mistake: only New Bill / Ongoing Balance are supported."
+                )
+                assert name in _AMOUNT_PATTERN_ONGOING_BALANCE, (
+                    f"Pattern {name!r} is not in the Ongoing Balance bucket — "
+                    f"the classifier would route it incorrectly."
+                )
+
+    def test_pattern_routes_cover_all_entries(self):
+        """Every registry entry must be in one of the two bucket sets.
+
+        A pattern with no bucket assignment would silently fall
+        through to heuristic classification, defeating the registry
+        contract. The :py:func:`edf_collector:AMOUNT_PATTERNS`
+        definition already asserts this at import time, but a test
+        here gives the developer's editor an immediate signal.
+        """
+        from edf_collector import _AMOUNT_PATTERN_NEW_BILL, _AMOUNT_PATTERN_ONGOING_BALANCE
+
+        for name, _ in AMOUNT_PATTERNS:
+            assert name in _AMOUNT_PATTERN_NEW_BILL or name in _AMOUNT_PATTERN_ONGOING_BALANCE, (
+                f"Pattern {name!r} has no entry-type bucket assigned."
+            )
+
+    def test_priority_order_specific_before_generic(self):
+        """Each specific anchor must come before the generic ``_within``
+        variant of the same intent.
+
+        Without this rule, the generic pattern would always fire first
+        on long-form bill bodies, leaving the more specific patterns
+        unreachable. Concretely:
+
+        * ``current_balance_debit`` must come before ``balance_within``.
+        * ``total_charges_period`` must come before ``total_charges_within``.
+        * ``your_new_account_balance`` must come before ``current_balance_within``
+          (both are "ongoing balance" shapes; the specific must win).
+        * ``total_credits_bill`` is a specific anchor with no generic
+          sibling — no constraint.
+        * ``pound_amount_debit`` is a specific leaf with no siblings —
+          no constraint.
+        * ``amount_to_pay_within`` / ``total_amount_due_within`` are
+          generic fall-throughs with no specific siblings — no constraint.
+
+        This test fails loud-and-fast when a future contributor
+        reorders the registry and accidentally hides a specialist
+        pattern behind a generic one.
+        """
+        names = [n for n, _ in AMOUNT_PATTERNS]
+
+        # (specific, must_come_before_this_generic_sibling)
+        order_invariants: list[tuple[str, str]] = [
+            ("current_balance_debit", "balance_within"),
+            ("total_charges_period", "total_charges_within"),
+            ("your_new_account_balance", "current_balance_within"),
+        ]
+        for specific, generic in order_invariants:
+            try:
+                specific_idx = names.index(specific)
+                generic_idx = names.index(generic)
+            except ValueError:
+                pytest.fail(
+                    f"Invariant violated: pattern {specific!r} or "
+                    f"{generic!r} missing from AMOUNT_PATTERNS."
+                )
+            assert specific_idx < generic_idx, (
+                f"Specific pattern {specific!r} (index {specific_idx}) "
+                f"must come before generic sibling {generic!r} (index "
+                f"{generic_idx}) — otherwise the specific pattern is "
+                f"unreachable on long-form bill text."
+            )
 
 
 class TestReadingPatterns:

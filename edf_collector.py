@@ -74,29 +74,70 @@ MEDIUM_GREY = "#666666"
 # ---------------------------------------------------------------------------
 # Extraction patterns
 # ---------------------------------------------------------------------------
-AMOUNT_PATTERNS = [
+# Amount-extraction regexes
+# ---------------------------------------------------------------------------
+#
+# Each entry is a (name, regex) tuple. The name maps to a single
+# ``Entry Type`` ("New Bill", "Ongoing Balance", ...) — this is the
+# contract the classifier consumes. Order matters: earlier entries
+# match first, so the more specific patterns (``current_balance_debit``,
+# ``total_charges_period``) take priority over the generic fall-through
+# ones (``balance_within``).
+#
+# Adding/removing/reordering a pattern no longer breaks the classifier —
+# the classifier drives off the *name* (a stable string), not off the
+# list index. If you add a new pattern you must also pick its entry
+# type in :data:`AMOUNT_PATTERN_ENTRY_TYPE` so the classifier routes
+# it correctly.
+AMOUNT_PATTERNS: list[tuple[str, str]] = [
     # New-style KI / KCR invoices — "Current balance £X debit"
-    r"current balance\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s*)?debit",
+    ("current_balance_debit", r"current balance\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit"),
     # New-style KI — "Total charges for this period £X debit"
-    r"total charges for this period\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s*)?debit",
+    ("total_charges_period", r"total charges for this period\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit"),
     # New-style KCR — "Total credits for this bill £X"
-    r"total credits for this bill\s+£\s?([\d,]+(?:\.\d{2})?)",
+    ("total_credits_bill", r"total credits for this bill\s+£\s?([\d,]+(?:\.\d{2})?)"),
     # Old-style cumulative balance
-    r"your new account balance\s+£\s?([\d,]+(?:\.\d{2})?)",
-    # Generic anchors
-    r"balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)",
-    r"total charges[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)",
-    r"total amount due[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)",
-    r"amount to pay[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)",
-    r"£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s*)?debit",
-    r"current balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)",
+    ("your_new_account_balance", r"your new account balance\s+£\s?([\d,]+(?:\.\d{2})?)"),
+    # Generic anchors (in priority order — more specific first)
+    ("balance_within", r"balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
+    ("total_charges_within", r"total charges[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
+    ("total_amount_due_within", r"total amount due[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
+    ("amount_to_pay_within", r"amount to pay[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
+    ("pound_amount_debit", r"£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit"),
+    ("current_balance_within", r"current balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
 ]
+#
+# Pattern name → entry type. The classifier looks up a pattern's name
+# here to decide whether a match is "New Bill" or "Ongoing Balance".
+# Unknown pattern names fall through to the heuristic body of
+# :py:meth:`EvidenceEngine._classify_entry_type`.
+_AMOUNT_PATTERN_NEW_BILL: frozenset[str] = frozenset({
+    "current_balance_debit",
+    "total_charges_period",
+    "total_credits_bill",
+    "total_charges_within",
+    "total_amount_due_within",
+    "amount_to_pay_within",
+    "pound_amount_debit",
+})
+_AMOUNT_PATTERN_ONGOING_BALANCE: frozenset[str] = frozenset({
+    "your_new_account_balance",
+    "balance_within",
+    "current_balance_within",
+})
+for name, _ in AMOUNT_PATTERNS:
+    assert name in _AMOUNT_PATTERN_NEW_BILL or name in _AMOUNT_PATTERN_ONGOING_BALANCE, (
+        f"AMOUNT_PATTERNS entry {name!r} has no entry-type bucket — "
+        "add it to either _AMOUNT_PATTERN_NEW_BILL or _AMOUNT_PATTERN_ONGOING_BALANCE."
+    )
 
-READING_PATTERNS = {
+
+READING_PATTERNS: dict[str, re.Pattern[str]] = {
     "Estimated": re.compile(r"estimated|est\.|estimate", re.IGNORECASE),
     "Actual": re.compile(r"actual|customer reading|your reading", re.IGNORECASE),
     "Smart": re.compile(r"smart meter|automated reading|smart reading", re.IGNORECASE),
 }
+
 
 PERIOD_RE = re.compile(
     r"(\d{1,2}(?:\s+\w+\s+\d{4}|\s*/\s*\d{2}\s*/\s*\d{4}|\s*-\s*\d{2}\s*-\s*\d{4}))"
@@ -570,16 +611,16 @@ class EvidenceEngine:
                 return
 
         found_amt, strategy = None, ""
-        matched_pattern_idx = -1
+        matched_pattern_name: str | None = None
 
         if self.config.get("use_anchors", True):
-            for idx, p in enumerate(AMOUNT_PATTERNS):
+            for name, p in AMOUNT_PATTERNS:
                 m = re.search(p, clean_text, re.IGNORECASE)
                 if m:
                     try:
                         found_amt = float(m.group(1).replace(",", ""))
                         strategy = "Smart Context"
-                        matched_pattern_idx = idx
+                        matched_pattern_name = name
                         break
                     except Exception:
                         continue
@@ -643,7 +684,7 @@ class EvidenceEngine:
 
         # Classify Entry Type based on content
         entry_type = self._classify_entry_type(
-            clean_text, matched_pattern_idx, period_from, period_to, strategy
+            clean_text, matched_pattern_name, period_from, period_to, strategy
         )
 
         self._add_record(
@@ -666,8 +707,32 @@ class EvidenceEngine:
             }
         )
 
-    def _classify_entry_type(self, text, pattern_idx, period_from, period_to, strategy):
-        """Classify a record as New Bill, Ongoing Balance, or Other based on content."""
+    def _classify_entry_type(
+        self,
+        text: str,
+        pattern_name: str | None,
+        period_from: str,
+        period_to: str,
+        strategy: str,
+    ) -> str:
+        """Classify a record as New Bill, Ongoing Balance, or Other based on content.
+
+        Args:
+            text (str): the cleaned bill body text.
+            pattern_name (str | None): the name of the regex from
+                :data:`AMOUNT_PATTERNS` that matched, or ``None`` if no
+                anchored match was found.
+            period_from, period_to (str): ``"N/A"`` or a parsed date.
+            strategy (str): either ``"Smart Context"`` (anchored pattern
+                matched) or ``"Large Amount Fallback"`` (anchored missed,
+                number extracted by fallback).
+
+        The classifier explicitly maps ``pattern_name`` to ``New Bill`` or
+        ``Ongoing Balance`` via
+        :data:`_AMOUNT_PATTERN_NEW_BILL` /
+        :data:`_AMOUNT_PATTERN_ONGOING_BALANCE`. Unknown / unset names
+        fall through to heuristic checks against the bill body text.
+        """
         text_lower = text.lower()
 
         # If it has billing period dates AND charges/invoice details → New Bill
@@ -681,12 +746,13 @@ class EvidenceEngine:
         if has_period and has_bill_markers:
             return "New Bill"
 
-        # Patterns 0-2 match current balance/total charges → these are new bill amounts
-        # Pattern 3 matches "your new account balance" → ongoing cumulative balance
-        if pattern_idx >= 0:
-            if pattern_idx <= 2:
+        # Pattern-name driven classification. The integer-index lookup
+        # used previously was brittle: reordering or inserting a pattern
+        # silently changed classification. Names are stable.
+        if pattern_name is not None:
+            if pattern_name in _AMOUNT_PATTERN_NEW_BILL:
                 return "New Bill"
-            if pattern_idx == 3:
+            if pattern_name in _AMOUNT_PATTERN_ONGOING_BALANCE:
                 return "Ongoing Balance"
 
         # If matched via "balance" pattern or has "account balance" language → Ongoing Balance
