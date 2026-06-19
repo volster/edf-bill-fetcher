@@ -1,14 +1,9 @@
 """Tests for EDF bill extraction patterns and helpers."""
 
 import re
-
-# Import the functions from the main module
-import sys
 from datetime import datetime
 
 import pytest
-
-sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
 
 from edf_collector import (
     _ISO_DATE_RE,

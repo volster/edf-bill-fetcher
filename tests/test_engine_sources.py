@@ -1,9 +1,5 @@
 """Tests for EvidenceEngine PDF/PST/HTM processing methods."""
 
-import sys
-
-sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
-
 from unittest.mock import MagicMock, Mock, mock_open, patch
 
 import pytest

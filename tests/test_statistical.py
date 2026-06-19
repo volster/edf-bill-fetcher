@@ -1,9 +1,5 @@
 """Tests for statistical analysis functions to improve coverage."""
 
-import sys
-
-sys.path.insert(0, "C:/Users/matthew/edf-bill-fetcher")
-
 import pandas as pd
 import pytest
 
