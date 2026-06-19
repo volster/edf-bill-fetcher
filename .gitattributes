@@ -1,0 +1,33 @@
+# Normalize line endings across the repo: LF in working copies,
+# CRLF in the index for the legacy CRLF-preserved DOS-style files
+# already in git history. New Python/TOML/Markdown/YAML files should
+# be added with the `text` attribute below.
+#
+# Background: this project has a long history on Windows + various
+# IDEs mixing LF and CRLF. We don't want to rewrite history on every
+# clone, so we tell git:
+#   * for ALL text files, work in LF locally;
+#   * keep the on-disk content of legacy CRLF files as CRLF in the
+#     index so existing clones don't churn.
+
+# Defaults: every text file uses LF in working copy; git autoclf cleans
+# the rest.
+* text=auto eol=lf
+
+# Force CRLF on these legacy files (already CRLF in the index).
+*.py text eol=crlf
+*.toml text eol=crlf
+.gitignore text eol=lf
+.github/workflows/*.yml text eol=lf
+*.md text eol=lf
+
+# Treat everything below as binary so no conversions ever happen.
+*.xlsx binary
+*.docx binary
+*.pdf binary
+*.pst binary
+*.ost binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
