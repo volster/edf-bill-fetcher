@@ -403,10 +403,12 @@ def create_key_findings_table(doc, styles, flags):
         for i, flag in enumerate(flags, 1):
             row = table.rows[i]
             # Flag tuple: (type, date, amount, detail, severity)
-            row.cells[0].text = flag[4] if len(flag) > 4 else ""          # Severity
-            row.cells[1].text = flag[0] if len(flag) > 0 else ""          # Category (type)
-            row.cells[2].text = flag[3] if len(flag) > 3 else ""          # Description (detail)
-            row.cells[3].text = fmt_date(flag[1]) if len(flag) > 1 else "" # Records Affected (date)
+            row.cells[0].text = flag[4] if len(flag) > 4 else ""  # Severity
+            row.cells[1].text = flag[0] if len(flag) > 0 else ""  # Category (type)
+            row.cells[2].text = flag[3] if len(flag) > 3 else ""  # Description (detail)
+            row.cells[3].text = (
+                fmt_date(flag[1]) if len(flag) > 1 else ""
+            )  # Records Affected (date)
 
         _format_table(table)
 
@@ -1122,9 +1124,21 @@ def generate_ombudsman_docx(
     enabled_sections = set(config.get("report_sections", []))
     # Backward compatibility: if not specified, enable all
     all_sections = {
-        "cover", "toc", "exec_summary", "key_findings", "evidence_index",
-        "detailed_findings", "timeline", "ofgem", "statistical", "payment",
-        "forecast", "data_quality", "tariff", "appendix_methodology", "appendix_glossary",
+        "cover",
+        "toc",
+        "exec_summary",
+        "key_findings",
+        "evidence_index",
+        "detailed_findings",
+        "timeline",
+        "ofgem",
+        "statistical",
+        "payment",
+        "forecast",
+        "data_quality",
+        "tariff",
+        "appendix_methodology",
+        "appendix_glossary",
         "appendix_full_evidence",
     }
     if not enabled_sections:
