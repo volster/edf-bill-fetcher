@@ -11,10 +11,10 @@ This test exercises the real bundled ``test.pdf`` through:
 It guarantees the full pipeline does not raise an exception and
 produces non-empty artifacts.
 
-Expected result on the bundled ``test.pdf`` (17 pages, an EDF Ombudsman
-Evidence Report template) — zero bill records are found because the PDF
-does not contain raw bill data, but the pipeline still produces empty
-report artifacts cleanly.
+The bundled ``test.pdf`` is a 17-page EDF Ombudsman Evidence Report
+template, not raw bill data — so the pipeline produces empty-but-valid
+output. The smoke still validates that the wiring survives a real
+PDF round-trip.
 """
 
 from pathlib import Path

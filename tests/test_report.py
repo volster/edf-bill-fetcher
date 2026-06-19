@@ -65,7 +65,7 @@ def _elements_to_text(elements):
             parts.append(str(getattr(el, "text", "")))
         elif cls_name == "Table":
             for row in getattr(el, "_cellvalues", []) or []:
-                for cell in (row if isinstance(row, list) else [row]):
+                for cell in row if isinstance(row, list) else [row]:
                     if cell is None:
                         continue
                     cls = type(cell).__name__

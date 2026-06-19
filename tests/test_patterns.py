@@ -168,28 +168,18 @@ class TestAmountPatterns:
     # Data-driven so adding new patterns is a one-line append.
     NAMED_PATTERN_CASES: list[tuple[str, str, float, str]] = [
         # New-style KI / KCR invoices (New Bill route)
-        ("current_balance_debit",
-         "Current balance £1,234.56 debit", 1234.56, "New Bill"),
-        ("total_charges_period",
-         "Total charges for this period £500.00 debit", 500.00, "New Bill"),
-        ("total_credits_bill",
-         "Total credits for this bill £250.00", 250.00, "New Bill"),
+        ("current_balance_debit", "Current balance £1,234.56 debit", 1234.56, "New Bill"),
+        ("total_charges_period", "Total charges for this period £500.00 debit", 500.00, "New Bill"),
+        ("total_credits_bill", "Total credits for this bill £250.00", 250.00, "New Bill"),
         # Old-style cumulative balance (Ongoing Balance route)
-        ("your_new_account_balance",
-         "Your new account balance £800.00", 800.00, "Ongoing Balance"),
+        ("your_new_account_balance", "Your new account balance £800.00", 800.00, "Ongoing Balance"),
         # Generic anchors (mixed, see below)
-        ("balance_within",
-         "Account balance £600.00 in debit", 600.00, "Ongoing Balance"),
-        ("total_charges_within",
-         "Your total charges £75.00 today", 75.00, "New Bill"),
-        ("total_amount_due_within",
-         "Your total amount due is £42.10", 42.10, "New Bill"),
-        ("amount_to_pay_within",
-         "Amount to pay £19.99", 19.99, "New Bill"),
-        ("pound_amount_debit",
-         "£99.99 in debit", 99.99, "New Bill"),
-        ("current_balance_within",
-         "Your current balance is £33.33", 33.33, "Ongoing Balance"),
+        ("balance_within", "Account balance £600.00 in debit", 600.00, "Ongoing Balance"),
+        ("total_charges_within", "Your total charges £75.00 today", 75.00, "New Bill"),
+        ("total_amount_due_within", "Your total amount due is £42.10", 42.10, "New Bill"),
+        ("amount_to_pay_within", "Amount to pay £19.99", 19.99, "New Bill"),
+        ("pound_amount_debit", "£99.99 in debit", 99.99, "New Bill"),
+        ("current_balance_within", "Your current balance is £33.33", 33.33, "Ongoing Balance"),
     ]
 
     def test_each_named_pattern_matches_its_anchor(self):
@@ -203,13 +193,10 @@ class TestAmountPatterns:
 
         for name, anchor, expected_amount, expected_classification in self.NAMED_PATTERN_CASES:
             matches = [
-                (n, m)
-                for n, p in AMOUNT_PATTERNS
-                if (m := re.search(p, anchor, re.IGNORECASE))
+                (n, m) for n, p in AMOUNT_PATTERNS if (m := re.search(p, anchor, re.IGNORECASE))
             ]
             assert matches, (
-                f"Anchor {anchor!r} matched no pattern (expected "
-                f"pattern {name!r} to match)."
+                f"Anchor {anchor!r} matched no pattern (expected pattern {name!r} to match)."
             )
             matching_names = [n for n, _ in matches]
             assert name in matching_names, (

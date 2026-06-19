@@ -93,7 +93,10 @@ AMOUNT_PATTERNS: list[tuple[str, str]] = [
     # New-style KI / KCR invoices — "Current balance £X debit"
     ("current_balance_debit", r"current balance\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit"),
     # New-style KI — "Total charges for this period £X debit"
-    ("total_charges_period", r"total charges for this period\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit"),
+    (
+        "total_charges_period",
+        r"total charges for this period\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit",
+    ),
     # New-style KCR — "Total credits for this bill £X"
     ("total_credits_bill", r"total credits for this bill\s+£\s?([\d,]+(?:\.\d{2})?)"),
     # Old-style cumulative balance
@@ -111,20 +114,24 @@ AMOUNT_PATTERNS: list[tuple[str, str]] = [
 # here to decide whether a match is "New Bill" or "Ongoing Balance".
 # Unknown pattern names fall through to the heuristic body of
 # :py:meth:`EvidenceEngine._classify_entry_type`.
-_AMOUNT_PATTERN_NEW_BILL: frozenset[str] = frozenset({
-    "current_balance_debit",
-    "total_charges_period",
-    "total_credits_bill",
-    "total_charges_within",
-    "total_amount_due_within",
-    "amount_to_pay_within",
-    "pound_amount_debit",
-})
-_AMOUNT_PATTERN_ONGOING_BALANCE: frozenset[str] = frozenset({
-    "your_new_account_balance",
-    "balance_within",
-    "current_balance_within",
-})
+_AMOUNT_PATTERN_NEW_BILL: frozenset[str] = frozenset(
+    {
+        "current_balance_debit",
+        "total_charges_period",
+        "total_credits_bill",
+        "total_charges_within",
+        "total_amount_due_within",
+        "amount_to_pay_within",
+        "pound_amount_debit",
+    }
+)
+_AMOUNT_PATTERN_ONGOING_BALANCE: frozenset[str] = frozenset(
+    {
+        "your_new_account_balance",
+        "balance_within",
+        "current_balance_within",
+    }
+)
 for name, _ in AMOUNT_PATTERNS:
     assert name in _AMOUNT_PATTERN_NEW_BILL or name in _AMOUNT_PATTERN_ONGOING_BALANCE, (
         f"AMOUNT_PATTERNS entry {name!r} has no entry-type bucket — "
