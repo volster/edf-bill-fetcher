@@ -282,6 +282,28 @@ def extract_new_credit_fields(text):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# HTM account-history parser
+# ---------------------------------------------------------------------------
+#
+# EDF MyAccount exports "Payments and Invoices" in HTML. The recurring
+# row shapes we recognise:
+#
+#   "DD Mon YYYY We charged your account £X.XX For Y kWh between D Mon YYYY and D Mon YYYY Balance £Z.ZZ in debit|credit"
+#   "DD Mon YYYY You paid us £X.XX [Bank Transfer] Balance £Z.ZZ in debit|credit"
+#   "DD Mon YYYY Reversed account charge £X.XX Balance £Z.ZZ in debit|credit"
+#   "DD Mon YYYY [Bank Transfer / nothing.] Balance £Z.ZZ in credit"  -- standalone
+#                               credit-only balance lines that appear when
+#                               the customer's overall balance is in credit
+#                               and there is no transaction for the period.
+#
+# Pre-fix (#15): the Balance clause hard-required "in debit", silently
+# dropping "in credit" rows.  This was a real, reproducible data loss.
+#
+# Each regex matches the trailing "Balance £X in (debit|credit)" with a
+# non-grouping alternation so existing group numbers are preserved.
+
+
 def parse_htm_account_history(text):
     """
     Parse the EDF MyAccount 'Payments and Invoices' HTM export.
@@ -301,10 +323,16 @@ def parse_htm_account_history(text):
         r"(\d{1,2}\s+\w+\s+\d{4})\s+We charged your account\s+£([\d,]+\.\d{2})"
         r"(?:\s+For\s+([\d,]+)\s+kWh\s+of\s+electricity\s+used\s+between\s+"
         r"(\d{1,2}\s+\w+\s+\d{4})\s+and\s+(\d{1,2}\s+\w+\s+\d{4}))?"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+debit",
+        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
         re.IGNORECASE,
     )
+    # Track the byte ranges ([start, end)) already covered by the
+    # three verb-aware regexes below so #15's standalone-balance
+    # step does not double-count the trailing balance clause of a
+    # charge/payment/reversal line.
+    covered: list[tuple[int, int]] = []
     for m in charge_re.finditer(text):
+        covered.append((m.start(0), m.end(0)))
         date_str = parse_to_display_date(m.group(1))
         period_from = parse_to_display_date(m.group(4)) if m.group(4) else "N/A"
         period_to = parse_to_display_date(m.group(5)) if m.group(5) else "N/A"
@@ -334,10 +362,11 @@ def parse_htm_account_history(text):
     # Find all "You paid us" entries
     pay_re = re.compile(
         r"(\d{1,2}\s+\w+\s+\d{4})\s+You paid us\s+£([\d,]+\.\d{2})"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+debit",
+        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
         re.IGNORECASE,
     )
     for m in pay_re.finditer(text):
+        covered.append((m.start(0), m.end(0)))
         date_str = parse_to_display_date(m.group(1))
         balance = float(m.group(3).replace(",", ""))
         records.append(
@@ -363,10 +392,11 @@ def parse_htm_account_history(text):
     # Find all "reversed account charge" entries (credits applied)
     rev_re = re.compile(
         r"(\d{1,2}\s+\w+\s+\d{4})\s+Reversed account charge\s+£([\d,]+\.\d{2})"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+debit",
+        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
         re.IGNORECASE,
     )
     for m in rev_re.finditer(text):
+        covered.append((m.start(0), m.end(0)))
         date_str = parse_to_display_date(m.group(1))
         balance = float(m.group(3).replace(",", ""))
         records.append(
@@ -386,6 +416,57 @@ def parse_htm_account_history(text):
                 "Attachment Name": "N/A",
                 "Details": "HTM: reversed account charge",
                 "Logic Used": "HTM Reversal",
+            }
+        )
+
+    # Find standalone "Balance £X in credit" lines.
+    #
+    # These appear at the top of an HTM export when the customer's
+    # overall balance is in credit and there is no transaction recorded
+    # for the period (e.g. a credit accumulated from the previous
+    # statement still on the books). Pre-#15 there was no regex to
+    # catch them, so the credit on this kind of opening line never
+    # reached downstream classification.
+    #
+    # We walk the regex and reject any match whose date-token is
+    # *inside* a span already covered by the verb-aware regexes
+    # above. The regex itself is intentionally tolerant of optional
+    # postcard text between the date and the Balance clause — the
+    # covered-range check is what keeps standalone from double-counting
+    # the trailing balance of a real charge/payment/reversal line.
+    def _inside_covered(start: int, end: int) -> bool:
+        for cs, ce in covered:
+            if start >= cs and end <= ce:
+                return True
+        return False
+
+    bal_re = re.compile(
+        r"(\d{1,2}\s+\w+\s+\d{4})[^A-Za-z0-9]*?Balance\s+£([\d,]+\.\d{2})\s+in\s+credit\b",
+        re.IGNORECASE,
+    )
+    for m in bal_re.finditer(text):
+        if _inside_covered(m.start(0), m.end(0)):
+            continue
+        covered.append((m.start(0), m.end(0)))
+        date_str = parse_to_display_date(m.group(1))
+        balance = float(m.group(2).replace(",", ""))
+        records.append(
+            {
+                "Source": "HTM Account History",
+                "Sender": "",
+                "Date": date_str,
+                "Period From": "N/A",
+                "Period To": "N/A",
+                "Invoice #": "N/A",
+                "Amount (£)": balance,
+                "Period Charge (£)": "N/A",
+                "Entry Type": "Credit",
+                "Reading": "Unknown",
+                "Units (kWh)": "N/A",
+                "Standing Chg (p/day)": "N/A",
+                "Attachment Name": "N/A",
+                "Details": "HTM: standalone credit balance",
+                "Logic Used": "HTM StandaloneBalance",
             }
         )
 
