@@ -181,31 +181,33 @@ class TestHTMParserEdgeCases:
 
 
 class TestHTMCreditBalance:
-    """Credit-balance handling — the known gap.
+    """Credit-balance handling — formerly the #15 known gap.
 
     BACKGROUND
     ----------
-    All three current regexes (charge, payment, reversal) end with
-    ``Balance £X in debit``. EDF's HTM export can also contain credit
-    balances. A typical credit-balance line is:
+    Pre-fix: the three transaction regexes (charge, payment, reversal)
+    all ended with ``Balance £X in debit``. EDF's HTM export also
+    contains credit balances, which were silently dropped — no record
+    emitted even though credit balances describe money owed by EDF to
+    the customer and matter for an Ombudsman submission.
 
-        "DD Mon YYYY Balance £X.XX in credit"
+    Tests
+    -----
+    * ``test_charge_in_credit_is_parsed`` — a charge line ending in
+      ``Balance £X in credit``: parser must still emit a record.
+    * ``test_payment_in_credit_is_parsed`` — a payment line ending in
+      ``Balance £X in credit``: parser must still emit a record.
+    * ``test_standalone_balance_in_credit_is_parsed`` — a balance-only
+      line with no preceding transaction verb: parser must emit a
+      Credit record carrying the absolute amount.
 
-    The current parser drops these silently — it returns no record,
-    even though credit balances describe real-world money owed by EDF
-    to the customer and may matter for an Ombudsman submission.
-
-    These tests describe the desired behaviour. They currently FAIL.
-    Removing the ``xfail`` marker (and adding the underlying parser
-    logic) will mark them passing once the gap is closed.
+    Anti-double-count guarantee: a charge/payment/reversal line still
+    produces ONE record, not two — the standalone-balance regex skips
+    any byte range already claimed by the verb-aware regexes.
     """
 
     import pytest  # local import so the rest of the file doesn't need pytest at module load
 
-    @pytest.mark.xfail(
-        reason="TODO(credit-balance): parser currently drops lines ending in 'in credit'",
-        strict=True,
-    )
     def test_charge_in_credit_is_parsed(self):
         # Charge line where the running balance is in credit (EDF
         # over-accounted in the past or this is an opening credit balance).
@@ -220,10 +222,6 @@ class TestHTMCreditBalance:
         assert r["Amount (£)"] == 250.0
         assert r["Period Charge (£)"] == 50.0
 
-    @pytest.mark.xfail(
-        reason="TODO(credit-balance): parser currently drops lines ending in 'in credit'",
-        strict=True,
-    )
     def test_payment_in_credit_is_parsed(self):
         # Standard payment line but balance in credit (after a refund).
         text = """
@@ -235,10 +233,6 @@ class TestHTMCreditBalance:
         assert r["Entry Type"] == "Payment"
         assert r["Amount (£)"] == 150.0
 
-    @pytest.mark.xfail(
-        reason="TODO(credit-balance): parser currently drops standalone 'Balance £X in credit' lines",
-        strict=True,
-    )
     def test_standalone_balance_in_credit_is_parsed(self):
         # A credit-balance line with no preceding charge/payment/reversal
         # verb. These appear at the top of an HTM export when the
