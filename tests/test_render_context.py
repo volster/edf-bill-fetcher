@@ -71,14 +71,12 @@ class TestReportSectionsRegistry:
     def test_appendix_keys_come_after_main(self):
         # Appendices are at the tail of the list so the dispatcher can
         # safely use index slicing. Verify by walking the registry.
-        seen_main = False
         seen_appendix = False
         for s in REPORT_SECTIONS:
-            if not s.is_appendix:
-                seen_main = True
-                assert not seen_appendix, "main sections must come before appendices"
-            else:
+            if s.is_appendix:
                 seen_appendix = True
+            else:
+                assert not seen_appendix, "main sections must come before appendices"
 
 
 class TestRenderContextNumbering:
