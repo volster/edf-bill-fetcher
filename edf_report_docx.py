@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -401,10 +402,11 @@ def create_key_findings_table(doc, styles, flags):
 
         for i, flag in enumerate(flags, 1):
             row = table.rows[i]
-            row.cells[0].text = flag[0] if len(flag) > 0 else ""
-            row.cells[1].text = fmt_date(flag[1]) if len(flag) > 1 else ""
-            row.cells[2].text = fmt_money(flag[2]) if len(flag) > 2 else ""
-            row.cells[3].text = str(flag[3]) if len(flag) > 3 else ""
+            # Flag tuple: (type, date, amount, detail, severity)
+            row.cells[0].text = flag[4] if len(flag) > 4 else ""          # Severity
+            row.cells[1].text = flag[0] if len(flag) > 0 else ""          # Category (type)
+            row.cells[2].text = flag[3] if len(flag) > 3 else ""          # Description (detail)
+            row.cells[3].text = fmt_date(flag[1]) if len(flag) > 1 else "" # Records Affected (date)
 
         _format_table(table)
 
@@ -1101,6 +1103,7 @@ def generate_ombudsman_docx(
     # Compute mean daily rate for HIGH DAILY RATE detection
     mean_daily = 0.0
     try:
+        pos_diffs = []
         for i in range(1, len(df_sorted)):
             p = df_sorted.iloc[i - 1]
             c_ = df_sorted.iloc[i]
@@ -1108,14 +1111,27 @@ def generate_ombudsman_docx(
             charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
             if days > 0 and charge > 0:
                 daily = charge / days
-                if mean_daily == 0.0:
-                    mean_daily = daily
-                else:
-                    mean_daily = (mean_daily + daily) / 2
+                pos_diffs.append(daily)
+        mean_daily = float(np.mean(pos_diffs)) / 30.0 if len(pos_diffs) else 0.0
     except Exception:
         mean_daily = 0.0
 
     flags, flag_counts = compute_dispute_flags(df_sorted, mean_daily)
+
+    # Section selection: only include sections in config["report_sections"]
+    enabled_sections = set(config.get("report_sections", []))
+    # Backward compatibility: if not specified, enable all
+    all_sections = {
+        "cover", "toc", "exec_summary", "key_findings", "evidence_index",
+        "detailed_findings", "timeline", "ofgem", "statistical", "payment",
+        "forecast", "data_quality", "tariff", "appendix_methodology", "appendix_glossary",
+        "appendix_full_evidence",
+    }
+    if not enabled_sections:
+        enabled_sections = all_sections
+
+    def section_enabled(key: str) -> bool:
+        return key in enabled_sections
 
     # Build document
     doc = Document()
@@ -1134,62 +1150,80 @@ def generate_ombudsman_docx(
     _add_footer(doc)
 
     # === COVER PAGE ===
-    create_cover_page(
-        doc, styles, acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y")
-    )
+    if section_enabled("cover"):
+        create_cover_page(
+            doc, styles, acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y")
+        )
 
     # === TABLE OF CONTENTS ===
-    create_table_of_contents(doc, styles)
+    if section_enabled("toc"):
+        create_table_of_contents(doc, styles)
 
     # === EXECUTIVE SUMMARY ===
-    create_executive_summary(
-        doc,
-        styles,
-        df,
-        config,
-        acc_ref,
-        flag_counts,
-        len(records),
-        charges,
-        payments,
-        period_start,
-        period_end,
-    )
+    if section_enabled("exec_summary"):
+        create_executive_summary(
+            doc,
+            styles,
+            df,
+            config,
+            acc_ref,
+            flag_counts,
+            len(records),
+            charges,
+            payments,
+            period_start,
+            period_end,
+        )
 
     # === KEY FINDINGS ===
-    create_key_findings_table(doc, styles, flags)
+    if section_enabled("key_findings"):
+        create_key_findings_table(doc, styles, flags)
 
     # === EVIDENCE INDEX ===
-    create_evidence_index(doc, styles, df, engine)
+    if section_enabled("evidence_index"):
+        create_evidence_index(doc, styles, df, engine)
 
     # === DETAILED FINDINGS ===
-    create_anomaly_detail_section(doc, styles, flags, df)
+    if section_enabled("detailed_findings"):
+        create_anomaly_detail_section(doc, styles, flags, df)
 
     # === TIMELINE ===
-    create_timeline_section(doc, styles, df, flags)
+    if section_enabled("timeline"):
+        create_timeline_section(doc, styles, df, flags)
 
     # === OFGEM COMPARISON ===
-    create_ofgem_comparison(doc, styles, df)
+    if section_enabled("ofgem"):
+        create_ofgem_comparison(doc, styles, df)
 
     # === STATISTICAL ANALYSIS ===
-    create_statistical_analysis(doc, styles, df)
+    if section_enabled("statistical"):
+        create_statistical_analysis(doc, styles, df)
 
     # === PAYMENT ANALYSIS ===
-    create_payment_analysis(doc, styles, df)
+    if section_enabled("payment"):
+        create_payment_analysis(doc, styles, df)
 
     # === FORECAST ===
-    create_forecast_section(doc, styles, df)
+    if section_enabled("forecast"):
+        create_forecast_section(doc, styles, df)
 
     # === DATA QUALITY ===
-    create_data_quality_section(doc, styles, df)
+    if section_enabled("data_quality"):
+        create_data_quality_section(doc, styles, df)
 
     # === TARIFF IMPACT ===
-    create_tariff_impact_section(doc, styles, df)
+    if section_enabled("tariff"):
+        create_tariff_impact_section(doc, styles, df)
 
     # === APPENDICES ===
-    create_appendix_methodology(doc, styles, config)
-    create_appendix_glossary(doc, styles)
-    create_appendix_full_evidence(doc, styles, df, filtered)
+    if section_enabled("appendix_methodology"):
+        create_appendix_methodology(doc, styles, config)
+
+    if section_enabled("appendix_glossary"):
+        create_appendix_glossary(doc, styles)
+
+    if section_enabled("appendix_full_evidence"):
+        create_appendix_full_evidence(doc, styles, df, filtered)
 
     # Save
     doc.save(output_path)
