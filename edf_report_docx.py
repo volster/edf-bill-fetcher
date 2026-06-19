@@ -48,23 +48,23 @@ ORANGE = RGBColor(0xFE, 0x57, 0x16)
 MARGIN_CM = 2.5
 
 
-def fmt_date(val):
+def fmt_date(val: Any) -> str:
     """Format date for display."""
     if val is None or pd.isna(val):
         return "Unknown"
     if hasattr(val, "strftime"):
-        return val.strftime("%d %B %Y")
+        return val.strftime("%d %B %Y")  # type: ignore[no-any-return]
     return str(val)
 
 
-def fmt_number(val, decimals=2):
+def fmt_number(val: Any, decimals: int = 2) -> str:
     """Format number with commas."""
     if val is None or pd.isna(val):
         return "N/A"
     return f"{float(val):,.{decimals}f}"
 
 
-def fmt_money(val):
+def fmt_money(val: Any) -> str:
     """Format money with £ sign."""
     if val is None or pd.isna(val):
         return "N/A"
@@ -77,8 +77,15 @@ def fmt_money(val):
 
 
 def _add_heading_style(
-    doc, level, name, font_size, color=NAVY, bold=True, space_before=12, space_after=6
-):
+    doc: Any,
+    level: int,
+    name: str,
+    font_size: int,
+    color: RGBColor = NAVY,
+    bold: bool = True,
+    space_before: int = 12,
+    space_after: int = 6,
+) -> Any:
     """Add a heading style to the document."""
     style = doc.styles.add_style(name, 1)  # WD_STYLE_TYPE.PARAGRAPH
     style.font.size = Pt(font_size)
@@ -90,7 +97,7 @@ def _add_heading_style(
     return style
 
 
-def _get_or_create_styles(doc):
+def _get_or_create_styles(doc: Any) -> Any:
     """Create custom styles for the document."""
     # Title
     if "CoverTitle" not in doc.styles:
@@ -163,7 +170,7 @@ def _get_or_create_styles(doc):
     }
 
 
-def _add_footer(doc, text="EDF Energy Billing Evidence Report — Confidential"):
+def _add_footer(doc: Any, text: str = "EDF Energy Billing Evidence Report — Confidential") -> None:
     """Add footer to all sections."""
     for section in doc.sections:
         footer = section.footer
@@ -228,10 +235,15 @@ def _format_table(table, header_color="#10367A", font_size=8):
 # =============================================================================
 
 
-def create_cover_page(doc, styles, acc_ref, period_start, period_end, report_date):
+def create_cover_page(
+    doc: Any,
+    styles: Any,
+    acc_ref: str,
+    period_start: str,
+    period_end: str,
+    report_date: str,
+) -> None:
     """Create cover page elements."""
-    elements: list = []
-
     doc.add_paragraph("EDF ENERGY BILLING", style=styles["CoverTitle"])
     doc.add_paragraph("EVIDENCE REPORT", style=styles["CoverTitle"])
     doc.add_paragraph("")  # spacer
@@ -272,10 +284,8 @@ def create_cover_page(doc, styles, acc_ref, period_start, period_end, report_dat
     doc.add_paragraph("")
     doc.add_page_break()
 
-    return elements
 
-
-def create_table_of_contents(doc, styles, ctx=None):
+def create_table_of_contents(doc: Any, styles: Any, ctx: RenderContext | None = None) -> None:
     """Create a single-column TOC driven by the registry.
 
     Same numbering rules as ``edf_report.create_table_of_contents``: main
@@ -303,24 +313,24 @@ def create_table_of_contents(doc, styles, ctx=None):
     doc.add_page_break()
 
 
-def _add_banner_heading(doc, text):
+def _add_banner_heading(doc: Any, text: str) -> None:
     doc.add_paragraph(text, style="Heading 1")
 
 
 def create_executive_summary(
-    doc,
-    styles,
-    df,
-    config,
-    acc_ref,
-    flag_counts,
-    n_records,
-    charges,
-    payments,
-    period_start,
-    period_end,
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    config: dict,
+    acc_ref: str,
+    flag_counts: dict,
+    n_records: int,
+    charges: float,
+    payments: float,
+    period_start: str,
+    period_end: str,
     ctx: RenderContext | None = None,
-):
+) -> None:
     """Create executive summary section."""
     if ctx is None:
         ctx = RenderContext()
@@ -390,7 +400,9 @@ def create_executive_summary(
     doc.add_paragraph("")
 
 
-def create_key_findings_table(doc, styles, flags, ctx: RenderContext | None = None):
+def create_key_findings_table(
+    doc: Any, styles: Any, flags: list, ctx: RenderContext | None = None
+) -> None:
     """Create key findings summary table from flags."""
     if ctx is None:
         ctx = RenderContext()
@@ -426,7 +438,13 @@ def create_key_findings_table(doc, styles, flags, ctx: RenderContext | None = No
     doc.add_page_break()
 
 
-def create_evidence_index(doc, styles, df, engine, ctx: RenderContext | None = None):
+def create_evidence_index(
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    engine: Any,
+    ctx: RenderContext | None = None,
+) -> None:
     """Create evidence index with source cross-references."""
     if ctx is None:
         ctx = RenderContext()
@@ -477,7 +495,13 @@ def create_evidence_index(doc, styles, df, engine, ctx: RenderContext | None = N
     doc.add_page_break()
 
 
-def create_anomaly_detail_section(doc, styles, flags, df, ctx: RenderContext | None = None):
+def create_anomaly_detail_section(
+    doc: Any,
+    styles: Any,
+    flags: list,
+    df: pd.DataFrame,
+    ctx: RenderContext | None = None,
+) -> None:
     """Create detailed anomaly findings section."""
     if ctx is None:
         ctx = RenderContext()
@@ -513,7 +537,13 @@ def create_anomaly_detail_section(doc, styles, flags, df, ctx: RenderContext | N
     doc.add_page_break()
 
 
-def create_timeline_section(doc, styles, df, flags, ctx: RenderContext | None = None):
+def create_timeline_section(
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    flags: list,
+    ctx: RenderContext | None = None,
+) -> None:
     """Create chronological timeline of events."""
     if ctx is None:
         ctx = RenderContext()
@@ -550,7 +580,9 @@ def create_timeline_section(doc, styles, df, flags, ctx: RenderContext | None = 
     doc.add_page_break()
 
 
-def create_ofgem_comparison(doc, styles, df, ctx: RenderContext | None = None):
+def create_ofgem_comparison(
+    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
+) -> None:
     """Create OFGEM price cap comparison section."""
     if ctx is None:
         ctx = RenderContext()
@@ -618,7 +650,9 @@ def create_ofgem_comparison(doc, styles, df, ctx: RenderContext | None = None):
     doc.add_page_break()
 
 
-def create_statistical_analysis(doc, styles, df, ctx: RenderContext | None = None):
+def create_statistical_analysis(
+    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
+) -> None:
     """Create statistical analysis section."""
     if ctx is None:
         ctx = RenderContext()
@@ -652,7 +686,9 @@ def create_statistical_analysis(doc, styles, df, ctx: RenderContext | None = Non
     doc.add_page_break()
 
 
-def create_payment_analysis(doc, styles, df, ctx: RenderContext | None = None):
+def create_payment_analysis(
+    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
+) -> None:
     """Create payment & credit analysis section."""
     if ctx is None:
         ctx = RenderContext()
@@ -684,7 +720,9 @@ def create_payment_analysis(doc, styles, df, ctx: RenderContext | None = None):
     doc.add_page_break()
 
 
-def create_forecast_section(doc, styles, df, ctx: RenderContext | None = None):
+def create_forecast_section(
+    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
+) -> None:
     """Create forecast & projection section."""
     if ctx is None:
         ctx = RenderContext()
@@ -711,7 +749,9 @@ def create_forecast_section(doc, styles, df, ctx: RenderContext | None = None):
     doc.add_page_break()
 
 
-def create_data_quality_section(doc, styles, df, ctx: RenderContext | None = None):
+def create_data_quality_section(
+    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
+) -> None:
     """Create data quality assessment section."""
     if ctx is None:
         ctx = RenderContext()
@@ -743,7 +783,9 @@ def create_data_quality_section(doc, styles, df, ctx: RenderContext | None = Non
     doc.add_page_break()
 
 
-def create_tariff_impact_section(doc, styles, df, ctx: RenderContext | None = None):
+def create_tariff_impact_section(
+    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
+) -> None:
     """Create tariff impact analysis section."""
     if ctx is None:
         ctx = RenderContext()
@@ -820,7 +862,9 @@ def create_tariff_impact_section(doc, styles, df, ctx: RenderContext | None = No
     doc.add_page_break()
 
 
-def create_appendix_methodology(doc, styles, config, ctx: RenderContext | None = None):
+def create_appendix_methodology(
+    doc: Any, styles: Any, config: Any, ctx: RenderContext | None = None
+) -> None:
     """Create Methodology appendix."""
     if ctx is None:
         ctx = RenderContext()
@@ -857,7 +901,7 @@ def create_appendix_methodology(doc, styles, config, ctx: RenderContext | None =
         doc.add_paragraph(f"• {key}: {val}", style=styles["BodyText"])
 
 
-def create_appendix_glossary(doc, styles, ctx: RenderContext | None = None):
+def create_appendix_glossary(doc: Any, styles: Any, ctx: RenderContext | None = None) -> None:
     """Create Glossary appendix."""
     if ctx is None:
         ctx = RenderContext()
@@ -887,7 +931,13 @@ def create_appendix_glossary(doc, styles, ctx: RenderContext | None = None):
     doc.add_page_break()
 
 
-def create_appendix_full_evidence(doc, styles, df, filtered=None, ctx: RenderContext | None = None):
+def create_appendix_full_evidence(
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    filtered: Any = None,
+    ctx: RenderContext | None = None,
+) -> None:
     """Create Full Evidence Table appendix, plus an optional Filtered Records sub-table."""
     if ctx is None:
         ctx = RenderContext()
