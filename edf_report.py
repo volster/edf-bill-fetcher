@@ -948,10 +948,10 @@ def _load_ofgem_caps() -> dict[str, dict]:
         "2020-Q3": {"unit_rate": 15.29, "standing_charge": 25.09},
         "2020-Q4": {"unit_rate": 15.29, "standing_charge": 20.58},
         # 2021
-        "2021-Q1": {"unit_rate": 20.58, "standing_charge": 20.58},
-        "2021-Q2": {"unit_rate": 20.58, "standing_charge": 20.58},
-        "2021-Q3": {"unit_rate": 20.58, "standing_charge": 20.58},
-        "2021-Q4": {"unit_rate": 20.58, "standing_charge": 20.58},
+        "2021-Q1": {"unit_rate": 16.36, "standing_charge": 20.58},
+        "2021-Q2": {"unit_rate": 16.36, "standing_charge": 20.58},
+        "2021-Q3": {"unit_rate": 16.36, "standing_charge": 20.58},
+        "2021-Q4": {"unit_rate": 18.36, "standing_charge": 20.58},
         # 2022
         "2022-Q1": {"unit_rate": 20.58, "standing_charge": 20.58},
         "2022-Q2": {"unit_rate": 28.34, "standing_charge": 45.34},
@@ -2048,6 +2048,7 @@ def generate_ombudsman_pdf(
     # Compute mean daily rate for HIGH DAILY RATE detection
     mean_daily = 0.0
     try:
+        pos_diffs = []
         for i in range(1, len(df_sorted)):
             p = df_sorted.iloc[i - 1]
             c_ = df_sorted.iloc[i]
@@ -2055,125 +2056,154 @@ def generate_ombudsman_pdf(
             charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
             if days > 0 and charge > 0:
                 daily = charge / days
-                if mean_daily == 0.0:
-                    mean_daily = daily
-                else:
-                    mean_daily = (mean_daily + daily) / 2
+                pos_diffs.append(daily)
+        mean_daily = float(np.mean(pos_diffs)) / 30.0 if len(pos_diffs) else 0.0
     except Exception:
         mean_daily = 0.0
 
     flags, flag_counts = compute_dispute_flags(df_sorted, mean_daily)
+
+    # Section selection: only include sections in config["report_sections"]
+    enabled_sections = set(config.get("report_sections", []))
+    # Backward compatibility: if not specified, enable all
+    all_sections = {
+        "cover", "toc", "exec_summary", "key_findings", "evidence_index",
+        "detailed_findings", "timeline", "ofgem", "statistical", "payment",
+        "forecast", "data_quality", "tariff", "appendix_methodology", "appendix_glossary",
+        "appendix_full_evidence", "appendix_filtered",
+    }
+    if not enabled_sections:
+        enabled_sections = all_sections
+
+    def section_enabled(key: str) -> bool:
+        return key in enabled_sections
 
     # Build document
     doc = build_doc_template(output_path)
     elements = []
 
     # === COVER PAGE ===
-    elements.extend(
-        create_cover_page(acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y"))
-    )
-    elements.append(NextPageTemplate("content"))
-    elements.append(PageBreak())
+    if section_enabled("cover"):
+        elements.extend(
+            create_cover_page(acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y"))
+        )
+        elements.append(NextPageTemplate("content"))
+        elements.append(PageBreak())
 
     # === TABLE OF CONTENTS ===
-    try:
-        elements.extend(create_table_of_contents())
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Table of Contents failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("toc"):
+        try:
+            elements.extend(create_table_of_contents())
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Table of Contents failed: {e}</i>", STYLES["BodyText"]))
 
     # === EXECUTIVE SUMMARY ===
-    try:
-        elements.extend(
-            create_executive_summary(
-                df,
-                config,
-                acc_ref,
-                flag_counts,
-                len(records),
-                charges,
-                payments,
-                period_start,
-                period_end,
+    if section_enabled("exec_summary"):
+        try:
+            elements.extend(
+                create_executive_summary(
+                    df,
+                    config,
+                    acc_ref,
+                    flag_counts,
+                    len(records),
+                    charges,
+                    payments,
+                    period_start,
+                    period_end,
+                )
             )
-        )
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Executive Summary failed: {e}</i>", STYLES["BodyText"]))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Executive Summary failed: {e}</i>", STYLES["BodyText"]))
 
     # === KEY FINDINGS ===
-    try:
-        elements.extend(create_key_findings_table(flags))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Key Findings failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("key_findings"):
+        try:
+            elements.extend(create_key_findings_table(flags))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Key Findings failed: {e}</i>", STYLES["BodyText"]))
 
     # === EVIDENCE INDEX ===
-    try:
-        elements.extend(create_evidence_index(df, engine))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Evidence Index failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("evidence_index"):
+        try:
+            elements.extend(create_evidence_index(df, engine))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Evidence Index failed: {e}</i>", STYLES["BodyText"]))
 
     # === DETAILED FINDINGS ===
-    try:
-        elements.extend(create_anomaly_detail_section(flags, df))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Detailed Findings failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("detailed_findings"):
+        try:
+            elements.extend(create_anomaly_detail_section(flags, df))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Detailed Findings failed: {e}</i>", STYLES["BodyText"]))
 
     # === TIMELINE ===
-    try:
-        elements.extend(create_timeline_section(df, flags))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Timeline failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("timeline"):
+        try:
+            elements.extend(create_timeline_section(df, flags))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Timeline failed: {e}</i>", STYLES["BodyText"]))
 
     # === OFGEM COMPARISON ===
-    try:
-        elements.extend(create_ofgem_comparison(df, config))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>OFGEM Comparison failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("ofgem"):
+        try:
+            elements.extend(create_ofgem_comparison(df, config))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>OFGEM Comparison failed: {e}</i>", STYLES["BodyText"]))
 
     # === STATISTICAL ANALYSIS ===
-    try:
-        elements.extend(create_statistical_analysis(df))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Statistical Analysis failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("statistical"):
+        try:
+            elements.extend(create_statistical_analysis(df))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Statistical Analysis failed: {e}</i>", STYLES["BodyText"]))
 
     # === PAYMENT ANALYSIS ===
-    try:
-        elements.extend(create_payment_analysis(df))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Payment Analysis failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("payment"):
+        try:
+            elements.extend(create_payment_analysis(df))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Payment Analysis failed: {e}</i>", STYLES["BodyText"]))
 
     # === FORECAST ===
-    try:
-        elements.extend(create_forecast_section(df))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Forecast failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("forecast"):
+        try:
+            elements.extend(create_forecast_section(df))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Forecast failed: {e}</i>", STYLES["BodyText"]))
 
     # === DATA QUALITY ===
-    try:
-        elements.extend(create_data_quality_section(df))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Data Quality failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("data_quality"):
+        try:
+            elements.extend(create_data_quality_section(df))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Data Quality failed: {e}</i>", STYLES["BodyText"]))
 
     # === TARIFF IMPACT ===
-    try:
-        elements.extend(create_tariff_impact_section(df))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Tariff Impact failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("tariff"):
+        try:
+            elements.extend(create_tariff_impact_section(df))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Tariff Impact failed: {e}</i>", STYLES["BodyText"]))
 
     # === APPENDICES ===
-    try:
-        elements.extend(create_appendix_methodology(config))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Appendix Methodology failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("appendix_methodology"):
+        try:
+            elements.extend(create_appendix_methodology(config))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Appendix Methodology failed: {e}</i>", STYLES["BodyText"]))
 
-    try:
-        elements.extend(create_appendix_glossary())
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Appendix Glossary failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("appendix_glossary"):
+        try:
+            elements.extend(create_appendix_glossary())
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Appendix Glossary failed: {e}</i>", STYLES["BodyText"]))
 
-    try:
-        elements.extend(create_appendix_full_evidence(df, filtered, config))
-    except Exception as e:
-        elements.append(Paragraph(f"<i>Appendix Full Evidence failed: {e}</i>", STYLES["BodyText"]))
+    if section_enabled("appendix_full_evidence"):
+        try:
+            elements.extend(create_appendix_full_evidence(df, filtered, config))
+        except Exception as e:
+            elements.append(Paragraph(f"<i>Appendix Full Evidence failed: {e}</i>", STYLES["BodyText"]))
 
     # Build
     doc.build(elements)
