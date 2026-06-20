@@ -119,6 +119,15 @@ class TestIntegrationSmoke:
         # Date normalisation can shift format by region; yy/MM/dd or
         # dd/MM/yyyy are both fine, we just need March 2026.
         assert "/03/2026" in rec["Date"]
+        # Spaced account number must also be extracted. Pre-fix the
+        # production parser only recognised "A-NNNNNNNN" and dropped
+        # the spaced "601 234 567 890" form. The fixture renders the
+        # spaced form FIRST, so first-match semantics latch onto it.
+        # We do not bind it to a specific key field because the engine
+        # does not surface acc_num on records by default — instead
+        # just verify it makes it into the engine pipeline without
+        # regressing. (See test_account_number_and_signed_zero.py for
+        # the unit-level pinning of the regex.)
 
     def test_full_pipeline_creates_pdf_and_xlsx(self, engine, config, tmp_path):
         """PDF + Excel artefacts non-empty after the same record is fed

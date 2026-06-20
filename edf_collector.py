@@ -212,8 +212,32 @@ def extract_new_invoice_fields(text):
     if m:
         fields["inv_num"] = m.group(1).strip()
 
-    # Account number (A-XXXXXXXX format)
-    m = re.search(r"Account number:\s*(A-[\d]+)", text, re.IGNORECASE)
+    # Account number. EDF has shipped multiple renderings on real
+    # invoices — both
+    #
+    #     "Account number: A-31105244"
+    #
+    # and
+    #
+    #     "Account number: 671 078 701 920"
+    #
+    # show up in real exports. The compact form requires the A- prefix;
+    # the spaced form omits the prefix and groups digits three-by-three.
+    #
+    # Pre-fix only the compact form was matched, so any invoice using
+    # spaced digits silently dropped ``acc_num`` AND failed the
+    # downstream --acc-filter (the user could not filter to their
+    # own bill). The regex below matches both renderings and emits a
+    # single normalised account number (either ``A-NNNNNNNN`` or
+    # ``601 234 567 890`` depending on what was on the page). Callers
+    # that need to compare against a filter value are responsible for
+    # stripping spaces and the ``A-`` prefix themselves; see the
+    # existing helper at the engine filter check.
+    m = re.search(
+        r"Account number:\s*(A-\d+|\d[\d ]*\d)",
+        text,
+        re.IGNORECASE,
+    )
     if m:
         fields["acc_num"] = m.group(1).strip()
 
@@ -289,7 +313,10 @@ def extract_new_credit_fields(text):
     if m:
         fields["inv_num"] = m.group(1).strip()
 
-    m = re.search(r"Account number:\s*(A-[\d]+)", text, re.IGNORECASE)
+    # Account number — accept both EDF renderings: compact
+    # "A-NNNNNNNN" and spaced-digits "601 234 567 890". See the same
+    # note in extract_new_invoice_fields above for context.
+    m = re.search(r"Account number:\s*(A-\d+|\d[\d ]*\d)", text, re.IGNORECASE)
     if m:
         fields["acc_num"] = m.group(1).strip()
 
