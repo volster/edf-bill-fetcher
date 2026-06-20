@@ -181,62 +181,76 @@ def build(output_path: Path) -> None:
     story.append(Paragraph("Electricity", body))
     story.append(
         Paragraph(
-            f"Supply address: {SUPPLY_NAME}, {SUPPLY_ADDR_1}, "
-            f"{SUPPLY_ADDR_2}, {SUPPLY_POSTCODE}",
+            f"Supply address: {SUPPLY_NAME}, {SUPPLY_ADDR_1}, {SUPPLY_ADDR_2}, {SUPPLY_POSTCODE}",
             body,
         )
     )
     story.append(Paragraph(f"Tariff name {TARIFF_NAME}", body))
     story.append(Paragraph("Payment type Non-Direct Debit", body))
-    story.append(Paragraph(
-        "Rota Disconnections Alpha Identifier: AA", body
-    ))
-    story.append(Paragraph(
-        f"Contract end date {BILL_DATE}",
-        body,
-    ))
-    story.append(Paragraph(
-        f"{TARIFF_NAME} ({PERIOD_FROM} - {PERIOD_TO}) Early exit fee "
-        f"No",
-        body,
-    ))
-    story.append(Paragraph(
-        f"Estimated yearly usage {int(ELECTRICITY_USED_KWH * 12)}.000 kWh",
-        body,
-    ))
-    story.append(Paragraph(
-        "Electricity charges for meter M0000000",
-        body,
-    ))
+    story.append(Paragraph("Rota Disconnections Alpha Identifier: AA", body))
+    story.append(
+        Paragraph(
+            f"Contract end date {BILL_DATE}",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"{TARIFF_NAME} ({PERIOD_FROM} - {PERIOD_TO}) Early exit fee No",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"Estimated yearly usage {int(ELECTRICITY_USED_KWH * 12)}.000 kWh",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            "Electricity charges for meter M0000000",
+            body,
+        )
+    )
     story.append(Spacer(1, 0.3 * cm))
 
-    story.append(Paragraph(
-        f"{PERIOD_FROM} 99999.999 Estimated reading Any PP0 Supplier "
-        f"Certificate logged with TR-0000 calculations.",
-        body,
-    ))
-    story.append(Paragraph(
-        f"{PERIOD_TO} 99999.999 Estimated reading VAT charge at "
-        f"reduced rate",
-        body,
-    ))
-    story.append(Paragraph(
-        "Any VAT declaration logged with us has been considered.",
-        body,
-    ))
-    story.append(Paragraph(
-        f"{ELECTRICITY_USED_KWH:.3f} kWh",
-        body,
-    ))
-    story.append(Paragraph(
-        f"Electricity used {UNIT_RATE_PKWH:.3f}p/kWh {gp}{ELECTRICITY_NET}",
-        body,
-    ))
-    story.append(Paragraph(
-        f"Standing charge {PERIOD_DAYS} days @ {STANDING_CHARGE_PDAY:.3f}"
-        f"p/day {gp}{CCL}",
-        body,
-    ))
+    story.append(
+        Paragraph(
+            f"{PERIOD_FROM} 99999.999 Estimated reading Any PP0 Supplier "
+            f"Certificate logged with TR-0000 calculations.",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"{PERIOD_TO} 99999.999 Estimated reading VAT charge at reduced rate",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            "Any VAT declaration logged with us has been considered.",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"{ELECTRICITY_USED_KWH:.3f} kWh",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"Electricity used {UNIT_RATE_PKWH:.3f}p/kWh {gp}{ELECTRICITY_NET}",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"Standing charge {PERIOD_DAYS} days @ {STANDING_CHARGE_PDAY:.3f}p/day {gp}{CCL}",
+            body,
+        )
+    )
 
     doc.build(story)
 

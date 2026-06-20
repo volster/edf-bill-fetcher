@@ -52,9 +52,7 @@ def _ensure_fixture() -> Path:
         return FixturePath
     gen = Path(__file__).parent / "fixtures" / "generate_bill_fixture.py"
     if not gen.exists():
-        raise RuntimeError(
-            f"Fixture missing and generator not found: {FixturePath}"
-        )
+        raise RuntimeError(f"Fixture missing and generator not found: {FixturePath}")
     # Use runpy to execute the generator and give us a handle on the
     # build() function without polluting sys.modules.
     import runpy
@@ -67,9 +65,7 @@ def _ensure_fixture() -> Path:
     finally:
         _sys.argv = saved_argv
     if not FixturePath.exists():
-        raise RuntimeError(
-            f"Fixture regeneration failed — file not created at {FixturePath}"
-        )
+        raise RuntimeError(f"Fixture regeneration failed — file not created at {FixturePath}")
     print(f"---- fixture regenerated: {FixturePath}")
     return FixturePath
 
@@ -117,9 +113,7 @@ class TestIntegrationSmoke:
         )
 
         rec = engine.records[0]
-        assert rec["Amount (£)"] == 240.50, (
-            f"Amount mismatch: {rec['Amount (£)']!r}"
-        )
+        assert rec["Amount (£)"] == 240.50, f"Amount mismatch: {rec['Amount (£)']!r}"
         assert rec["Period Charge (£)"] == 240.50
         assert rec["Entry Type"] == "New Bill"
         # Date normalisation can shift format by region; yy/MM/dd or
