@@ -32,19 +32,14 @@ def _with_balance_clause(clause):
     """Compose a minimal KI body with the given balance+ period-charge
     clauses (no extra context).
     """
-    return (
-        KI_HEADER
-        + clause
-        + "\nPlease pay this invoice by 10 March 2026.\n"
-    )
+    return KI_HEADER + clause + "\nPlease pay this invoice by 10 March 2026.\n"
 
 
 def test_balance_in_debit_still_parses():
     """Regression: the legacy ``debit`` path must still match."""
     fields = extract_new_invoice_fields(
         _with_balance_clause(
-            "Total charges for this period £240.50 debit\n"
-            "Current balance £240.50 debit\n"
+            "Total charges for this period £240.50 debit\nCurrent balance £240.50 debit\n"
         )
     )
     assert fields["amount"] == 240.50
@@ -57,8 +52,7 @@ def test_balance_in_credit_is_now_parsed():
     Amount and Period Charge the same as a debit-labelled one."""
     fields = extract_new_invoice_fields(
         _with_balance_clause(
-            "Total charges for this period £240.50 credit\n"
-            "Current balance £240.50 credit\n"
+            "Total charges for this period £240.50 credit\nCurrent balance £240.50 credit\n"
         )
     )
     assert fields["amount"] == 240.50, (
@@ -66,8 +60,7 @@ def test_balance_in_credit_is_now_parsed():
         f"got: {fields.get('amount')!r}"
     )
     assert fields["period_charge"] == 240.50, (
-        f"credit-labelled period charge should still populate, "
-        f"got: {fields.get('period_charge')!r}"
+        f"credit-labelled period charge should still populate, got: {fields.get('period_charge')!r}"
     )
     assert fields.get("amount_side") == "credit"
 
@@ -78,10 +71,7 @@ def test_balance_with_no_side_label_parses():
     Must still match.
     """
     fields = extract_new_invoice_fields(
-        _with_balance_clause(
-            "Total charges for this period £240.50\n"
-            "Current balance £240.50\n"
-        )
+        _with_balance_clause("Total charges for this period £240.50\nCurrent balance £240.50\n")
     )
     assert fields["amount"] == 240.50
     assert fields["period_charge"] == 240.50
