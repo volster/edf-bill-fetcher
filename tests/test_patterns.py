@@ -297,8 +297,33 @@ class TestReadingPatterns:
             assert READING_PATTERNS["Estimated"].search(variant)
 
     def test_actual_reading(self):
-        for variant in ["actual", "customer reading", "your reading", "ACTUAL"]:
-            assert READING_PATTERNS["Actual"].search(variant)
+        # The "Actual" pattern must match the meter-reading context —
+        # bare-word "actual" should NOT misfire on simple bill prose
+        # such as "the actual amount you owe is £X".
+        for variant in [
+            "customer reading",
+            "your reading",
+            "Customer reading was 12450",
+            "your reading: 12450",
+            "meter reading was actual",
+            "actual reading: 12450",
+        ]:
+            assert READING_PATTERNS["Actual"].search(variant), (
+                f"Actual-reading marker missing for {variant!r}"
+            )
+        # And it must NOT match bare "actual" — that would be a low-
+        # precision false positive inviting the dispute-report to
+        # misclassify meter-reading semantics.
+        for variant in [
+            "the actual amount you owe is £240",
+            "the actual cost of your bill",
+            "for actual consumption in this period",
+            "actual",
+            "ACTUAL",
+        ]:
+            assert not READING_PATTERNS["Actual"].search(variant), (
+                f"Actual-reading pattern wrongly matched bare word in {variant!r}"
+            )
 
     def test_smart_reading(self):
         for variant in ["smart meter", "automated reading", "smart reading", "SMART METER"]:

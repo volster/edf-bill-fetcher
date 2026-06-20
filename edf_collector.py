@@ -140,9 +140,22 @@ for name, _ in AMOUNT_PATTERNS:
 
 
 READING_PATTERNS: dict[str, re.Pattern[str]] = {
+    # Order matters: callers iterate insertion-order and break on first
+    # match (see EvidenceEngine.process_text / _process_new_invoice).
+    # Specific phrases first; the bare word "actual" only matches if
+    # nothing more specific does.
     "Estimated": re.compile(r"estimated|est\.|estimate", re.IGNORECASE),
-    "Actual": re.compile(r"actual|customer reading|your reading", re.IGNORECASE),
     "Smart": re.compile(r"smart meter|automated reading|smart reading", re.IGNORECASE),
+    # "Actual" must NOT match the bare word "actual" — that phrase
+    # appears in normal bill prose ("the actual amount you owe is
+    # £X"). It only counts when the meter-reading language is present.
+    "Actual": re.compile(
+        r"actual reading|customer reading|your reading|"  # standard phrase
+        r"reading was actual|reading is actual|"  # OK in long prose
+        r"actual\s+reading\s*[-:]\s*\d|"
+        r"meter\s+reading\s+was\s+actual",
+        re.IGNORECASE,
+    ),
 }
 
 
@@ -1000,6 +1013,42 @@ class EvidenceEngine:
             self.update_ui(f"HTM: extracted {len(recs)} account history entries")
         except Exception as e:
             self.log_error(f"HTM: {path}", str(e))
+
+    def process_pst_file(self, path):
+        """Open a PST file at ``path`` and crawl its root folder.
+
+        Wrapper around :meth:`crawl_pst` so the public per-file API
+        is symmetric with :meth:`process_pdf_file` and
+        :meth:`process_htm_file`. Returns nothing; outcomes are
+        surfaced through ``update_ui`` / ``error_log``.
+        """
+        if not HAS_PYPFF:
+            self.log_error(
+                "PST",
+                f"pypff not installed — cannot open PST file {path}",
+            )
+            return
+        try:
+            import pypff
+
+            pst = pypff.file()
+            pst.open(path)
+            try:
+                root = pst.get_root_folder()
+                self.crawl_pst(root)
+            finally:
+                try:
+                    pst.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            self.log_error(f"PST: {path}", str(e))
+
+    # `process_ost_file` is the same code path: ``libpff-python`` accepts
+    # both PST and OST archives. Exposed as an explicit alias so
+    # callers picking from the per-file API do not have to know that.
+    def process_ost_file(self, path):
+        self.process_pst_file(path)
 
     # ------------------------------------------------------------------
     # PST / OST crawl
@@ -2809,10 +2858,14 @@ def _data_quality_report(df):
     # Reading classification
     reading_classified = (df["Reading"] != "Unknown").sum() if "Reading" in df.columns else 0
 
-    # Unit rate computable
-    ur_computable = (
-        df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, (int, float)) and x != "N/A")
-    ).sum()
+    # Unit rate computable — count numeric values only. The unit
+    # rate column can hold `int | float | "N/A"`; only numerics can be
+    # used downstream by tariff charts, so other values are excluded.
+    # The older draft guarded this with `and x != "N/A"`, which is
+    # unreachable for an already-typed numeric — pinned here so a
+    # future careless refactor cannot silently change this branch
+    # back into a no-op-or-true tautology that overcounts.
+    ur_computable = df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, (int, float))).sum()
 
     # Duplicates (same date + amount)
     dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
