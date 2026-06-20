@@ -27,7 +27,10 @@ def _dispatcher_keys_for_function(function_name: str, source_path: str) -> set[s
     the literal-dict ``section_builders`` keyed strings out of the
     function named ``function_name``.
     """
-    src = Path(source_path).read_text()
+    # Read as UTF-8 explicitly — ``Path.read_text`` defaults to the
+    # locale encoding on Windows runners (cp1252), which trips on
+    # non-ASCII bytes inside Python source comments / strings.
+    src = Path(source_path).read_text(encoding="utf-8")
     module = ast.parse(src)
     for node in ast.walk(module):
         if not isinstance(node, ast.FunctionDef) or node.name != function_name:
