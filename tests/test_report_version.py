@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 from reportlab.platypus import Paragraph
 
 from edf_report import _get_package_version, create_cover_page
@@ -64,32 +63,45 @@ def test_get_package_version_includes_the_actual_pyproject_version():
     assert found_version, f"Cover-page text did not contain the version string 'v{declared}'"
 
 
-def test_get_package_version_falls_back_to_zero_when_pyproject_missing(monkeypatch):
+def test_get_package_version_falls_back_to_zero_when_pyproject_missing(
+    monkeypatch,
+):
     """If pyproject.toml is unreadable, return a stable fallback.
 
-    The helper resolves Path(__file__).parent / "pyproject.toml";
-    we substitute ``pathlib.Path.resolve`` with a stand-in whose
-    ``read_text`` always raises ``OSError``. The function must
-    fall back to a sane default rather than propagate the
-    exception — the cover page is what a paying client sees
-    first, and a missing version string is uglier than a stable
-    fallback (and worse than no cover page at all).
+    The helper resolves Path(__file__).parent / "pyproject.toml" and
+    reads it. We monkey-patch the module-level lookup by replacing
+    ``open`` in the ``edf_report`` module's namespace so any read
+    attempt raises ``OSError``. The function must feed the
+    fallback chain instead of propagating — the cover page is what a
+    paying client sees first and a missing version string is uglier
+    than a stable fallback. Avoid relying on ``Path.resolve`` /
+    platform-specific ``_flavour`` (CI Windows runners differ from
+    Linux / macOS in how pathlib's POSIXPath / WindowsPath copies
+    work through subclassing).
     """
-    import pathlib
+    import builtins
 
-    class _HiddenPath(pathlib.Path):
-        def read_text(self, *args, **kwargs):
+    real_open = builtins.open
+
+    def _raise_open(*args, **kwargs):
+        # Allow the helper to open *something* (so ast / import
+        # machinery works in unrelated tests) when the target is
+        # NOT pyproject.toml — but raise when target IS pyproject.
+        path = args[0] if args else kwargs.get("file", kwargs.get("name"))
+        if isinstance(path, str) and path.endswith("pyproject.toml"):
             raise OSError("simulated missing")
+        if isinstance(path, object) and str(path).endswith("pyproject.toml"):
+            raise OSError("simulated missing")
+        return real_open(*args, **kwargs)
 
-    monkeypatch.setattr(
-        pathlib.Path,
-        "resolve",
-        classmethod(lambda cls: _HiddenPath(__file__)),
-    )
-
+    monkeypatch.setattr(builtins, "open", _raise_open)
     try:
-        _get_package_version()
+        from edf_report import _get_package_version as _get
+
+        _get()
     except OSError:
+        import pytest
+
         pytest.fail(
             "_get_package_version() leaked an OSError when pyproject.toml is unreadable; "
             "expected fall-back to '0.1.0'"
