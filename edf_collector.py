@@ -232,13 +232,34 @@ def extract_new_invoice_fields(text):
         fields["period_from"] = parse_to_display_date(m.group(1).strip())
         fields["period_to"] = parse_to_display_date(m.group(2).strip())
 
-    # Current balance (the running account total — used as primary Amount)
-    m = re.search(r"Current balance\s+£([\d,]+\.\d{2})\s+debit", text, re.IGNORECASE)
+    # Current balance (the running account total — used as primary Amount).
+    #
+    # Pre-fix this hard-required "debit" — same gap as the #15 HTM parser:
+    # if the KI invoice reports ``Current balance GBPX in credit`` (rare but
+    # legal: e.g. over-payment or opening credit balance), this matcher
+    # would drop the Amount cell. Accept either currency-side label.
+    m = re.search(
+        r"Current balance\s+£([\d,]+\.\d{2})(?:\s+(debit|credit))?",
+        text,
+        re.IGNORECASE,
+    )
     if m:
         fields["amount"] = float(m.group(1).replace(",", ""))
+        fields["amount_side"] = (m.group(2) or "").lower()
 
-    # Period charge (total for this invoice)
-    m = re.search(r"Total charges for this period\s+£([\d,]+\.\d{2})\s+debit", text, re.IGNORECASE)
+    # Period charge (total for this invoice).
+    #
+    # Pre-fix, this regex hard-required "debit" after the amount — it
+    # silently dropped period charges where the line was reported in
+    # credit. The "debit"/"credit" labelling is a side-property of
+    # the statement, not the period charge itself; accept either so a
+    # credit-flagged period still populates the Period Charge column.
+    # Captures: group(1) = amount, group(2) = debit|credit (may be empty).
+    m = re.search(
+        r"Total charges for this period\s+£([\d,]+\.\d{2})(?:\s+(debit|credit))?",
+        text,
+        re.IGNORECASE,
+    )
     if m:
         fields["period_charge"] = float(m.group(1).replace(",", ""))
 

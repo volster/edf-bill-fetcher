@@ -20,6 +20,10 @@ output/
 *.xlsx
 *.pdf
 *.docx
+# Carrier exception — tests/fixtures/sample_bill.pdf is the
+# synthetic EDF bill the integration test parses end-to-end.
+# All other PDFs (output reports, generated bundles) stay ignored.
+!tests/fixtures/*.pdf
 
 # IDE
 .vscode/
