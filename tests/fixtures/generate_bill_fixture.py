@@ -42,7 +42,20 @@ from reportlab.platypus import (
 )
 
 # Synthetic, FAKE, no-PII data — see module docstring.
-ACCOUNT_NUMBER = "A-0000000"
+#
+# Account number is rendered twice into the fixture to exercise both
+# code paths the production parser supports:
+#   * compact form  "Account number: A-NNNNNNNN"  (the legacy regex)
+#   * spaced form    "Account number: NNN NNN NNN NNN"  (the post-fix
+#                                                       regex) — this
+#                   is the format produced by EDF's newer MyAccount
+#                   exports.
+#
+# Both forms are present so a single integration pass exercises both
+# branches of the parser, and so neither branch rots without being
+# noticed.
+ACCOUNT_NUMBER_COMPACT = "A-0000000"
+ACCOUNT_NUMBER_SPACED = "601 234 567 890"
 INVOICE_NUMBER = "KI-0000000-0000"
 BIN = "2010-FAFE-FAKE-0000"
 SUPPLY_NAME = "Synthetic Test Site"
@@ -115,7 +128,20 @@ def build(output_path: Path) -> None:
     story.append(Paragraph("Your VAT invoice", h1))
 
     story.append(Paragraph(f"Invoice number: {INVOICE_NUMBER}", body))
-    story.append(Paragraph(f"Account number: {ACCOUNT_NUMBER}", body))
+    # Spaced account number first (newer EDF format), then compact
+    # fallback — mirrors how MyAccount renders both forms.
+    story.append(
+        Paragraph(
+            f"Account number: {ACCOUNT_NUMBER_SPACED}",
+            body,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"Account number (compact): {ACCOUNT_NUMBER_COMPACT}",
+            body,
+        )
+    )
     story.append(Paragraph(f"Date issued: {BILL_DATE}", body))
     story.append(Spacer(1, 0.3 * cm))
 
