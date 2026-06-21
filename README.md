@@ -48,7 +48,7 @@ Or run the built executable `EDF_Evidence_Collector.exe`.
    - **PDF Folder**: Directory containing EDF bill PDFs
    - **HTM Export**: EDF MyAccount "Payments and Invoices" HTM export
 2. **Configure Options**:
-   - **Account Filter**: Filter by EDF account number (A-XXXXXXXX)
+   - **Account Filter**: Filter by EDF account number (e.g., `A-12345678` or `123 456 789 012`). Both compact and grouped-digit renderings are matched against the bill — `extract_new_invoice_fields` accepts the spaceless `A-NNNNNNNN` shape and the bank-row-style `NNN NNN NNN NNN` shape.
    - **Domain Filter**: Filter PST emails by sender domain (default: edfenergy.com)
    - **Minimum Amount**: Filter out records below this threshold (default: £500)
    - **Analysis Threshold**: Minimum bill amount for analysis tabs (default: £500)
@@ -71,6 +71,12 @@ python edf_collector.py --docx-report -i records.json -o report.docx
 Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records state.
 
 ### Programmatic Usage
+
+> Per-source API is symmetric — all three source types expose
+> `process_<source>_file(path, source_label, detail_label, fallback_date)`
+> so a paying client can plug in any combination via the same
+> call signature. PST only requires the `[pst]` extra to be installed
+> (the wrapper auto-logs an error if `libpff-python` is missing).
 
 ```python
 from edf_collector import EvidenceEngine, export_to_excel
@@ -103,8 +109,14 @@ config = {
 }
 
 engine = EvidenceEngine(config, print)
-engine.crawl_local_pdfs("/path/to/pdfs")
-# ... process other sources ...
+engine.process_pdf_file("path/to/a.pdf",
+                        source_label="Local PDF",
+                        detail_label="bill.pdf",
+                        fallback_date="2026-03-01")
+engine.process_htm_file("path/to/export.htm",
+                        fallback_date="2026-03-01")
+engine.process_pst_file("path/to/archive.pst")
+# …each call extracts whatever it can and appends to engine.records.
 
 # Excel export
 export_to_excel(engine.records, "output.xlsx", engine.error_log, config, engine.filtered_records)
@@ -132,12 +144,14 @@ generate_docx_from_gui(
 
 The PDF and DOCX reports are both built from a single section-registry so the titles and numbering always line up. The registry lives in `edf_report.REPORT_SECTIONS`:
 
-| Class          | Sections                                                                                               |
-| -------------- | ------------------------------------------------------------------------------------------------------ |
+| Class          | Sections                                                                                                                                                                                                              |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Main (numeric) | Executive Summary · Key Findings Summary · Evidence Index & Source Cross-Reference · Detailed Findings · Timeline of Events · OFGEM Price Cap Comparison · Statistical Analysis · Payment & Credit Analysis · Forecast & Projection · Data Quality Assessment · Tariff Impact Analysis |
-| Appendix       | Methodology & Data Sources · Glossary · Full Evidence Table                                            |
+| Appendix       | Methodology & Data Sources · Glossary · Full Evidence Table                                                                                                                                                                                                              |
 
 Main sections are numbered **1, 2, 3, …** and appendices are lettered **A, B, C, …**, computed at render time based on the user's `report_sections` selection.
+
+A `tests/test_dispatch_parity.py` structural test pins the invariant that the PDF dispatcher's `section_builders`, the DOCX dispatcher's `section_builders`, and `REPORT_SECTIONS` all expose exactly the same set of keys — so a future contributor who adds a section to the registry without wiring both dispatchers breaks CI, not a paying client's report.
 
 ### Adding a new section
 
@@ -170,10 +184,11 @@ Removing a section: same steps in reverse.
 ## Supported EDF Formats
 
 ### New-Style Invoices (KI-XXXXXXXX)
-- "Current balance £X debit"
-- "Total charges for this period £X debit"
+- "Current balance £X in debit" or "Current balance £X in credit"
+- "Total charges for this period £X in debit" or "… in credit"
 - "Your charges: DD Mon YYYY - DD Mon YYYY"
 - kWh usage, standing charge, tariff name
+- Account number rendered as `A-NNNNNNNN` (compact) **or** `NNN NNN NNN NNN` (spaced) — both parsed since audit-pass-1
 
 ### New-Style Credit Notes (KCR-XXXXXXXX)
 - "Total credits for this bill £X"
@@ -182,10 +197,14 @@ Removing a section: same steps in reverse.
 - "Your new account balance £X"
 - Generic amount patterns with "balance", "total charges", "amount to pay"
 
-### HTM Account History
+### HTM Account History (since the #15 fix)
 - "DD Mon YYYY We charged your account £X For Y kWh ... Balance £Z in debit"
+- "DD Mon YYYY We charged your account £X For Y kWh ... Balance £Z in credit"
 - "DD Mon YYYY You paid us £X ... Balance £Z in debit"
-- "DD Mon YYYY Reversed account charge £X ... Balance £Z in debit"
+- "DD Mon YYYY You paid us £X ... Balance £Z in credit"
+- "DD Mon YYYY Reversed account charge £X ... Balance £Z in debit | credit"
+- Plus standalone opening-balance lines:
+  "DD Mon YYYY Balance £X in credit" (only the credit side — debit-only opening balances get summarised by the next transaction)
 
 ## Requirements
 
@@ -201,6 +220,35 @@ pip install -e ".[dev]"
 pytest -v
 ```
 
+Tests are organised into three lake levels:
+
+- **Unit tests** (most files in `tests/test_*.py`) pin the
+  behaviour of public functions and structural invariants of the
+  registry/dispatcher.
+- **Audit regression tests** (`tests/test_audit_pass_1.py`,
+  `tests/test_report_version.py`, `tests/test_dispatch_parity.py`)
+  pin the contracts a paying client depends on. These exist
+  *because* real-data review exposed one or more real defects — see
+  `CHANGELOG.md` for the audit trail. Do not edit these without
+  re-running audit-pass analysis:
+  1. `tests/test_audit_pass_1.py` — reading-pattern ordering,
+     `detect_pdf_format`, `process_text` heuristic-fallback,
+     `_detect_payment_patterns`, `_analyze_tariff_impact`,
+     `_data_quality_report`, `process_pst_file` / `process_ost_file`,
+     `compute_dispute_flags`.
+  2. `tests/test_report_version.py` — cover page reflects the
+     `pyproject.toml` version; falls back to a stable default when
+     `pyproject.toml` is unreadable.
+  3. `tests/test_dispatch_parity.py` — REGISTRY ↔ PDF dispatcher ↔
+     DOCX dispatcher key-set parity is locked in.
+- **Integration smoke** (`tests/test_integration_pipeline.py`) drives
+  the bundled synthetic bill PDF (`tests/fixtures/sample_bill.pdf`)
+  through the full PDF → engine → reportlab PDF + openpyxl XLSX
+  pipeline and asserts the extracted fields. The fixture is
+  regenerated via `tests/fixtures/generate_bill_fixture.py` if
+  missing — a fully-synthetic, deterministic dataset (FAFA policy,
+  no real EDF data).
+
 ### Linting / formatting / type-checking
 
 ```bash
@@ -208,6 +256,10 @@ ruff check .
 ruff format .
 mypy .
 ```
+
+All three are enforced in CI on Python 3.10 / 3.11 / 3.12 ×
+ubuntu / windows / macos — see `.github/workflows/ci.yml`. A
+paying-client build is one CI green away from shippable.
 
 ## Configuration
 
@@ -232,3 +284,11 @@ MIT License — see `LICENSE` for details.
 ## Disclaimer
 
 This tool was created for personal use in an EDF billing dispute. It is provided as-is without warranty. Always verify extracted data against original documents before using in any formal dispute.
+
+## Release & Test Status
+
+Last CI run: 9/9 matrix legs green (Python 3.10 / 3.11 / 3.12 ×
+ubuntu / windows / macos). Last test count: 224 passed, 2 skipped
+(the 2 skipped PST tests skip when `libpff-python` is installed,
+which is the case on the developer's host and in CI). See
+[CHANGELOG.md](CHANGELOG.md) for the per-pass audit trail.
