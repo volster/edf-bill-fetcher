@@ -32,12 +32,20 @@ dependencies = [
     "reportlab>=4.5,<5",        # PDF report generation
     "python-docx>=1.1,<2",      # DOCX report generation
     "scipy>=1.10,<2",           # rolling stats, normality tests, linregress
+    # Heavy pickers that ship with the default install so paying-client
+    # deployments don't have to enable extras to use the documented
+    # features (PST/OST ingestion, Holt-Winters forecasting). Both are
+    # swappable at run-time: libpff-python is only imported when
+    # `process_pst_file`/`process_ost_file` is called, and statsmodels
+    # falls back to linear+EMA projection if not importable.
+    "libpff-python>=20211114",   # Outlook PST/OST archive parsing
+    "statsmodels>=0.14,<1",     # Holt-Winters forecasting
 ]
 
 [project.optional-dependencies]
-# Optional deps that install only the heavy / platform-specific bits.
-pst = ["libpff-python>=20211114"]            # Outlook PST/OST archive parsing
-statsmodels = ["statsmodels>=0.14,<1"]       # Holt-Winters forecasting (otherwise EMA-only)
+# Optional deps that install only specific build / dev toolchains.
+# Heavy runtime parsers (libpff-python, statsmodels) are pulled in by
+# the default install — see dependencies above.
 build = [
     "pyinstaller>=6.0,<7",
 ]

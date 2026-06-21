@@ -33,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,pst,statsmodels]"
+          pip install -e ".[dev]"
 
       - name: Run linting (ruff)
         run: |
