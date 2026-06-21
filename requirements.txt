@@ -3,7 +3,8 @@
 # source of truth; this file is a convenience for environments that pre-date
 # editing the pyproject directly.
 
-# === Runtime core (Excel + PDF + DOCX + scipy) ===
+# === Runtime (Excel + PDF + DOCX + PST + Holt-Winters) ===
+# Every documented feature works without opting into extras.
 pandas>=2.0,<3
 pdfplumber>=0.10,<1
 beautifulsoup4>=4.12,<5
@@ -12,12 +13,10 @@ numpy>=1.24,<3
 reportlab>=4.5,<5
 python-docx>=1.1,<2
 scipy>=1.10,<2
+libpff-python>=20211114
+statsmodels>=0.14,<1
 
-# === Optional per-extras (left commented for visibility) ===
-# libpff-python>=20211114          # [pst]
-# statsmodels>=0.14,<1             # [statsmodels] Holt-Winters forecasting
-
-# === Dev / build (left commented for visibility) ===
+# === Optional toolchains (left commented for visibility) ===
 # pytest>=7.4,<8
 # pytest-cov>=4.1,<5
 # ruff>=0.4,<1

@@ -19,19 +19,41 @@ A personal desktop application that collects and analyses EDF Energy billing dat
 git clone https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
 
-# Required runtime — Excel + PDF + DOCX reports all work out of the box:
+# Single install covers every documented feature:
+# GUI, CLI, PST/OST archive parsing, Holt-Winters forecasting,
+# Excel + PDF + DOCX report generation.
 pip install -e .
 
-# Optional heavy deps:
-#   [pst]         Outlook PST/OST archive parsing (Windows: requires libpff)
-#   [statsmodels] Holt-Winters forecasting (without it, forecast degrades to linear + EMA)
-#   [dev]         test/lint/typecheck toolchain
-#   [build]       PyInstaller for one-file Windows/macOS/Linux executables
-pip install -e ".[pst,statsmodels]"      # recommended for real use
-pip install -e ".[dev,build]"            # recommended for contributors
+# Optional toolchains (only needed if you are contributing or
+# packaging binaries — the default extras-as-runtime policy above
+# keeps paying-client installs at one command):
+#
+#   [dev]    test + lint + typecheck toolchain (pytest, ruff, mypy)
+#   [build]  PyInstaller for one-file Windows / macOS / Linux executables
+pip install -e ".[dev,build]"   # recommended for contributors
 ```
 
-`-e .` already pulls in pandas, pdfplumber, beautifulsoup4, openpyxl, numpy, reportlab, python-docx, and scipy — every report feature works without opting into extras.
+What `pip install -e .` actually pulls in (current version):
+
+| Library            | Used for                                                                      |
+| ------------------ | ----------------------------------------------------------------------------- |
+| pandas / numpy     | DataFrame plumbing across extraction, dedup, statistical analysis, export.    |
+| pdfplumber         | Reading text + tables out of EDF bill PDFs.                                     |
+| beautifulsoup4     | Stripping HTML into text body for PST / HTM ingestion.                         |
+| openpyxl           | Writing the multi-sheet evidence workbook.                                      |
+| reportlab          | PDF report rendering (cover, TOC, sections, summary tables, appendix).         |
+| python-docx        | DOCX report rendering (sister surface to PDF).                                  |
+| scipy              | Rolling stats, Shapiro-Wilk normality, linregress fallback forecasting.          |
+| **`libpff-python`** | Outlook PST / OST archive ingestion — used by `EvidenceEngine.process_pst_file`. |
+| **`statsmodels`**   | Holt-Winters forecasting in the Forecast section — falls back to linear+EMA     |
+|                    | projection if missing (with a warning in the report).                          |
+
+Adding optional toolchains later does not require re-installing everything:
+
+```bash
+pip install -e ".[dev]"     # bring in pytest / ruff / mypy only
+pip install -e ".[build]"   # add PyInstaller
+```
 
 ## Usage
 
@@ -44,7 +66,7 @@ python edf_collector.py
 Or run the built executable `EDF_Evidence_Collector.exe`.
 
 1. **Select Sources** (at least one required):
-   - **PST/OST File**: Outlook email archive containing EDF emails (needs `[pst]` extra)
+   - **PST/OST File**: Outlook email archive containing EDF emails (`.pst` / `.ost` are read via `libpff-python`; the `process_pst_file` wrapper auto-logs an error if the lib is missing, so the rest of the pipeline still runs)
    - **PDF Folder**: Directory containing EDF bill PDFs
    - **HTM Export**: EDF MyAccount "Payments and Invoices" HTM export
 2. **Configure Options**:
@@ -75,8 +97,10 @@ Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records s
 > Per-source API is symmetric — all three source types expose
 > `process_<source>_file(path, source_label, detail_label, fallback_date)`
 > so a paying client can plug in any combination via the same
-> call signature. PST only requires the `[pst]` extra to be installed
-> (the wrapper auto-logs an error if `libpff-python` is missing).
+> call signature. PST requires `libpff-python` (a runtime dep
+> since `0.1.0+`); if it's missing in some hand-built
+> environment, the wrapper logs the error and the rest of the
+> pipeline still runs.
 
 ```python
 from edf_collector import EvidenceEngine, export_to_excel
@@ -210,8 +234,12 @@ Removing a section: same steps in reverse.
 
 - Python 3.10+
 - tkinter (bundled with most Python installers)
-- Runtime: pandas, pdfplumber, beautifulsoup4, openpyxl, numpy, reportlab, python-docx, scipy (all installed by `pip install -e .`)
-- Optional: libpff-python (`[pst]`), statsmodels (`[statsmodels]`)
+- Runtime (all installed by `pip install -e .`):
+  pandas, numpy, pdfplumber, beautifulsoup4, openpyxl, reportlab,
+  python-docx, scipy, **libpff-python**, **statsmodels**.
+- Toolchain (only for contributors / packagers, install via
+  `pip install -e ".[dev,build]"`):
+  pytest, ruff, mypy, pyinstaller.
 
 ## Development
 

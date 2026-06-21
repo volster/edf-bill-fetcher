@@ -6,14 +6,25 @@ project. Dates are YYYY-MM-DD.
 The format is loosely [Keep a Changelog](https://keepachangelog.com/),
 semver-friendly.
 
-## [Unreleased] — Audit pass (2026-06-19 → 2026-06-20)
+## [Unreleased] — Audit pass (2026-06-19 → 2026-06-21)
 
 A four-commit consultant-grade audit pass landed on `dev`. CI matrix
 green across all 9 legs (Python 3.10/3.11/3.12 × linux/macos/windows).
 Total test count: 224 passed (up from 162), 2 skipped.
 
+Plus a fifth commit (this round) demotes the heavy pickers
+(`libpff-python`, `statsmodels`) from optional extras to runtime
+deps so paying clients get every documented feature with a single
+`pip install -e .` — no tag-choosing required.
+
 ### Changed
 
+- `pip install -e .` is now feature-complete for paying clients.
+  `libpff-python` (PST/OST ingestion) and `statsmodels`
+  (Holt-Winters forecasting) are pulled in by the default install
+  instead of sitting behind `[pst]` and `[statsmodels]` extras.
+  Optional extras are reduced to `[dev]` (test/lint/typecheck
+  toolchain) and `[build]` (PyInstaller).
 - `extract_new_invoice_fields` and `extract_new_credit_fields`
   account-number regex now match both EDF renderings: compact
   `A-NNNNNNNN` and grouped `NNN NNN NNN NNN`. Pre-fix, the spaced
