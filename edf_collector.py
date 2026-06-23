@@ -14,6 +14,7 @@ import tempfile
 import threading
 import traceback
 from datetime import datetime
+from typing import Any, cast
 
 import numpy as np
 import openpyxl
@@ -97,25 +98,52 @@ MEDIUM_GREY = "#666666"
 # list index. If you add a new pattern you must also pick its entry
 # type in :data:`AMOUNT_PATTERN_ENTRY_TYPE` so the classifier routes
 # it correctly.
-AMOUNT_PATTERNS: list[tuple[str, str]] = [
+AMOUNT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # New-style KI / KCR invoices — "Current balance £X debit"
-    ("current_balance_debit", r"current balance\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit"),
+    (
+        "current_balance_debit",
+        re.compile(r"current balance\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit", re.IGNORECASE),
+    ),
     # New-style KI — "Total charges for this period £X debit"
     (
         "total_charges_period",
-        r"total charges for this period\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit",
+        re.compile(
+            r"total charges for this period\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit",
+            re.IGNORECASE,
+        ),
     ),
     # New-style KCR — "Total credits for this bill £X"
-    ("total_credits_bill", r"total credits for this bill\s+£\s?([\d,]+(?:\.\d{2})?)"),
+    (
+        "total_credits_bill",
+        re.compile(r"total credits for this bill\s+£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+    ),
     # Old-style cumulative balance
-    ("your_new_account_balance", r"your new account balance\s+£\s?([\d,]+(?:\.\d{2})?)"),
+    (
+        "your_new_account_balance",
+        re.compile(r"your new account balance\s+£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+    ),
     # Generic anchors (in priority order — more specific first)
-    ("balance_within", r"balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
-    ("total_charges_within", r"total charges[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
-    ("total_amount_due_within", r"total amount due[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
-    ("amount_to_pay_within", r"amount to pay[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
-    ("pound_amount_debit", r"£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit"),
-    ("current_balance_within", r"current balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)"),
+    ("balance_within", re.compile(r"balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE)),
+    (
+        "total_charges_within",
+        re.compile(r"total charges[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+    ),
+    (
+        "total_amount_due_within",
+        re.compile(r"total amount due[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+    ),
+    (
+        "amount_to_pay_within",
+        re.compile(r"amount to pay[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+    ),
+    (
+        "pound_amount_debit",
+        re.compile(r"£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit", re.IGNORECASE),
+    ),
+    (
+        "current_balance_within",
+        re.compile(r"current balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+    ),
 ]
 #
 # Pattern name → entry type. The classifier looks up a pattern's name
@@ -175,6 +203,10 @@ PERIOD_RE = re.compile(
 )
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Used by the "large amount" fallback in `extract_amount`.  Pre-compiled
+# once at module load; this hot-path is hit once per analysed chunk.
+_POUND_AMOUNT_FALLBACK_RE = re.compile(r"£\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)")
 
 
 # ---------------------------------------------------------------------------
@@ -772,7 +804,9 @@ class EvidenceEngine:
 
         if self.config.get("use_anchors", True):
             for name, p in AMOUNT_PATTERNS:
-                m = re.search(p, clean_text, re.IGNORECASE)
+                # Patterns are pre-compiled at module load with
+                # `re.IGNORECASE` baked in, so search() takes no flags.
+                m = p.search(clean_text)
                 if m:
                     try:
                         found_amt = float(m.group(1).replace(",", ""))
@@ -783,7 +817,7 @@ class EvidenceEngine:
                         continue
 
         if not found_amt and self.config.get("use_large", True):
-            matches = re.findall(r"£\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)", clean_text)
+            matches = _POUND_AMOUNT_FALLBACK_RE.findall(clean_text)
             if matches:
                 floats = [float(x.replace(",", "")) for x in matches]
                 highs = [x for x in floats if x >= self.config["min_amount"]]
@@ -1086,9 +1120,7 @@ class EvidenceEngine:
                 msg = folder.get_sub_message(i)
                 subj = str(msg.get_subject() or "")
                 d_time = msg.get_delivery_time()
-                date_str = (
-                    parse_to_display_date(d_time.strftime("%Y-%m-%d")) if d_time else "N/A"
-                )
+                date_str = parse_to_display_date(d_time.strftime("%Y-%m-%d")) if d_time else "N/A"
 
                 if self.update_progress and i % 100 == 0:
                     self.update_progress(
@@ -4524,7 +4556,6 @@ class App:
         except Exception as e:
             self._show("error", "Load Error", f"Failed to load spreadsheet:\n\n{e}")
 
-
     def _export_legacy(self, fmt: str) -> None:
         """Legacy single-format export with all sections."""
         if fmt == "pdf" and not HAS_PDF_REPORT:
@@ -4781,6 +4812,7 @@ class App:
 # else raises UnpicklingError.
 # ---------------------------------------------------------------------------
 
+
 class _RestrictedUnpickler(pickle.Unpickler):
     """Unpickler that only allows known-safe types.
 
@@ -4793,9 +4825,20 @@ class _RestrictedUnpickler(pickle.Unpickler):
     # Module→class whitelist.  Only classes listed here can be rebuilt.
     _SAFE_CLASSES: dict[str, set[str]] = {
         "builtins": {
-            "dict", "list", "tuple", "set", "frozenset",
-            "int", "float", "str", "bool", "bytes", "bytearray",
-            "NoneType", "type", "slice",
+            "dict",
+            "list",
+            "tuple",
+            "set",
+            "frozenset",
+            "int",
+            "float",
+            "str",
+            "bool",
+            "bytes",
+            "bytearray",
+            "NoneType",
+            "type",
+            "slice",
         },
         "collections": {"OrderedDict", "defaultdict", "Counter", "deque"},
         "collections.__init__": {"OrderedDict", "defaultdict", "Counter", "deque"},
@@ -4816,15 +4859,19 @@ class _RestrictedUnpickler(pickle.Unpickler):
             # can be reconstructed normally.
             if module == "edf_collector" or module == "__main__":
                 import importlib
-                mod = importlib.import_module("edf_collector")
-                return getattr(mod, name)
-            return super().find_class(module, name)
-        raise pickle.UnpicklingError(
-            f"Blocked unsafe class {module!r}.{name!r} in pickle stream"
-        )
+
+                mod: Any = importlib.import_module("edf_collector")
+                cls: Any = getattr(mod, name)
+                if not isinstance(cls, type):
+                    raise pickle.UnpicklingError(
+                        f"Resolved edf_collector attribute {name!r} is not a class"
+                    )
+                return cls
+            return cast(type, super().find_class(module, name))
+        raise pickle.UnpicklingError(f"Blocked unsafe class {module!r}.{name!r} in pickle stream")
 
 
-def _safe_pickle_load(path: str):
+def _safe_pickle_load(path: str) -> Any:
     """Load a pickle file through the restricted unpickler.
 
     Usage:  obj = _safe_pickle_load("engine.pkl")
