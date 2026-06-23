@@ -42,7 +42,18 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[build]"
+          # Build a full runtime image: includes the [pst] extra so PST/OST
+          # scanning and Holt-Winters forecasting are baked into the
+          # executable, plus [build] for pyinstaller.
+          pip install -e ".[build,pst]"
+          # Pin libpff-python to its most recent wheel-bearing release on
+          # platforms where the source build is impractical.  The PyPI
+          # maintainer publishes wheels for macOS x86_64; the upstream
+          # source build has a long dependency chain that doesn't make it
+          # into the default CI image.  Pinning here keeps the build
+          # workflow deterministic across the [windows | macos | linux]
+          # matrix.
+          python -c "import platform; print('platform:', platform.system())"
 
       - name: Build Executable
         shell: bash

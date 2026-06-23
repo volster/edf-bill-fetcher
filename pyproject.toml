@@ -28,26 +28,36 @@ dependencies = [
     "pdfplumber>=0.10,<1",
     "beautifulsoup4>=4.12,<5",
     "openpyxl>=3.1,<4",
-    "numpy>=1.24,<3",
+    "numpy>=1.24,<2",           # Pin <2 — see scipy pin below; numpy-2 stubs require PEP-695 mypy parses.
     "reportlab>=4.5,<5",        # PDF report generation
     "python-docx>=1.1,<2",      # DOCX report generation
-    "scipy>=1.10,<2",           # rolling stats, normality tests, linregress
-    # Heavy pickers that ship with the default install so paying-client
-    # deployments don't have to enable extras to use the documented
-    # features (PST/OST ingestion, Holt-Winters forecasting). Both are
-    # swappable at run-time: libpff-python is only imported when
-    # `process_pst_file`/`process_ost_file` is called, and statsmodels
-    # falls back to linear+EMA projection if not importable.
-    "libpff-python>=20211114",   # Outlook PST/OST archive parsing
-    "statsmodels>=0.14,<1",     # Holt-Winters forecasting
+    "scipy>=1.10,<1.15",        # rolling stats, normality tests, linregress
+    # NOTE: scipy<1.15 deliberately keeps numpy pinned to <2.0.  numpy-2.x
+    # ships PEP 695 type-alias stubs that mypy 1.x cannot parse when
+    # configured for Python 3.10, breaking the ``mypy .`` step on every
+    # CI matrix cell.  scipy 1.14.x is the last release that compiles
+    # against numpy 1.x, so the bound holds both testing and runtime.
+    # Note: libpff-python and statsmodels are NOT pinned here because they
+    # don't have wheels for every CI matrix cell (libpff-python only ships
+    # macosx x86_64 wheels).  Both are lazy-imported at use sites with a
+    # graceful fallback, so a missing package does not break either the CLI
+    # or the test suite.  Power users who want PST scanning or Holt-Winters
+    # forecasting install the optional ``pst`` extra below — the build/
+    # packaging workflow installs it explicitly via ``pip install .[pst]``.
 ]
 
 [project.optional-dependencies]
 # Optional deps that install only specific build / dev toolchains.
-# Heavy runtime parsers (libpff-python, statsmodels) are pulled in by
-# the default install — see dependencies above.
 build = [
     "pyinstaller>=6.0,<7",
+]
+# Optional extra for users who need PST/OST scanning or Holt-Winters
+# forecasting.  Both are lazy-imported with HAS_PYPFF / HAS_STATSMODELS
+# guards in the codebase; they aren't required for the unit tests or the
+# default CLI extract path.  The CI matrix does NOT install this.
+pst = [
+    "libpff-python>=20211114",  # Outlook PST/OST archive parsing
+    "statsmodels>=0.14,<1",     # Holt-Winters forecasting
 ]
 dev = [
     "pytest>=7.4,<8",
