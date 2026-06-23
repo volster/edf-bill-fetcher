@@ -8,17 +8,27 @@ Fixed version: correct Excel date serials, dynamic range references, new PDF for
 import gc
 import hashlib
 import os
+import pickle
 import re
 import tempfile
 import threading
-import tkinter as tk
 import traceback
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
 import openpyxl
 import pandas as pd
+
+# Tkinter is only needed for the GUI dialog.  Importing it at module
+# level would crash on headless / CI machines that lack a display, so
+# we guard it and set a flag that downstream GUI code checks.
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+
+    HAS_TK = True
+except ImportError:
+    HAS_TK = False
 import pdfplumber
 from bs4 import BeautifulSoup
 from openpyxl.chart import BarChart, LineChart, Reference
@@ -51,10 +61,8 @@ except ImportError:
 
 # Check for optional report dependencies (without importing to avoid circular imports)
 try:
-    from importlib.util import find_spec
-
-    HAS_PDF_REPORT = find_spec("edf_report") is not None
-    HAS_DOCX_REPORT = find_spec("edf_report_docx") is not None
+    HAS_PDF_REPORT = importlib.util.find_spec("edf_report") is not None
+    HAS_DOCX_REPORT = importlib.util.find_spec("edf_report_docx") is not None
 except ImportError:
     HAS_PDF_REPORT = False
     HAS_DOCX_REPORT = False
@@ -418,7 +426,7 @@ def parse_htm_account_history(text):
                 "Amount (£)": balance,
                 "Period Charge (£)": charge_amt,
                 "Entry Type": "Ongoing Balance",
-                "Reading": "Unknown",
+                "Reading": "N/A",
                 "Units (kWh)": units,
                 "Standing Chg (p/day)": "N/A",
                 "Attachment Name": "N/A",
@@ -448,7 +456,7 @@ def parse_htm_account_history(text):
                 "Amount (£)": balance,
                 "Period Charge (£)": "N/A",
                 "Entry Type": "Payment",
-                "Reading": "Unknown",
+                "Reading": "N/A",
                 "Units (kWh)": "N/A",
                 "Standing Chg (p/day)": "N/A",
                 "Attachment Name": "N/A",
@@ -478,7 +486,7 @@ def parse_htm_account_history(text):
                 "Amount (£)": balance,
                 "Period Charge (£)": "N/A",
                 "Entry Type": "Credit",
-                "Reading": "Unknown",
+                "Reading": "N/A",
                 "Units (kWh)": "N/A",
                 "Standing Chg (p/day)": "N/A",
                 "Attachment Name": "N/A",
@@ -529,7 +537,7 @@ def parse_htm_account_history(text):
                 "Amount (£)": balance,
                 "Period Charge (£)": "N/A",
                 "Entry Type": "Credit",
-                "Reading": "Unknown",
+                "Reading": "N/A",
                 "Units (kWh)": "N/A",
                 "Standing Chg (p/day)": "N/A",
                 "Attachment Name": "N/A",
@@ -733,7 +741,7 @@ class EvidenceEngine:
                 "Amount (£)": fields["amount"],
                 "Period Charge (£)": "N/A",
                 "Entry Type": "Credit",
-                "Reading": "Unknown",
+                "Reading": "N/A",
                 "Units (kWh)": "N/A",
                 "Standing Chg (p/day)": "N/A",
                 "Attachment Name": attachment_name or "N/A",
@@ -936,7 +944,7 @@ class EvidenceEngine:
 
             with open(path, "rb") as fh:
                 raw = fh.read()
-            pdf_hash = hashlib.sha1(raw).hexdigest()
+            pdf_hash = hashlib.sha256(raw).hexdigest()
             with self.lock:
                 if pdf_hash in self.seen_pdf_hashes:
                     return
@@ -1003,8 +1011,17 @@ class EvidenceEngine:
 
     def process_htm_file(self, path):
         try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                content = f.read()
+            # Read with strict UTF-8 first — evidence data must not be
+            # silently corrupted by mojibake replacement.  Fall back to
+            # "replace" only if strict fails, and log a warning so the
+            # user knows data may be imperfect.
+            try:
+                with open(path, encoding="utf-8", errors="strict") as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                self.log_error(f"HTM: {path}", "UTF-8 decode error — some characters replaced")
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
             soup = BeautifulSoup(content, "html.parser")
             text = soup.get_text(separator=" ", strip=True)
             recs = parse_htm_account_history(text)
@@ -1070,7 +1087,7 @@ class EvidenceEngine:
                 subj = str(msg.get_subject() or "")
                 d_time = msg.get_delivery_time()
                 date_str = (
-                    parse_to_display_date(d_time.strftime("%Y-%m-%d")) if d_time else "Unknown"
+                    parse_to_display_date(d_time.strftime("%Y-%m-%d")) if d_time else "N/A"
                 )
 
                 if self.update_progress and i % 100 == 0:
@@ -1293,9 +1310,7 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
         - flags_list: list of (type, date, amount, detail, severity) tuples
         - flag_counts_dict: dict with HIGH, MEDIUM, INFO counts
     """
-    from typing import Any
-
-    flags: list[tuple[str, Any, Any, str, str]] = []
+    flags: list[tuple[str, str | float | None, float | None, str, str]] = []
     n = len(dfc)
     if n < 2:
         return flags, {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
@@ -1761,7 +1776,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
                 return round((pc_f / u_f) * 100, 2)
         except (ValueError, TypeError):
             pass
-        return "N/A"
+        return np.nan
 
     df["Unit Rate (p/kWh)"] = df.apply(_compute_unit_rate, axis=1)
     if not dup_df.empty:
@@ -2678,7 +2693,7 @@ def _compute_ema(series, span=6):
 
 
 def _compute_momentum(series, period=3):
-    """Compute momentum (rate of change)."""
+    """Compute momentum (rate of change) of a series."""
     return series.diff(period)
 
 
@@ -2836,7 +2851,15 @@ def _analyze_tariff_impact(df):
 
 
 def _data_quality_report(df):
-    """Generate a comprehensive data quality report."""
+    """Generate a comprehensive data quality report.
+
+    Works on a *copy* of the input DataFrame so the caller's data is
+    never mutated (previously this added ``_dt_parsed`` as a side-effect
+    on the caller's df, which broke downstream code that re-used the
+    same DataFrame for other purposes).
+    """
+    # Work on a copy to avoid mutating the caller's DataFrame
+    df = df.copy()
     total_records = len(df)
     if total_records == 0:
         return {}
@@ -2856,7 +2879,8 @@ def _data_quality_report(df):
     period_complete = period_from_complete  # At least from date
 
     # Reading classification
-    reading_classified = (df["Reading"] != "Unknown").sum() if "Reading" in df.columns else 0
+    # Reading classification — "N/A" is the sentinel for unclassified readings
+    reading_classified = (df["Reading"] != "N/A").sum() if "Reading" in df.columns else 0
 
     # Unit rate computable — count numeric values only. The unit
     # rate column can hold `int | float | "N/A"`; only numerics can be
@@ -3238,7 +3262,13 @@ def write_payment_analysis_sheet(ws, dfc):
         _text(ws, r, 1, row["Date"], fill_hex=bg)
         _text(ws, r, 2, row["Entry Type"], fill_hex=bg, bold=True)
         _money(ws, r, 3, float(row["Amount (£)"]), fill_hex=bg)
-        _money(ws, r, 4, float(row["Amount (£)"]), fill_hex=bg)  # Balance after = current amount
+        # Balance After (column 4) — Historical Note: this column shows
+        # the per-row transaction amount rather than the running account
+        # balance.  Real "balance-after" data is not currently parsed
+        # from EDF bills, so we display the same amount as a placeholder
+        # (open Low-severity follow-up B6: parse the running balance
+        # column from EDF statements when available).
+        _money(ws, r, 4, float(row["Amount (£)"]), fill_hex=bg)
         _text(ws, r, 5, str(row.get("Details", ""))[:60], fill_hex=bg, wrap=True)
 
     # Chart - Payment amounts over time
@@ -3665,6 +3695,7 @@ class ReportOptionsDialog:
         ("tariff", "Tariff Impact Analysis", True),
         ("appendix_methodology", "Appendix: Methodology", True),
         ("appendix_glossary", "Appendix: Glossary", True),
+        ("appendix_full_evidence", "Appendix: Full Evidence Table", True),
     ]
 
     def __init__(self, parent):
@@ -4331,18 +4362,22 @@ class App:
 
             records = df.to_dict("records")
 
-            # Create a minimal engine-like object for metadata
+            # Create a minimal engine-like object for metadata.
+            # A dataclass is used instead of bare class-level annotations
+            # so the attributes have a clear constructor contract and are
+            # self-documenting (previously these were bare class-level
+            # annotations that looked like static type hints but were only
+            # ever set on instances after construction).
+            from dataclasses import dataclass
+
+            @dataclass
             class MockEngine:
                 records: list
                 filtered_records: list
                 pdf_count: int
                 email_count: int
 
-            engine = MockEngine()
-            engine.records = records
-            engine.filtered_records = []
-            engine.pdf_count = 0
-            engine.email_count = 0
+            engine = MockEngine(records=records, filtered_records=[], pdf_count=0, email_count=0)
 
             # Open report options
             dialog = ReportOptionsDialog(self.root)
@@ -4489,14 +4524,6 @@ class App:
         except Exception as e:
             self._show("error", "Load Error", f"Failed to load spreadsheet:\n\n{e}")
 
-    # Keep old methods for backward compatibility (they now call the unified one)
-    def export_pdf_report(self):
-        """Legacy method — PDF only with default sections."""
-        self._export_legacy("pdf")
-
-    def export_docx_report(self):
-        """Legacy method — DOCX only with default sections."""
-        self._export_legacy("docx")
 
     def _export_legacy(self, fmt: str) -> None:
         """Legacy single-format export with all sections."""
@@ -4747,6 +4774,66 @@ class App:
             self.root.after(0, self._finish)
 
 
+# ---------------------------------------------------------------------------
+# Safe pickle deserialiser — prevents arbitrary code execution when loading
+# engine-data pickle files from disk.  Only standard built-in types and
+# the project's own EvidenceEngine class are allowed through; anything
+# else raises UnpicklingError.
+# ---------------------------------------------------------------------------
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """Unpickler that only allows known-safe types.
+
+    Permits: built-in scalars, dicts, lists, tuples, sets, frozensets,
+    bytes/bytearray, and the project's own ``EvidenceEngine``.  Everything
+    else triggers ``pickle.UnpicklingError`` so a crafted pickle can never
+    import and call arbitrary code.
+    """
+
+    # Module→class whitelist.  Only classes listed here can be rebuilt.
+    _SAFE_CLASSES: dict[str, set[str]] = {
+        "builtins": {
+            "dict", "list", "tuple", "set", "frozenset",
+            "int", "float", "str", "bool", "bytes", "bytearray",
+            "NoneType", "type", "slice",
+        },
+        "collections": {"OrderedDict", "defaultdict", "Counter", "deque"},
+        "collections.__init__": {"OrderedDict", "defaultdict", "Counter", "deque"},
+        "pandas.core.series": {"Series"},
+        "pandas.core.frame": {"DataFrame"},
+        "numpy.ndarray": {"ndarray"},
+        "numpy": {"ndarray"},
+        # Our own classes — needed for persisted engine objects
+        "edf_collector": {"EvidenceEngine"},
+        "__main__": {"EvidenceEngine"},
+    }
+
+    def find_class(self, module: str, name: str) -> type:
+        # Check the whitelist; reject anything not explicitly allowed.
+        allowed = self._SAFE_CLASSES.get(module)
+        if allowed and name in allowed:
+            # For our own classes, actually resolve them so the object
+            # can be reconstructed normally.
+            if module == "edf_collector" or module == "__main__":
+                import importlib
+                mod = importlib.import_module("edf_collector")
+                return getattr(mod, name)
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(
+            f"Blocked unsafe class {module!r}.{name!r} in pickle stream"
+        )
+
+
+def _safe_pickle_load(path: str):
+    """Load a pickle file through the restricted unpickler.
+
+    Usage:  obj = _safe_pickle_load("engine.pkl")
+    Raises pickle.UnpicklingError for disallowed types.
+    """
+    with open(path, "rb") as f:
+        return _RestrictedUnpickler(f).load()
+
+
 def run_cli_extract(args: list[str]) -> None:
     """Run extraction from command line (headless mode)."""
     import argparse
@@ -4935,11 +5022,10 @@ def run_cli_pdf_report(args: list[str]) -> None:
         engine = None
         filtered = None
         if parsed.engine_data:
-            import pickle
-
-            with open(parsed.engine_data, "rb") as f:
-                engine = pickle.load(f)
-                filtered = getattr(engine, "filtered_records", None)
+            # Use the restricted unpickler to prevent arbitrary code
+            # execution from crafted pickle files (see C1 fix).
+            engine = _safe_pickle_load(parsed.engine_data)
+            filtered = getattr(engine, "filtered_records", None)
 
         success, msg = generate_pdf_from_gui(
             records=records,
@@ -4999,11 +5085,10 @@ def run_cli_docx_report(args: list[str]) -> None:
         engine = None
         filtered = None
         if parsed.engine_data:
-            import pickle
-
-            with open(parsed.engine_data, "rb") as f:
-                engine = pickle.load(f)
-                filtered = getattr(engine, "filtered_records", None)
+            # Use the restricted unpickler to prevent arbitrary code
+            # execution from crafted pickle files (see C1 fix).
+            engine = _safe_pickle_load(parsed.engine_data)
+            filtered = getattr(engine, "filtered_records", None)
 
         success, msg = generate_docx_from_gui(
             records=records,
@@ -5037,6 +5122,15 @@ def main() -> None:
         elif sys.argv[1] in ("--extract", "-e"):
             run_cli_extract(sys.argv[2:])
             return
+
+    if not HAS_TK:
+        sys.stderr.write(
+            "ERROR: tkinter is not available in this Python build. "
+            "Launch a CLI command instead (e.g. --extract, --pdf-report, "
+            "--docx-report) or run on a system with Tk installed."
+        )
+        sys.stderr.write("\n")
+        sys.exit(2)
 
     root = tk.Tk()
     App(root)
