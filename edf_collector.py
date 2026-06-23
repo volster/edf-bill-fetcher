@@ -240,6 +240,25 @@ _CREDIT_TOTAL_RE = re.compile(r"Total credits for this bill\s+£([\d,]+\.\d{2})"
 _KI_PRESENCE_RE = re.compile(r"invoice number:\s*KI-", re.IGNORECASE)
 _KCR_PRESENCE_RE = re.compile(r"credit note number:\s*KCR-", re.IGNORECASE)
 
+# `_classify_entry_type` is on the per-record hot path.  Compile the
+# three heuristic patterns once at module load so each call skips the
+# implicit re.compile step.
+_BILL_MARKERS_RE = re.compile(
+    r"(?:bill date|date issued|invoice number|total charges|your charges)"
+)
+_ACCOUNT_BALANCE_LANG_RE = re.compile(
+    r"(?:account balance|running balance|balance brought forward)"
+)
+_BILL_INDICATORS_RE = re.compile(r"(?:kwh|standing charge|tariff)")
+
+# `_extract_sender_email` pulls an email out of either the transport
+# headers (multi-line From:) or the sender name.  Compile both.
+_FROM_HEADER_RE = re.compile(
+    r"^From:\s*.*?([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})",
+    re.MULTILINE | re.IGNORECASE,
+)
+_EMAIL_ADDR_RE = re.compile(r"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
+
 
 # ---------------------------------------------------------------------------
 # Date helpers
@@ -612,11 +631,7 @@ def _extract_sender_email(msg):
             headers_str = (
                 headers if isinstance(headers, str) else headers.decode("utf-8", errors="replace")
             )
-            m = re.search(
-                r"^From:\s*.*?([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})",
-                headers_str,
-                re.MULTILINE | re.IGNORECASE,
-            )
+            m = _FROM_HEADER_RE.search(headers_str)
             if m:
                 sender = m.group(1).lower()
     except Exception:
@@ -625,7 +640,7 @@ def _extract_sender_email(msg):
     if not sender:
         try:
             name = msg.get_sender_name() or ""
-            m = re.search(r"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})", name)
+            m = _EMAIL_ADDR_RE.search(name)
             if m:
                 sender = m.group(1).lower()
         except Exception:
@@ -944,11 +959,7 @@ class EvidenceEngine:
 
         # If it has billing period dates AND charges/invoice details → New Bill
         has_period = period_from != "N/A" and period_to != "N/A"
-        has_bill_markers = bool(
-            re.search(
-                r"(?:bill date|date issued|invoice number|total charges|your charges)", text_lower
-            )
-        )
+        has_bill_markers = bool(_BILL_MARKERS_RE.search(text_lower))
 
         if has_period and has_bill_markers:
             return "New Bill"
@@ -963,7 +974,7 @@ class EvidenceEngine:
                 return "Ongoing Balance"
 
         # If matched via "balance" pattern or has "account balance" language → Ongoing Balance
-        if re.search(r"(?:account balance|running balance|balance brought forward)", text_lower):
+        if _ACCOUNT_BALANCE_LANG_RE.search(text_lower):
             return "Ongoing Balance"
 
         # If matched via total/amount to pay with period info → New Bill
@@ -975,7 +986,7 @@ class EvidenceEngine:
             return "Other"
 
         # Default: if it looks like a bill (has kWh, standing charge) → New Bill
-        if re.search(r"(?:kwh|standing charge|tariff)", text_lower):
+        if _BILL_INDICATORS_RE.search(text_lower):
             return "New Bill"
 
         return "Ongoing Balance"
