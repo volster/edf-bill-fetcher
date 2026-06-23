@@ -208,6 +208,38 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # once at module load; this hot-path is hit once per analysed chunk.
 _POUND_AMOUNT_FALLBACK_RE = re.compile(r"£\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)")
 
+# =============================================================================
+# KI / KCR invoice field regexes — pre-compiled at module load so
+# `extract_new_invoice_fields` / `extract_new_credit_fields` don't pay the
+# implicit re-compile cost on every PDF page.  All flags are baked into
+# the compiled patterns (re.search refuses to combine a flags argument
+# with an already-compiled pattern).
+# =============================================================================
+_INV_NUMBER_RE = re.compile(r"Invoice number:\s*(KI-[\w-]+)", re.IGNORECASE)
+_ACC_NUM_RE = re.compile(r"Account number:\s*(A-\d+|\d[\d ]*\d)", re.IGNORECASE)
+_DATE_ISSUED_RE = re.compile(r"Date issued:\s*(\d{1,2}\s+\w+\s+\d{4})", re.IGNORECASE)
+_BILLING_PERIOD_RE = re.compile(
+    r"Your charges:\s*(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4})",
+    re.IGNORECASE,
+)
+_CURRENT_BAL_RE = re.compile(
+    r"Current balance\s+£([\d,]+\.\d{2})(?:\s+(debit|credit))?",
+    re.IGNORECASE,
+)
+_PERIOD_CHARGE_RE = re.compile(
+    r"Total charges for this period\s+£([\d,]+\.\d{2})(?:\s+(debit|credit))?",
+    re.IGNORECASE,
+)
+_UNITS_USED_RE = re.compile(r"Electricity used\s+([\d,]+\.?\d*)\s+kWh", re.IGNORECASE)
+_STANDING_CHARGE_RE = re.compile(r"Standing charge\s+\d+\s+days\s+@\s+([\d.]+)p/day", re.IGNORECASE)
+_TARIFF_NAME_RE = re.compile(r"Tariff name\s+(\w[\w\s]+?)(?:Payment type|$)", re.IGNORECASE)
+_CREDIT_NUMBER_RE = re.compile(r"Credit note number:\s*(KCR-[\w-]+)", re.IGNORECASE)
+# Credit-note accounts can use the same rendering as KI invoices.
+_CREDIT_TOTAL_RE = re.compile(r"Total credits for this bill\s+£([\d,]+\.\d{2})", re.IGNORECASE)
+# Format-detection: cheap presence tests for the invoice number prefix.
+_KI_PRESENCE_RE = re.compile(r"invoice number:\s*KI-", re.IGNORECASE)
+_KCR_PRESENCE_RE = re.compile(r"credit note number:\s*KCR-", re.IGNORECASE)
+
 
 # ---------------------------------------------------------------------------
 # Date helpers
@@ -249,9 +281,9 @@ def to_excel_date(date_input):
 
 def detect_pdf_format(text):
     """Return 'new_invoice', 'new_credit', or 'old' based on document markers."""
-    if re.search(r"invoice number:\s*KI-", text, re.IGNORECASE):
+    if _KI_PRESENCE_RE.search(text):
         return "new_invoice"
-    if re.search(r"credit note number:\s*KCR-", text, re.IGNORECASE):
+    if _KCR_PRESENCE_RE.search(text):
         return "new_credit"
     return "old"
 
@@ -261,7 +293,7 @@ def extract_new_invoice_fields(text):
     fields = {}
 
     # Invoice number
-    m = re.search(r"Invoice number:\s*(KI-[\w-]+)", text, re.IGNORECASE)
+    m = _INV_NUMBER_RE.search(text)
     if m:
         fields["inv_num"] = m.group(1).strip()
 
@@ -286,25 +318,17 @@ def extract_new_invoice_fields(text):
     # that need to compare against a filter value are responsible for
     # stripping spaces and the ``A-`` prefix themselves; see the
     # existing helper at the engine filter check.
-    m = re.search(
-        r"Account number:\s*(A-\d+|\d[\d ]*\d)",
-        text,
-        re.IGNORECASE,
-    )
+    m = _ACC_NUM_RE.search(text)
     if m:
         fields["acc_num"] = m.group(1).strip()
 
     # Date issued
-    m = re.search(r"Date issued:\s*(\d{1,2}\s+\w+\s+\d{4})", text, re.IGNORECASE)
+    m = _DATE_ISSUED_RE.search(text)
     if m:
         fields["date"] = parse_to_display_date(m.group(1).strip())
 
     # Billing period from "Your charges: DD Mon YYYY - DD Mon YYYY"
-    m = re.search(
-        r"Your charges:\s*(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4})",
-        text,
-        re.IGNORECASE,
-    )
+    m = _BILLING_PERIOD_RE.search(text)
     if m:
         fields["period_from"] = parse_to_display_date(m.group(1).strip())
         fields["period_to"] = parse_to_display_date(m.group(2).strip())
@@ -315,11 +339,7 @@ def extract_new_invoice_fields(text):
     # if the KI invoice reports ``Current balance GBPX in credit`` (rare but
     # legal: e.g. over-payment or opening credit balance), this matcher
     # would drop the Amount cell. Accept either currency-side label.
-    m = re.search(
-        r"Current balance\s+£([\d,]+\.\d{2})(?:\s+(debit|credit))?",
-        text,
-        re.IGNORECASE,
-    )
+    m = _CURRENT_BAL_RE.search(text)
     if m:
         fields["amount"] = float(m.group(1).replace(",", ""))
         fields["amount_side"] = (m.group(2) or "").lower()
@@ -332,26 +352,22 @@ def extract_new_invoice_fields(text):
     # the statement, not the period charge itself; accept either so a
     # credit-flagged period still populates the Period Charge column.
     # Captures: group(1) = amount, group(2) = debit|credit (may be empty).
-    m = re.search(
-        r"Total charges for this period\s+£([\d,]+\.\d{2})(?:\s+(debit|credit))?",
-        text,
-        re.IGNORECASE,
-    )
+    m = _PERIOD_CHARGE_RE.search(text)
     if m:
         fields["period_charge"] = float(m.group(1).replace(",", ""))
 
     # kWh used
-    m = re.search(r"Electricity used\s+([\d,]+\.?\d*)\s+kWh", text, re.IGNORECASE)
+    m = _UNITS_USED_RE.search(text)
     if m:
         fields["units_used"] = m.group(1)
 
     # Standing charge
-    m = re.search(r"Standing charge\s+\d+\s+days\s+@\s+([\d.]+)p/day", text, re.IGNORECASE)
+    m = _STANDING_CHARGE_RE.search(text)
     if m:
         fields["standing_charge"] = m.group(1)
 
     # Tariff name
-    m = re.search(r"Tariff name\s+(\w[\w\s]+?)(?:Payment type|$)", text, re.IGNORECASE)
+    m = _TARIFF_NAME_RE.search(text)
     if m:
         fields["tariff"] = m.group(1).strip()
 
@@ -362,23 +378,23 @@ def extract_new_credit_fields(text):
     """Extract key fields from new-style KCR-XXXXXXXX credit notes."""
     fields = {}
 
-    m = re.search(r"Credit note number:\s*(KCR-[\w-]+)", text, re.IGNORECASE)
+    m = _CREDIT_NUMBER_RE.search(text)
     if m:
         fields["inv_num"] = m.group(1).strip()
 
     # Account number — accept both EDF renderings: compact
     # "A-NNNNNNNN" and spaced-digits "601 234 567 890". See the same
     # note in extract_new_invoice_fields above for context.
-    m = re.search(r"Account number:\s*(A-\d+|\d[\d ]*\d)", text, re.IGNORECASE)
+    m = _ACC_NUM_RE.search(text)
     if m:
         fields["acc_num"] = m.group(1).strip()
 
-    m = re.search(r"Date issued:\s*(\d{1,2}\s+\w+\s+\d{4})", text, re.IGNORECASE)
+    m = _DATE_ISSUED_RE.search(text)
     if m:
         fields["date"] = parse_to_display_date(m.group(1).strip())
 
     # Total credits for this bill
-    m = re.search(r"Total credits for this bill\s+£([\d,]+\.\d{2})", text, re.IGNORECASE)
+    m = _CREDIT_TOTAL_RE.search(text)
     if m:
         fields["amount"] = float(m.group(1).replace(",", ""))
 
