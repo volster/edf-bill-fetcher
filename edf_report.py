@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape as xml_escape
 
 import numpy as np
 import pandas as pd
@@ -591,6 +592,46 @@ def _get_package_version() -> str:
     return m.group(1)
 
 
+def _compute_mean_daily(df_sorted: pd.DataFrame) -> float:
+    """Compute the mean daily charge rate from a date-sorted DataFrame.
+
+    Walks consecutive rows, computes the charge difference divided by
+    the day gap, keeps only positive charges, and returns
+    ``mean(pos_diffs) / 30.0``.  This normalises per-day charges into
+    an approximate monthly figure used by ``compute_dispute_flags``.
+
+    NOTE on the "MEAN DAILY" label used by the rendered reports: the
+    value is averaged over each positive-charge /period/ (treated as
+    a 30-day billing cycle) rather than each calendar day.  The
+    division by 30 is the convention used throughout this project;
+    the displayed label refers to the / 30 step, not actual day-level
+    averaging.
+
+    Returns 0.0 when there are fewer than two positive-charge intervals
+    or if any error occurs (e.g. missing columns).
+
+    This helper is the single source of truth for this calculation;
+    both the PDF report and the DOCX report call it so the numbers
+    can never diverge.
+    """
+    try:
+        pos_diffs = []
+        for i in range(1, len(df_sorted)):
+            p = df_sorted.iloc[i - 1]
+            c_ = df_sorted.iloc[i]
+            days = (c_["_dt"] - p["_dt"]).days
+            charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+            if days > 0 and charge > 0:
+                daily = charge / days
+                pos_diffs.append(daily)
+        return float(np.mean(pos_diffs)) / 30.0 if len(pos_diffs) else 0.0
+        # NOTE: dividing by 30 rescales the per-day average into the
+        # project-canonical /period/ rate used throughout the rendered
+        # reports (see docstring above for the labelling convention).
+    except Exception:
+        return 0.0
+
+
 def create_cover_page(
     account_ref: str, period_start: str, period_end: str, report_date: str
 ) -> list:
@@ -612,8 +653,9 @@ def create_cover_page(
         HRFlowable(width="100%", thickness=2, color=Colors.NAVY, spaceAfter=1.5 * cm, spaceBefore=0)
     )
 
-    # Account info
-    elements.append(Paragraph(f"Account Reference: <b>{account_ref}</b>", STYLES["CoverInfo"]))
+    # Account info — escape user-supplied strings to avoid breaking reportlab's
+    # internal XML parser if the reference contains <, >, or & characters.
+    elements.append(Paragraph(f"Account Reference: <b>{xml_escape(account_ref)}</b>", STYLES["CoverInfo"]))
     elements.append(
         Paragraph(
             f"Period Covered: <b>{period_start}</b> to <b>{period_end}</b>", STYLES["CoverInfo"]
@@ -718,7 +760,7 @@ def create_executive_summary(
     # Overview paragraph
     overview = (
         f"This report presents the findings of a comprehensive analysis of EDF Energy billing data "
-        f"for account <b>{account_ref}</b>, covering the period <b>{period_start}</b> to "
+        f"for account <b>{xml_escape(account_ref)}</b>, covering the period <b>{period_start}</b> to "
         f"<b>{period_end}</b>. The analysis encompasses <b>{total_records}</b> billing records "
         f"sourced from EDF bills (PDF), HTM account exports, and email archives (PST/OST)."
     )
@@ -1477,9 +1519,7 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
 # =============================================================================
 
 
-# =============================================================================
-# FORECAST SECTION
-# =============================================================================
+
 
 
 def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
@@ -1629,7 +1669,7 @@ def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = No
     date_parsed = df["Date"].apply(lambda x: parse_to_sort_date(x) is not pd.NaT).sum()
     amt_complete = df["Amount (£)"].notna().sum()
     period_complete = (df["Period From"] != "N/A").sum()
-    reading_classified = (df["Reading"] != "Unknown").sum() if "Reading" in df.columns else 0
+    reading_classified = (df["Reading"] != "N/A").sum() if "Reading" in df.columns else 0
     dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
 
     quality_data = [
@@ -2195,7 +2235,7 @@ def generate_ombudsman_pdf(
         "Invoice #": "N/A",
         "Period Charge (£)": "N/A",
         "Entry Type": "Unknown",
-        "Reading": "Unknown",
+        "Reading": "N/A",
         "Units (kWh)": "N/A",
         "Standing Chg (p/day)": "N/A",
         "Attachment Name": "N/A",
@@ -2230,21 +2270,8 @@ def generate_ombudsman_pdf(
         df["_dt"] = df["Date"].apply(parse_to_sort_date)
     df_sorted = df.sort_values("_dt").reset_index(drop=True)
 
-    # Compute mean daily rate for HIGH DAILY RATE detection
-    mean_daily = 0.0
-    try:
-        pos_diffs = []
-        for i in range(1, len(df_sorted)):
-            p = df_sorted.iloc[i - 1]
-            c_ = df_sorted.iloc[i]
-            days = (c_["_dt"] - p["_dt"]).days
-            charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-            if days > 0 and charge > 0:
-                daily = charge / days
-                pos_diffs.append(daily)
-        mean_daily = float(np.mean(pos_diffs)) / 30.0 if len(pos_diffs) else 0.0
-    except Exception:
-        mean_daily = 0.0
+    # Mean daily rate — shared logic (see _compute_mean_daily in this file).
+    mean_daily = _compute_mean_daily(df_sorted)
 
     flags, flag_counts = compute_dispute_flags(df_sorted, mean_daily)
 

@@ -328,7 +328,7 @@ class TestDataQualityReport:
                 "Date": ["01/03/2026", "01/04/2026", "01/05/2026"],
                 "Amount (£)": [240.50, 240.50, 240.50],
                 "Entry Type": ["New Bill", "New Bill", "New Bill"],
-                "Reading": ["Actual", "Unknown", "Actual"],
+                "Reading": ["Actual", "N/A", "Actual"],
                 "Source": ["Local PDF Folder", "Local PDF Folder", "HTM Account History"],
                 "Unit Rate (p/kWh)": ["N/A", 24.5, 24.5],
                 "Period From": ["01/02/2026", "N/A", "01/04/2026"],
@@ -344,7 +344,7 @@ class TestDataQualityReport:
         # but the Production count uses period_from_complete, which
         # counts "non-N/A" entries.
         assert result["period_complete"] >= 1
-        # Reading column is "Actual" for two rows; "Unknown" excluded.
+        # Reading column is "Actual" for two rows; "N/A" excluded.
         assert result["reading_classified"] == 2
         # Unit Rate is numeric on two rows.
         assert result["ur_computable"] == 2
