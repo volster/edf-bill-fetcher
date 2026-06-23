@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -657,9 +656,7 @@ def create_ofgem_comparison(
     ofgem_caps = _load_ofgem_caps()
     # Only show recent/relevant periods (2022 onwards) to keep the
     # table readable; the full dataset goes back to 2019-Q1.
-    recent_caps = {
-        k: v for k, v in ofgem_caps.items() if int(k[:4]) >= 2022
-    }
+    recent_caps = {k: v for k, v in ofgem_caps.items() if int(k[:4]) >= 2022}
     # Human-readable quarter labels, e.g. "2022-Q4" → "Oct 2022 – Dec 2022"
     _q_start = {1: "Jan", 2: "Apr", 3: "Jul", 4: "Oct"}
     _q_end = {1: "Mar", 2: "Jun", 3: "Sep", 4: "Dec"}

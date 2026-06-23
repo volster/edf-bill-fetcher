@@ -1,6 +1,5 @@
 """Tests for EDF bill extraction patterns and helpers."""
 
-import re
 from datetime import datetime
 
 import pytest
@@ -192,9 +191,7 @@ class TestAmountPatterns:
         from edf_collector import _AMOUNT_PATTERN_NEW_BILL, _AMOUNT_PATTERN_ONGOING_BALANCE
 
         for name, anchor, expected_amount, expected_classification in self.NAMED_PATTERN_CASES:
-            matches = [
-                (n, m) for n, p in AMOUNT_PATTERNS if (m := re.search(p, anchor, re.IGNORECASE))
-            ]
+            matches = [(n, m) for n, p in AMOUNT_PATTERNS if (m := p.search(anchor))]
             assert matches, (
                 f"Anchor {anchor!r} matched no pattern (expected pattern {name!r} to match)."
             )

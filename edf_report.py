@@ -655,7 +655,9 @@ def create_cover_page(
 
     # Account info — escape user-supplied strings to avoid breaking reportlab's
     # internal XML parser if the reference contains <, >, or & characters.
-    elements.append(Paragraph(f"Account Reference: <b>{xml_escape(account_ref)}</b>", STYLES["CoverInfo"]))
+    elements.append(
+        Paragraph(f"Account Reference: <b>{xml_escape(account_ref)}</b>", STYLES["CoverInfo"])
+    )
     elements.append(
         Paragraph(
             f"Period Covered: <b>{period_start}</b> to <b>{period_end}</b>", STYLES["CoverInfo"]
@@ -1517,9 +1519,6 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
 # =============================================================================
 # FORECAST SECTION
 # =============================================================================
-
-
-
 
 
 def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
