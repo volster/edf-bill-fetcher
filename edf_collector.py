@@ -259,6 +259,19 @@ _FROM_HEADER_RE = re.compile(
 )
 _EMAIL_ADDR_RE = re.compile(r"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
 
+# Old-format PDF (pre-2019) extractors in `analyse_pdf`.
+_OLD_PDF_DATE_RE = re.compile(
+    r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s+\w+\s+\d{4})",
+    re.IGNORECASE,
+)
+_OLD_PDF_KWH_RE = re.compile(r"([\d,]+)\s*kWh", re.IGNORECASE)
+_OLD_PDF_STANDING_RE = re.compile(r"(\d+\.\d{2})p\s*per day", re.IGNORECASE)
+_OLD_PDF_INV_RE = re.compile(r"Invoice number[\s:,\"\'\n]*([A-Z0-9\-]+)", re.IGNORECASE)
+_OLD_PDF_PERIOD_CHARGE_RE = re.compile(
+    r"total charges for this (?:period|bill|invoice)\s+£\s?([\d,]+(?:\.\d{2})?)",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Date helpers
@@ -862,11 +875,7 @@ class EvidenceEngine:
         # Date extraction
         date_to_use = fallback_date
         if "PDF" in source_type or "old" in source_type.lower():
-            date_m = re.search(
-                r"(?:Bill date|Date issued):\s*[\",]*\s*(\d{1,2}\s+\w+\s+\d{4})",
-                clean_text,
-                re.IGNORECASE,
-            )
+            date_m = _OLD_PDF_DATE_RE.search(clean_text)
             if date_m:
                 date_to_use = parse_to_display_date(date_m.group(1))
 
@@ -879,9 +888,9 @@ class EvidenceEngine:
 
         units_used = standing_charge = inv_num = "N/A"
         if self.config.get("use_pdf_fields", True):
-            u_m = re.search(r"([\d,]+)\s*kWh", clean_text, re.IGNORECASE)
-            sc_m = re.search(r"(\d+\.\d{2})p\s*per day", clean_text, re.IGNORECASE)
-            in_m = re.search(r"Invoice number[\s:,\"\'\n]*([A-Z0-9\-]+)", clean_text, re.IGNORECASE)
+            u_m = _OLD_PDF_KWH_RE.search(clean_text)
+            sc_m = _OLD_PDF_STANDING_RE.search(clean_text)
+            in_m = _OLD_PDF_INV_RE.search(clean_text)
             if u_m:
                 units_used = u_m.group(1)
             if sc_m:
@@ -893,11 +902,7 @@ class EvidenceEngine:
 
         # Attempt to extract period charge separately from cumulative balance
         period_charge: str | float = "N/A"
-        pc_m = re.search(
-            r"total charges for this (?:period|bill|invoice)\s+£\s?([\d,]+(?:\.\d{2})?)",
-            clean_text,
-            re.IGNORECASE,
-        )
+        pc_m = _OLD_PDF_PERIOD_CHARGE_RE.search(clean_text)
         if pc_m:
             try:
                 period_charge = float(pc_m.group(1).replace(",", ""))
