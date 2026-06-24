@@ -48,7 +48,12 @@ dependencies = [
     # source compile via autotools on Linux/Windows.  Pinning <2024 keeps
     # the wheel-available path on Windows during the Windows CI matrix
     # cell while still allowing source build as a fallback.
-    "libpff-python>=20211114,<2024",
+    #
+    # PYP 3.12 removed PyUnicode_AsUnicode, so libpff-python cannot be
+    # compiled from source on Py 3.12 at all (any OS).  We gate it with
+    # a python_version marker: installed on 3.10/3.11 (source-build
+    # path still works), skipped on 3.12 (code has HAS_PYPFF=False guard).
+    "libpff-python>=20211114,<2024; python_version < '3.12'",
     "statsmodels>=0.14,<1",
 ]
 
