@@ -37,27 +37,24 @@ dependencies = [
     # configured for Python 3.10, breaking the ``mypy .`` step on every
     # CI matrix cell.  scipy 1.14.x is the last release that compiles
     # against numpy 1.x, so the bound holds both testing and runtime.
-    # Note: libpff-python and statsmodels are NOT pinned here because they
-    # don't have wheels for every CI matrix cell (libpff-python only ships
-    # macosx x86_64 wheels).  Both are lazy-imported at use sites with a
-    # graceful fallback, so a missing package does not break either the CLI
-    # or the test suite.  Power users who want PST scanning or Holt-Winters
-    # forecasting install the optional ``pst`` extra below — the build/
-    # packaging workflow installs it explicitly via ``pip install .[pst]``.
+    #
+    # libpff-python and statsmodels are core runtime deps.  PST/OST
+    # ingestion goes through ``process_pst_file``/``process_ost_file``;
+    # the Holt-Winters forecast pipeline lives in ``edf_report.py``.
+    # Both are guarded by try/except at use sites so a missing package
+    # still produces a runnable — though degraded — installation.
+    # libpff-python 20211114 is the last release with Windows x86 wheels
+    # (cp39); newer builds only ship macosx wheels and force a from-
+    # source compile via autotools on Linux/Windows.  Pinning <2024 keeps
+    # the wheel-available path on Windows during the Windows CI matrix
+    # cell while still allowing source build as a fallback.
+    "libpff-python>=20211114,<2024",
+    "statsmodels>=0.14,<1",
 ]
 
 [project.optional-dependencies]
-# Optional deps that install only specific build / dev toolchains.
 build = [
     "pyinstaller>=6.0,<7",
-]
-# Optional extra for users who need PST/OST scanning or Holt-Winters
-# forecasting.  Both are lazy-imported with HAS_PYPFF / HAS_STATSMODELS
-# guards in the codebase; they aren't required for the unit tests or the
-# default CLI extract path.  The CI matrix does NOT install this.
-pst = [
-    "libpff-python>=20211114",  # Outlook PST/OST archive parsing
-    "statsmodels>=0.14,<1",     # Holt-Winters forecasting
 ]
 dev = [
     "pytest>=7.4,<8",
