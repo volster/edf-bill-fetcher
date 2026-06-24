@@ -43,17 +43,17 @@ dependencies = [
     # the Holt-Winters forecast pipeline lives in ``edf_report.py``.
     # Both are guarded by try/except at use sites so a missing package
     # still produces a runnable — though degraded — installation.
-    # libpff-python 20211114 is the last release with Windows x86 wheels
-    # (cp39); newer builds only ship macosx wheels and force a from-
-    # source compile via autotools on Linux/Windows.  Pinning <2024 keeps
-    # the wheel-available path on Windows during the Windows CI matrix
-    # cell while still allowing source build as a fallback.
+    # libpff-python is in [dependencies] (not an extra) because PST/OST
+    # scanning is a documented, supported feature of the project.  The
+    # pair (libpff-python + statsmodels) covers the "core install"
+    # surfaces: ``process_pst_file`` reads Outlook archives and
+    # ``edf_report.py`` runs Holt-Winters forecasts for kWh totals.
+    # Use-sites wrap both in try/except so a missing build product
+    # degrades gracefully rather than aborting startup.
     #
-    # PYP 3.12 removed PyUnicode_AsUnicode, so libpff-python cannot be
-    # compiled from source on Py 3.12 at all (any OS).  We gate it with
-    # a python_version marker: installed on 3.10/3.11 (source-build
-    # path still works), skipped on 3.12 (code has HAS_PYPFF=False guard).
-    "libpff-python>=20211114,<2024; python_version < '3.12'",
+    # pip picks the platform wheel when one exists (Py 3.12 Windows,
+    # Py 3.12 macOS) and falls back to the source sdist otherwise.
+    "libpff-python>=20211114",  # Outlook PST/OST archive parsing
     "statsmodels>=0.14,<1",
 ]
 
