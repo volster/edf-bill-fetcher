@@ -43,6 +43,9 @@ Thumbs.db
 .coverage
 htmlcov/
 .tox/
+# Coverage report artifacts — produced by ``pytest --cov`` across
+# every CI run; nothing in the project consumes them outside pytest.
+coverage.xml
 
 # Local data
 *.pst
