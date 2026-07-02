@@ -681,16 +681,31 @@ def create_ofgem_comparison(
     ofgem_caps = _load_ofgem_caps()
 
     # Average bill unit rate per quarter; compare to OFGEM cap.
-    cap_rows: list[tuple[str, float, float, float, str]] = []
+    # Rows are tuples ``(quarter, avg_rate, cap_rate_or_MISSING,
+    # diff_or_MISSING, status_or_UNAVAILABLE)`` — the cap-rate /
+    # diff / status positions use sentinels when the OFGEM cap dict
+    # doesn't cover that quarter, so a reviewer can still see that
+    # the quarter exists in the data even when we couldn't benchmark
+    # it.
+    MISSING = "—"
+    UNAVAILABLE = "CAP DATA UNAVAILABLE"
+    cap_rows: list[tuple[str, float | str, float | str, float | str, str]] = []
     exceed_count = 0
+    unavailable_count = 0
     for quarter in sorted(bills["_quarter"].unique()):
-        if quarter not in ofgem_caps:
-            continue
-        cap_rate = ofgem_caps[quarter]["unit_rate"]
         quarter_bills = bills[bills["_quarter"] == quarter]
         avg_rate = quarter_bills["_unit_rate"].mean()
         if pd.isna(avg_rate):
             continue
+        if quarter not in ofgem_caps:
+            # Cap NOT in our published list — still keep the row so
+            # a reviewer can see the quarter exists in the data even
+            # though we couldn't benchmark it.  ``exceed_count`` is
+            # left untouched (no judgement is made).
+            unavailable_count += 1
+            cap_rows.append((quarter, avg_rate, MISSING, MISSING, UNAVAILABLE))
+            continue
+        cap_rate = ofgem_caps[quarter]["unit_rate"]
         diff = avg_rate - cap_rate
         if diff > 0:
             status = "EXCEEDS CAP"
@@ -729,11 +744,20 @@ def create_ofgem_comparison(
     headers = ["Period", "Bill Unit Rate (p/kWh)", "OFGEM Cap (p/kWh)", "Difference", "Status"]
     for j, h in enumerate(headers):
         table.rows[0].cells[j].text = h
-    for i, (quarter, avg_rate, cap_rate, diff, status) in enumerate(cap_rows, 1):
+    for i, row in enumerate(cap_rows, 1):
+        quarter, avg_rate, cap_rate, diff, status = row
         table.rows[i].cells[0].text = str(quarter)
         table.rows[i].cells[1].text = fmt_number(avg_rate, 2)
-        table.rows[i].cells[2].text = fmt_number(cap_rate, 2)
-        table.rows[i].cells[3].text = fmt_number(diff, 2) if diff != 0 else "0.00"
+        # ``cap_rate`` and ``diff`` may be ``MISSING`` sentinels when a
+        # quarter landed outside the published OFGEM cap window.
+        table.rows[i].cells[2].text = (
+            fmt_number(cap_rate, 2) if isinstance(cap_rate, float) else str(cap_rate)
+        )
+        table.rows[i].cells[3].text = (
+            fmt_number(diff, 2)
+            if isinstance(diff, float) and diff != 0
+            else ("0.00" if isinstance(diff, float) else str(diff))
+        )
         table.rows[i].cells[4].text = status
     # Summary row at the bottom.
     summary_idx = len(cap_rows) + 1
@@ -743,6 +767,13 @@ def create_ofgem_comparison(
     if exceed_count > 0:
         table.rows[summary_idx].cells[3].text = f"{exceed_count} periods exceed cap"
         table.rows[summary_idx].cells[4].text = "REVIEW REQUIRED"
+    elif unavailable_count > 0:
+        # Quarter(s) presented but benchmark missing — the row is in
+        # the table because we *want* the reviewer to see it, but the
+        # overall verdict can't be safely "COMPLIANT" or "REVIEW
+        # REQUIRED" without an OFGEM comparison. Surface that.
+        table.rows[summary_idx].cells[3].text = f"{unavailable_count} period(s) not benchmarked"
+        table.rows[summary_idx].cells[4].text = "INCOMPLETE"
     else:
         table.rows[summary_idx].cells[3].text = "No exceedances"
         table.rows[summary_idx].cells[4].text = "COMPLIANT"

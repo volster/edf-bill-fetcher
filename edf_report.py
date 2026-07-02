@@ -1133,54 +1133,66 @@ def create_timeline_section(
 
 
 def _load_ofgem_caps() -> dict[str, dict]:
-    """Load OFGEM price cap data.
+    """Load OFGEM Default Tariff Cap data.
 
     Returns a dictionary mapping period string (e.g., '2023-Q4') to cap values:
     {'unit_rate': p_per_kwh, 'standing_charge': p_per_day}
 
-    For now, returns built-in data for key periods. Could be extended to load
-    from external CSV/JSON or API.
+    Provenance
+    ----------
+    All figures are the **Direct Debit GB-average** figures published by OFGEM
+    each quarter (the headline tariff cap most bills are benchmarked against).
+    Source: electricityprices.org.uk's history chart; that chart cites the
+    OFGEM "Default tariff cap" announcements directly. Re-verify against
+    https://www.ofgem.gov.uk/information-consumers/energy-advice-households/
+    energy-price-cap-unit-rates-and-standing-charges before any tribunal or
+    ombudsman submission that quotes these numbers.
+
+    Values flagged ``# carry`` repeat the previous quarter's cap, which is
+    the OFGEM convention when a quarterly announcement is delayed or falls
+    in a quarter where no new figure is published.  Carries are clearly
+    labelled so a maintainer can tell a real number from a repeated one.
     """
-    # OFGEM Default Tariff Cap history (unit rate in p/kWh, standing charge in p/day)
-    # Source: https://www.ofgem.gov.uk/energy-policy-and-regulation/policies-and-regulations/default-tariff-cap
     return {
         # 2019
-        "2019-Q1": {"unit_rate": 17.46, "standing_charge": 25.09},
-        "2019-Q2": {"unit_rate": 15.29, "standing_charge": 25.09},
-        "2019-Q3": {"unit_rate": 15.29, "standing_charge": 25.09},
-        "2019-Q4": {"unit_rate": 15.29, "standing_charge": 25.09},
+        "2019-Q1": {"unit_rate": 16.52, "standing_charge": 22.77},
+        "2019-Q2": {"unit_rate": 18.56, "standing_charge": 23.42},
+        "2019-Q3": {"unit_rate": 18.56, "standing_charge": 23.42},  # carry
+        "2019-Q4": {"unit_rate": 17.85, "standing_charge": 23.51},
         # 2020
-        "2020-Q1": {"unit_rate": 15.29, "standing_charge": 25.09},
-        "2020-Q2": {"unit_rate": 15.29, "standing_charge": 25.09},
-        "2020-Q3": {"unit_rate": 15.29, "standing_charge": 25.09},
-        "2020-Q4": {"unit_rate": 15.29, "standing_charge": 20.58},
+        "2020-Q1": {"unit_rate": 17.85, "standing_charge": 23.51},  # carry
+        "2020-Q2": {"unit_rate": 17.81, "standing_charge": 24.38},
+        "2020-Q3": {"unit_rate": 17.81, "standing_charge": 24.38},  # carry
+        "2020-Q4": {"unit_rate": 17.19, "standing_charge": 24.38},
         # 2021
-        "2021-Q1": {"unit_rate": 16.36, "standing_charge": 20.58},
-        "2021-Q2": {"unit_rate": 16.36, "standing_charge": 20.58},
-        "2021-Q3": {"unit_rate": 16.36, "standing_charge": 20.58},
-        "2021-Q4": {"unit_rate": 18.36, "standing_charge": 20.58},
+        "2021-Q1": {"unit_rate": 17.19, "standing_charge": 24.38},  # carry
+        "2021-Q2": {"unit_rate": 18.95, "standing_charge": 24.89},
+        "2021-Q3": {"unit_rate": 18.95, "standing_charge": 24.89},  # carry
+        "2021-Q4": {"unit_rate": 20.80, "standing_charge": 24.89},
         # 2022
-        "2022-Q1": {"unit_rate": 20.58, "standing_charge": 20.58},
+        "2022-Q1": {"unit_rate": 20.80, "standing_charge": 24.89},  # carry
         "2022-Q2": {"unit_rate": 28.34, "standing_charge": 45.34},
-        "2022-Q3": {"unit_rate": 28.34, "standing_charge": 45.34},
-        "2022-Q4": {"unit_rate": 28.34, "standing_charge": 45.34},
+        "2022-Q3": {"unit_rate": 28.34, "standing_charge": 45.34},  # carry
+        "2022-Q4": {"unit_rate": 51.89, "standing_charge": 46.36},
         # 2023
-        "2023-Q1": {"unit_rate": 34.00, "standing_charge": 46.36},
-        "2023-Q2": {"unit_rate": 34.00, "standing_charge": 46.36},
-        "2023-Q3": {"unit_rate": 34.00, "standing_charge": 46.36},
-        "2023-Q4": {"unit_rate": 27.35, "standing_charge": 46.36},
+        "2023-Q1": {"unit_rate": 67.47, "standing_charge": 46.36},
+        "2023-Q2": {"unit_rate": 50.60, "standing_charge": 52.97},
+        "2023-Q3": {"unit_rate": 30.11, "standing_charge": 52.97},
+        "2023-Q4": {"unit_rate": 27.35, "standing_charge": 53.37},
         # 2024
         "2024-Q1": {"unit_rate": 28.62, "standing_charge": 53.35},
         "2024-Q2": {"unit_rate": 24.50, "standing_charge": 60.10},
-        "2024-Q3": {"unit_rate": 24.50, "standing_charge": 60.10},
-        "2024-Q4": {"unit_rate": 24.50, "standing_charge": 60.10},
+        "2024-Q3": {"unit_rate": 22.36, "standing_charge": 60.12},
+        "2024-Q4": {"unit_rate": 24.50, "standing_charge": 60.99},
         # 2025
-        "2025-Q1": {"unit_rate": 24.50, "standing_charge": 60.10},
-        "2025-Q2": {"unit_rate": 24.50, "standing_charge": 60.10},
-        "2025-Q3": {"unit_rate": 24.50, "standing_charge": 60.10},
-        "2025-Q4": {"unit_rate": 24.50, "standing_charge": 60.10},
+        "2025-Q1": {"unit_rate": 24.86, "standing_charge": 60.97},
+        "2025-Q2": {"unit_rate": 27.03, "standing_charge": 53.80},
+        "2025-Q3": {"unit_rate": 25.73, "standing_charge": 51.37},
+        "2025-Q4": {"unit_rate": 26.35, "standing_charge": 53.68},
         # 2026
-        "2026-Q1": {"unit_rate": 24.50, "standing_charge": 60.10},
+        "2026-Q1": {"unit_rate": 27.69, "standing_charge": 54.75},
+        "2026-Q2": {"unit_rate": 24.67, "standing_charge": 57.21},
+        "2026-Q3": {"unit_rate": 26.11, "standing_charge": 57.19},
     }
 
 
@@ -1257,14 +1269,36 @@ def create_ofgem_comparison(
     cap_data = [["Period", "Bill Unit Rate (p/kWh)", "OFGEM Cap (p/kWh)", "Difference", "Status"]]
 
     exceed_count = 0
+    unavailable_count = 0
+    # ``MISSING = "—"`` is the sentinel for "we did not look this up"
+    # versus ``"CAP DATA UNAVAILABLE"`` in the Status column which marks
+    # a row that *was* looked up but couldn't find a publication.
+    # Splitting the two lets an Ombudsman-grade reviewer tell a missing
+    # row from an unverified row at a glance.
+    MISSING = "—"
+    UNAVAILABLE = "CAP DATA UNAVAILABLE"
     for quarter in sorted(bills["_quarter"].dropna().unique()):
-        if quarter not in ofgem_caps:
-            continue
-        cap = ofgem_caps[quarter]
         quarter_bills = bills[bills["_quarter"] == quarter]
         avg_rate = quarter_bills["_unit_rate"].mean()
         if pd.isna(avg_rate):
             continue
+        if quarter not in ofgem_caps:
+            # Cap NOT in our published list — still emit a row so a
+            # reviewer can see the quarter exists in the data even
+            # though we couldn't benchmark it.  ``exceed_count`` is
+            # left untouched (no judgement is made).
+            unavailable_count += 1
+            cap_data.append(
+                [
+                    quarter,
+                    fmt_number(avg_rate, 2),
+                    MISSING,
+                    MISSING,
+                    UNAVAILABLE,
+                ]
+            )
+            continue
+        cap = ofgem_caps[quarter]
         cap_rate = cap["unit_rate"]
         diff = avg_rate - cap_rate
         status = "EXCEEDS CAP" if diff > 0 else "AT CAP" if abs(diff) < 0.01 else "BELOW CAP"
@@ -1281,13 +1315,26 @@ def create_ofgem_comparison(
         )
 
     # Add summary row
+    if exceed_count > 0:
+        summary_diff = f"{exceed_count} periods exceed cap"
+        summary_status = "REVIEW REQUIRED"
+    elif unavailable_count > 0:
+        # Quarter(s) presented but benchmark missing - we still want
+        # them in the comparison; just don't claim a clean COMPLIANT
+        # verdict without an OFGEM comparison row.  The reviewer can
+        # see at a glance something needs checking.
+        summary_diff = f"{unavailable_count} period(s) not benchmarked"
+        summary_status = "INCOMPLETE"
+    else:
+        summary_diff = "No exceedances"
+        summary_status = "COMPLIANT"
     cap_data.append(
         [
             "OVERALL",
             "—",
             "—",
-            f"{exceed_count} periods exceed cap" if exceed_count > 0 else "No exceedances",
-            "REVIEW REQUIRED" if exceed_count > 0 else "COMPLIANT",
+            summary_diff,
+            summary_status,
         ]
     )
 

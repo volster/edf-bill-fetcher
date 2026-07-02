@@ -4,6 +4,7 @@ Tests for edf_report module - PDF report generation for Ombudsman submissions.
 
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -487,6 +488,78 @@ class TestOFGEMComparison:
         elements = create_ofgem_comparison(sample_df)
         assert isinstance(elements, list)
         assert len(elements) > 0
+
+    def test_create_ofgem_comparison_quarter_without_cap_row_is_explicit(self, monkeypatch):
+        """A billing quarter that has no entry in the OFGEM-cap dict must
+        surface as an explicit ``CAP DATA UNAVAILABLE`` row rather than
+        being silently dropped from the comparison table.
+
+        This is the Phase 1.1 invariant — a reviewer must be able to see
+        *which* quarters in the data the project couldn't benchmark, not
+        just the ones it could.
+        """
+        # Force the cap dict to a known minimal shape so we know exactly
+        # which quarter is missing.  2024-Q3 is intentionally absent
+        # while 2024-Q1 and 2024-Q2 are present.
+        minimal_caps = {
+            "2024-Q1": {"unit_rate": 28.62, "standing_charge": 53.35},
+            "2024-Q2": {"unit_rate": 24.50, "standing_charge": 60.10},
+            # 2024-Q3 intentionally omitted to force the gap-row path.
+        }
+
+        monkeypatch.setattr(sys.modules["edf_report"], "_load_ofgem_caps", lambda: minimal_caps)
+
+        # One bill per quarter in our minimal cap set, plus a bill
+        # landing in 2024-Q3 which has no cap entry.
+        df = pd.DataFrame(
+            [
+                {
+                    "Date": "15/02/2024",
+                    "Period Charge (£)": 200.0,
+                    "Units (kWh)": 500.0,
+                },
+                {
+                    "Date": "15/05/2024",
+                    "Period Charge (£)": 300.0,
+                    "Units (kWh)": 600.0,
+                },
+                {
+                    "Date": "15/08/2024",
+                    "Period Charge (£)": 400.0,
+                    "Units (kWh)": 700.0,
+                },
+            ]
+        )
+
+        elements = create_ofgem_comparison(df)
+
+        # Find the comparison table by walking the elements — tables
+        # are reportlab.platypus.Table objects and the only one in
+        # this section is the comparison table.  We extract its
+        # first row ("Period"/"Bill ... cap") and every data row.
+        tables = [el for el in elements if el.__class__.__name__ == "Table"]
+        assert tables, "No table found in OFGEM-comparison elements"
+        comparison_table = tables[0]
+        cell_values = getattr(comparison_table, "_cellvalues", [])
+        # First row is the header; subsequent rows are data rows.
+        data_rows = cell_values[1:]
+        quarters_seen = [row[0] for row in data_rows]
+
+        # All three quarters must appear, even the one without a cap.
+        assert "2024-Q1" in quarters_seen
+        assert "2024-Q2" in quarters_seen
+        assert "2024-Q3" in quarters_seen
+
+        # Find the 2024-Q3 row and confirm the gap-rendering markers.
+        q3_row = next(row for row in data_rows if row[0] == "2024-Q3")
+        # Cell 4 is ``Status``: must read exactly ``CAP DATA UNAVAILABLE``
+        # so an OFGEM-grade reader can tell it apart from a row that
+        # was benchmarked and came out "BELOW CAP".
+        assert q3_row[4] == "CAP DATA UNAVAILABLE"
+        # Cells 2 (OFGEM Cap p/kWh) and 3 (Difference) must be the
+        # "—" missing-sentinel so the table never pretends to know.
+        assert q3_row[2] == "—"
+        assert q3_row[3] == "—"
 
 
 class TestStatisticalAnalysis:
