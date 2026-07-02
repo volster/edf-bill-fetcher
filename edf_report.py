@@ -1371,7 +1371,16 @@ def create_ofgem_comparison(
         ]
     )
 
-    t = Table(cap_data, colWidths=[3.5 * cm, 3.5 * cm, 3.5 * cm, 3 * cm, 2.5 * cm])
+    # Phase 1.1 + portability: the Difference and Status columns need
+    # to comfortably fit the longest status string this table can
+    # ever render, namely ``"1 period(s) not benchmarked"`` wired
+    # into the OVERALL summary row in the unbenchmarked-quarter
+    # path.  Default column widths were truncating that to
+    # "1 period(s) not benchm" with the remaining characters
+    # spilling into the next column.  Give the last two columns an
+    # extra half-centimetre each and tighten Period to keep the
+    # table inside the printable area on a portrait A4.
+    t = Table(cap_data, colWidths=[3.0 * cm, 3.0 * cm, 3.5 * cm, 4.0 * cm, 3.5 * cm])
     t.setStyle(make_table_style(num_rows=len(cap_data)))
 
     # Color the status column

@@ -745,6 +745,66 @@ class EvidenceEngine:
         self.seen_pdf_hashes = set()
         self.lock = threading.Lock()
 
+    # ------------------------------------------------------------------
+    # Pickle support — Phase 1.4
+    # ------------------------------------------------------------------
+    def __getstate__(self) -> dict:
+        """Return a picklable snapshot of the engine data.
+
+        ``EvidenceEngine`` carries three non-picklable runtime
+        primitives — ``threading.Lock``, ``threading.Event``, and the
+        two callbacks — which can't survive a naive ``pickle.dump`` of
+        the instance (``TypeError: cannot pickle '_thread.lock' object``).
+        We round-trip the *data* the engine holds, and rebuild the
+        threading primitives fresh in ``__setstate__``.
+
+        This means a loaded engine is fully usable again — just with
+        fresh ``Lock``/``Event`` instances and no cancellation state
+        from the persisting session — which is the right semantic for
+        a CLI report-on-engine-data flow that resumes a saved snapshot.
+
+        Concretely we strip:
+          * ``self.lock``             (``threading.Lock`` — not picklable)
+          * ``self.cancel_event``     (``threading.Event`` — not picklable)
+          * ``self.update_ui``        (a GUI callback; serialising
+                                      Tkinter closures would leak the GUI
+                                      context across the CLI↔GUI boundary)
+          * ``self.update_progress``  (same reason)
+
+        and rebuild them in ``__setstate__``.
+        """
+        return {
+            "config": self.config,
+            "records": self.records,
+            "filtered_records": self.filtered_records,
+            "pdf_count": self.pdf_count,
+            "email_count": self.email_count,
+            "error_log": self.error_log,
+            "seen_pdf_hashes": self.seen_pdf_hashes,
+        }
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore a pickled snapshot — rebuild non-picklable fields fresh.
+
+        See ``__getstate__`` for why each of these is set this way.
+        """
+        self.config = state["config"]
+        self.records = state["records"]
+        self.filtered_records = state["filtered_records"]
+        self.pdf_count = state["pdf_count"]
+        self.email_count = state["email_count"]
+        self.error_log = state["error_log"]
+        self.seen_pdf_hashes = state["seen_pdf_hashes"]
+        # Rebuild runtime primitives fresh — the persisted snapshot
+        # does not carry cancel state forward.
+        self.cancel_event = threading.Event()
+        self.lock = threading.Lock()
+        # GUI callbacks don't survive a CLI↔CLI round-trip; a GUI
+        # consumer can install its own after loading the snapshot via
+        # ``engine.update_ui = my_gui_callback``.
+        self.update_ui = lambda *_a, **_kw: None
+        self.update_progress = lambda *_a, **_kw: None
+
     def is_cancelled(self):
         return self.cancel_event.is_set()
 
@@ -4912,8 +4972,60 @@ class _RestrictedUnpickler(pickle.Unpickler):
         "collections.__init__": {"OrderedDict", "defaultdict", "Counter", "deque"},
         "pandas.core.series": {"Series"},
         "pandas.core.frame": {"DataFrame"},
+        # Phase 1.4: ``BlockManager`` is the internal layout primitive
+        # that pandas 2.x uses to back every ``DataFrame`` /
+        # ``Series``.  Without it, a pickle of a ``records`` list
+        # containing a DataFrame falls back to "Can't pickle local
+        # object" or "Blocked unsafe class ... BlockManager"
+        # depending on whether the unpickler bails before/after
+        # resolving the type.  Phase 1.4 acceptance: pin the round-trip
+        # of a real engine whose ``engine.records`` includes a
+        # ``pandas.DataFrame`` — see tests/test_pickle_roundtrip.py.
+        "pandas.core.internals.managers": {"BlockManager"},
+        # Phase 1.4: pandas's ``_unpickle_block`` is the C-extension
+        # helper that ``BlockManager.__setstate__`` falls through to
+        # when materialising ``Block`` objects from a pickled stream.
+        # Without it the BlockManager round-trip falls back to
+        # "Blocked unsafe class ... _unpickle_block".  BlockManager
+        # itself is a thin Python wrapper around this C-level loader,
+        # so both are required for a clean DataFrame round-trip.
+        "pandas._libs.internals": {"_unpickle_block"},
+        # Phase 1.4: numpy's ``_frombuffer`` is the C-extension helper
+        # used by ``ndarray.__reduce__`` to round-trip the raw byte
+        # buffer that holds the array alongside a type descriptor.
+        # ``ndarray`` was already on the whitelist; this lets the
+        # byte-buffer half survive the round-trip.
+        "numpy.core.numeric": {"_frombuffer"},
+        # Phase 1.4: ``numpy.dtype`` is the scalar-type descriptor
+        # every ndarray carries — without it a round-tripped
+        # ndarray raises "Object has no attribute 'itemsize'".
+        # Whitelist the dedicated ``dtype`` module too, alongside
+        # the existing ndarray entries.
+        "numpy.dtype": {"dtype"},
+        "numpy": {"ndarray", "dtype"},
         "numpy.ndarray": {"ndarray"},
-        "numpy": {"ndarray"},
+        # Phase 1.4: ``_reconstruct`` is the C-extension helper that
+        # rebuilds an ``ndarray`` of a given shape/dtype from the
+        # pickle-encoded byte buffer.  Without this entry, a
+        # round-tripped 2D ``numpy.ndarray`` (under the bonnet of
+        # every ``pandas.DataFrame``) fails with
+        # "Blocked unsafe class 'numpy.core.multiarray'.'_reconstruct'".
+        "numpy.core.multiarray": {"_reconstruct"},
+        # Phase 1.4: ``_new_Index`` rebuilds a pandas Index from a
+        # pickled (dtype, kind) tuple — needed because the persistent
+        # RangeIndex(DataFrame.index) carries a ``kind`` token.  The
+        # public ``Index`` class is the parent that ``_new_Index``
+        # instantiates; both need to be on the whitelist for the
+        # round-trip to construct a fully-fledged ``Index`` after
+        # the C-extension helper has built its layout.
+        "pandas.core.indexes.base": {"_new_Index", "Index"},
+        # Phase 1.4: ``RangeIndex`` is the integer-only Index
+        # subclass that pandas DataFrames grow by default.  Without
+        # it the round-trip works for ``Index`` but raises
+        # "Blocked unsafe class 'pandas.core.indexes.range'.'RangeIndex'"
+        # on the most common case.  ``RangeIndex.__init__`` is a thin
+        # wrapper so this single entry is sufficient.
+        "pandas.core.indexes.range": {"RangeIndex"},
         # Our own classes — needed for persisted engine objects
         "edf_collector": {"EvidenceEngine"},
         "__main__": {"EvidenceEngine"},
