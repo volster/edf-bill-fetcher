@@ -19,11 +19,11 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4.2.2
+      - name: Checkout repository
+        uses: actions/checkout@v5.0.1
 
-      - name: Set up Python
-        uses: actions/setup-python@v5.4.0
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6.1.0
         with:
           python-version: "3.11"
           cache: 'pip'
@@ -41,6 +41,10 @@ jobs:
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
+          # macOS-latest runners ship untrusted taps (aws/tap, azure/bicep)
+          # that aren't needed for this build.  Skip the verbose
+          # "tap not trusted" warnings so the install log stays focused.
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
           brew install python-tk
 
       - name: Install Dependencies
