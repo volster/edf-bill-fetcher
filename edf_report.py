@@ -286,9 +286,42 @@ def fmt_pct(val: Any, blank_if_na: bool = True) -> str:
 
 
 def fmt_date(val: Any) -> str:
-    """Format date for display."""
+    """Format a date for display in the generated report.
+
+    Single source of truth for the date string shape used by every
+    PDF and DOCX call site in the project.  ``edf_report_docx.py``
+    imports this symbol rather than defining its own so the two
+    surfaces cannot drift apart.
+
+    Output contract
+    ---------------
+    * Returns ``""`` (empty string) for any missing / unparseable date
+      so blank cells in a table don't shout ``"Unknown"`` at the
+      reader.  Matches the convention the Excel export already uses.
+    * Returns the date rendered as ``dd/mm/yyyy`` (zero-padded)
+      for everything else — datetimes, ``date`` objects, ISO strings,
+      ``DD Mon YYYY`` strings, or any other input that
+      ``parse_to_display_date`` accepts.
+    * Falls back to ``str(val)`` if every parse path fails, so the
+      reader sees the raw string they entered rather than a blank.
+
+    Parity
+    ------
+    The test suite pins this behaviour with explicit cases for None,
+      ``"N/A"``, pandas NaT/NaN, ISO strings, and UK-format strings in
+      ``tests/test_dispatch_parity.py::TestFmtDateParity``.
+    """
+    # ``None`` first to avoid the pandas ``isna`` call on a bare None
+    # (some pandas versions warn on that combination).
     if val is None or (isinstance(val, str) and val.upper() in ("N/A", "NA", "")):
         return ""
+    # pandas NaT / NaN — ``pd.isna`` covers both, but guard the call
+    # so non-pandas callers don't end up importing numpy accidentally.
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
     try:
         result = parse_to_display_date(val)
         return str(result) if result else ""

@@ -31,6 +31,7 @@ from edf_report import (
     _get_package_version,
     _load_ofgem_caps,
     _period_to_ofgem_quarter,
+    fmt_date,
 )
 
 # =============================================================================
@@ -52,15 +53,6 @@ GREEN = RGBColor(0x54, 0x82, 0x35)
 ORANGE = RGBColor(0xFE, 0x57, 0x16)
 
 MARGIN_CM = 2.5
-
-
-def fmt_date(val: Any) -> str:
-    """Format date for display."""
-    if val is None or pd.isna(val):
-        return "Unknown"
-    if hasattr(val, "strftime"):
-        return val.strftime("%d %B %Y")  # type: ignore[no-any-return]
-    return str(val)
 
 
 def fmt_number(val: Any, decimals: int = 2) -> str:

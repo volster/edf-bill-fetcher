@@ -17,6 +17,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pandas as pd
+import pytest
+
 from edf_report import REPORT_SECTIONS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -131,3 +134,80 @@ class TestDispatcherBuildersAllCallable:
         from edf_report_docx import generate_ombudsman_docx
 
         assert callable(generate_ombudsman_docx)
+
+
+class TestFmtDateParity:
+    """Parity test for ``fmt_date`` between the PDF and DOCX generators.
+
+    Phase 1.2: ``edf_report_docx.fmt_date`` is an alias of
+    ``edf_report.fmt_date`` so a paying client's bill is rendered
+    identically in both formats.  This test pins that invariant at
+    the unit level — any code path that re-introduces a
+    DOCX-local ``fmt_date`` will break the alias resolution and
+    fail the import parity check.
+    """
+
+    @pytest.mark.parametrize(
+        "input_val",
+        [
+            None,
+            "N/A",
+            "NA",
+            "",
+            "2023-06-15",
+            "15/06/2023",
+            "15 Jun 2023",
+            "15 June 2023",
+            "2026-Q3 2026-07-01",
+            pd.NaT,
+        ],
+    )
+    def test_fmt_date_pdf_matches_docx_for_every_input(self, input_val):
+        from edf_report import fmt_date as pdf_fmt_date
+        from edf_report_docx import fmt_date as docx_fmt_date
+
+        # Pandas NaT can't be compared with ``==`` cleanly (raises
+        # warnings), so we route through ``isinstance`` + ``pd.isna``
+        # to short-circuit the equality branch.
+        if isinstance(input_val, type(pd.NaT)) or pd.isna(input_val):
+            assert pdf_fmt_date(input_val) == docx_fmt_date(input_val)
+            return
+        assert pdf_fmt_date(input_val) == docx_fmt_date(input_val), (
+            f"PDF and DOCX fmt_date disagree on {input_val!r}: "
+            f"PDF={pdf_fmt_date(input_val)!r} "
+            f"DOCX={docx_fmt_date(input_val)!r}"
+        )
+
+    def test_fmt_date_returns_blank_for_missing(self):
+        """The blank-for-missing contract is new in Phase 1.2 — explicitly
+        tested so ``"Unknown"`` (the old DOCX-only string) cannot sneak
+        back in.
+        """
+        from edf_report import fmt_date
+
+        for missing in (None, "", "N/A", "NA", pd.NaT):
+            assert fmt_date(missing) == "", (
+                f"fmt_date({missing!r}) returned {fmt_date(missing)!r}; expected blank string"
+            )
+
+    def test_fmt_date_renders_iso_and_uk_to_same_dd_mm_yyyy(self):
+        from edf_report import fmt_date
+
+        # Both inputs collapse to the same canonical dd/mm/yyyy form,
+        # matching the convention the Excel export already uses.
+        assert fmt_date("2023-06-15") == "15/06/2023"
+        assert fmt_date("15/06/2023") == "15/06/2023"
+
+    def test_docx_uses_edf_report_fmt_date_not_local_definition(self):
+        """A docx-local ``fmt_date`` would diverge from the PDF and break
+        this project.  The import in ``edf_report_docx`` must be the
+        one in ``edf_report``.
+        """
+        from edf_report import fmt_date as pdf_fmt_date
+        from edf_report_docx import fmt_date as docx_fmt_date
+
+        assert docx_fmt_date is pdf_fmt_date, (
+            "DOCX fmt_date is a different object; the two renderers "
+            "can drift apart at runtime, which is exactly what Phase 1.2 "
+            "was meant to prevent."
+        )
