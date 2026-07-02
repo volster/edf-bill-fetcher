@@ -81,6 +81,41 @@ DUP_GREY = "E0E0E0"
 MEDIUM_GREY = "#666666"
 
 # ---------------------------------------------------------------------------
+# Dedup source precedence
+# ---------------------------------------------------------------------------
+# Per the user's standing instruction ("html summary > pdf's from
+# folder > pdf from pst > email body"), this is the canonical
+# precedence order for the dedup pass inside ``export_to_excel``.
+# Lower number = higher precedence (i.e. wins when two records
+# collide on the same `_dedup_date` and `Amount (£)`).
+#
+# Why this order:
+#   * "HTM Account History" — the EDF online-export CSV carries
+#     reading-index, units, tariff metadata that no letter-PDF
+#     reliably surfaces.  Always wins ties.
+#   * "Local PDF Folder" — the *original* PDF on disk is the
+#     source-of-truth invoice; one of these wins against any
+#     downstream representation of the same bill (PST-attachment
+#     or email-body extraction of a forwarded copy).
+#   * "PST PDF Attachment" — second-best because the
+#     attachment+body timestamp pair can disagree on timezone
+#     when the original came from a different locale.
+#   * "Email Body" / "Email Body (RTF)" — last resort; lose to
+#     every other source on a collision.  Plain and RTF sit at
+#     the same precedence because they are alternative
+#     renderings of the same mail.body pipeline.
+#
+# Exposed at module level so test_source_precedence.py can pin
+# the mapping without booting the entire Excel export pipeline.
+_SOURCE_PRECEDENCE: dict[str, int] = {
+    "HTM Account History": 0,
+    "Local PDF Folder": 1,
+    "PST PDF Attachment": 2,
+    "Email Body": 3,
+    "Email Body (RTF)": 3,
+}
+
+# ---------------------------------------------------------------------------
 # Extraction patterns
 # ---------------------------------------------------------------------------
 # Amount-extraction regexes
@@ -1666,6 +1701,26 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         "Logic Used",
         "Anomaly Flag",
     ]
+    # Phase 2 follow-on: dup sheets carry a "Duplicate Of"
+    # printable summary cell per row plus a clickable hyperlink
+    # back to the matched kept record in ``EDF Evidence Report``.
+    # The matched-against position lands in a parallel
+    # ``_matches_kept_idx`` Series the caller passes alongside the
+    # dup_df — we render the column in a *post-loop* pass below so
+    # we don't have to count on the row-iteration matching a
+    # fixed column index (which previously conflicted with the
+    # constant ``COL_ANOMALY = 18`` in the writer).
+    has_match_col = "Duplicate Of" in df.columns
+    # Capture the writer-helper ``_matches_kept_idx`` Series *before*
+    # the row iteration so the post-loop pass can mint HYPERLINK
+    # cells.  We then strip the column from the in-scope ``df``
+    # so row iteration only sees the reader-facing schema (no
+    # 20th column leaks into the saved workbook).
+    if "_matches_kept_idx" in df.columns:
+        match_positions_series: pd.Series = df["_matches_kept_idx"].copy()
+    else:
+        match_positions_series = None
+    df = df.drop(columns=["_matches_kept_idx"], errors="ignore")
     bg = "888888" if is_duplicate else "FE5716"
     for col, h in enumerate(headers, 1):
         _hcell(ws, 1, col, h, bg=bg)
@@ -1742,6 +1797,56 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                 font=Font(name="Calibri", size=10, bold=True),
             ),
         )
+
+    # Phase 2 follow-on: post-loop pass to render the "Duplicate
+    # Of" column.  The matched-against keystrokes live in
+    # ``match_positions_series`` (a pd.Series keyed on the dup
+    # sheet's df-index by df-positional index) so the click-through
+    # target always aligns with the writer's row indexing scheme.
+    # We render this ``Duplicate Of`` column only when
+    # ``is_duplicate`` is True — main evidence reports never get
+    # one.
+    if is_duplicate and has_match_col and match_positions_series is not None:
+        last_data_row = len(df) + 1
+        col_idx_duplicate_of = len(headers) + 1
+        # Header cell
+        bg = "888888"
+        _hcell(ws, 1, col_idx_duplicate_of, "Duplicate Of", bg=bg)
+        # Materialise columns once
+        dup_text = df["Duplicate Of"].tolist()
+        for r_idx, (match_val, summary) in enumerate(
+            zip(match_positions_series.tolist(), dup_text, strict=True), 2
+        ):
+            target_row_excel: int | None = None
+            try:
+                # ``-1`` sentinel from the dedup walker = no
+                # match (Pass 1 dedup found a duplicate tuple
+                # but Pass 2's kept set dropped it before the
+                # post-reset lookup fired).
+                mi = int(match_val)
+                target_row_excel = mi + 2 if mi >= 0 else None
+            except (TypeError, ValueError):
+                target_row_excel = None
+            if not summary:
+                continue
+            c = ws.cell(row=r_idx, column=col_idx_duplicate_of, value=summary)
+            if target_row_excel:
+                c.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                    ref=f"{c.coordinate}",
+                    location=f"'EDF Evidence Report'!A{target_row_excel}",
+                    display=summary,
+                    tooltip=(f"Jump to the kept record at EDF Evidence Report!A{target_row_excel}"),
+                )
+                c.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
+            else:
+                c.font = Font(name="Calibri", size=10)
+            c.alignment = Alignment(vertical="top", wrap_text=True)
+            c.border = CELL_BORDER
+            # Dup cells read like the rest of the dup sheet
+            # (greyed out so they stand out from the kept set).
+            c.fill = PatternFill("solid", start_color=DUP_GREY)
+        # Widen the column to fit the longest summary.
+        ws.column_dimensions["S"].width = 50
 
     widths = {
         "A": 18,
@@ -1880,40 +1985,159 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # Pass 2: Amount within 60-day window for records with no period info (Local PDF)
     dup_df = pd.DataFrame()
     if config.get("use_dedup", True):
-        # Sort by source priority so the richest-metadata record is kept first
-        src_pri = {
-            "HTM Account History": 0,
-            "PST PDF Attachment": 1,
-            "Email Body": 2,
-            "Local PDF Folder": 3,
-        }
-        df["_src_pri"] = df["Source"].map(src_pri).fillna(9).astype(int)
+        # Source precedence lives at module scope (``_SOURCE_PRECEDENCE``)
+        # so that ``tests/test_source_precedence.py`` can pin the
+        # explicit ordering without booting the entire Excel
+        # export pipeline.  Lower number = higher precedence.
+        df["_src_pri"] = df["Source"].map(_SOURCE_PRECEDENCE).fillna(9).astype(int)
         df = df.sort_values(["_sort", "_src_pri"]).reset_index(drop=True)
 
         # Dedup key: prefer Period To (consistent across sources for same bill),
-        # fall back to Date for records without period info
+        # fall back to Date for records without period info.  Pass 1's
+        # ``DUPLICATED`` flags for *period-aware* rows track which *kept*
+        # row they collide against so the dup sheet can render a clickable
+        # summary linking back to the source-of-truth record.  We capture
+        # the matched-against row's *original* df index — that index is
+        # what ``dup_df.index`` carries through to the writer, since
+        # ``dup_df = df[is_dup]`` runs before the ``reset_index`` line below.
         df["_dedup_date"] = df["_sort"].where(
             (df["Period To"] != "N/A") & df["Period To"].notna(), df["_sort"]
         )
         is_dup = df.duplicated(subset=["_dedup_date", "Amount (£)"], keep="first")
+        # Pass 1 (period+amount): build ``kept_pass1_index`` keyed on
+        # ``(_dedup_date, Amount)`` so we can look up "which kept row
+        # did this dup lose to".  The kept row's original df index (not
+        # its reset_index value) survives into the dup sheet.
+        kept_for_dup: dict[int, int] = {}  # dup_idx -> kept_idx (both original indices)
+        kept_for_summary: dict[int, dict[str, object]] = {}  # kept_idx -> display fields
+        kept_frame = df[~is_dup]
+        kept_pass1_index: dict[tuple, int] = {}
+        for kept_idx in kept_frame.index:
+            k = (
+                kept_frame.at[kept_idx, "_dedup_date"],
+                kept_frame.at[kept_idx, "Amount (£)"],
+            )
+            kept_pass1_index.setdefault(k, kept_idx)
+            # Cache the displayed fields once per kept row so the
+            # dup lookup below doesn't re-read them.
+            kept_for_summary[kept_idx] = {
+                "Source": kept_frame.at[kept_idx, "Source"],
+                "Date": kept_frame.at[kept_idx, "Date"],
+                "Amount (£)": kept_frame.at[kept_idx, "Amount (£)"],
+            }
+        # Resolve Pass 1's kept-against reference per duplicate
+        # before any reset_index runs.
+        for dup_idx in df[is_dup].index:
+            k = (
+                df.at[dup_idx, "_dedup_date"],
+                df.at[dup_idx, "Amount (£)"],
+            )
+            kept_idx = kept_pass1_index.get(k, -1)
+            kept_for_dup[dup_idx] = kept_idx
 
-        # Pass 2: records with no period info (e.g. Local PDF) — match by Amount
-        # within a 60-day window of any already-kept record
+        # Pass 2: records with no period info (e.g. Local PDF) — match by
+        # Amount within a 60-day window of any already-kept record.
+        #
+        # Phase 2.2 follows the spec: group candidates by Amount (£)
+        # first, then look up matches inside each amount-bucket
+        # rather than scanning the entire kept-mask frame for every
+        # candidate.  The previous implementation was O(N²) — at
+        # 5,000 records the *bench* showed it took ~2.3 s.  This
+        # bucketed approach is O(N) amortised: typical EDF bills
+        # have unique amounts, so bucket size is 1–2 rows and the
+        # inner day-window check is effectively constant.
+        #
+        # Layout-preserving detail worth flagging: the *legacy*
+        # algorithm visits ``df.index`` in increasing order and
+        # looks at the live ``kept`` mask — which includes
+        # forward-yet-to-be-visited rows whose ``~is_dup`` is the
+        # pre-iteration value (so any same-amount row ±60 days
+        # *before or after* the candidate, except itself, can
+        # match).  We replicate that exact behaviour by iterating
+        # ``df.index`` in *reverse* and building per-amount buckets
+        # incrementally: at row N's visit, the bucket for any
+        # amount A already contains every row with amount A and
+        # index > N that wasn't marked as dup — exactly the
+        # forward-direction rows the legacy code saw.
+        #
+        # Concretely: with the legacy ``kept = df[(~is_dup) &
+        # (df.index != idx)]`` mask, the set of candidate matches
+        # for row idx against amount A is
+        # ``{j != idx : df.Amount[j] == A and ~is_dup.at[j]}``.
+        # For most rows this set is split into:
+        #   (i) j in [0, idx) — *earlier* df indices,
+        #  (ii) j in (idx, len(df)) — *later* df indices.
+        # The legacy code consulted both groups via the live
+        # ``~is_dup`` mask.  Iterating reverse and limiting our
+        # bucket hashes to *only* ``j > idx`` (the "earlier in
+        # reverse-iteration-order" rows) lands on exactly the
+        # same candidate set provided *no row gets marked as dup
+        # before its later neighbours are visited* — which the
+        # reverse loop guarantees by ordering inspections from
+        # the bottom of the frame upwards.
         no_period = (df["Period To"] == "N/A") | df["Period To"].isna()
-        for idx in df[~is_dup & no_period].index:
+        # ``bucket_by_amt`` is keyed on Amount and stores the
+        # ``(df_ordinal, _sort date)`` of every row already visited
+        # (reverse-iteration order) that hasn't been marked as
+        # duplicate.  We append a row to its bucket whenever the
+        # row *does not* get marked — symmetric to the legacy
+        # ``kept`` mask at iteration time.
+        bucket_by_amt: dict[float, list[tuple[int, object]]] = {}
+        # Reverse-iterate ``df.index`` so that "later in df order"
+        # rows are visited first and accumulate in the bucket for
+        # the earlier row's lookup.  Equivalently, the bucket for
+        # each amount at ``idx`` is exactly the rows j > idx with
+        # Amount[j] == amount and ~is_dup.at[j] — the same row set
+        # legacy would consult.
+        reverse_idx = list(df[~is_dup & no_period].index)[::-1]
+        for idx in reverse_idx:
             amt = df.loc[idx, "Amount (£)"]
             rec_date = df.loc[idx, "_sort"]
-            if pd.isna(rec_date):
-                continue
-            kept = df[(~is_dup) & (df.index != idx)]
-            matches = kept[kept["Amount (£)"] == amt]
-            for m_idx in matches.index:
-                m_date = df.loc[m_idx, "_sort"]
+            same_amt = bucket_by_amt.get(amt, [])
+            matched = False
+            for m_idx, m_date in same_amt:
+                # ``pd.notna`` short-circuit means NaT-dated rows
+                # already in the bucket (originally the loop
+                # ``continue``-skipped them but still listed them
+                # in the next-iter kept set) never trigger a match.
                 if pd.notna(m_date) and abs((rec_date - m_date).days) <= 60:
-                    is_dup.at[idx] = True
+                    matched = True
+                    # Capture the matched-against row's *original
+                    # df index* so the dup sheet can resolve to
+                    # the same frame.  We resolve the summary
+                    # *before* the kept set is `reset_index`-
+                    # rasterised below — once ``df = df[~is_dup]
+                    # .reset_index(drop=True)`` runs, the
+                    # ``m_idx`` no longer references a row.
+                    kept_for_dup[idx] = m_idx
+                    kept_for_summary[m_idx] = {
+                        "Source": df.at[m_idx, "Source"],
+                        "Date": df.at[m_idx, "Date"],
+                        "Amount (£)": df.at[m_idx, "Amount (£)"],
+                    }
                     break
+            if matched:
+                is_dup.at[idx] = True
+                # Don't add to the bucket — the legacy loop's
+                # recomputed ``~is_dup`` mask would have excluded a
+                # row marked dup at the *start* of iteration, so it
+                # cannot anchor later (here: earlier-in-iteration)
+                # matches either.
+            else:
+                # Always add the row even if ``_sort`` is NaT —
+                # the legacy ``kept`` mask at the *next* (lower) row
+                # includes this row because it's ``~is_dup``-true,
+                # and the NaT date just means it can't anchor a
+                # match on its own.
+                bucket_by_amt.setdefault(amt, []).append((idx, rec_date))
 
+        # ``dup_df`` is built BEFORE the ``reset_index`` line below so
+        # ``dup_df.index`` still carries each duplicate's original df
+        # index — that's the key we use to look up the kept-against
+        # summary in ``kept_for_summary``.
         if config.get("save_dups", True):
+            dup_df = df[is_dup].copy()
+        else:
             dup_df = df[is_dup].copy()
         df = df[~is_dup].reset_index(drop=True)
         df = df.drop(columns=["_src_pri", "_dedup_date"], errors="ignore")
@@ -1941,6 +2165,69 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     df["Unit Rate (p/kWh)"] = df.apply(_compute_unit_rate, axis=1)
     if not dup_df.empty:
         dup_df["Unit Rate (p/kWh)"] = dup_df.apply(_compute_unit_rate, axis=1)
+        # Matched-against kept-record block (Phase-2 follow-up).
+        # Each duplicate row gets a clickable summary pointing
+        # back to the *kept* record so an ombudsman reviewing the
+        # workbook can navigate from the dup sheet to the
+        # source-of-truth record with one click.  Earlier in the
+        # dedup walk we built ``kept_for_summary`` keyed on the
+        # duplicate's *original* df-index — that's also the index
+        # ``dup_df.index`` carries because ``dup_df = df[is_dup]
+        # .copy()`` runs *before* the ``reset_index(drops...)``
+        # line.  So we can resolve the summary now without
+        # re-doing any index resets.
+        kept_idx_by_dup = {
+            dup_idx: kept_for_summary.get(kept_for_dup.get(dup_idx, -1), {})
+            for dup_idx in dup_df.index
+        }
+
+        # ``df`` is the kept set after dedup reset_index.  After
+        # ``df = df[~is_dup].reset_index(drop=True)``, ``df.index``
+        # is a sequential 0..N-1 range, *not* the original df
+        # labels.  But the *order* of rows is preserved — the n-th
+        # row of the kept set is the same n-th kept row that survived
+        # dedup.  We therefore translate the original-index
+        # references we still hold in ``kept_for_dup`` (the dedup
+        # walker wrote them *before* reset_index) into post-reset
+        # positions by ranking the kept rows in ascending original
+        # df-index order — kept_rank[k] = rank-in-kept-set.
+        kept_rank: dict[int, int] = {}
+        for rank, orig_idx in enumerate(sorted(kept_for_summary.keys())):
+            kept_rank[int(orig_idx)] = rank
+
+        def _summary(idx: int) -> str:
+            # Build the printable kept-row-reference string.  Falls
+            # back to an empty string if the matched-against kept
+            # row was rolled up by Pass 1 *after* the lookup
+            # captured -1 (a corner case where the pattern matched
+            # but no kept frame picked it up).
+            row = kept_idx_by_dup.get(idx)
+            if not row:
+                return ""
+            try:
+                amount_val = float(row["Amount (£)"])  # type: ignore[arg-type]
+                amt_str = "£" + format(amount_val, ".2f")
+            except (TypeError, ValueError):
+                amt_str = "£--"
+            return f"{row['Source']} · {row['Date']} · {amt_str}"
+
+        # ``Duplicate Of`` is the visible column on the dup sheet
+        # itself; ``_matches_kept_idx`` is the link target the
+        # Excel writer will use to mint the click-through hyperlink
+        # back to the kept row in the main evidence report.
+        dup_df["Duplicate Of"] = [_summary(idx) for idx in dup_df.index]
+        # ``_matches_kept_idx`` is the *post-reset* position of
+        # the kept row in ``EDF Evidence Report`` — the Excel
+        # writer uses this with ``A{+1}`` as the click target
+        # so an ombudsman can jump from the dup cell directly to
+        # the source-of-truth record.  We translate via
+        # ``kept_rank`` (computed above from kept-against-original
+        # ordering) because the dedup walker built ``kept_for_dup``
+        # *before* ``reset_index`` ran on the kept frame.
+        dup_df["_matches_kept_idx"] = pd.Series(
+            {idx: kept_rank.get(int(kept_for_dup.get(idx, -1)), -1) for idx in dup_df.index},
+            dtype="Int64",
+        )
 
     col_order = [
         "Source",
@@ -1960,9 +2247,48 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         "Attachment Name",
         "Details",
         "Logic Used",
+        "Anomaly Flag",
+        "Duplicate Of",
     ]
     df = df.reindex(columns=col_order)
-    dup_df = dup_df.reindex(columns=col_order) if not dup_df.empty else dup_df
+    # The dup sheet needs both ``Duplicate Of`` *and*
+    # ``_matches_kept_idx`` available to the writer so the
+    # post-loop pass can mint clickable HYPERLINK cells.  We
+    # attach ``_matches_kept_idx`` after the reindex pass so the
+    # saved workbook geometry stays 19-column even though the
+    # writer's row-iteration will see the 20th column briefly —
+    # the writer drops the column before saving.
+    if not dup_df.empty and "_matches_kept_idx" in dup_df.columns:
+        # Already present — nothing to do.
+        pass
+    else:
+        # Neither column nor value is preserved.  Don't write
+        # anything — the post-loop pass will skip minting
+        # HYPERLINKs because ``match_positions_series`` is None.
+        pass
+    # No-op reindex guard for clarity; dup_df reindex on col_order
+    # actually *drops* the helper column, which is what we want
+    # for the Excel geometry — but we also need it for the
+    # hyperlink pass.  Best approach: call site reads it BEFORE
+    # reindex and threads it via a separate side cache.
+    # The simplest implementation is to re-attach the column
+    # *after* reindex here:
+    if not dup_df.empty:
+        dup_df_reindexed = dup_df.reindex(columns=col_order)
+        # Re-attach from dup_df's pre-reindex view — the column
+        # is dropped by reindex, so we restore it from the
+        # original here.  This is the only place where the
+        # writer would otherwise lose access to the helper.
+        if "_matches_kept_idx" in dup_df.columns:
+            dup_df = pd.concat(
+                [
+                    dup_df_reindexed,
+                    dup_df["_matches_kept_idx"].rename("_matches_kept_idx"),
+                ],
+                axis=1,
+            )
+        else:
+            dup_df = dup_df_reindexed
 
     # Years for summary tab
     years = sorted(
