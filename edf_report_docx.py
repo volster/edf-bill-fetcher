@@ -30,6 +30,7 @@ from edf_report import (
     _compute_mean_daily,
     _get_package_version,
     _load_ofgem_caps,
+    _period_to_ofgem_quarter,
 )
 
 # =============================================================================
@@ -611,7 +612,19 @@ def create_timeline_section(
 def create_ofgem_comparison(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
 ) -> None:
-    """Create OFGEM price cap comparison section."""
+    """Create OFGEM price cap comparison section.
+
+    Mirrors ``edf_report.create_ofgem_comparison``: computes the
+    effective bill unit rate from ``Period Charge (£)`` ÷
+    ``Units (kWh)`` × 100 instead of trusting a pre-baked
+    ``Unit Rate (p/kWh)`` column (which is `None` for many records
+    because not every bill has both columns populated).
+
+    That means the DOCX output now covers every record that has
+    Period Charge AND Units available, even when the Excel
+    ``Unit Rate (p/kWh)`` column ended up ``N/A`` — same logic,
+    same table, same row labels as the PDF report.
+    """
     if ctx is None:
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("ofgem"), style=styles["SectionHeader"])
@@ -623,39 +636,125 @@ def create_ofgem_comparison(
         style=styles["BodyText"],
     )
 
-    if "Unit Rate (p/kWh)" not in df.columns:
-        doc.add_paragraph("No unit rate data available for comparison.", style=styles["BodyText"])
+    # Compute quarter for every record first so we can filter to
+    # records that actually fall inside an OFGEM-cap window.
+    work = df.copy()
+    work["_dt"] = work["Date"].apply(parse_to_sort_date)
+    work = work.sort_values("_dt").reset_index(drop=True)
+
+    # Same filter the PDF uses: Period Charge + Units both present and
+    # non-empty.  ``Unit Rate (p/kWh)`` is intentionally *not*
+    # consulted — many real records have it set to "N/A" even when
+    # both Period Charge and Units are fine.
+    valid_pc = work["Period Charge (£)"].notna() & (work["Period Charge (£)"] != "N/A")
+    valid_units = (
+        work["Units (kWh)"].notna() & (work["Units (kWh)"] != "N/A") & (work["Units (kWh)"] != "")
+    )
+    bills = work[valid_pc & valid_units].copy()
+
+    if bills.empty:
+        doc.add_paragraph(
+            "No billing records with both Period Charge and Units (kWh) available for comparison.",
+            style=styles["BodyText"],
+        )
         doc.add_page_break()
         return
 
-    df_rates = df.dropna(subset=["Unit Rate (p/kWh)"])
-    df_rates = df_rates[df_rates["Unit Rate (p/kWh)"] != "N/A"]
-    df_rates["rate_num"] = pd.to_numeric(df_rates["Unit Rate (p/kWh)"], errors="coerce")
+    # Effective unit rate from Period Charge / Units × 100 (= p/kWh).
+    bills["_unit_rate"] = (
+        bills["Period Charge (£)"].astype(float) / bills["Units (kWh)"].astype(float) * 100
+    )
+    # Quarter the bill falls into (drives the OFGEM-cap lookup).
+    bills["_quarter"] = bills["_dt"].apply(_period_to_ofgem_quarter)
+    # Drop rows whose quarter isn't in our published cap list —
+    # otherwise the comparison table shows empty blanks.
+    bills = bills[bills["_quarter"].notna()].copy()
 
-    if df_rates["rate_num"].dropna().empty:
-        doc.add_paragraph("No computable unit rates found.", style=styles["BodyText"])
+    if bills.empty:
+        doc.add_paragraph(
+            "No billing records fall within an OFGEM-published cap window.",
+            style=styles["BodyText"],
+        )
         doc.add_page_break()
         return
 
-    avg_rate = df_rates["rate_num"].mean()
-    median_rate = df_rates["rate_num"].median()
+    ofgem_caps = _load_ofgem_caps()
+
+    # Average bill unit rate per quarter; compare to OFGEM cap.
+    cap_rows: list[tuple[str, float, float, float, str]] = []
+    exceed_count = 0
+    for quarter in sorted(bills["_quarter"].unique()):
+        if quarter not in ofgem_caps:
+            continue
+        cap_rate = ofgem_caps[quarter]["unit_rate"]
+        quarter_bills = bills[bills["_quarter"] == quarter]
+        avg_rate = quarter_bills["_unit_rate"].mean()
+        if pd.isna(avg_rate):
+            continue
+        diff = avg_rate - cap_rate
+        if diff > 0:
+            status = "EXCEEDS CAP"
+            exceed_count += 1
+        elif abs(diff) < 0.01:
+            status = "AT CAP"
+        else:
+            status = "BELOW CAP"
+        cap_rows.append((quarter, avg_rate, cap_rate, diff, status))
+
+    if not cap_rows:
+        doc.add_paragraph(
+            "No comparably-dated billing records to compare against the OFGEM cap table.",
+            style=styles["BodyText"],
+        )
+        doc.add_page_break()
+        return
+
+    # Headline metrics across every bill in the quarter-table.
+    all_rates = bills["_unit_rate"].dropna()
+    overall_avg = all_rates.mean()
+    overall_median = all_rates.median()
 
     doc.add_paragraph(
-        f"Average unit rate across all records: {fmt_number(avg_rate, 2)} p/kWh",
+        f"Average unit rate across all records: {fmt_number(overall_avg, 2)} p/kWh",
         style=styles["BodyText"],
     )
     doc.add_paragraph(
-        f"Median unit rate: {fmt_number(median_rate, 2)} p/kWh", style=styles["BodyText"]
+        f"Median unit rate: {fmt_number(overall_median, 2)} p/kWh",
+        style=styles["BodyText"],
     )
+
+    # Per-quarter comparison table mirrors the PDF output.
+    table = doc.add_table(rows=len(cap_rows) + 2, cols=5)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    headers = ["Period", "Bill Unit Rate (p/kWh)", "OFGEM Cap (p/kWh)", "Difference", "Status"]
+    for j, h in enumerate(headers):
+        table.rows[0].cells[j].text = h
+    for i, (quarter, avg_rate, cap_rate, diff, status) in enumerate(cap_rows, 1):
+        table.rows[i].cells[0].text = str(quarter)
+        table.rows[i].cells[1].text = fmt_number(avg_rate, 2)
+        table.rows[i].cells[2].text = fmt_number(cap_rate, 2)
+        table.rows[i].cells[3].text = fmt_number(diff, 2) if diff != 0 else "0.00"
+        table.rows[i].cells[4].text = status
+    # Summary row at the bottom.
+    summary_idx = len(cap_rows) + 1
+    table.rows[summary_idx].cells[0].text = "OVERALL"
+    table.rows[summary_idx].cells[1].text = "—"
+    table.rows[summary_idx].cells[2].text = "—"
+    if exceed_count > 0:
+        table.rows[summary_idx].cells[3].text = f"{exceed_count} periods exceed cap"
+        table.rows[summary_idx].cells[4].text = "REVIEW REQUIRED"
+    else:
+        table.rows[summary_idx].cells[3].text = "No exceedances"
+        table.rows[summary_idx].cells[4].text = "COMPLIANT"
+    _format_table(table, header_color="#10367A", font_size=9)
+
+    doc.add_paragraph("")
 
     # OFGEM caps reference table — built dynamically from the shared
     # _load_ofgem_caps() data (edf_report.py) so the DOCX and PDF
     # generators always show the same values.  The old code hard-coded
     # a 7-row table that diverged from the PDF (e.g. "34.0" here vs
     # the correct 28.34 for Oct–Dec 2022).
-    ofgem_caps = _load_ofgem_caps()
-    # Only show recent/relevant periods (2022 onwards) to keep the
-    # table readable; the full dataset goes back to 2019-Q1.
     recent_caps = {k: v for k, v in ofgem_caps.items() if int(k[:4]) >= 2022}
     # Human-readable quarter labels, e.g. "2022-Q4" → "Oct 2022 – Dec 2022"
     _q_start = {1: "Jan", 2: "Apr", 3: "Jul", 4: "Oct"}
@@ -677,6 +776,14 @@ def create_ofgem_comparison(
     _format_table(table, header_color="#10367A", font_size=9)
 
     doc.add_paragraph("")
+    doc.add_paragraph(
+        "<b>Methodology:</b> Unit rates calculated as Period Charge (£) ÷ "
+        "Units (kWh) × 100. Standing charges compared separately against the "
+        "OFGEM daily cap. Only records with both Period Charge and Units (kWh) "
+        "are included. OFGEM cap data sourced from official Default Tariff Cap "
+        "publications.",
+        style=styles["BodyText"],
+    )
     doc.add_paragraph(
         "Note: Price caps are for typical domestic consumption values. "
         "Actual rates vary by region, payment method, and tariff type.",
@@ -1185,6 +1292,17 @@ def generate_ombudsman_docx(
     df = pd.DataFrame(records)
     if df.empty:
         raise ValueError("Records DataFrame is empty")
+
+    # Validate required parameters — create a minimal engine if not provided
+    # (CLI usage without --engine-data should still work)
+    if engine is None:
+
+        class MinimalEngine:
+            pdf_count: int = 0
+            email_count: int = 0
+            filtered_records: list[Any] = []
+
+        engine = MinimalEngine()
 
     # Ensure required columns exist with defaults
     required_cols = {

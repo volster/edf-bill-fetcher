@@ -632,8 +632,28 @@ class TestGeneratePDF:
         assert "no records" in msg.lower() or "error" in msg.lower()
 
     def test_generate_pdf_from_gui_no_engine(self, sample_records, sample_config):
-        success, msg = generate_pdf_from_gui(sample_records, "test.pdf", sample_config, None, [])
-        assert success is False
+        # The CLI path requires a runnable PDF even when --engine-data
+        # wasn't supplied, so the GUI wrapper now synthesises a minimal
+        # engine rather than failing.  Verify the underlying generator
+        # accepts the engine=None / filtered=None combination without
+        # raising (the old code raised ``ValueError("Engine is required")``).
+        cfg = dict(sample_config)
+        # Pre-fill fields the generator requires so no exception is raised
+        cfg.setdefault(
+            "report_sections",
+            ["cover", "toc", "exec_summary", "key_findings"],
+        )
+        # The PDF generator writes to disk; point it at the current
+        # directory under a unique name and clean up afterwards.
+        import os
+
+        out = os.path.abspath("test_no_engine_gui.pdf")
+        try:
+            success, msg = generate_pdf_from_gui(sample_records, out, cfg, None, [])
+            assert success is True, msg
+        finally:
+            if os.path.exists(out):
+                os.remove(out)
 
 
 # =============================================================================

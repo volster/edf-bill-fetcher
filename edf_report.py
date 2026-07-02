@@ -2218,11 +2218,16 @@ def generate_ombudsman_pdf(
     if df.empty:
         raise ValueError("Records DataFrame is empty")
 
-    # Validate required parameters
+    # Validate required parameters — create a minimal engine if not provided
+    # (CLI usage without --engine-data should still work)
     if engine is None:
-        raise ValueError(
-            "Engine is required for report generation (contains PDF count, email count metadata)"
-        )
+
+        class MinimalEngine:
+            pdf_count: int = 0
+            email_count: int = 0
+            filtered_records: list[Any] = []
+
+        engine = MinimalEngine()
 
     # Ensure required columns exist with defaults
     required_cols = {
