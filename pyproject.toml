@@ -134,6 +134,15 @@ no_implicit_optional = true
 strict_optional = true
 ignore_missing_imports = true
 
+# ``build/`` is a transient PyInstaller output directory emitted by
+# ``pyinstaller --onefile ... edf_collector.py`` runs (locally and
+# on the *Build Executables* CI worker).  Without an explicit
+# exclude, mypy picks up ``build/lib/tests/__init__.py`` *and*
+# ``tests/__init__.py`` and errors out with ``Duplicate module
+# named 'tests'`` — pinning this in CI keeps the type-check gate
+# robust regardless of when someone last ran the exe builder.
+exclude = ["build/", "dist/"]
+
 [[tool.mypy.overrides]]
 module = [
     "pandas",
