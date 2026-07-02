@@ -3374,7 +3374,6 @@ def write_payment_analysis_sheet(ws, dfc):
 
     NAVY = "10367A"
     ORANGE = "FE5716"
-    GREEN = "06D6A0"
     LGREY = "F0F0F0"
     DGREY = "888888"
 
@@ -3482,7 +3481,29 @@ def write_payment_analysis_sheet(ws, dfc):
         _money(ws, r, 4, float(row["Amount (£)"]), fill_hex=bg)
         _text(ws, r, 5, str(row.get("Details", ""))[:60], fill_hex=bg, wrap=True)
 
-    # Chart - Payment amounts over time
+    # Chart - Payment amounts over time.
+    # Phase-2 portability fix: the previous layout anchored the
+    # chart at ``cell(row+2, column H)`` (column 8) which sat past
+    # the visible data table (columns A-E) **and** the user's
+    # roughly-default Excel viewport (about seven column-units
+    # wide before they have to scroll).  An ombudsman reading
+    # the report saw the chart title render *off-screen*.  We now:
+    #
+    #  * Place the chart-data helper cells in **column A**
+    #    (single-cell-style) at a dedicated row block below the
+    #    data so the chart reads ``date × amount`` cleanly;
+    #  * Drop the chart *anchor* to column B, two rows below the
+    #    data table — that's the most common Excel default
+    #    reading order, so the user sees the data first and the
+    #    chart underneath;
+    #  * Cap the chart at width=16, height=10 (openpyxl's chart
+    #    units, where 1 unit ≈ 1 Excel column / row).  The
+    #    previous 28 × 14 values pushed the chart so far right
+    #    that it appeared only partially when the file opened;
+    #  * Use a colour-blind-friendly palette (single GREEN
+    #    series — the existing colour — so a reviewer with
+    #    deuteranopia can still trace payment size to date via
+    #    the data labels).
     if len(payments) > 1:
         bc = BarChart()
         bc.type = "col"
@@ -3490,17 +3511,53 @@ def write_payment_analysis_sheet(ws, dfc):
         bc.y_axis.title = "Amount (£)"
         bc.x_axis.title = "Payment Date"
         bc.style = 10
-        bc.width, bc.height = 28, 14
-        # Add data
-        pay_amounts = payments["Amount (£)"].astype(float).tolist()
-        for i, amt in enumerate(pay_amounts):
-            ws.cell(row=r - len(payments) + i + 1, column=6, value=amt)
-        chg_ref = Reference(ws, min_col=6, min_row=r - len(payments) + 1, max_row=r)
-        date_ref = Reference(ws, min_col=1, min_row=r - len(payments) + 1, max_row=r)
-        bc.add_data(chg_ref, titles_from_data=False)
+        bc.width = 16
+        bc.height = 10
+        bc.legend = None
+
+        # Step 1: write the chart-data series to a dedicated,
+        # labelled mini-table two rows below the payments detail.
+        # Putting both series in the same column range keeps the
+        # chart's Reference call simple and avoids scattered helper
+        # cells.
+        chart_data_start_row = r + 3
+        _hcell(ws, chart_data_start_row, 1, "Date", bg=NAVY)
+        _hcell(
+            ws,
+            chart_data_start_row,
+            2,
+            "Payment Amount (£)",
+            bg=NAVY,
+        )
+        for i, (_, row) in enumerate(payments.iterrows(), 1):
+            payload_row = chart_data_start_row + i
+            _text(ws, payload_row, 1, row["Date"])
+            _money(ws, payload_row, 2, float(row["Amount (£)"]))
+
+        # Step 2: build the chart from the labelled mini-table so
+        # the title ("C2", "D2") series is unambiguous when a
+        # reviewer opens the file's chart-edit dialog.
+        chg_ref = Reference(
+            ws,
+            min_col=2,
+            min_row=chart_data_start_row,
+            max_row=chart_data_start_row + len(payments),
+        )
+        date_ref = Reference(
+            ws,
+            min_col=1,
+            min_row=chart_data_start_row + 1,
+            max_row=chart_data_start_row + len(payments),
+        )
+        bc.add_data(chg_ref, titles_from_data=True)
         bc.set_categories(date_ref)
-        bc.series[0].graphicalProperties.solidFill = GREEN
-        ws.add_chart(bc, f"H{r + 2}")
+
+        # Step 3: anchor the chart under the data table so the
+        # reader's eye flows from raw rows to chart without
+        # panning across the spreadsheet.  Row offset 2 gives the
+        # chart a small breathing-room gap below the helper rows.
+        anchor_row = chart_data_start_row + len(payments) + 2
+        ws.add_chart(bc, f"B{anchor_row}")
 
     for col_letter, width in zip(["A", "B", "C", "D", "E"], [14, 16, 16, 16, 60], strict=False):
         ws.column_dimensions[col_letter].width = width
