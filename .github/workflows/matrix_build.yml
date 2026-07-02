@@ -70,8 +70,19 @@ jobs:
           # as ``ImportError: No module named 'X'`` — pinning these
           # with ``--hidden-import`` is the standard PyInstaller
           # workaround (see scikit-build / pandas' own bundling docs).
+          #
+          # NOTE: bash's ``\`` line-continuation does NOT accept ``#``
+          # comments on the joined lines — the inline-comment
+          # style the previous draft of this step used (mid-command
+          # ``# === Direct deps: reportlab ===`` etc.) caused the
+          # GitHub Actions runner to treat each comment as a fresh
+          # shell command (``--hidden-import=reportlab: command
+          # not found``), which propagates onward as
+          # ``pyinstaller: error: the following arguments are
+          # required: scriptname``.  All rationale lives in this
+          # header block; the actual pyinstaller command is a clean
+          # uninterrupted chain of ``\` joins.
           pyinstaller --onefile --windowed --name EDF_Evidence_Collector \
-            # === Direct deps: reportlab series (PDF report) ===
             --hidden-import=reportlab \
             --hidden-import=reportlab.platypus \
             --hidden-import=reportlab.lib \
@@ -83,24 +94,11 @@ jobs:
             --hidden-import=reportlab.pdfbase \
             --hidden-import=reportlab.pdfbase.pdfmetrics \
             --hidden-import=reportlab.pdfbase.ttfonts \
-            # === Late-found importlib.find_spec("scipy") →
-            #   fallback stats. PyInstaller can't see "find_spec"
-            #   lookups, so the binary would fail on statsmodels
-            #   fallback code if scipy wasn't pre-stubbed. ===
             --hidden-import=scipy \
             --hidden-import=scipy.stats \
-            # === statsmodels (Holt-Winters) ===
             --hidden-import=statsmodels \
             --hidden-import=statsmodels.tsa.holtwinters \
-            # === pypff (Outlook PST/OST) ===
             --hidden-import=pypff \
-            # === Project-coded late imports ===
-            # Cross-module imports happen via find_spec() in
-            # ``edf_collector._SAFE_CLASSES`` for the picker, and
-            # the GUI's run_cli_*() entry points dispatch into
-            # edf_report / edf_report_docx branches that PyInstaller's
-            # static walk can't see because they're behind
-            # ``if sys.argv[1] in (...)``.
             --hidden-import=edf_report \
             --hidden-import=edf_report_docx \
             edf_collector.py
