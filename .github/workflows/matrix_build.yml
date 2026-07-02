@@ -59,7 +59,19 @@ jobs:
       - name: Build Executable
         shell: bash
         run: |
+          # Hidden imports — each line below is a module the source
+          # code loads dynamically (via ``find_spec`` / ``importlib``)
+          # that PyInstaller's static analysis can't follow.  Every
+          # entry here corresponds to a runtime dep declared in
+          # ``pyproject.toml[project].dependencies``; we add it here
+          # purely so PyInstaller bundles the binary into the exe.
+          #
+          # Crashes caused by a missing module show up at exe runtime
+          # as ``ImportError: No module named 'X'`` — pinning these
+          # with ``--hidden-import`` is the standard PyInstaller
+          # workaround (see scikit-build / pandas' own bundling docs).
           pyinstaller --onefile --windowed --name EDF_Evidence_Collector \
+            # === Direct deps: reportlab series (PDF report) ===
             --hidden-import=reportlab \
             --hidden-import=reportlab.platypus \
             --hidden-import=reportlab.lib \
@@ -71,11 +83,26 @@ jobs:
             --hidden-import=reportlab.pdfbase \
             --hidden-import=reportlab.pdfbase.pdfmetrics \
             --hidden-import=reportlab.pdfbase.ttfonts \
-            --hidden-import=PIL \
-            --hidden-import=PIL.Image \
+            # === Late-found importlib.find_spec("scipy") →
+            #   fallback stats. PyInstaller can't see "find_spec"
+            #   lookups, so the binary would fail on statsmodels
+            #   fallback code if scipy wasn't pre-stubbed. ===
+            --hidden-import=scipy \
+            --hidden-import=scipy.stats \
+            # === statsmodels (Holt-Winters) ===
             --hidden-import=statsmodels \
             --hidden-import=statsmodels.tsa.holtwinters \
+            # === pypff (Outlook PST/OST) ===
             --hidden-import=pypff \
+            # === Project-coded late imports ===
+            # Cross-module imports happen via find_spec() in
+            # ``edf_collector._SAFE_CLASSES`` for the picker, and
+            # the GUI's run_cli_*() entry points dispatch into
+            # edf_report / edf_report_docx branches that PyInstaller's
+            # static walk can't see because they're behind
+            # ``if sys.argv[1] in (...)``.
+            --hidden-import=edf_report \
+            --hidden-import=edf_report_docx \
             edf_collector.py
 
       - name: Verify executable exists
