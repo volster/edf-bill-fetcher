@@ -84,7 +84,7 @@ jobs:
           pytest --cov=. --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         with:
           files: ./coverage.xml
@@ -92,7 +92,7 @@ jobs:
 
       - name: Trigger build workflow on success
         if: success() && github.ref == 'refs/heads/dev' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({
