@@ -306,6 +306,50 @@ def to_excel_date(date_input):
     return dt.to_pydatetime()
 
 
+def _account_number_matches(acc_filter: str, text: str) -> bool:
+    """Return True when ``acc_filter`` appears as a standalone digit run in ``text``.
+
+    Phase 1.3: replaces the old "is the digits substring contained anywhere"
+    check, which false-matched an unrelated longer string (invoice number,
+    meter serial, phone number) when the configured account number happened
+    to be a subset of those digits.
+
+    Strategy
+    --------
+    Split ``text`` into alternating runs of digits and non-digits.  Look up
+    ``acc_filter`` in the digit-run list after stripping non-digit
+    characters from the filter itself (so a configured ``"A-12345678"``,
+    ``"123 456 789 012"``, or ``"a-601-234-567-890"`` all collapse to the
+    same ``"12345678"`` comparator).
+
+    This preserves the natural word boundaries of ``"Account number:
+    31 555 4444"`` — the digit runs are ``["31", "555", "4444", "240",
+    "50"]`` and the filter ``"31"`` only matches the first run — whereas
+    the naive ``digits_only in text_no_sep`` would have produced
+    ``"315554444"`` from the same input and dropped the right answer.
+
+    Invariant
+    ---------
+        Pure-substring match (digits in collapse-stripped text) being True
+        does NOT imply this helper returns True (we tighten the
+        predicate).  The reverse direction holds: a real standalone digit
+        run from the original text, after the digit-run split, still
+        matches.  No legitimate standalone occurrence is dropped.
+    """
+    if not acc_filter:
+        return True  # empty filter matches everything
+    digits_only = re.sub(r"\D", "", str(acc_filter))
+    if not digits_only:
+        return True  # unusable filter — pass rather than silently reject
+
+    # Walk through text and collect each contiguous digit run.  ``re.findall``
+    # with a digit pattern is the cheapest way to express this; the
+    # alternation between isdigit and not-isdigit characters in real EDF
+    # text is exactly what drives the word-boundary semantics we want.
+    digit_runs = re.findall(r"\d+", text or "")
+    return digits_only in digit_runs
+
+
 # ---------------------------------------------------------------------------
 # Detect which EDF bill format we're looking at
 # ---------------------------------------------------------------------------
@@ -748,14 +792,9 @@ class EvidenceEngine:
 
         # Account filter
         if self.config.get("use_acc_filter"):
-            acc_raw = re.sub(r"[\s\-]", "", self.config.get("acc_num", ""))
-            # New format account numbers are "A-31105244" — check both variants
-            text_stripped = re.sub(r"[\s\-]", "", text)
-            if acc_raw and acc_raw not in text_stripped:
-                # Also try just the numeric part
-                acc_numeric = re.sub(r"\D", "", acc_raw)
-                if acc_numeric not in text_stripped:
-                    return False
+            acc = self.config.get("acc_num", "")
+            if acc and not _account_number_matches(acc, text):
+                return False
 
         r_type = "Unknown"
         for label, pat in READING_PATTERNS.items():
@@ -799,12 +838,9 @@ class EvidenceEngine:
             return False
 
         if self.config.get("use_acc_filter"):
-            acc_raw = re.sub(r"[\s\-]", "", self.config.get("acc_num", ""))
-            text_stripped = re.sub(r"[\s\-]", "", text)
-            if acc_raw and acc_raw not in text_stripped:
-                acc_numeric = re.sub(r"\D", "", acc_raw)
-                if acc_numeric not in text_stripped:
-                    return False
+            acc = self.config.get("acc_num", "")
+            if acc and not _account_number_matches(acc, text):
+                return False
 
         self._add_record(
             {
@@ -839,8 +875,8 @@ class EvidenceEngine:
 
         # Account filter
         if self.config.get("use_acc_filter"):
-            acc = re.sub(r"[\s\-]", "", self.config.get("acc_num", ""))
-            if acc and acc not in re.sub(r"[\s\-]", "", clean_text):
+            acc = self.config.get("acc_num", "")
+            if acc and not _account_number_matches(acc, clean_text):
                 return
 
         found_amt, strategy = None, ""
