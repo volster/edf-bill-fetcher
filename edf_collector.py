@@ -5091,7 +5091,16 @@ def run_cli_pdf_report(args: list[str]) -> None:
 
     try:
         with open(parsed.records, encoding="utf-8") as f:
-            records = json.load(f)
+            loaded = json.load(f)
+
+        # Accept either a bare list of records (preferred) or the wrapper
+        # object emitted by ``--extract --records-json``.  The wrapper
+        # shape is ``{"records": [...], ...meta}`` — unwrap it so both
+        # CLI entry points behave identically.
+        if isinstance(loaded, dict) and "records" in loaded:
+            records = loaded["records"]
+        else:
+            records = loaded
 
         config = {}
         if parsed.config:
@@ -5154,7 +5163,15 @@ def run_cli_docx_report(args: list[str]) -> None:
 
     try:
         with open(parsed.records, encoding="utf-8") as f:
-            records = json.load(f)
+            loaded = json.load(f)
+
+        # Accept either a bare list of records (preferred) or the wrapper
+        # object emitted by ``--extract --records-json``.  Mirrors the
+        # PDF CLI loader so both formats round-trip without extra steps.
+        if isinstance(loaded, dict) and "records" in loaded:
+            records = loaded["records"]
+        else:
+            records = loaded
 
         config = {}
         if parsed.config:
