@@ -2889,40 +2889,66 @@ def _iqr_anomalies(series, multiplier=1.5):
     return (series < lower) | (series > upper)
 
 
-def _linear_forecast(series, steps=6):
-    """Simple linear regression forecast."""
+def _linear_forecast_pair(series, steps=6):
+    """Simple linear regression: returns (fitted, future) values.
+
+    The fitted series is the model's prediction at each historical
+    point — this lets the Forecast tab back-paint predictions onto
+    historical rows so the reader sees actual-vs-predicted for the
+    whole data range, not only at a 6-step future horizon.
+
+    Linear regression in this codebase uses ``np.polyfit``.  The
+    fitted value at index ``i`` is simply ``np.polyval(coeffs, i)``
+    computed against the same coefficients used for the future
+    forecast, so the in-sample and out-of-sample predictions share
+    a single model — meaning the historical vs forward columns
+    reflect exactly the same fit.
+
+    Returns ``(None, None)`` for insufficient data.
+    """
     if len(series) < 3:
-        return None
+        return None, None
     x = np.arange(len(series))
     y = series.values
     # Handle NaN values
     mask = ~np.isnan(y)
     if mask.sum() < 3:
-        return None
+        return None, None
     x_clean = x[mask]
     y_clean = y[mask]
     try:
         coeffs = np.polyfit(x_clean, y_clean, 1)
+        # Fitted values for every historical index — back-pained
+        # by the same straight line that drives the future window.
+        fitted = np.polyval(coeffs, x)
         future_x = np.arange(len(series), len(series) + steps)
         forecast = np.polyval(coeffs, future_x)
-        return forecast
+        return fitted, forecast
     except Exception:
-        return None
+        return None, None
 
 
-def _holt_winters_forecast(series, steps=6, seasonal_periods=None):
-    """Holt-Winters exponential smoothing forecast (if statsmodels available)."""
+def _holt_winters_forecast_pair(series, steps=6, seasonal_periods=None):
+    """Holt-Winters: returns (fitted, future) values (if statsmodels available).
+
+    Mirrors ``_linear_forecast_pair`` for the ExponentialSmoothing
+    path.  Statsmodels's ``fit()`` returns a fitted-ness model whose
+    ``.fittedvalues`` attribute carries the one-step-ahead in-sample
+    prediction at every historical index — exactly what we need to
+    back-paint the forecast tab so the reader sees actual vs
+    predicted divergence for the whole data range.
+
+    Returns ``(None, None)`` when statsmodels is unavailable, the
+    series is too short, or fitting fails.
+    """
     if not HAS_STATSMODELS or len(series) < 4:
-        return None
+        return None, None
     try:
-        # Clean series
         clean_series = series.dropna()
         if len(clean_series) < 4:
-            return None
+            return None, None
 
-        # Determine seasonal periods from data frequency if not provided
         if seasonal_periods is None:
-            # Guess from data length
             seasonal_periods = min(12, len(clean_series) // 2) if len(clean_series) >= 8 else None
 
         model = ExponentialSmoothing(
@@ -2932,11 +2958,36 @@ def _holt_winters_forecast(series, steps=6, seasonal_periods=None):
             seasonal_periods=seasonal_periods,
             initialization_method="estimated",
         )
-        fitted = model.fit(optimized=True)
-        forecast = fitted.forecast(steps)
-        return forecast.values
+        fitted_model = model.fit(optimized=True)
+        # In-sample fitted: statsmodels returns the one-step-ahead
+        # prediction for each historical point the model was fit
+        # against.  We reindex onto the original series (which may
+        # include NaN gaps) so row N in the call sites lines up
+        # with row N in the user's data.
+        fitted_vals = fitted_model.fittedvalues.reindex(series.index)
+        forecast = fitted_model.forecast(steps).values
+        return fitted_vals.values, forecast
     except Exception:
-        return None
+        return None, None
+
+
+def _linear_forecast(series, steps=6):
+    """Simple linear regression forecast (forward-only legacy entry point).
+
+    See ``_linear_forecast_pair`` for the (fitted, future) form that
+    the Forecast tab now uses.  This single-value shim is kept for
+    any callers that imported the previous-shape return value (we
+    don't have any in-tree callers anymore, but a paying client
+    may have downstream code that does).
+    """
+    _, forecast = _linear_forecast_pair(series, steps)
+    return forecast
+
+
+def _holt_winters_forecast(series, steps=6, seasonal_periods=None):
+    """Holt-Winters forward-only legacy entry point.  See ``_holt_winters_forecast_pair``."""
+    _, forecast = _holt_winters_forecast_pair(series, steps, seasonal_periods)
+    return forecast
 
 
 def _detect_payment_patterns(df):
@@ -3478,6 +3529,13 @@ def write_forecast_sheet(ws, dfc):
         ws.column_dimensions["A"].width = 60
         return
 
+    # ``Date`` + the canonical six forecast columns + ``Forecast Δ
+    # (Actual − Linear)``.  The Δ column is what makes the tab
+    # useful as evidence: a reviewer sees *by how much* each bill
+    # diverged from what the model would call average.  Historical
+    # rows carry a per-row back-painted prediction; future rows
+    # carry forward-looking projections; the divider between the
+    # two is a separator row.
     headers = [
         "Date",
         "Actual (£)",
@@ -3485,6 +3543,7 @@ def write_forecast_sheet(ws, dfc):
         "Holt-Winters (£)",
         "EMA Projection (£)",
         "Confidence (±£)",
+        "Forecast Δ (Actual − Linear)",
     ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 1, col, h, bg=NAVY)
@@ -3495,43 +3554,121 @@ def write_forecast_sheet(ws, dfc):
     tc.fill = PatternFill("solid", start_color=ORANGE)
     tc.border = CELL_BORDER
     tc.alignment = Alignment(horizontal="left", vertical="center")
-    for c in range(2, 7):
+    for c in range(2, 8):
         x = ws.cell(row=1, column=c)
         x.fill = PatternFill("solid", start_color=ORANGE)
         x.border = CELL_BORDER
 
-    # Generate forecasts (6 steps ahead)
+    # Generate forecasts (6 steps ahead).  We use the *_pair helper
+    # variants to also obtain the in-sample fitted-values array so
+    # every historical row carries a real prediction column rather
+    # than the previous "—" placeholders.  This is what makes the
+    # tab show model-vs-actual divergence across the full data range.
     forecast_steps = 6
     series = pd.Series(amounts, index=pd.to_datetime(dates, dayfirst=True, errors="coerce"))
 
-    linear_fc = _linear_forecast(series, forecast_steps)
-    hw_fc = _holt_winters_forecast(series, forecast_steps)
-    ema_fc = _compute_ema(series, span=6).iloc[-1] if n >= 2 else amounts[-1]
-    # Simple EMA projection (extend last EMA)
-    ema_vals = [ema_fc] * forecast_steps
+    # ``linear_fitted[i]`` is the straight-line prediction at row i
+    # (uses ALL n historical points); ``linear_fc[i]`` is the future
+    # value i steps past the last historical row.  Both come from
+    # the same fit, so the in-sample and out-of-sample columns
+    # share one model.
+    linear_fitted, linear_fc = _linear_forecast_pair(series, forecast_steps)
+    hw_fitted, hw_fc = _holt_winters_forecast_pair(series, forecast_steps)
+    # EMA trajectory: per-row exponentially-weighted moving average.
+    # We expand the existing ``_compute_ema`` helper into a length-n
+    # series so every historical row gets the right EMA *as of that
+    # row*, not the last-window mean.
+    ema_series = _compute_ema(series, span=6)
+    ema_last = ema_series.iloc[-1] if n >= 2 else amounts[-1]
+    # Forward EMA projection extends the last EMA flat-forecast for
+    # future rows; historical rows just carry the historical EMA.
+    ema_future = [ema_last] * forecast_steps
 
-    # Historical volatility for confidence intervals
+    # Historical volatility for confidence intervals.
+    # ``hist_vol`` is the std-dev of monthly *returns* (pct_change),
+    # which is what we multiply against the predicted value to
+    # produce a ±2σ confidence band.  With only one historical bill
+    # we fall back to a sensible default.
     returns = pd.Series(amounts).pct_change().dropna()
     hist_vol = returns.std() if len(returns) > 1 else 0.05
 
-    # Write historical data + forecasts
+    def _model_value(fitted_array, fc_array, i, n_total):
+        """Pick the in-sample fitted value at historical index i
+        or ``N/A`` if the model didn't fit (not enough data).
+        """
+        if fitted_array is None:
+            return None
+        # Defensive index guard — the fitted array has the same
+        # length as ``series`` per the *_pair helpers, but a
+        # statsmodels-index misalignment is always possible.
+        if i < len(fitted_array):
+            val = fitted_array[i]
+            return val if not pd.isna(val) else None
+        return None
+
+    # === Historical block: back-paint every forecast column ===
+    # The y-axis of the forecast table now spans the *entire* data
+    # range — each historical row carries the model's prediction at
+    # that point, and the Forecast Δ column quantifies how far the
+    # actual bill landed above (positive) or below (negative) the
+    # linear-trend baseline.  The future block (after the separator
+    # row) shows 6 forward projection rows.  Together they answer
+    # "given what you've paid historically, what should you have
+    # paid each month, and where did the bill diverge?".
     r = 2
-    # Historical
     for i in range(n):
         bg = LGREY if i % 2 == 0 else None
         _text(ws, r, 1, dates[i], fill_hex=bg)
         _money(ws, r, 2, float(amounts[i]), fill_hex=bg)
-        _text(ws, r, 3, "—", fill_hex=bg)
-        _text(ws, r, 4, "—", fill_hex=bg)
-        _text(ws, r, 5, "—", fill_hex=bg)
-        _text(ws, r, 6, "—", fill_hex=bg)
+        # Linear forecast — back-painted fitted value (not "—").
+        lin_val = _model_value(linear_fitted, linear_fc, i, n)
+        if lin_val is not None:
+            _money(ws, r, 3, float(lin_val), fill_hex=bg)
+        else:
+            _text(ws, r, 3, "N/A", fill_hex=bg)
+        # Holt-Winters — back-painted fitted value (still "N/A"
+        # when statsmodels is unavailable or the series is too
+        # short for the additive-trend fit).
+        hw_val = _model_value(hw_fitted, hw_fc, i, n)
+        if hw_val is not None:
+            _money(ws, r, 4, float(hw_val), fill_hex=bg)
+        else:
+            _text(ws, r, 4, "N/A", fill_hex=bg)
+        # EMA — per-row exponentially-weighted moving average
+        # (historical anchored to row i's position in the series).
+        ema_at_i = float(ema_series.iloc[i]) if not pd.isna(ema_series.iloc[i]) else None
+        if ema_at_i is not None:
+            _money(ws, r, 5, ema_at_i, fill_hex=bg)
+        else:
+            _text(ws, r, 5, "N/A", fill_hex=bg)
+        # Confidence band — ±2σ around the fitted value.  When the
+        # model didn't fit we fall back to the predicted value of
+        # the actual bill (i.e. confidence = 0) — visually faithful
+        # but not concealing data.
+        if lin_val is not None:
+            conf = abs(float(lin_val)) * hist_vol * 2
+            _money(ws, r, 6, conf, fill_hex=bg)
+        else:
+            _text(ws, r, 6, "N/A", fill_hex=bg)
+        # Forecast Δ = actual − fitted linear.  This is the
+        # ombudsman-facing signal: a row with ``£50`` actual and a
+        # fitted linear value of ``£200`` writes ``−£150`` here,
+        # i.e. the bill landed £150 below what the trend expected
+        # (favourable).  Conversely an actual bill above fitted
+        # writes a positive number the reviewer can see as the
+        # over-billing flag.
+        if lin_val is not None:
+            delta = float(amounts[i]) - float(lin_val)
+            _money(ws, r, 7, delta, fill_hex=bg)
+        else:
+            _text(ws, r, 7, "N/A", fill_hex=bg)
         r += 1
 
     # Separator
-    ws.cell(row=r, column=1, value="—" * 20).font = Font(bold=True, color=DGREY)
+    ws.cell(row=r, column=1, value="— " * 20).font = Font(bold=True, color=DGREY)
     r += 1
 
-    # Forecasts
+    # === Forward forecast block: 6 steps past the last historical ===
     forecast_dates = []
     last_date = parse_to_sort_date(dates[-1])
     from datetime import timedelta
@@ -3547,17 +3684,29 @@ def write_forecast_sheet(ws, dfc):
         bg = AMBER
         _text(ws, r, 1, forecast_dates[i], fill_hex=bg, bold=True)
         _text(ws, r, 2, "—", fill_hex=bg)  # No actual
-        lin_val = linear_fc[i] if linear_fc is not None else "N/A"
-        hw_val = hw_fc[i] if hw_fc is not None else "N/A"
-        _money(ws, r, 3, lin_val, fill_hex=bg)
-        _money(ws, r, 4, hw_val, fill_hex=bg)
-        _money(ws, r, 5, ema_vals[i], fill_hex=bg)
-        # Confidence interval ±2σ
-        if linear_fc is not None:
-            conf = linear_fc[i] * hist_vol * 2
+        lin_val = linear_fc[i] if linear_fc is not None else None
+        hw_val = hw_fc[i] if hw_fc is not None else None
+        if lin_val is not None:
+            _money(ws, r, 3, float(lin_val), fill_hex=bg)
+        else:
+            _text(ws, r, 3, "N/A", fill_hex=bg)
+        if hw_val is not None:
+            _money(ws, r, 4, float(hw_val), fill_hex=bg)
+        else:
+            _text(ws, r, 4, "N/A", fill_hex=bg)
+        _money(ws, r, 5, ema_future[i], fill_hex=bg)
+        # Confidence band on the future prediction is the *predicted
+        # value's* ±2σ — same shape as on the historical rows but
+        # at the forecasted level so the reviewer sees the
+        # widening band as the horizon extends.
+        if lin_val is not None:
+            conf = abs(float(lin_val)) * hist_vol * 2
             _money(ws, r, 6, conf, fill_hex=bg)
         else:
             _text(ws, r, 6, "N/A", fill_hex=bg)
+        # Forecast Δ is intentionally "—" for future rows: there
+        # is no actual bill yet to subtract from.
+        _text(ws, r, 7, "—", fill_hex=bg)
         r += 1
 
     # Model comparison
@@ -3602,7 +3751,7 @@ def write_forecast_sheet(ws, dfc):
             _num(ws, r, 2, mape, fmt="0.00%")
 
     for col_letter, width in zip(
-        ["A", "B", "C", "D", "E", "F"], [14, 16, 18, 18, 18, 16], strict=False
+        ["A", "B", "C", "D", "E", "F", "G"], [14, 16, 18, 18, 18, 16, 22], strict=False
     ):
         ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A2"
