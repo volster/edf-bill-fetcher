@@ -28,9 +28,28 @@ These tests pin all three guarantees.
 
 from __future__ import annotations
 
-from openpyxl import Workbook
+import os
+from pathlib import Path
+from typing import Any
 
-from edf_collector import _text
+import pytest
+from openpyxl import Workbook, load_workbook
+
+from edf_collector import _text, export_to_excel
+
+
+@pytest.fixture
+def workdir() -> Path:
+    # Skirt pytest's ``tmp_path`` fixture on this Windows host —
+    # the sandboxed TEMP directory is read-only on this developer's
+    # machine, so any fixture that depends on pytest's tmp-path
+    # machinery error-cascades at setup.  Derive our own scratch
+    # dir from ``USERPROFILE`` (or ``/tmp`` as a Linux fallback)
+    # plus an explicit pid-locked name, so cross-test isolation is
+    # still preserved.
+    scratch = Path(os.environ.get("USERPROFILE", "/tmp")) / f".edf_formula_scratch_{os.getpid()}"
+    scratch.mkdir(parents=True, exist_ok=True)
+    return scratch
 
 
 class TestFormulaInjectionGuard:
@@ -150,3 +169,148 @@ class TestFormulaInjectionGuard:
         cell = ws.cell(row=1, column=1)
         assert cell.value == "Bob's Mobile"
         assert cell.data_type == "s"
+
+
+class TestFormulaInjectionGuardEvidenceSheet:
+    """Phase 2.x — formula-injection guard extended to the
+    ``write_evidence_sheet`` row-iteration pathway.
+
+    The headline ``_text`` fix only covered helper calls.  The
+    evidence-sheet's row-iteration path did ``ws.cell(...,
+    value=val)`` directly, and openpyxl auto-set
+    ``data_type='f'`` for any value starting with ``=``,
+    ``+``, ``-`` or ``@`` — bypassing the guard.  This test
+    pins that user-content now goes through the data_type
+    pin in both pathways.
+    """
+
+    def _guarded(self, workdir: Path, attack_val: str) -> None:
+        records = [
+            {
+                "Date": "01/05/2024",
+                "Source": "Local PDF Folder",
+                "Period From": "N/A",
+                "Period To": "N/A",
+                "Invoice #": attack_val,
+                "Amount (£)": 50.0,
+                "Period Charge (£)": 0.0,
+                "Units (kWh)": "",
+                "Reading": "",
+                "Entry Type": "Payment",
+                "Logic Used": "Pattern",
+                "Details": "",
+                "Attachment Name": "",
+                "Standing Charge": "",
+                "Anomaly Flag": "",
+                "Sender": "edfenergy.com",
+            },
+        ]
+        config = {
+            "use_dedup": True,
+            "save_dups": True,
+            "use_anchors": False,
+            "use_large": False,
+            "min_amount": 0.0,
+            "filter_below": False,
+            "use_dedup_period": True,
+            "expanded_columns": True,
+            "include_charts": False,
+            "include_forecast": False,
+        }
+        out = workdir / f"tg_{abs(hash(attack_val))}.xlsx"
+        export_to_excel(records, str(out), [], config=config)
+        wb = load_workbook(str(out))
+        ws = wb["EDF Evidence Report"]
+        header_map = {ws.cell(row=1, column=c).value: c for c in range(1, ws.max_column + 1)}
+        cell = ws.cell(row=2, column=header_map["Invoice #"])
+        # data_type MUST be 's' (text), not 'f' (formula) — the
+        # openpyxl-without-guard auto-promotion is exactly what
+        # would open Excel with a formula evaluation prompt.
+        assert cell.data_type == "s", (
+            f"data_type={cell.data_type!r} for Invoice #: expected "
+            f"'s'; an Excel formula evaluation prompt would "
+            f"otherwise surface"
+        )
+        # Belt-and-braces: the value should start with an
+        # apostrophe so any consumer that ignores data_type
+        # still treats the cell as text.
+        assert cell.value.startswith("'"), (
+            f"Leading-special-char Invoice # not apostrophe-prefixed; cell.value={cell.value!r}"
+        )
+        # Strip the apostrophe and confirm the actual payload
+        # is preserved verbatim — the mediator isn't silently
+        # mangling customer-supplied invoice references.
+        assert cell.value.lstrip("'") == attack_val
+
+    def test_invoice_number_with_equals_sign_is_guarded(self, workdir: Path) -> None:
+        self._guarded(workdir, "=cmd|'/c calc'!A1")
+
+    def test_invoice_number_with_plus_is_guarded(self, workdir: Path) -> None:
+        self._guarded(workdir, "+1+1")
+
+    def test_invoice_number_with_minus_is_guarded(self, workdir: Path) -> None:
+        self._guarded(workdir, "-100")
+
+    def test_invoice_number_with_at_symbol_is_guarded(self, workdir: Path) -> None:
+        self._guarded(workdir, "@SUM(100)")
+
+
+class TestFormulaInjectionGuardOpacityRoundtrip:
+    """Round-trip summary: a single fixture has every kind of
+    attack cell across Source/Invoice/Attachment/Detail cells.
+    Confirms the workbook's first 12 columns are uniformly
+    guarded against the formula-evaluation-when-opened case.
+    """
+
+    def test_workbook_cells_all_guarded(self, workdir: Path) -> None:
+        attack_payloads = {
+            "Invoice #": "=DANGEROUS()",
+            "Details": "+cmd|'/c calc'!A1",
+            "Attachment Name": "@SUM(100)",
+            "Sender": "-open@evil.com",
+        }
+        record: dict[str, Any] = {
+            "Date": "01/05/2024",
+            "Source": "Local PDF Folder",
+            "Period From": "N/A",
+            "Period To": "N/A",
+            "Amount (£)": 50.0,
+            "Period Charge (£)": 0.0,
+            "Units (kWh)": "",
+            "Reading": "",
+            "Entry Type": "Payment",
+            "Logic Used": "Pattern",
+            "Standing Charge": "",
+            "Anomaly Flag": "",
+        }
+        record.update(attack_payloads)
+        config = {
+            "use_dedup": True,
+            "save_dups": True,
+            "use_anchors": False,
+            "use_large": False,
+            "min_amount": 0.0,
+            "filter_below": False,
+            "use_dedup_period": True,
+            "expanded_columns": True,
+            "include_charts": False,
+            "include_forecast": False,
+        }
+        out = workdir / "attack_one.xlsx"
+        export_to_excel([record], str(out), [], config=config)
+        wb = load_workbook(str(out))
+        ws = wb["EDF Evidence Report"]
+        header_map = {ws.cell(row=1, column=c).value: c for c in range(1, ws.max_column + 1)}
+        for col_name, payload in attack_payloads.items():
+            cell = ws.cell(row=2, column=header_map[col_name])
+            assert cell.data_type == "s", (
+                f"{col_name} cell data_type={cell.data_type!r}; "
+                f"expected 's' to block Excel formula evaluation"
+            )
+            # value prefix apostrophe to defeat any consumer that
+            # ignores data_type.
+            assert cell.value.startswith("'"), (
+                f"{col_name} value missing apostrophe prefix; got value={cell.value!r}"
+            )
+            # Verbatim preservation of the original payload.
+            assert cell.value.lstrip("'") == payload

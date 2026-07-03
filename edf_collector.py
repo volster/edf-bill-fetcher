@@ -1801,6 +1801,24 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                     if dt is not None:
                         excel_val = dt
                 c = ws.cell(row=r_idx, column=c_idx, value=excel_val)
+                # Phase 2.x — formula-injection guard on the
+                # generic evidence-sheet row path.  openpyxl
+                # auto-promotes any cell whose text value starts
+                # with ``=``/``+``/``-``/``@`` to ``data_type='f'``
+                # (formula).  Without this fix, a bill whose
+                # Invoice # or Details field begins with ``=cmd
+                # |'/c calc'!A1`` would render as a real formula
+                # when an ombudsman opens the workbook.  Same
+                # belt-and-braces policy as ``_text``: coerce
+                # textual leads to ``str`` first, then pin
+                # ``data_type='s'`` and prefix apostrophe on
+                # leading special chars.
+                if isinstance(excel_val, str) and excel_val:
+                    safe_val = excel_val
+                    if safe_val[0] in "+-=@":
+                        safe_val = "'" + safe_val
+                    c.value = safe_val
+                    c.data_type = "s"
                 if c_idx == COL_AMOUNT and isinstance(val, (int, float)):
                     c.number_format = "£#,##0.00"
                 if c_idx == COL_PERIOD_CHG and isinstance(val, (int, float)):
