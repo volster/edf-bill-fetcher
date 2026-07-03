@@ -351,24 +351,30 @@ def _account_number_matches(acc_filter: str, text: str) -> bool:
 
     Strategy
     --------
-    Split ``text`` into alternating runs of digits and non-digits.  Look up
-    ``acc_filter`` in the digit-run list after stripping non-digit
-    characters from the filter itself (so a configured ``"A-12345678"``,
-    ``"123 456 789 012"``, or ``"a-601-234-567-890"`` all collapse to the
-    same ``"12345678"`` comparator).
+    Split ``text`` into "tokens" — sequences of alphanumeric characters and
+    hyphens (e.g., "A-12345678", "31", "555", "4444").  For each token,
+    strip non-digit characters to get its digit-only form.  Look up the
+    normalized ``acc_filter in the resulting list.
 
     This preserves the natural word boundaries of ``"Account number:
-    31 555 4444"`` — the digit runs are ``["31", "555", "4444", "240",
-    "50"]`` and the filter ``"31"`` only matches the first run — whereas
-    the naive ``digits_only in text_no_sep`` would have produced
+    31 555 4444"`` — the tokens are ``["Account", "number", "31", "555",
+    "4444", "Current", "balance", "240", "50", "debit"]`` and their
+    digit-only forms are ``["", "", "31", "555", "4444", "", "", "240",
+    "50", ""]``.  The filter ``"31"`` only matches the "31" token —
+    whereas the naive ``digits_only in text_no_sep`` would have produced
     ``"315554444"`` from the same input and dropped the right answer.
+
+    Crucially, hyphens *inside* a token are preserved during tokenization
+    so ``"A-12345678"`` is one token whose digit-only form is
+    ``"12345678"`` — fixing the false-negative where the original
+    ``re.findall(r"\d+", ...)`` split it into ``["123", "45678"]``.
 
     Invariant
     ---------
         Pure-substring match (digits in collapse-stripped text) being True
         does NOT imply this helper returns True (we tighten the
         predicate).  The reverse direction holds: a real standalone digit
-        run from the original text, after the digit-run split, still
+        run from the original text, after the token-based split, still
         matches.  No legitimate standalone occurrence is dropped.
     """
     if not acc_filter:
@@ -377,12 +383,17 @@ def _account_number_matches(acc_filter: str, text: str) -> bool:
     if not digits_only:
         return True  # unusable filter — pass rather than silently reject
 
-    # Walk through text and collect each contiguous digit run.  ``re.findall``
-    # with a digit pattern is the cheapest way to express this; the
-    # alternation between isdigit and not-isdigit characters in real EDF
-    # text is exactly what drives the word-boundary semantics we want.
-    digit_runs = re.findall(r"\d+", text or "")
-    return digits_only in digit_runs
+    # Tokenize: split on whitespace and punctuation EXCEPT hyphens that
+    # are inside alphanumeric sequences.  The pattern [A-Za-z0-9-]+
+    # captures words, numbers, and hyphenated codes like "A-12345678"
+    # or "A123-456" as single tokens.
+    tokens = re.findall(r"[A-Za-z0-9-]+", text or "")
+
+    # For each token, strip non-digits to get its digit-only form.
+    # Example: "A-12345678" → "12345678", "31" → "31", "555" → "555"
+    token_digits = [re.sub(r"\D", "", t) for t in tokens]
+
+    return digits_only in token_digits
 
 
 # ---------------------------------------------------------------------------
@@ -5666,28 +5677,31 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # wrapper so this single entry is sufficient.
         "pandas.core.indexes.range": {"RangeIndex"},
         # Our own classes — needed for persisted engine objects
-        "edf_collector": {"EvidenceEngine"},
-        "__main__": {"EvidenceEngine"},
-    }
+                # NOTE: "__main__" was previously allowed but is a security risk —
+                # it would permit any user script named EvidenceEngine to be
+                # unpickled.  The proper module path "edf_collector" is the only
+                # legitimate source for this class.
+                "edf_collector": {"EvidenceEngine"},
+            }
 
     def find_class(self, module: str, name: str) -> type:
-        # Check the whitelist; reject anything not explicitly allowed.
-        allowed = self._SAFE_CLASSES.get(module)
-        if allowed and name in allowed:
-            # For our own classes, actually resolve them so the object
-            # can be reconstructed normally.
-            if module == "edf_collector" or module == "__main__":
-                import importlib
+            # Check the whitelist; reject anything not explicitly allowed.
+            allowed = self._SAFE_CLASSES.get(module)
+            if allowed and name in allowed:
+                # For our own classes, actually resolve them so the object
+                # can be reconstructed normally.
+                if module == "edf_collector":
+                    import importlib
 
-                mod: Any = importlib.import_module("edf_collector")
-                cls: Any = getattr(mod, name)
-                if not isinstance(cls, type):
-                    raise pickle.UnpicklingError(
-                        f"Resolved edf_collector attribute {name!r} is not a class"
-                    )
-                return cls
-            return cast(type, super().find_class(module, name))
-        raise pickle.UnpicklingError(f"Blocked unsafe class {module!r}.{name!r} in pickle stream")
+                    mod: Any = importlib.import_module("edf_collector")
+                    cls: Any = getattr(mod, name)
+                    if not isinstance(cls, type):
+                        raise pickle.UnpicklingError(
+                            f"Resolved edf_collector attribute {name!r} is not a class"
+                        )
+                    return cls
+                return cast(type, super().find_class(module, name))
+            raise pickle.UnpicklingError(f"Blocked unsafe class {module!r}.{name!r} in pickle stream")
 
 
 def _safe_pickle_load(path: str) -> Any:

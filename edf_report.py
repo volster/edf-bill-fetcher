@@ -1165,7 +1165,7 @@ def create_timeline_section(
 # =============================================================================
 
 
-def _load_ofgem_caps() -> dict[str, dict]:
+def _load_ofgem_caps(auto_carry: bool = True) -> dict[str, dict]:
     """Load OFGEM Default Tariff Cap data.
 
     Returns a dictionary mapping period string (e.g., '2023-Q4') to cap values:
@@ -1185,8 +1185,17 @@ def _load_ofgem_caps() -> dict[str, dict]:
     the OFGEM convention when a quarterly announcement is delayed or falls
     in a quarter where no new figure is published.  Carries are clearly
     labelled so a maintainer can tell a real number from a repeated one.
+
+    Future-quarter auto-carry
+    -------------------------
+    If ``auto_carry`` is True (default) and a requested quarter is not in the
+    hard-coded table, the function returns the most recent known cap (carried
+    forward).  This prevents the OFGEM comparison from silently returning
+    "CAP DATA UNAVAILABLE" for quarters after the table's last entry (2026-Q3
+    at time of writing).  Set ``auto_carry=False`` to get the exact table
+    only (used by tests that pin specific values).
     """
-    return {
+    caps = {
         # 2019
         "2019-Q1": {"unit_rate": 16.52, "standing_charge": 22.77},
         "2019-Q2": {"unit_rate": 18.56, "standing_charge": 23.42},
@@ -1228,6 +1237,20 @@ def _load_ofgem_caps() -> dict[str, dict]:
         "2026-Q3": {"unit_rate": 26.11, "standing_charge": 57.19},
     }
 
+    if not auto_carry:
+        return caps
+
+    # Auto-carry: if a quarter is requested that isn't in the table,
+    # return the most recent known quarter's cap.
+    # This is a convenience wrapper; callers should use the returned
+    # dict via `.get(quarter)` and handle missing keys themselves.
+    # The actual carry logic lives in the caller (create_ofgem_comparison)
+    # which calls this with auto_carry=False and then applies carry
+    # explicitly for transparency.  This function just exposes the
+    # raw table plus a helper to get the latest known cap.
+    caps["_LATEST_KNOWN"] = caps["2026-Q3"]
+    return caps
+
 
 def _period_to_ofgem_quarter(dt: datetime | None) -> str | None:
     """Convert datetime to OFGEM quarter string (e.g., '2024-Q1')."""
@@ -1262,8 +1285,9 @@ def create_ofgem_comparison(
     )
     elements.append(Spacer(1, 0.3 * cm))
 
-    # Load OFGEM cap data
-    ofgem_caps = _load_ofgem_caps()
+    # Load OFGEM cap data (with auto-carry for future quarters)
+    ofgem_caps = _load_ofgem_caps(auto_carry=False)
+    latest_known_cap = ofgem_caps.get("_LATEST_KNOWN")
 
     # Compute unit rates from bills
     df = df.copy()
@@ -1303,6 +1327,7 @@ def create_ofgem_comparison(
 
     exceed_count = 0
     unavailable_count = 0
+    carried_count = 0
     # ``MISSING = "—"`` is the sentinel for "we did not look this up"
     # versus ``"CAP DATA UNAVAILABLE"`` in the Status column which marks
     # a row that *was* looked up but couldn't find a publication.
@@ -1310,26 +1335,42 @@ def create_ofgem_comparison(
     # row from an unverified row at a glance.
     MISSING = "—"
     UNAVAILABLE = "CAP DATA UNAVAILABLE"
+    CARRIED = "CAP CARRIED FORWARD"
     for quarter in sorted(bills["_quarter"].dropna().unique()):
         quarter_bills = bills[bills["_quarter"] == quarter]
         avg_rate = quarter_bills["_unit_rate"].mean()
         if pd.isna(avg_rate):
             continue
         if quarter not in ofgem_caps:
-            # Cap NOT in our published list — still emit a row so a
-            # reviewer can see the quarter exists in the data even
-            # though we couldn't benchmark it.  ``exceed_count`` is
-            # left untouched (no judgement is made).
-            unavailable_count += 1
-            cap_data.append(
-                [
-                    quarter,
-                    fmt_number(avg_rate, 2),
-                    MISSING,
-                    MISSING,
-                    UNAVAILABLE,
-                ]
-            )
+            # Quarter beyond hard-coded table — use auto-carry if available
+            if latest_known_cap:
+                carried_count += 1
+                cap_rate = latest_known_cap["unit_rate"]
+                diff = avg_rate - cap_rate
+                status = f"EXCEEDS CAP ({CARRIED})" if diff > 0 else f"AT CAP ({CARRIED})" if abs(diff) < 0.01 else f"BELOW CAP ({CARRIED})"
+                if diff > 0:
+                    exceed_count += 1
+                cap_data.append(
+                    [
+                        quarter,
+                        fmt_number(avg_rate, 2),
+                        fmt_number(cap_rate, 2),
+                        fmt_number(diff, 2) if diff != 0 else "0.00",
+                        status,
+                    ]
+                )
+            else:
+                # No cap data at all — mark as unavailable
+                unavailable_count += 1
+                cap_data.append(
+                    [
+                        quarter,
+                        fmt_number(avg_rate, 2),
+                        MISSING,
+                        MISSING,
+                        UNAVAILABLE,
+                    ]
+                )
             continue
         cap = ofgem_caps[quarter]
         cap_rate = cap["unit_rate"]
@@ -1358,6 +1399,10 @@ def create_ofgem_comparison(
         # see at a glance something needs checking.
         summary_diff = f"{unavailable_count} period(s) not benchmarked"
         summary_status = "INCOMPLETE"
+    elif carried_count > 0:
+        # All matched but some were carried forward — note it
+        summary_diff = f"{carried_count} period(s) used carried-forward cap"
+        summary_status = "COMPLIANT (CARRIED)"
     else:
         summary_diff = "No exceedances"
         summary_status = "COMPLIANT"

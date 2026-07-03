@@ -507,7 +507,7 @@ class TestOFGEMComparison:
             # 2024-Q3 intentionally omitted to force the gap-row path.
         }
 
-        monkeypatch.setattr(sys.modules["edf_report"], "_load_ofgem_caps", lambda: minimal_caps)
+        monkeypatch.setattr(sys.modules["edf_report"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps)
 
         # One bill per quarter in our minimal cap set, plus a bill
         # landing in 2024-Q3 which has no cap entry.
@@ -560,9 +560,6 @@ class TestOFGEMComparison:
         # "—" missing-sentinel so the table never pretends to know.
         assert q3_row[2] == "—"
         assert q3_row[3] == "—"
-
-
-class TestStatisticalAnalysis:
     """Tests for statistical analysis section."""
 
     def test_create_statistical_analysis(self, sample_df):
