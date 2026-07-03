@@ -1414,14 +1414,33 @@ class EvidenceEngine:
     def crawl_local_pdfs(self, path):
         if not path or not os.path.exists(path):
             return
-        pdf_files = [f for f in os.listdir(path) if f.lower().endswith(".pdf")]
+        # Recursive walk: PDF bills are commonly organised into
+        # sub-folders by year or account reference (e.g.
+        # ``pdfs/2023/2023-01.pdf``).  The legacy implementation
+        # only scanned the top-level directory and silently
+        # dropped any bills in nested folders — a real EDF
+        # dispute case with year-organised PDFs would have
+        # silently undercounted, so this matters for ombudsman
+        # submissions where a missing bill undoes the entire
+        # argument.
+        pdf_files: list[tuple[str, str]] = []
+        for root, _dirs, files in os.walk(path):
+            for f in files:
+                if f.lower().endswith(".pdf"):
+                    pdf_files.append((root, f))
+        # Sort by relative path so the progress narrative is
+        # deterministic across runs (otherwise os.walk's
+        # filesystem-order output varies by platform).
+        pdf_files.sort(
+            key=lambda pair: os.path.relpath(os.path.join(pair[0], pair[1]), path).lower()
+        )
         total = len(pdf_files)
 
         def _process_one(i_file):
-            idx, fname = i_file
+            idx, (root, fname) = i_file
             if self.is_cancelled():
                 return
-            file_path = os.path.join(path, fname)
+            file_path = os.path.join(root, fname)
             fallback_date = parse_to_display_date(
                 datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d")
             )
@@ -1431,8 +1450,16 @@ class EvidenceEngine:
                 file_path, "Local PDF Folder", fname, fallback_date, attachment_name=fname
             )
             if self.update_progress:
-                self.update_progress(idx, total, f"Scanning local PDFs: {idx}/{total}")
+                relative = os.path.relpath(file_path, path)
+                self.update_progress(idx, total, f"Scanning local PDFs: {idx}/{total} ({relative})")
 
+        # Sequential pass.  The ``_process_one`` closure comment
+        # above used to imply a thread-pool dispatch that's no
+        # longer present (see also ``EvidenceEngine.lock`` which
+        # is in fact exercised by ``process_pdf_file``'s own
+        # write paths).  Keeping the indirection for now so
+        # transition to ``ThreadPoolExecutor`` later stays a
+        # one-line change.
         for item in enumerate(pdf_files, start=1):
             _process_one(item)
 
@@ -1468,7 +1495,28 @@ def _money(ws, r, c, val, bold=False, fill_hex=None):
 
 
 def _text(ws, r, c, val, bold=False, fill_hex=None, wrap=False, align="left", color="000000"):
-    cell = ws.cell(row=r, column=c, value=val)
+    # Phase 2.x — formula-injection guard.  External text
+    # (PDF/PST/email) can start with ``=``, ``+``, ``-`` or
+    # ``@`` and Excel will silently evaluate the cell as a
+    # formula when the workbook is opened.  The classic
+    # mitigation is to coerce the cell's ``data_type`` to
+    # ``'s'`` (text).  We coerce non-strings via ``str()`` first
+    # so the cell value is always a Python string before the
+    # data_type pin; otherwise cell types follow Python type
+    # inference.
+    safe_val: str
+    if val is None:
+        safe_val = ""
+    else:
+        safe_val = str(val)
+        # Belt-and-braces: prefix a leading ``=``, ``+``, ``-``
+        # or ``@`` with an apostrophe.  This nails the contract
+        # even on Excel versions that still try to evaluate
+        # auto-formats despite the ``data_type = 's'`` flag.
+        if safe_val and safe_val[0] in "+-=@":
+            safe_val = "'" + safe_val
+    cell = ws.cell(row=r, column=c, value=safe_val)
+    cell.data_type = "s"
     cell.font = Font(name="Calibri", size=10, bold=bold, color=color)
     cell.border = CELL_BORDER
     cell.alignment = Alignment(horizontal=align, vertical="center", wrap_text=wrap)
@@ -1990,7 +2038,14 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         # explicit ordering without booting the entire Excel
         # export pipeline.  Lower number = higher precedence.
         df["_src_pri"] = df["Source"].map(_SOURCE_PRECEDENCE).fillna(9).astype(int)
-        df = df.sort_values(["_sort", "_src_pri"]).reset_index(drop=True)
+        # Sort by source precedence first so the dedup pass's
+        # ``keep="first"`` keeps the higher-precedence row when
+        # two records collide on (_dedup_date, Amount).  With
+        # ``ascending=[True, True]``, lower _src_pri (HTM) sorts
+        # *before* higher _src_pri (PST/Email/etc.) so HTM wins
+        # the dedup tie.  Date is the secondary key — only used
+        # to break ties across same-precedence sources.
+        df = df.sort_values(["_src_pri", "_sort"]).reset_index(drop=True)
 
         # Dedup key: prefer Period To (consistent across sources for same bill),
         # fall back to Date for records without period info.  Pass 1's
@@ -2000,9 +2055,18 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         # the matched-against row's *original* df index — that index is
         # what ``dup_df.index`` carries through to the writer, since
         # ``dup_df = df[is_dup]`` runs before the ``reset_index`` line below.
-        df["_dedup_date"] = df["_sort"].where(
-            (df["Period To"] != "N/A") & df["Period To"].notna(), df["_sort"]
-        )
+        # Period To is the source-of-truth end-of-billing-period
+        # date when present; fall back to ``_sort`` (the parsed
+        # source-specific ``Date``) when the row is no-period
+        # (e.g. Local PDF).  ``df["_sort"].where(cond, df["_sort"])``
+        # is a tautology — Period To was being ignored and Pass 1
+        # only ever saw Date+Amount, missing cross-source HTM↔PST
+        # duplicates that share a billing period when the
+        # receipt dates differ.  This is critical for ombudsman
+        # submissions: under-dedup = same bill rendered twice
+        # as if they were two separate charges.
+        period_to_dt = pd.to_datetime(df["Period To"], dayfirst=True, errors="coerce")
+        df["_dedup_date"] = period_to_dt.where(period_to_dt.notna(), df["_sort"])
         is_dup = df.duplicated(subset=["_dedup_date", "Amount (£)"], keep="first")
         # Pass 1 (period+amount): build ``kept_pass1_index`` keyed on
         # ``(_dedup_date, Amount)`` so we can look up "which kept row

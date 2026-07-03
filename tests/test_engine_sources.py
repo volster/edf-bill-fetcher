@@ -219,9 +219,17 @@ class TestEvidenceEngineLocalPDFs:
         mock_pdf.__exit__.return_value = None
         mock_pdf_open.return_value = mock_pdf
 
+        # Phase 2.2 — crawl_local_pdfs now uses os.walk (recursive
+        # walk) instead of os.listdir.  The legacy test stubbed
+        # listdir; we now stub walk to return the same two bills.
         with (
             patch("os.path.exists", return_value=True),
-            patch("os.listdir", return_value=["bill1.pdf", "bill2.pdf"]),
+            patch(
+                "os.walk",
+                return_value=[
+                    ("/fake/path", [], ["bill1.pdf", "bill2.pdf"]),
+                ],
+            ),
             patch("os.path.getmtime", return_value=1704067200),
             patch("builtins.open", mock_open(read_data=b"fake pdf content")),
         ):
@@ -229,6 +237,51 @@ class TestEvidenceEngineLocalPDFs:
             engine.crawl_local_pdfs("/fake/path")
 
         assert engine.pdf_count == 2
+
+    @patch("edf_collector.pdfplumber.open")
+    def test_crawl_local_pdfs_recurses_into_subfolders(self, mock_pdf_open: MagicMock) -> None:
+        """Phase 2.2 — recursive walk yields bills in nested
+        folders.  Real EDF customers commonly organise their
+        local PDF tree by year (``pdfs/2023/2023-01.pdf``) and
+        the legacy top-level-only scan silently dropped every
+        bill below the surface; this pin asserts the recursive
+        walk.  We stub ``os.walk`` to return a synthetic tree
+        with a top-level bill and a bill two folders deep.
+        """
+        mock_pdf = MagicMock()
+        mock_page = MagicMock()
+        mock_page.extract_text.return_value = "Current balance £500.00 debit"
+        mock_pdf.pages = [mock_page]
+        mock_pdf.__enter__.return_value = mock_pdf
+        mock_pdf.__exit__.return_value = None
+        mock_pdf_open.return_value = mock_pdf
+
+        # Synthesised directory tree:
+        #   /fake/path/
+        #     ├── top.pdf
+        #     └── 2023/
+        #         └── bills/
+        #             └── nested.pdf
+        with (
+            patch("os.path.exists", return_value=True),
+            patch(
+                "os.walk",
+                return_value=[
+                    ("/fake/path", ["2023"], ["top.pdf"]),
+                    ("/fake/path/2023", ["bills"], []),
+                    ("/fake/path/2023/bills", [], ["nested.pdf"]),
+                ],
+            ),
+            patch("os.path.getmtime", return_value=1704067200),
+            patch("builtins.open", mock_open(read_data=b"fake pdf content")),
+        ):
+            engine = self._make_engine()
+            engine.crawl_local_pdfs("/fake/path")
+
+        # Both surfaces of the directory tree must be reached.
+        assert engine.pdf_count == 2, (
+            f"recursive walk discovered only {engine.pdf_count} of 2 expected PDFs"
+        )
 
 
 if __name__ == "__main__":
