@@ -1106,8 +1106,25 @@ def create_appendix_full_evidence(
     df: pd.DataFrame,
     filtered: Any = None,
     ctx: RenderContext | None = None,
-) -> None:
-    """Create Full Evidence Table appendix, plus an optional Filtered Records sub-table."""
+    table_row_cap: int = 150,
+) -> dict[str, int]:
+    """Create Full Evidence Table appendix, plus an optional Filtered Records sub-table.
+
+    Phase 2.3 — DOCX full-evidence appendix cap: ``table_row_cap`` controls
+    how many rows render to the DOCX table.  When the dataset has more
+    rows, the table only renders the *first* ``table_row_cap`` records
+    (sorted chronologically by date) and emits a "see Excel workbook"
+    note above the table.  The Excel workbook (which this DOCX is an
+    accompaniment to) is the canonical source of truth and so is not
+    affected by this cap.
+
+    Returns a small dict that callers can use in tests::
+
+        {"rendered_rows": N, "total_rows": M, "truncated": bool}
+
+    See ``tests/test_appendix_full_evidence_docx.py`` for how this is
+    exercised against the cap path.
+    """
     if ctx is None:
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("appendix_full_evidence"), style=styles["SectionHeader"])
@@ -1121,12 +1138,32 @@ def create_appendix_full_evidence(
     if df.empty:
         doc.add_paragraph("No records available.", style=styles["BodyText"])
         doc.add_page_break()
-        return
+        return {"rendered_rows": 0, "total_rows": 0, "truncated": False}
 
     # Ensure _dt column for sorting
     if "_dt" not in df.columns:
         df["_dt"] = df["Date"].apply(parse_to_sort_date)
     df_sorted = df.sort_values("_dt").reset_index(drop=True)
+
+    total_rows = int(len(df_sorted))
+    truncated = bool(total_rows > table_row_cap)
+    if truncated:
+        # Phase 2.3 — DOCX row cap.  Render only the first N rows
+        # chronologically, and add a note above the table directing
+        # the ombudsman to the Excel workbook for the complete
+        # dataset.  The note is plain prose so it's tool-agnostic
+        # and prints the same on every Word version.
+        truncated_note = (
+            f"The full evidence table exceeds the document render cap "
+            f"({total_rows} rows > {table_row_cap} row limit), so only "
+            f"the first {table_row_cap} records are shown below in "
+            f"chronological order.  Please refer to the accompanying "
+            f"Excel workbook for the complete dataset."
+        )
+        doc.add_paragraph(truncated_note, style=styles["BodyText"])
+        rows_to_render = df_sorted.head(table_row_cap)
+    else:
+        rows_to_render = df_sorted
 
     # Table header
     evidence_header = [
@@ -1147,7 +1184,8 @@ def create_appendix_full_evidence(
 
     evidence_data = [evidence_header]
 
-    for _, row in df_sorted.iterrows():
+    # Phase 2.3 — render sliced rows, not the full sorted frame.
+    for _, row in rows_to_render.iterrows():
         evidence_data.append(
             [
                 fmt_date(row.get("Date", "")),
@@ -1282,6 +1320,16 @@ def create_appendix_full_evidence(
                         )
 
         doc.add_page_break()
+
+    # Phase 2.3 — caller-facing render metadata.  Tests pin this
+    # dict to confirm the cap path fires on large fixtures and
+    # stays silent on smaller ones.
+    rendered_rows = int(len(rows_to_render))
+    return {
+        "rendered_rows": rendered_rows,
+        "total_rows": total_rows,
+        "truncated": truncated,
+    }
 
 
 # =============================================================================
