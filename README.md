@@ -26,7 +26,7 @@ pip install -e .
 
 # Optional toolchains (only needed if you are contributing or
 # packaging binaries — the default extras-as-runtime policy above
-# keeps paying-client installs at one command):
+# typical installs at one command):
 #
 #   [dev]    test + lint + typecheck toolchain (pytest, ruff, mypy)
 #   [build]  PyInstaller for one-file Windows / macOS / Linux executables
@@ -96,7 +96,7 @@ Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records s
 
 > Per-source API is symmetric — all three source types expose
 > `process_<source>_file(path, source_label, detail_label, fallback_date)`
-> so a paying client can plug in any combination via the same
+> so you can plug in any combination via the same
 > call signature. PST requires `libpff-python` (a runtime dep
 > since `0.1.0+`); if it's missing in some hand-built
 > environment, the wrapper logs the error and the rest of the
@@ -175,7 +175,7 @@ The PDF and DOCX reports are both built from a single section-registry so the ti
 
 Main sections are numbered **1, 2, 3, …** and appendices are lettered **A, B, C, …**, computed at render time based on the user's `report_sections` selection.
 
-A `tests/test_dispatch_parity.py` structural test pins the invariant that the PDF dispatcher's `section_builders`, the DOCX dispatcher's `section_builders`, and `REPORT_SECTIONS` all expose exactly the same set of keys — so a future contributor who adds a section to the registry without wiring both dispatchers breaks CI, not a paying client's report.
+A `tests/test_dispatch_parity.py` structural test pins the invariant that the PDF dispatcher's `section_builders`, the DOCX dispatcher's `section_builders`, and `REPORT_SECTIONS` all expose exactly the same set of keys — so a future contributor who adds a section to the registry without wiring both dispatchers breaks CI, not the rendered report.
 
 ### Adding a new section
 
@@ -255,7 +255,7 @@ Tests are organised into three lake levels:
   registry/dispatcher.
 - **Audit regression tests** (`tests/test_audit_pass_1.py`,
   `tests/test_report_version.py`, `tests/test_dispatch_parity.py`)
-  pin the contracts a paying client depends on. These exist
+  pin the contracts the report depends on. These exist
   *because* real-data review exposed one or more real defects — see
   `CHANGELOG.md` for the audit trail. Do not edit these without
   re-running audit-pass analysis:
@@ -287,7 +287,7 @@ mypy .
 
 All three are enforced in CI on Python 3.10 / 3.11 / 3.12 ×
 ubuntu / windows / macos — see `.github/workflows/ci.yml`. A
-paying-client build is one CI green away from shippable.
+release is one CI green away from shippable.
 
 ## Configuration
 
@@ -315,8 +315,9 @@ This tool was created for personal use in an EDF billing dispute. It is provided
 
 ## Release & Test Status
 
-Last CI run: 9/9 matrix legs green (Python 3.10 / 3.11 / 3.12 ×
-ubuntu / windows / macos). Last test count: 224 passed, 2 skipped
-(the 2 skipped PST tests skip when `libpff-python` is installed,
-which is the case on the developer's host and in CI). See
+Goes green on the full CI matrix (Python 3.10 / 3.11 / 3.12 ×
+ubuntu / windows / macos) — see `.github/workflows/ci.yml`.  The
+local test baseline runs `pytest -v`, `ruff check .`, `ruff format
+--check .`, and `mypy .` end-to-end; the "Test Status" code path is
+documented in *Development* above.  See
 [CHANGELOG.md](CHANGELOG.md) for the per-pass audit trail.
