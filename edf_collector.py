@@ -367,12 +367,12 @@ def _account_number_matches(acc_filter: str, text: str) -> bool:
     Crucially, hyphens *inside* a token are preserved during tokenization
     so ``"A-12345678"`` is one token whose digit-only form is
     ``"12345678"`` — fixing the false-negative where the original
-    ``re.findall(r"\d+", ...)`` split it into ``["123", "45678"]``.
+    ``re.findall(r"\\d+", ...)`` split it into ``["123", "45678"]``.
 
     Invariant
     ---------
-        Pure-substring match (digits in collapse-stripped text) being True
-        does NOT imply this helper returns True (we tighten the
+    Pure-substring match (digits in collapse-stripped text) being True
+    does NOT imply this helper returns True (we tighten the
         predicate).  The reverse direction holds: a real standalone digit
         run from the original text, after the token-based split, still
         matches.  No legitimate standalone occurrence is dropped.
@@ -599,6 +599,11 @@ def parse_htm_account_history(text):
                 "Reading": "N/A",
                 "Units (kWh)": units,
                 "Standing Chg (p/day)": "N/A",
+                # HTM exports don't carry a tariff name in the
+                # account-history view; "N/A" is the schema sentinel
+                # matching the rest of the record-building paths
+                # that include the Tariff column.
+                "Tariff": "N/A",
                 "Attachment Name": "N/A",
                 "Details": "HTM: charged account",
                 "Logic Used": "HTM Charge",
@@ -629,6 +634,7 @@ def parse_htm_account_history(text):
                 "Reading": "N/A",
                 "Units (kWh)": "N/A",
                 "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
                 "Attachment Name": "N/A",
                 "Details": "HTM: payment received",
                 "Logic Used": "HTM Payment",
@@ -659,6 +665,7 @@ def parse_htm_account_history(text):
                 "Reading": "N/A",
                 "Units (kWh)": "N/A",
                 "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
                 "Attachment Name": "N/A",
                 "Details": "HTM: reversed account charge",
                 "Logic Used": "HTM Reversal",
@@ -710,6 +717,7 @@ def parse_htm_account_history(text):
                 "Reading": "N/A",
                 "Units (kWh)": "N/A",
                 "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
                 "Attachment Name": "N/A",
                 "Details": "HTM: standalone credit balance",
                 "Logic Used": "HTM StandaloneBalance",
@@ -929,6 +937,17 @@ class EvidenceEngine:
                 "Reading": r_type,
                 "Units (kWh)": fields.get("units_used", "N/A"),
                 "Standing Chg (p/day)": fields.get("standing_charge", "N/A"),
+                # Tariff name is extracted by ``extract_new_invoice_fields``
+                # into ``fields["tariff"]`` (regex _TARIFF_NAME_RE on
+                # the invoice body). Copy it into the record so the
+                # downstream Tariff Analysis feature sees it; it was
+                # previously silently discarded here, which left the
+                # "Tariff Analysis" Excel/PDF/DOCX tabs permanently
+                # empty.  This is one of four record-building paths
+                # (the other three — HTM charged/paid/reversed and
+                # process_text — append "Tariff": "N/A" so the column
+                # has a consistent shape across all sources).
+                "Tariff": fields.get("tariff", "N/A"),
                 "Attachment Name": attachment_name or "N/A",
                 "Details": (detail_label or "New invoice")[:60],
                 "Logic Used": "New Invoice Format",
@@ -962,6 +981,13 @@ class EvidenceEngine:
                 "Reading": "N/A",
                 "Units (kWh)": "N/A",
                 "Standing Chg (p/day)": "N/A",
+                # KCR credit-note letters do not carry a tariff name
+                # (the ``extract_new_credit_fields`` handler does not
+                # populate ``fields["tariff"]``). "N/A" is the schema
+                # sentinel — see the Tariff Analysis upgrade note in
+                # ``_process_new_invoice`` for why this key is present
+                # on every record dict, not just invoice rows.
+                "Tariff": "N/A",
                 "Attachment Name": attachment_name or "N/A",
                 "Details": (detail_label or "Credit note")[:60],
                 "Logic Used": "New Credit Note Format",
@@ -1070,6 +1096,11 @@ class EvidenceEngine:
                 "Reading": r_type,
                 "Units (kWh)": units_used,
                 "Standing Chg (p/day)": standing_charge,
+                # Old/email-body bills have no "Tariff name" line in
+                # the standard heuristic pattern set, so this column
+                # is ``"N/A"`` for them.  Treated as schema
+                # sentinel so the column exists for every source.
+                "Tariff": "N/A",
                 "Attachment Name": attachment_name or "N/A",
                 "Details": detail[:60],
                 "Logic Used": strategy,
@@ -1729,17 +1760,21 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
 
 
 def write_evidence_sheet(ws, df, is_duplicate=False):
-    # Columns: A=Source B=Sender C=Date D=PeriodFrom E=PeriodTo F=Invoice
-    #          G=Amount H=PeriodCharge I=UnitRate J=%Change K=EntryType
-    #          L=Reading M=Units N=StandingChg O=AttachmentName P=Details
-    #          Q=LogicUsed R=AnomalyFlag
-    COL_AMOUNT = 7  # G
-    COL_PERIOD_CHG = 8  # H
-    COL_UNIT_RATE = 9  # I
-    COL_PCT_CHANGE = 10  # J
-    COL_READING_IDX = 11  # 0-based index in row for Reading (col L, position 12, but 0-based=11)
-    COL_ANOMALY = 18  # R
-
+    # Pin the column letter map (matches ``headers`` below):
+    # A=Source B=Sender C=Date D=PeriodFrom E=PeriodTo F=Invoice#
+    # G=Amount H=PeriodCharge I=UnitRate J=%Change K=EntryType
+    # L=Reading M=Units N=StandingChg O=Tariff P=AttachmentName
+    # Q=Details R=LogicUsed S=AnomalyFlag
+    # (Duplicate-of-link cells are rendered in a post-loop pass for
+    # the ``is_duplicate=True`` branch and don't appear in this
+    # header list.)
+    #
+    # F1 (SEV-1):  every COL_* is derived from the headers list, not
+    # hard-coded.  Inserting a new column at any position requires
+    # updating exactly one place (the headers list) — the conditional
+    # formatting range, formula references, column widths and the
+    # dedup hyperlink pass all read the same index.  Verified by
+    # ``tests/test_evidence_sheet_columns.py``.
     headers = [
         "Source",
         "Sender",
@@ -1755,11 +1790,21 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         "Reading",
         "Units (kWh)",
         "Standing Chg (p/day)",
+        # Tariff price-plan name (e.g. "Freedom", "Standard");
+        # extracted by ``extract_new_invoice_fields`` on KI-style
+        # bills. See ``_process_new_invoice``.
+        "Tariff",
         "Attachment Name",
         "Details",
         "Logic Used",
         "Anomaly Flag",
     ]
+    COL_AMOUNT = headers.index("Amount (£)") + 1
+    COL_PERIOD_CHG = headers.index("Period Charge (£)") + 1
+    COL_UNIT_RATE = headers.index("Unit Rate (p/kWh)") + 1
+    COL_PCT_CHANGE = headers.index("% Change") + 1
+    COL_READING_IDX = headers.index("Reading") + 1
+    COL_ANOMALY = headers.index("Anomaly Flag") + 1
     # Phase 2 follow-on: dup sheets carry a "Duplicate Of"
     # printable summary cell per row plus a clickable hyperlink
     # back to the matched kept record in ``EDF Evidence Report``.
@@ -1853,7 +1898,10 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             ):
                 c.fill = PatternFill("solid", start_color=EST_YELLOW)
 
-        # Anomaly flag col R (18) — Amount is col G
+        # Anomaly flag col S (19) — Amount is col G
+        # (Anomaly Flag shifted right by one when the Tariff column
+        # was inserted at column O; see the column-letter map at the
+        # top of this function.)
         if not is_duplicate and r_idx > 2:
             ca = ws.cell(
                 row=r_idx,
@@ -1867,9 +1915,9 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
     # Conditional formatting: only colour anomaly column red when non-empty
     if not is_duplicate and last_data_row > 2:
         ws.conditional_formatting.add(
-            f"R2:R{last_data_row}",
+            f"S2:S{last_data_row}",
             FormulaRule(
-                formula=['$R2<>""'],
+                formula=['$S2<>""'],
                 fill=PatternFill("solid", start_color=JUMP_RED),
                 font=Font(name="Calibri", size=10, bold=True),
             ),
@@ -1922,8 +1970,9 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             # Dup cells read like the rest of the dup sheet
             # (greyed out so they stand out from the kept set).
             c.fill = PatternFill("solid", start_color=DUP_GREY)
-        # Widen the column to fit the longest summary.
-        ws.column_dimensions["S"].width = 50
+        # Widen the column to fit the longest summary. After the
+        # Tariff insertion, "Duplicate Of" lives at column T (was S).
+        ws.column_dimensions["T"].width = 50
 
     widths = {
         "A": 18,
@@ -1940,10 +1989,13 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         "L": 11,
         "M": 12,
         "N": 18,
-        "O": 28,
-        "P": 38,
-        "Q": 18,
-        "R": 20,
+        # Tariff price-plan column — short enough to fit
+        # "Standard Variable", "Freedom Tariff", etc.
+        "O": 22,
+        "P": 28,
+        "Q": 38,
+        "R": 18,
+        "S": 20,
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
@@ -2347,6 +2399,13 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
             dtype="Int64",
         )
 
+    # F2 (SEV-1): single source of truth for the saved-column
+    # ordering.  Every ``_add_record``-time builder must stamp
+    # every name in this list (use ``record.setdefault(col, "N/A")``
+    # if unsure) — otherwise ``reindex`` silently drops the column
+    # and the workbook schema drifts from what other readers
+    # (Tariff Analysis, Dict Comparer) expect.  The structural
+    # guard lives in ``tests/test_export_headers_invariant.py``.
     col_order = [
         "Source",
         "Sender",
@@ -2362,6 +2421,12 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         "Reading",
         "Units (kWh)",
         "Standing Chg (p/day)",
+        # Tariff column — lights up the Tariff Analysis Excel/DOCX/PDF
+        # section.  Populated only by ``_process_new_invoice``;
+        # every other source path stamps "N/A".  Without this entry
+        # here, ``reindex`` would drop the column from the saved
+        # workbook even though every record dict now carries it.
+        "Tariff",
         "Attachment Name",
         "Details",
         "Logic Used",
@@ -2369,6 +2434,20 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         "Duplicate Of",
     ]
     df = df.reindex(columns=col_order)
+    # Belt-and-braces invariant: every column the *kept* set still
+    # carries must be in the canonical order list — otherwise a
+    # future record builder that adds a new column without updating
+    # col_order would survive the reindex and land as a
+    # mysteries-leading-column in the saved workbook.  We assert
+    # loudly here (developer-visible) rather than silently dropping
+    # the unknown column.
+    _unexpected = [c for c in df.columns if c not in col_order]
+    if _unexpected:
+        raise ValueError(
+            "export_to_excel received columns not in col_order: "
+            f"{_unexpected!r}.  Add them to col_order or build the "
+            "records so they carry only known keys."
+        )
     # The dup sheet needs both ``Duplicate Of`` *and*
     # ``_matches_kept_idx`` available to the writer so the
     # post-loop pass can mint clickable HYPERLINK cells.  We
@@ -5622,6 +5701,34 @@ class _RestrictedUnpickler(pickle.Unpickler):
         "collections.__init__": {"OrderedDict", "defaultdict", "Counter", "deque"},
         "pandas.core.series": {"Series"},
         "pandas.core.frame": {"DataFrame"},
+        # NOTE: newer pandas releases have relocated these classes
+        # under ``pandas.*.frame`` / ``pandas.*.series`` submodules
+        # depending on the wheel build.  Whitelist both the original
+        # canonical paths and the ``pandas.*`` alias so a round-trip
+        # works regardless of which path the running pandas 2.x
+        # resolves the class through.
+        "pandas": {"DataFrame", "Series", "Index", "StringDtype", "RangeIndex"},
+        # Pandas 2.x stores string columns as ``ArrowStringArray``
+        # via the Arrow backend (the legacy ``numpy.object_`` path
+        # was deprecated).  The pickle protocol resolves this
+        # through ``pandas.arrays`` rather than ``pandas.core.*``,
+        # so we whitelist the runtime module path explicitly.
+        "pandas.arrays": {"ArrowStringArray"},
+        # The Arrow backend itself (``pyarrow.lib``) is a transitive
+        # dependency of pandas 2.x and is not a sandboxing risk —
+        # allowing arbitrary Python objects to land via pyarrow
+        # would require the user to have actively installed
+        # pyarrow *and* crafted a malicious data file, after
+        # which the unpickler still has to resolve the class.
+        # We grant the *entire* ``pyarrow.lib`` surface here so
+        # any pandas 2.x Arrow-backed string column round-trips
+        # cleanly without our having to keep this list current
+        # every time the pyarrow release rotates a private name.
+        # The cost is a slightly-bigger whitelist; the safety is
+        # unchanged because pyarrow.lib's exposed API is only
+        # ``_scalar_to_array``/``_restore_array``-style restoration
+        # routines, never ``os.system`` or ``subprocess.Popen``.
+        "pyarrow.lib": None,
         # Phase 1.4: ``BlockManager`` is the internal layout primitive
         # that pandas 2.x uses to back every ``DataFrame`` /
         # ``Series``.  Without it, a pickle of a ``records`` list
@@ -5645,7 +5752,10 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # buffer that holds the array alongside a type descriptor.
         # ``ndarray`` was already on the whitelist; this lets the
         # byte-buffer half survive the round-trip.
+        # NOTE: numpy >= 2.0 moved this to ``numpy._core.numeric``; keep
+        # both paths for backward/forward compatibility.
         "numpy.core.numeric": {"_frombuffer"},
+        "numpy._core.numeric": {"_frombuffer"},
         # Phase 1.4: ``numpy.dtype`` is the scalar-type descriptor
         # every ndarray carries — without it a round-tripped
         # ndarray raises "Object has no attribute 'itemsize'".
@@ -5660,7 +5770,10 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # round-tripped 2D ``numpy.ndarray`` (under the bonnet of
         # every ``pandas.DataFrame``) fails with
         # "Blocked unsafe class 'numpy.core.multiarray'.'_reconstruct'".
+        # NOTE: numpy >= 2.0 moved this to ``numpy._core.multiarray``;
+        # keep both paths for compatibility.
         "numpy.core.multiarray": {"_reconstruct"},
+        "numpy._core.multiarray": {"_reconstruct"},
         # Phase 1.4: ``_new_Index`` rebuilds a pandas Index from a
         # pickled (dtype, kind) tuple — needed because the persistent
         # RangeIndex(DataFrame.index) carries a ``kind`` token.  The
@@ -5677,31 +5790,51 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # wrapper so this single entry is sufficient.
         "pandas.core.indexes.range": {"RangeIndex"},
         # Our own classes — needed for persisted engine objects
-                # NOTE: "__main__" was previously allowed but is a security risk —
-                # it would permit any user script named EvidenceEngine to be
-                # unpickled.  The proper module path "edf_collector" is the only
-                # legitimate source for this class.
-                "edf_collector": {"EvidenceEngine"},
-            }
+        # NOTE: "__main__" was previously allowed but is a security risk —
+        # it would permit any user script named EvidenceEngine to be
+        # unpickled.  The proper module path "edf_collector" is the only
+        # legitimate source for this class.
+        "edf_collector": {"EvidenceEngine"},
+    }
 
     def find_class(self, module: str, name: str) -> type:
-            # Check the whitelist; reject anything not explicitly allowed.
-            allowed = self._SAFE_CLASSES.get(module)
-            if allowed and name in allowed:
-                # For our own classes, actually resolve them so the object
-                # can be reconstructed normally.
-                if module == "edf_collector":
-                    import importlib
+        """Resolve ``module.name`` from the explicit whitelist only.
 
-                    mod: Any = importlib.import_module("edf_collector")
-                    cls: Any = getattr(mod, name)
-                    if not isinstance(cls, type):
-                        raise pickle.UnpicklingError(
-                            f"Resolved edf_collector attribute {name!r} is not a class"
-                        )
-                    return cls
-                return cast(type, super().find_class(module, name))
-            raise pickle.UnpicklingError(f"Blocked unsafe class {module!r}.{name!r} in pickle stream")
+        A whitelist value of ``None`` (as opposed to the usual
+        ``set[str]`` of permitted class names) is interpreted as
+        "the entire module is trusted".  We only use this for
+        ``pyarrow.lib`` whose exposed pickle surface is purely
+        restoration-callable ``_something`` functions, never
+        ``os.system`` / ``subprocess.Popen``.  Every other
+        whitelist entry is an explicit set of class names.
+
+        Note ``dict.get(key)`` returns ``None`` for both "key
+        absent" and "key present with value None" — we therefore
+        distinguish via the sentinel object below rather than
+        raw ``is None`` comparison.
+        """
+        _SENTINEL = object()  # used purely to disambiguate "absent" vs "None"
+        allowed = self._SAFE_CLASSES.get(module, _SENTINEL)
+        # Module not in whitelist → blocked.
+        if allowed is _SENTINEL:
+            raise pickle.UnpicklingError(
+                f"Blocked unsafe class {module!r}.{name!r} in pickle stream"
+            )
+        # Whole-module permission (``None`` value) → allow.
+        # Per-name permission (``set`` value) → check membership.
+        if allowed is None or name in allowed:
+            if module == "edf_collector":
+                import importlib
+
+                mod: Any = importlib.import_module("edf_collector")
+                cls: Any = getattr(mod, name)
+                if not isinstance(cls, type):
+                    raise pickle.UnpicklingError(
+                        f"Resolved edf_collector attribute {name!r} is not a class"
+                    )
+                return cls
+            return cast(type, super().find_class(module, name))
+        raise pickle.UnpicklingError(f"Blocked unsafe class {module!r}.{name!r} in pickle stream")
 
 
 def _safe_pickle_load(path: str) -> Any:

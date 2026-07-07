@@ -507,7 +507,9 @@ class TestOFGEMComparison:
             # 2024-Q3 intentionally omitted to force the gap-row path.
         }
 
-        monkeypatch.setattr(sys.modules["edf_report"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps)
+        monkeypatch.setattr(
+            sys.modules["edf_report"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps
+        )
 
         # One bill per quarter in our minimal cap set, plus a bill
         # landing in 2024-Q3 which has no cap entry.
@@ -560,7 +562,20 @@ class TestOFGEMComparison:
         # "—" missing-sentinel so the table never pretends to know.
         assert q3_row[2] == "—"
         assert q3_row[3] == "—"
-    """Tests for statistical analysis section."""
+
+
+class TestStatisticalAnalysis:
+    """Tests for the statistical analysis section builder.
+
+    These two tests were previously sitting inside
+    ``TestOFGEMComparison`` with a bare orphan ``\"\"\"...\"\"\"``
+    docstring floating below the last OFGEM test — looks like a
+    class-header line that lost its ``class TestStatisticalAnalysis:``
+    predecessors during an earlier reshape of the file.  Promoting
+    them into a real class with this docstring makes them
+    discoverable by name (``pytest -k Statistical``) and removes
+    the structural defect.
+    """
 
     def test_create_statistical_analysis(self, sample_df):
         elements = create_statistical_analysis(sample_df)

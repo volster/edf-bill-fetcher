@@ -265,9 +265,26 @@ class TestCrossSourceDedup:
         }, f"Expected only Local PDF + PST marked dup; got {set(dup_sources)}"
         # The Duplicate Of hyperlink-and-summary should resolve
         # to the HTM record for both dups.
+        # The dup sheet's "Duplicate Of" hyperlink-summary column
+        # index depends on the headers list length in
+        # ``write_evidence_sheet``.  As of the Tariff insertion
+        # the headers list has 19 entries, so the duplicate column
+        # is at position 20 (1-based) of the writer's run loop
+        # (see write_evidence_sheet's post-loop append).  Resolve
+        # by header-name rather than hard-coded index so a future
+        # header insertion (column shifts) is automatically tracked.
+        header_row = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        duplicate_of_col = (
+            header_row.index("Duplicate Of") + 1 if "Duplicate Of" in header_row else None
+        )
+        if duplicate_of_col is None:
+            # Older workbook without a Duplicate Of column — assert
+            # no dups were saved (the save_dups toggle was off).
+            assert ws.max_row == 1, "save_dups=True must yield a Duplicate Of column header."
+            return
         for r in range(2, ws.max_row + 1):
             source = ws.cell(row=r, column=1).value
-            summary = ws.cell(row=r, column=19).value
+            summary = ws.cell(row=r, column=duplicate_of_col).value
             assert "HTM Account History" in (summary or ""), (
                 f"Row {r} ({source}) should resolve to HTM; got {summary!r}"
             )

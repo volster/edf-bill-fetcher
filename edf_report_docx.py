@@ -27,6 +27,8 @@ from edf_collector import parse_to_sort_date
 from edf_report import (
     REPORT_SECTIONS,
     RenderContext,
+    _compute_balance_extremes,
+    _compute_financial_totals,
     _compute_mean_daily,
     _get_package_version,
     _load_ofgem_caps,
@@ -339,6 +341,8 @@ def create_executive_summary(
     payments: float,
     period_start: str,
     period_end: str,
+    opening_balance: float | None = None,
+    closing_balance: float | None = None,
     ctx: RenderContext | None = None,
 ) -> None:
     """Create executive summary section."""
@@ -354,8 +358,12 @@ def create_executive_summary(
         style=styles["BodyText"],
     )
 
-    # Financial snapshot table
-    table = doc.add_table(rows=5, cols=2)
+    # Financial snapshot table — 7 rows (vs. 5 pre-fix): the
+    # Opening/Closing balance rows show concrete amounts courtesy of
+    # ``_compute_balance_extremes`` in ``edf_report``.  Falling back
+    # to ``"—"`` is the honest "no data" path rather than a
+    # placeholder steady state.
+    table = doc.add_table(rows=7, cols=2)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     exec_data = [
@@ -364,6 +372,14 @@ def create_executive_summary(
         ("Total Charges (Debits)", fmt_money(charges)),
         ("Total Payments (Credits)", fmt_money(payments)),
         ("Net Position", fmt_money(charges - payments)),
+        (
+            "Opening Balance (First Record)",
+            fmt_money(opening_balance) if opening_balance is not None else "—",
+        ),
+        (
+            "Closing Balance (Latest Record)",
+            fmt_money(closing_balance) if closing_balance is not None else "—",
+        ),
     ]
 
     for i, (label, value) in enumerate(exec_data):
@@ -1061,7 +1077,7 @@ def create_appendix_methodology(
     doc.add_paragraph(
         "Amount extraction uses a tiered anchor-based approach with fallback to "
         "large-amount detection. Date extraction prioritizes bill/invoice date markers. "
-        "Deduplication uses SHA-1 hashing of PDF content.",
+        "Deduplication uses SHA-256 hashing of PDF content.",
         style=styles["BodyText"],
     )
 
@@ -1388,6 +1404,7 @@ def generate_ombudsman_docx(
         "Reading": "N/A",
         "Units (kWh)": "N/A",
         "Standing Chg (p/day)": "N/A",
+        "Tariff": "N/A",
         "Attachment Name": "N/A",
         "Details": "",
         "Logic Used": "",
@@ -1408,9 +1425,16 @@ def generate_ombudsman_docx(
     period_start = fmt_date(valid_dates.min()) if not valid_dates.empty else "Unknown"
     period_end = fmt_date(valid_dates.max()) if not valid_dates.empty else "Unknown"
 
-    # Financial totals
-    charges = df[df["Amount (£)"] > 0]["Amount (£)"].astype(float).sum()
-    payments = df[df["Amount (£)"] < 0]["Amount (£)"].astype(float).sum() * -1
+    # Financial totals — see edf_report._compute_financial_totals for
+    # why we route off Entry Type rather than splitting Amount (£) on
+    # sign (the column is a positive cumulative balance, not a signed
+    # delta).  Same helper the PDF report uses, so the two surfaces
+    # can never diverge.
+    charges, payments = _compute_financial_totals(df)
+    # Same helper supplies opening/closing balance to the DOCX table
+    # (which historically omitted those rows entirely; see
+    # ``_compute_balance_extremes`` for the "no — placeholders" rule).
+    opening_balance, closing_balance = _compute_balance_extremes(df)
 
     # Compute dispute flags from the data
     from edf_collector import compute_dispute_flags
@@ -1498,6 +1522,8 @@ def generate_ombudsman_docx(
                 "payments": payments,
                 "period_start": period_start,
                 "period_end": period_end,
+                "opening_balance": opening_balance,
+                "closing_balance": closing_balance,
             },
             lambda kwargs: create_executive_summary(**kwargs),
         ),
@@ -1555,6 +1581,15 @@ def generate_ombudsman_docx(
         ),
     }
 
+    # Error isolation: each section builder is wrapped in try/except
+    # so a single broken section (e.g. a KeyError from missing data)
+    # degrades gracefully and the rest of the document still renders.
+    # The PDF generator (``edf_report.generate_ombudsman_pdf``) does
+    # the same thing, but uses reportlab's ``Paragraph`` to surface the
+    # failure in-line.  python-docx emits ``Document.add_paragraph``;
+    # we use that here.  Without this guard, an exception in any one
+    # section aborts the whole DOCX build with no partial output —
+    # leaving the ombudsman submission without a file at all.
     for spec in REPORT_SECTIONS:
         if not section_enabled(spec.key):
             continue
@@ -1565,9 +1600,16 @@ def generate_ombudsman_docx(
                 f"in generate_ombudsman_docx. Add it to section_builders."
             )
         arg_factory, invoke = entry
-        kwargs = arg_factory()
-        kwargs["ctx"] = render_ctx
-        invoke(kwargs)
+        try:
+            kwargs = arg_factory()
+            kwargs["ctx"] = render_ctx
+            invoke(kwargs)
+        except Exception as e:
+            # Surface the failure as a visible paragraph so an
+            # ombudsman reader can see something went wrong with a
+            # specific section — much better than a silently missing
+            # section or (worse) a half-saved document.
+            doc.add_paragraph(f"{spec.title} failed: {e}", style=styles.get("BodyText"))
 
     # Save
     doc.save(output_path)

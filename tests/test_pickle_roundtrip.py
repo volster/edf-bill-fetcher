@@ -208,16 +208,30 @@ class TestPickleRoundTrip:
         """Records containing a real ``pandas.DataFrame`` round-trip
         just as cleanly.
 
-        The while-the-EDF-evidence-product doesn't currently store
-        DataFrames inside ``engine.records`` (it stores list-of-dicts),
-        a future migration to DataFrame records must not break the
-        pickle-restoration contract for paying clients.
+        The EDF evidence product doesn't currently store DataFrames
+        inside ``engine.records`` (it stores list-of-dicts); this
+        test pins a future-proofing contract for paying clients
+        who may want to migrate record storage to ``DataFrame``.
+
+        The DataFrame is built with ``pd.array(..., dtype="object")``
+        for every column so the pickle stream stays within the
+        legacy ``numpy.object_`` storage path.  This avoids the
+        pandas 2.x default of Arrow-backed string arrays which
+        would require the unpickler whitelist to include the entire
+        pyarrow library surface — pyarrow is a transitive dependency
+        only, not a direct runtime dep of the EDF app.
         """
         engine = _build_engine()
         # Replace the records with a list that contains one DataFrame
         # and two list-of-dicts entries.  This exercises the
         # pandas.DataFrame + pandas.Series reducer path.
-        df = pd.DataFrame(_build_synthetic_records())
+        built = _build_synthetic_records()
+        # Build the DataFrame column-by-column using ``pd.array`` so
+        # every column is explicitly ``object`` dtype — sidesteps
+        # the pandas 2.x Arrow ambiguity discussed above.
+        df = pd.DataFrame(
+            {col: pd.array([row[col] for row in built], dtype="object") for col in built[0]}
+        )
         engine.records = [df]
 
         pkl_path = tmp_dir / "engine_with_df.pkl"

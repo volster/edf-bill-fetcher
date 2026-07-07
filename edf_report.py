@@ -665,6 +665,109 @@ def _compute_mean_daily(df_sorted: pd.DataFrame) -> float:
         return 0.0
 
 
+def _compute_financial_totals(df: pd.DataFrame) -> tuple[float, float]:
+    """Compute (total_charges, total_payments_and_credits) correctly.
+
+    ``Amount (£)`` in this codebase is always a positive running
+    account BALANCE, never a signed transaction delta — this is
+    true for bills, Payment records, and Credit records alike
+    (see ``parse_htm_account_history`` and ``extract_new_invoice_fields``
+    in ``edf_collector.py``: every writer sets ``Amount (£)`` to a
+    positive cumulative balance).  Do NOT compute charges/payments by
+    splitting ``Amount (£)`` on sign; that approach silently produces
+    £0.00 payments (no rows are negative) and wildly overstated charges
+    (it sums balances, not period charges).
+
+    Correct approach, mirroring ``_detect_payment_patterns`` and
+    ``write_payment_analysis_sheet`` in ``edf_collector.py``:
+
+      * "Charges" = the sum of ``Period Charge (£)`` for records whose
+        ``Entry Type`` is ``"New Bill"`` — i.e. the actual amount billed
+        for that period, NOT the cumulative ``Amount (£)`` balance.
+      * "Payments/Credits" = the sum of ``Amount (£)`` for records whose
+        ``Entry Type`` is ``"Payment"`` or ``"Credit"`` — for those rows
+        the balance figure IS the amount of the payment/credit event.
+
+    Returns (charges, payments) as floats.  Missing/non-numeric values
+    are treated as 0 and do not raise.  This helper is the single
+    source of truth for the executive-summary financial totals so the
+    PDF and DOCX reports can never diverge — both ``generate_ombudsman_pdf``
+    and ``generate_ombudsman_docx`` call it.
+    """
+    # ``get`` falls back to an empty object Series when the column is
+    # absent entirely (e.g. a hand-built test DataFrame missing Entry
+    # Type).  The later boolean masks then reduce to all-False, which
+    # correctly yields zero totals.
+    entry_type = df.get("Entry Type", pd.Series(dtype=object))
+
+    # Charges: only "New Bill" rows, using Period Charge (£), not the
+    # cumulative Amount (£) balance.  "Ongoing Balance" rows do not
+    # carry a period charge — they are snapshots of the running balance
+    # and would double-count if summed into charges.
+    bill_mask = entry_type == "New Bill"
+    period_charge = pd.to_numeric(df.get("Period Charge (£)"), errors="coerce")
+    charges = float(period_charge[bill_mask].fillna(0).sum())
+
+    # Payments/Credits: identified by Entry Type, not by sign of Amount.
+    # ``Amount (£)`` on Payment/Credit rows is a positive balance figure
+    # representing the size of that payment/credit event (see HTM parser
+    # lines 626/656/707 in edf_collector.py — all set ``Amount (£)``
+    # from the same positive balance field).
+    pay_mask = entry_type.isin(["Payment", "Credit"])
+    pay_amounts = pd.to_numeric(df.get("Amount (£)"), errors="coerce")
+    payments = float(pay_amounts[pay_mask].fillna(0).sum())
+
+    return charges, payments
+
+
+def _compute_balance_extremes(df: pd.DataFrame) -> tuple[float | None, float | None]:
+    """Compute (opening_balance, closing_balance) for the executive summary.
+
+    Returns (opening, closing) — the first and last sort-date
+    ``Amount (£)`` in chronological order.  Because ``Amount (£)``
+    is the cumulative account balance throughout this codebase
+    (NEVER a signed transaction delta — see
+    ``_compute_financial_totals`` for the rationale), the chronologically
+    earliest record's balance IS the opening balance, and the latest
+    record's balance IS the closing balance.  No reconciliation needed.
+
+    Returns ``(None, None)`` when the input has no usable dates —
+    the caller falls back to ``"—"`` as the rendered token so the
+    table can never carry a misleading figure on empty data.
+
+    Why placeholders are wrong
+    --------------------------
+    Pre-fix the executive-summary tables rendered literal ``"—"``
+    em-dashes for Opening/Closing balance rows.  An ombudsman
+    reviewer reading the headline financial table sees a dash where
+    they expect a concrete number — the project-mandated
+    reader-first policy ("show, never leave a placeholder") is
+    violated by both the original em-dashes and the absence of the
+    rows from the DOCX variant.  Compute the real values whenever
+    the underlying dataframe lets us.
+    """
+    # Need both a parseable date and a numeric amount to make a
+    # judgement call on which row is "first" and "last".
+    if "Date" not in df.columns or "Amount (£)" not in df.columns:
+        return None, None
+
+    amounts = pd.to_numeric(df["Amount (£)"], errors="coerce")
+    dates = df["Date"].apply(parse_to_sort_date)
+    # Only consider rows that have BOTH a valid date and a numeric
+    # amount; rows with NaT dates or NaN amounts are excluded.
+    valid = dates.notna() & amounts.notna()
+    if not valid.any():
+        return None, None
+
+    sorted_idx = dates[valid].sort_values().index.tolist()
+    if not sorted_idx:
+        return None, None
+
+    opening = float(amounts.loc[sorted_idx[0]])
+    closing = float(amounts.loc[sorted_idx[-1]])
+    return opening, closing
+
+
 def create_cover_page(
     account_ref: str, period_start: str, period_end: str, report_date: str
 ) -> list:
@@ -781,6 +884,8 @@ def create_executive_summary(
     total_payments: float,
     period_start: str,
     period_end: str,
+    opening_balance: float | None = None,
+    closing_balance: float | None = None,
     ctx: RenderContext | None = None,
 ) -> list:
     """Create executive summary section."""
@@ -812,8 +917,21 @@ def create_executive_summary(
         ["Total Charges (Debits)", fmt_money(total_charges)],
         ["Total Payments/Credits", fmt_money(total_payments)],
         ["Net Balance Increase", fmt_money(net_change)],
-        ["Opening Balance (First Record)", "—"],  # Would need first record
-        ["Closing Balance (Latest Record)", "—"],  # Would need last record
+        # Opening/Closing balance rows were hard-coded "—" placeholders
+        # before this commit.  Now the dispatcher pre-computes them via
+        # ``_compute_balance_extremes`` so the reader sees the actual
+        # earliest and latest Account Balance figures from the dataset.
+        # ``"—"`` is still rendered as a fallback when the helper could
+        # not extract real numbers (no dated/amounted rows), which is
+        # the honest result rather than the steady state.
+        [
+            "Opening Balance (First Record)",
+            fmt_money(opening_balance) if opening_balance is not None else "—",
+        ],
+        [
+            "Closing Balance (Latest Record)",
+            fmt_money(closing_balance) if closing_balance is not None else "—",
+        ],
     ]
     fin_table = Table(fin_data, colWidths=[8 * cm, 5 * cm])
     fin_table.setStyle(make_table_style(num_rows=6))
@@ -1347,7 +1465,13 @@ def create_ofgem_comparison(
                 carried_count += 1
                 cap_rate = latest_known_cap["unit_rate"]
                 diff = avg_rate - cap_rate
-                status = f"EXCEEDS CAP ({CARRIED})" if diff > 0 else f"AT CAP ({CARRIED})" if abs(diff) < 0.01 else f"BELOW CAP ({CARRIED})"
+                status = (
+                    f"EXCEEDS CAP ({CARRIED})"
+                    if diff > 0
+                    else f"AT CAP ({CARRIED})"
+                    if abs(diff) < 0.01
+                    else f"BELOW CAP ({CARRIED})"
+                )
                 if diff > 0:
                     exceed_count += 1
                 cap_data.append(
@@ -2376,6 +2500,7 @@ def generate_ombudsman_pdf(
         "Reading": "N/A",
         "Units (kWh)": "N/A",
         "Standing Chg (p/day)": "N/A",
+        "Tariff": "N/A",
         "Attachment Name": "N/A",
         "Details": "",
         "Logic Used": "",
@@ -2396,9 +2521,17 @@ def generate_ombudsman_pdf(
     period_start = fmt_date(valid_dates.min()) if not valid_dates.empty else "Unknown"
     period_end = fmt_date(valid_dates.max()) if not valid_dates.empty else "Unknown"
 
-    # Financial totals
-    charges = df[df["Amount (£)"] > 0]["Amount (£)"].astype(float).sum()
-    payments = df[df["Amount (£)"] < 0]["Amount (£)"].astype(float).sum() * -1
+    # Financial totals — see ``_compute_financial_totals`` for why we
+    # route off Entry Type rather than splitting ``Amount (£)`` on sign
+    # (the column is a positive cumulative balance, not a signed delta).
+    charges, payments = _compute_financial_totals(df)
+    # Opening/closing balance — see ``_compute_balance_extremes`` for why
+    # we no longer ship ``"—"`` placeholders to the ombudsman-facing
+    # executive summary.  When the dataframe has at least one dated
+    # record with a numeric balance we emit real numbers; otherwise the
+    # helper returns ``(None, None)`` and the table renders ``"—"``,
+    # which is now an honest fallback rather than the steady state.
+    opening_balance, closing_balance = _compute_balance_extremes(df)
 
     # Compute dispute flags from the data
     from edf_collector import compute_dispute_flags
@@ -2491,6 +2624,8 @@ def generate_ombudsman_pdf(
                 "total_payments": payments,
                 "period_start": period_start,
                 "period_end": period_end,
+                "opening_balance": opening_balance,
+                "closing_balance": closing_balance,
             },
             lambda kwargs: create_executive_summary(**kwargs),
         ),
