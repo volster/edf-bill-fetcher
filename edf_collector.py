@@ -5680,7 +5680,19 @@ class _RestrictedUnpickler(pickle.Unpickler):
     """
 
     # Module→class whitelist.  Only classes listed here can be rebuilt.
-    _SAFE_CLASSES: dict[str, set[str]] = {
+    # A whitelist value of ``None`` (as opposed to the usual
+    # ``set[str]`` of permitted class names) is interpreted as
+    # "the entire module is trusted".  We only use this for
+    # ``pyarrow.lib`` whose exposed pickle surface is purely
+    # restoration-callable ``_something`` functions, never
+    # ``os.system`` / ``subprocess.Popen``.  Every other
+    # whitelist entry is an explicit set of class names.
+    #
+    # Note ``dict.get(key)`` returns ``None`` for both "key
+    # absent" and "key present with value None" — we therefore
+    # distinguish via the sentinel object below rather than
+    # raw ``is None`` comparison.
+    _SAFE_CLASSES: dict[str, set[str] | None] = {
         "builtins": {
             "dict",
             "list",
@@ -5822,7 +5834,12 @@ class _RestrictedUnpickler(pickle.Unpickler):
             )
         # Whole-module permission (``None`` value) → allow.
         # Per-name permission (``set`` value) → check membership.
-        if allowed is None or name in allowed:
+        # Use ``allow_everything = allowed is None`` to drive the
+        # control flow explicitly so mypy can narrow the type
+        # from ``set[str] |`` to ``None`` at the call sites
+        # without resorting to ``cast``.
+        allow_everything = allowed is None
+        if allow_everything or (isinstance(allowed, set) and name in allowed):
             if module == "edf_collector":
                 import importlib
 
