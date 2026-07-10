@@ -6,6 +6,7 @@ Fixed version: correct Excel date serials, dynamic range references, new PDF for
 """
 
 import gc
+import glob
 import hashlib
 import json
 import os
@@ -15,7 +16,7 @@ import tempfile
 import threading
 import traceback
 import warnings
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, cast
 
 import numpy as np
@@ -3420,10 +3421,10 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     flags, counts = compute_dispute_flags(dfc, mean_daily)
 
     sev_fill = {"HIGH": RED, "MEDIUM": AMBER, "INFO": GREEN}
-    for fi, (ftype, date, amt, detail, sev) in enumerate(flags, hdr_row + 1):
+    for fi, (ftype, flag_date, amt, detail, sev) in enumerate(flags, hdr_row + 1):
         bg = sev_fill.get(sev, LGREY)
         _num(ws_df, fi, 1, fi - hdr_row, fmt="#,##0", fill_hex=bg)
-        _text(ws_df, fi, 2, date or "—", fill_hex=bg)
+        _text(ws_df, fi, 2, flag_date or "—", fill_hex=bg)
         if amt:
             _money(ws_df, fi, 3, float(amt), fill_hex=bg)
         else:
@@ -3557,9 +3558,9 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # Sort by date and write
     timeline_events.sort(key=lambda e: parse_to_sort_date(e[0]) or pd.Timestamp.min)
     tl_r = 5
-    for date, etype, desc in timeline_events:
+    for tl_date, etype, desc in timeline_events:
         bg_hex = LGREY if tl_r % 2 == 0 else None
-        _text(ws_tl, tl_r, 1, date, fill_hex=bg_hex)
+        _text(ws_tl, tl_r, 1, tl_date, fill_hex=bg_hex)
         _text(ws_tl, tl_r, 2, etype, bold=True, fill_hex=bg_hex)
         _text(ws_tl, tl_r, 3, desc, fill_hex=bg_hex, wrap=True)
         ws_tl.row_dimensions[tl_r].height = 40
@@ -5158,6 +5159,44 @@ class App:
             os.fsync(f.fileno())
         os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, self._CONFIG_PATH)
+
+    def _resolve_output_path(
+        self,
+        stem: str,
+        ext: str,
+        batch_n: int | None = None,
+        is_report: bool = False,
+    ) -> str:
+        """Build a sequential non-overwriting output path.
+
+        Naming: {folder}/{stem}_{date}_{N}[{_Report}].{ext}
+        If batch_n is passed, use it (shared counter for a batch).
+        If None, scan folder for max existing N and use N+1.
+        If output_folder is empty, falls back to os.getcwd().
+        """
+        folder = self.output_folder.get().strip() or os.getcwd()
+        date_stamp = date.today().isoformat()
+        suffix = "_Report" if is_report else ""
+
+        if batch_n is not None:
+            n = batch_n
+        else:
+            pattern = os.path.join(folder, f"{stem}_{date_stamp}_*{suffix}.{ext}")
+            existing = glob.glob(pattern)
+            max_n = 0
+            for f in existing:
+                basename = os.path.basename(f)
+                prefix = f"{stem}_{date_stamp}_"
+                rest = basename[len(prefix) :]
+                if suffix:
+                    rest = rest[: rest.index(suffix)]
+                rest = rest.rsplit(".", 1)[0]
+                if rest.isdigit():
+                    max_n = max(max_n, int(rest))
+            n = max_n + 1
+
+        filename = f"{stem}_{date_stamp}_{n}{suffix}.{ext}"
+        return os.path.join(folder, filename)
 
     def build_ui(self):
         hdr = tk.Frame(self.root, bg=EDF_ORANGE, height=60)
