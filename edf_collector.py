@@ -13,6 +13,7 @@ import re
 import tempfile
 import threading
 import traceback
+import warnings
 from datetime import datetime
 from typing import Any, cast
 
@@ -114,6 +115,162 @@ _SOURCE_PRECEDENCE: dict[str, int] = {
     "Email Body": 3,
     "Email Body (RTF)": 3,
 }
+
+# ---------------------------------------------------------------------------
+# Duplicate-cluster completeness scoring
+# ---------------------------------------------------------------------------
+# Spec: "duplicates should be assessed and the most complete version of
+# the information presented".  The dedup walker uses these columns to
+# compute a per-row completeness score; the score is the primary sort
+# key so the *richest* sibling of a duplicate cluster survives, with
+# source precedence (``_SOURCE_PRECEDENCE``) as the tie-breaker and the
+# parsed date as the final tie.
+#
+# Cosmetic columns (``Source``, ``Sender``), runtime-derived columns
+# (``% Change``, ``Anomaly Flag``, ``Duplicate Of``), and the debug
+# column ``Logic Used`` are intentionally excluded — they don't reflect
+# the *data* the user is reviewing.  ``Amount (£)`` is excluded because
+# it's the dedup *key* — every sibling has it by definition.
+_COMPLETENESS_FIELDS: tuple[str, ...] = (
+    "Date",
+    "Period From",
+    "Period To",
+    "Invoice #",
+    "Period Charge (£)",
+    "Unit Rate (p/kWh)",
+    "Entry Type",
+    "Reading",
+    "Units (kWh)",
+    "Standing Chg (p/day)",
+    "Tariff",
+    "Attachment Name",
+    "Details",
+)
+
+
+def _is_populated(value: object) -> bool:
+    """Return True iff ``value`` counts as a populated field for
+    completeness scoring.
+
+    Treats the EinDF "N/A" sentinel, empty string, ``None``, and NaN
+    as missing.  Everything else — including non-zero numerics like
+    0.0 when the producer explicitly stamped it — counts as present
+    because the producer's ``record.setdefault(col, "N/A")`` path
+    converts missing to "N/A" upstream.
+
+    The one edge case worth calling out: ``Period Charge (£) = 0.0``
+    is *populated* in the sense that the producer explicitly stamped
+    it as 0.0 rather than leaving "N/A".  We count it as present.
+    """
+    if value is None:
+        return False
+    try:
+        if isinstance(value, float) and pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        s = value.strip()
+        return s != "" and s != "N/A"
+    return True
+
+
+def _completeness_score(row: pd.Series) -> int:
+    """Count populated substantive fields on a record row.
+
+    Used as the primary sort key in the dedup pass so the row with the
+    most populated ``_COMPLETENESS_FIELDS`` ends up first (and thus
+    survives ``keep="first"``).  Lower score = sparser row; ties
+    fall through to source precedence and then date.
+    """
+    return sum(1 for f in _COMPLETENESS_FIELDS if f in row.index and _is_populated(row[f]))
+
+
+def _amalgamate_cluster(cluster: pd.DataFrame) -> pd.DataFrame:
+    """Merge a duplicate cluster into a single hybrid row.
+
+    For each column, walks the cluster rows in completeness-descending
+    order and picks the *first* non-empty / non-"N/A" value.  The
+    ``Source`` column is pinned to the completeness-winner's source
+    (identity, not data).  ``_sort`` and all ``_``-prefixed helpers
+    are dropped before returning so the caller can concat.
+
+    Returns a zero-row DataFrame if ``cluster`` is already a single
+    row (nothing to merge — the caller just keeps the singleton).
+    """
+    if len(cluster) <= 1:
+        return cluster.iloc[0:0]
+    # Sort so the most-complete row is first — ties fall to _src_pri
+    # then _sort (the same contract the dedup walker uses).
+    cluster = cluster.sort_values(
+        ["_completeness", "_src_pri", "_sort"],
+        ascending=[False, True, True],
+    )
+    hybrid: dict[str, object] = {}
+    for col in cluster.columns:
+        if col.startswith("_"):
+            continue
+        # Walk completeness-descending to find the first populated value.
+        picked = None
+        for _ri, row in cluster.iterrows():
+            val = row.get(col)
+            if col == "Source":
+                # Identity pinned to the top-row (completeness winner).
+                picked = val
+                break
+            if _is_populated(val):
+                picked = val
+                break
+        hybrid[col] = picked if picked is not None else row.get(col)
+    return pd.DataFrame([hybrid], index=[cluster.index[0]])
+
+
+def _apply_amalgamate_to_kept_frame(
+    df: pd.DataFrame,
+    dup_df: pd.DataFrame,
+    kept_pass1_index: dict[tuple, int],
+    kept_for_dup: dict[int, int],
+    is_dup: pd.Series,
+) -> pd.DataFrame:
+    """Reflow ``df`` so each duplicate cluster collapses to a single
+    hybrid kept row; non-duplicate rows stay verbatim.
+
+    Cluster resolution merges the two dedup-pass anchor maps:
+
+    * ``kept_pass1_index`` (Period+Amount) — Pass 1.
+    * ``kept_for_dup`` (bucket-anchor index) — Pass 2.
+
+    Every deduplicated cluster is reachable from one of these maps.
+    The amalgamation path was extracted from ``export_to_excel`` so
+    it can be unit-tested without booting the full pipeline (see
+    ``tests/test_dedup_most_complete.py`` and
+    ``tests/test_amalgamate_*.py``).
+
+    Returns a fresh DataFrame with the duplicates cleaned and
+    ``dup_df`` left untouched.
+    """
+    anchor_to_dup_indices: dict[int, list[int]] = {}
+    for (_dd, _amt), kept_idx in kept_pass1_index.items():
+        anchor_to_dup_indices.setdefault(kept_idx, [])
+    for dup_idx, kept_idx in kept_for_dup.items():
+        anchor_to_dup_indices.setdefault(kept_idx, []).append(dup_idx)
+
+    hybrid_rows: list[pd.DataFrame] = []
+    for anchor_idx, dup_indices in anchor_to_dup_indices.items():
+        if not dup_indices:
+            continue
+        one_cluster = dup_df.loc[dup_indices]
+        cluster_df = pd.concat([df.loc[[anchor_idx]], one_cluster])
+        hybrid = _amalgamate_cluster(cluster_df)
+        if not hybrid.empty:
+            hybrid.index = [anchor_idx]
+            hybrid_rows.append(hybrid)
+    if not hybrid_rows:
+        return df
+    hybrid_idx_set = {h.index[0] for h in hybrid_rows}
+    non_hybrid_kept = df.loc[df[~is_dup].index.difference(hybrid_idx_set)]
+    return pd.concat([non_hybrid_kept] + hybrid_rows).reset_index(drop=True)
+
 
 # ---------------------------------------------------------------------------
 # Extraction patterns
@@ -1200,7 +1357,16 @@ class EvidenceEngine:
                         page_text = p.extract_text()
                         if page_text:
                             pdf_text_parts.append(page_text)
-                    except Exception as page_err:
+                    except (
+                        pdfplumber.utils.exceptions.PdfminerException,
+                        ValueError,
+                        TypeError,
+                    ) as page_err:
+                        # Narrowly catch PDF-syntax / text-coercion errors so
+                        # a single bad page does not skip the whole file.
+                        # ``BaseException`` (e.g. ``KeyboardInterrupt``) and
+                        # unexpected runtime errors propagate so the caller
+                        # can still cancel or surface real bugs.
                         self.log_error(
                             f"PDF page {detail_label}", f"Page extraction failed: {page_err}"
                         )
@@ -1594,7 +1760,27 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
         tuple: (flags_list, flag_counts_dict)
         - flags_list: list of (type, date, amount, detail, severity) tuples
         - flag_counts_dict: dict with HIGH, MEDIUM, INFO counts
+
+    Issues a :func:`warnings.warn` for any row that fails to evaluate
+    under each heuristic (parse error, missing key, etc.).  Previously
+    those rows were silently swallowed and the report lost the
+    surrounding evidence — turning them into warnings surfaces a
+    developer-visible signal without breaking the run.
     """
+
+    def _flag_or_warn(
+        row_idx: int,
+        flag_name: str,
+        exc: BaseException,
+    ) -> None:
+        warnings.warn(
+            (
+                f"compute_dispute_flags[{flag_name}] could not evaluate "
+                f"row index {row_idx}: {exc!r}; row silently skipped."
+            ),
+            stacklevel=3,
+        )
+
     flags: list[tuple[str, str | float | None, float | None, str, str]] = []
     n = len(dfc)
     if n < 2:
@@ -1618,8 +1804,8 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                         "HIGH" if pct > 0.5 else "MEDIUM",
                     )
                 )
-        except (ValueError, TypeError, KeyError):
-            pass
+        except (ValueError, TypeError, KeyError) as exc:
+            _flag_or_warn(i, "LARGE_JUMP", exc)
 
     # 2. BILLING GAP: >60 days without a bill
     for i in range(1, n):
@@ -1637,8 +1823,8 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                         "HIGH" if days > 120 else "MEDIUM",
                     )
                 )
-        except (ValueError, TypeError, KeyError):
-            pass
+        except (ValueError, TypeError, KeyError) as exc:
+            _flag_or_warn(i, "BILLING_GAP", exc)
 
     # 3. ESTIMATED RUN: 3+ consecutive estimated readings
     if "Reading" in dfc.columns:
@@ -1694,8 +1880,8 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                                 "HIGH" if ratio > 4 else "MEDIUM",
                             )
                         )
-            except (ValueError, TypeError, KeyError, ZeroDivisionError):
-                pass
+            except (ValueError, TypeError, KeyError, ZeroDivisionError) as exc:
+                _flag_or_warn(i, "HIGH_DAILY_RATE", exc)
 
     # 5. BALANCE REDUCTION: payment/credit > £500
     for i in range(1, n):
@@ -1713,8 +1899,8 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                         "INFO",
                     )
                 )
-        except (ValueError, TypeError, KeyError):
-            pass
+        except (ValueError, TypeError, KeyError) as exc:
+            _flag_or_warn(i, "BALANCE_REDUCTION", exc)
 
     # 6. RECONCILIATION MISMATCH: balance delta vs period charge
     if "Period Charge (£)" in dfc.columns:
@@ -1746,8 +1932,8 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                                 "HIGH" if diff > pc_val * 0.5 else "MEDIUM",
                             )
                         )
-            except (ValueError, TypeError, KeyError):
-                pass
+            except (ValueError, TypeError, KeyError) as exc:
+                _flag_or_warn(i, "RECONCILIATION_MISMATCH", exc)
 
     # Count by severity
     counts = {s: sum(1 for f in flags if f[4] == s) for s in ("HIGH", "MEDIUM", "INFO")}
@@ -2119,14 +2305,27 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         # explicit ordering without booting the entire Excel
         # export pipeline.  Lower number = higher precedence.
         df["_src_pri"] = df["Source"].map(_SOURCE_PRECEDENCE).fillna(9).astype(int)
-        # Sort by source precedence first so the dedup pass's
-        # ``keep="first"`` keeps the higher-precedence row when
-        # two records collide on (_dedup_date, Amount).  With
-        # ``ascending=[True, True]``, lower _src_pri (HTM) sorts
-        # *before* higher _src_pri (PST/Email/etc.) so HTM wins
-        # the dedup tie.  Date is the secondary key — only used
-        # to break ties across same-precedence sources.
-        df = df.sort_values(["_src_pri", "_sort"]).reset_index(drop=True)
+        # Completeness score — primary sort key.  Spec: "duplicates
+        # should be assessed and the most complete version of the
+        # information presented".  ``_completeness_score`` counts
+        # populated substantive fields on each row; the richer row
+        # sorts *before* the sparser row so ``keep="first"`` keeps it.
+        # Computed here (not earlier) so it's available even if the
+        # upstream pipeline headers change in future.
+        df["_completeness"] = df.apply(_completeness_score, axis=1)
+        # Sort order (primary to tie-breaker):
+        #   1. _completeness descending      — most-populated row wins
+        #   2. _src_pri ascending             — higher-precedence source wins ties
+        #   3. _sort ascending                — earliest date wins remaining ties
+        # ``keep="first"`` then retains the head of every duplicate cluster.
+        # Pre-fix the sort was only ``["_src_pri", "_sort"]`` so source
+        # precedence dominated completeness — a sparser HTM row would
+        # beat a richer PST row.  The companion test is
+        # ``tests/test_dedup_most_complete.py``.
+        df = df.sort_values(
+            ["_completeness", "_src_pri", "_sort"],
+            ascending=[False, True, True],
+        ).reset_index(drop=True)
 
         # Dedup key: prefer Period To (consistent across sources for same bill),
         # fall back to Date for records without period info.  Pass 1's
@@ -2141,13 +2340,16 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         # source-specific ``Date``) when the row is no-period
         # (e.g. Local PDF).  ``df["_sort"].where(cond, df["_sort"])``
         # is a tautology — Period To was being ignored and Pass 1
-        # only ever saw Date+Amount, missing cross-source HTM↔PST
-        # duplicates that share a billing period when the
-        # receipt dates differ.  This is critical for ombudsman
-        # submissions: under-dedup = same bill rendered twice
-        # as if they were two separate charges.
+        # ``_dedup_date`` is the *canonical* dedup key — Period To when
+        # available, otherwise left as ``NaT`` so the row is excluded
+        # from ``duplicated`` clusters (since ``duplicated`` treats
+        # NaT as equal across rows, falling back to ``_sort`` would
+        # silently merge unrelated no-period same-amount rows).
+        # Rows with NaT here are rerouted through Pass-2's no-period
+        # bucket logic below, which uses ``Period To == "N/A" | NaN``
+        # as the explicit handling mask.
         period_to_dt = pd.to_datetime(df["Period To"], dayfirst=True, errors="coerce")
-        df["_dedup_date"] = period_to_dt.where(period_to_dt.notna(), df["_sort"])
+        df["_dedup_date"] = period_to_dt
         is_dup = df.duplicated(subset=["_dedup_date", "Amount (£)"], keep="first")
         # Pass 1 (period+amount): build ``kept_pass1_index`` keyed on
         # ``(_dedup_date, Amount)`` so we can look up "which kept row
@@ -2280,16 +2482,50 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         # ``dup_df.index`` still carries each duplicate's original df
         # index — that's the key we use to look up the kept-against
         # summary in ``kept_for_summary``.
+        #
+        # ``save_dups`` toggles whether dedup *itself* is applied to the
+        # main dataframe (``df``).  When True (the historical default),
+        # duplicates are filtered out of ``df`` and *recorded* in
+        # ``dup_df`` for the dup sheet — users never lose visibility of
+        # what was dropped.  When False, dedup is skipped entirely: every
+        # row stays in ``df`` and ``dup_df`` is empty.
         if config.get("save_dups", True):
             dup_df = df[is_dup].copy()
         else:
-            dup_df = df[is_dup].copy()
-        df = df[~is_dup].reset_index(drop=True)
-        df = df.drop(columns=["_src_pri", "_dedup_date"], errors="ignore")
+            dup_df = df[is_dup].iloc[0:0].copy()
+
+        # Spec 3 (stretch): hybrid rows when ``amalgamate_duplicates`` is
+        # True.  Instead of keeping the completeness-winner verbatim, we
+        # merge each duplicate cluster's non-empty fields into a single
+        # hybrid kept row.  The composite keeps the completeness-winner's
+        # ``Source`` identity and picks any populated column value from
+        # any sibling.  Each non-surviving sibling still stays in
+        # ``dup_df`` (the spec's 'never drop without being recorded').
+        #
+        # N.B. the amalgamated ``df`` is is already a cleaned kept set
+        # (all duplicates removed), so the ``df[~is_dup]`` filter below
+        # is skipped for the amalgamate path.
+        if (
+            config.get("save_dups", True)
+            and config.get("amalgamate_duplicates", False)
+            and not dup_df.empty
+        ):
+            df = _apply_amalgamate_to_kept_frame(df, dup_df, kept_pass1_index, kept_for_dup, is_dup)
+            # dup_df stays unchanged — the amalgamation only touches the
+            # kept set; the dup sheet still records every sibling.
+
+        if config.get("save_dups", True) and not config.get("amalgamate_duplicates", False):
+            df = df[~is_dup].reset_index(drop=True)
+        # else: do not drop duplicates — leave ``df`` unchanged so the
+        # user sees the raw ingress and can resolve duplicates manually.
+        df = df.drop(columns=["_src_pri", "_dedup_date", "_completeness"], errors="ignore")
 
     df = df.drop(columns=["_sort"], errors="ignore")
     dup_df = (
-        dup_df.drop(columns=["_sort", "_src_pri", "_dedup_date"], errors="ignore")
+        dup_df.drop(
+            columns=["_sort", "_src_pri", "_dedup_date", "_completeness"],
+            errors="ignore",
+        )
         if not dup_df.empty
         else dup_df
     )
@@ -3500,7 +3736,7 @@ def _linear_forecast(series, steps=6):
     See ``_linear_forecast_pair`` for the (fitted, future) form that
     the Forecast tab now uses.  This single-value shim is kept for
     any callers that imported the previous-shape return value (we
-    don't have any in-tree callers anymore, but a paying client
+    don't have any in-tree callers anymore, but a user
     may have downstream code that does).
     """
     _, forecast = _linear_forecast_pair(series, steps)
@@ -5459,7 +5695,7 @@ class App:
         if not out_path:
             return
 
-        self.set_status(f"Generating professional {'PDF' if fmt == 'pdf' else 'Word'} report…")
+        self.set_status(f"Generating {'PDF' if fmt == 'pdf' else 'Word'} report…")
         getattr(self, f"{fmt}_report_btn").config(state="disabled")
         self.run_btn.config(state="disabled")
         self.cancel_btn.config(state="disabled")
@@ -6022,7 +6258,7 @@ def run_cli_pdf_report(args: list[str]) -> None:
     from edf_report import generate_pdf_from_gui
 
     parser = argparse.ArgumentParser(
-        description="Generate professional PDF report for Energy Ombudsman submission",
+        description="Generate PDF report from extracted records",
         prog="edf-collector --pdf-report",
     )
     parser.add_argument(
@@ -6094,7 +6330,7 @@ def run_cli_docx_report(args: list[str]) -> None:
     from edf_report_docx import generate_docx_from_gui
 
     parser = argparse.ArgumentParser(
-        description="Generate professional Word DOCX report for Energy Ombudsman submission",
+        description="Generate DOCX report from extracted records",
         prog="edf-collector --docx-report",
     )
     parser.add_argument(

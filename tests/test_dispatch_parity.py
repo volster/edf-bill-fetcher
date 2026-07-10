@@ -140,7 +140,7 @@ class TestFmtDateParity:
     """Parity test for ``fmt_date`` between the PDF and DOCX generators.
 
     Phase 1.2: ``edf_report_docx.fmt_date`` is an alias of
-    ``edf_report.fmt_date`` so a paying client's bill is rendered
+    ``edf_report.fmt_date`` so a user's bill is rendered
     identically in both formats.  This test pins that invariant at
     the unit level — any code path that re-introduces a
     DOCX-local ``fmt_date`` will break the alias resolution and

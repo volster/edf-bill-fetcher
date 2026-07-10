@@ -17,7 +17,7 @@ mode this whole subsystem is supposed to provide. We pin:
 4. ``test_restricted_loader_blocks_arbitrary_module`` — a
    raw-pickle of a module that isn't on the whitelist produces
    ``UnpicklingError`` immediately, not after partial restoration,
-   so a paying client is never half-served.
+   so a user is never half-served.
 
 If a fix is needed in the production whitelist, the contract
 here is: add *only* the specific module+class names actually
@@ -210,7 +210,7 @@ class TestPickleRoundTrip:
 
         The EDF evidence product doesn't currently store DataFrames
         inside ``engine.records`` (it stores list-of-dicts); this
-        test pins a future-proofing contract for paying clients
+        test pins a future-proofing contract for users
         who may want to migrate record storage to ``DataFrame``.
 
         The DataFrame is built with ``pd.array(..., dtype="object")``

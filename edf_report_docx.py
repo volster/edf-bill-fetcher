@@ -1,8 +1,10 @@
 """
 DOCX Report Generator for EDF Energy Ombudsman Submissions.
 
-Generates a professional Word document report optimized for Energy Ombudsman review.
-Mirrors the PDF report structure but uses python-docx for output.
+Generates a Word document report mirroring the PDF report structure
+defined in ``edf_report.REPORT_SECTIONS``.  Section titles and
+numbering are derived from that registry, so adding or removing a
+section in one place keeps both surfaces aligned.
 """
 
 from __future__ import annotations
@@ -216,12 +218,25 @@ def _set_cell_shading(cell, color):
     shading_elm.append(shading)
 
 
-def _format_table(table, header_color="#10367A", font_size=8):
-    """Apply formatting to a docx table."""
+def _format_table(table, header_color="#10367A", font_size=8, header_row=True):
+    """Apply formatting to a docx table.
+
+    Parameters
+    ----------
+    header_row:
+        When True (the default) row 0 is treated as a header row and
+        repainted with the ``header_color`` fill plus WHITE bold runs.
+        Set to False for label/value tables (cover page, the
+        Account-Reference table on the cover) where row 0 carries
+        legitimate user content that must keep its prior styling.
+        In header_row=False mode the data-row repaint (DARK_GREY
+        font / alternating fill) is also skipped — call sites that
+        opt out of header styling rely on their own per-cell styling
+        having been applied earlier in the builder.
+    """
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # Header row
-    if table.rows:
+    if header_row and table.rows:
         for cell in table.rows[0].cells:
             _set_cell_shading(cell, header_color)
             for paragraph in cell.paragraphs:
@@ -230,9 +245,18 @@ def _format_table(table, header_color="#10367A", font_size=8):
                     run.font.color.rgb = WHITE
                     run.font.bold = True
                     run.font.size = Pt(font_size)
+        data_start = 1
+    else:
+        # header_row=False: leave every row's contents alone.  Earlier
+        # in the cover-page / exec-summary builders the per-cell loop
+        # already set NAVY/bold on labels and DARK_GREY on values —
+        # re-repainting them here would silently overwrite that with
+        # DARK_GREY (which is on _every_ code path, including the
+        # pre-fix white-overwrite).
+        return
 
     # Data rows
-    for i, row in enumerate(table.rows[1:], 1):
+    for i, row in enumerate(table.rows[data_start:], data_start):
         for cell in row.cells:
             if i % 2 == 0:
                 _set_cell_shading(cell, LIGHT_GREY)
@@ -281,17 +305,29 @@ def create_cover_page(
         row = table.rows[i]
         row.cells[0].text = label
         row.cells[1].text = value
-        for cell in row.cells:
+        # Iterate by column index instead of by re-fetching
+        # ``row.cells[0]`` inside the loop — python-docx's
+        # ``Cell.__eq__`` does NOT compare across freshly-fetched
+        # proxies, so the original ``cell == row.cells[0]`` check
+        # silently evaluated False for *every* column, labelling
+        # every cell DARK_GREY and never NAVY.  Column-zero labels
+        # never received the intended NAVY/bold styling at all until
+        # this fix landed.
+        for col_idx, cell in enumerate(row.cells):
             for paragraph in cell.paragraphs:
                 for run in paragraph.runs:
                     run.font.size = Pt(11)
-                    if cell == row.cells[0]:
+                    if col_idx == 0:
                         run.font.bold = True
                         run.font.color.rgb = NAVY
                     else:
                         run.font.color.rgb = DARK_GREY
 
-    _format_table(table, header_color="#EBF3FA", font_size=11)
+    # Label/value table — row 0 is "Account Reference", not a header.
+    # Pass ``header_row=False`` so _format_table does not repaint row 0
+    # white-on-light-blue (which would silently overwrite the NAVY
+    # label styling applied above and render the labels invisible).
+    _format_table(table, header_color="#EBF3FA", font_size=11, header_row=False)
 
     doc.add_paragraph("")
     doc.add_page_break()
@@ -386,17 +422,25 @@ def create_executive_summary(
         row = table.rows[i]
         row.cells[0].text = label
         row.cells[1].text = value
-        for cell in row.cells:
+        # See ``create_cover_page`` for why ``enumerate(row.cells)`` is
+        # used here — ``cell == row.cells[0]`` silently evaluates False
+        # for fresh proxies, so column-zero labels were never navy-bold
+        # until this fix.
+        for col_idx, cell in enumerate(row.cells):
             for paragraph in cell.paragraphs:
                 for run in paragraph.runs:
                     run.font.size = Pt(11)
-                    if cell == row.cells[0]:
+                    if col_idx == 0:
                         run.font.bold = True
                         run.font.color.rgb = NAVY
                     else:
                         run.font.color.rgb = DARK_GREY
 
-    _format_table(table, header_color="#EBF3FA", font_size=11)
+    # Label/value table — row 0 is "Total Records Analyzed", not a header.
+    # Pass ``header_row=False`` so _format_table does not repaint row 0
+    # white-on-light-blue and silently overwrite the NAVY label styling
+    # applied above (same bug pattern as the cover-page table).
+    _format_table(table, header_color="#EBF3FA", font_size=11, header_row=False)
 
     doc.add_paragraph("")
 
@@ -618,7 +662,11 @@ def create_timeline_section(
 
 
 def create_ofgem_comparison(
-    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    config: dict | None = None,
+    ctx: RenderContext | None = None,
 ) -> None:
     """Create OFGEM price cap comparison section.
 
@@ -632,6 +680,14 @@ def create_ofgem_comparison(
     Period Charge AND Units available, even when the Excel
     ``Unit Rate (p/kWh)`` column ended up ``N/A`` — same logic,
     same table, same row labels as the PDF report.
+
+    Quarters beyond the hard-coded OFGEM cap table are benchmarked
+    against the most recent published cap (``_LATEST_KNOWN``)
+    rather than marked ``CAP DATA UNAVAILABLE`` — same carry-forward
+    contract the PDF report exposes via ``_load_ofgem_caps(auto_carry=False)``
+    plus the ``CAR CARRIED FORWARD`` status. ``config`` is accepted for
+    signature symmetry with the PDF; the comparison logic itself does
+    not currently consult ``config``.
     """
     if ctx is None:
         ctx = RenderContext()
@@ -686,32 +742,49 @@ def create_ofgem_comparison(
         doc.add_page_break()
         return
 
-    ofgem_caps = _load_ofgem_caps()
+    ofgem_caps = _load_ofgem_caps(auto_carry=False)
+    latest_known_cap = ofgem_caps.get("_LATEST_KNOWN")
 
     # Average bill unit rate per quarter; compare to OFGEM cap.
     # Rows are tuples ``(quarter, avg_rate, cap_rate_or_MISSING,
-    # diff_or_MISSING, status_or_UNAVAILABLE)`` — the cap-rate /
-    # diff / status positions use sentinels when the OFGEM cap dict
-    # doesn't cover that quarter, so a reviewer can still see that
-    # the quarter exists in the data even when we couldn't benchmark
-    # it.
+    # diff_or_MISSING, status_or_UNAVAILABLE_or_CARRIED)`` — the
+    # cap-rate / diff / status positions use sentinels when the
+    # OFGEM cap dict doesn't cover that quarter, so a reviewer can
+    # still see the quarter exists in the data even when we couldn't
+    # benchmark it.  Quarters beyond the hard-coded table fall back
+    # to ``_LATEST_KNOWN`` (carry-forward) where available, mirroring
+    # the PDF logic in ``edf_report.create_ofgem_comparison:1462-1497``.
     MISSING = "—"
     UNAVAILABLE = "CAP DATA UNAVAILABLE"
+    CARRIED = "CAP CARRIED FORWARD"
     cap_rows: list[tuple[str, float | str, float | str, float | str, str]] = []
     exceed_count = 0
     unavailable_count = 0
+    carried_count = 0
     for quarter in sorted(bills["_quarter"].unique()):
         quarter_bills = bills[bills["_quarter"] == quarter]
         avg_rate = quarter_bills["_unit_rate"].mean()
         if pd.isna(avg_rate):
             continue
         if quarter not in ofgem_caps:
-            # Cap NOT in our published list — still keep the row so
-            # a reviewer can see the quarter exists in the data even
-            # though we couldn't benchmark it.  ``exceed_count`` is
-            # left untouched (no judgement is made).
-            unavailable_count += 1
-            cap_rows.append((quarter, avg_rate, MISSING, MISSING, UNAVAILABLE))
+            # Quarter beyond hard-coded table — use auto-carry if
+            # available, otherwise mark as unavailable.  Matches
+            # ``edf_report.create_ofgem_comparison:1462-1497``.
+            if latest_known_cap:
+                carried_count += 1
+                cap_rate = latest_known_cap["unit_rate"]
+                diff = avg_rate - cap_rate
+                if diff > 0:
+                    status = f"EXCEEDS CAP ({CARRIED})"
+                    exceed_count += 1
+                elif abs(diff) < 0.01:
+                    status = f"AT CAP ({CARRIED})"
+                else:
+                    status = f"BELOW CAP ({CARRIED})"
+                cap_rows.append((quarter, avg_rate, cap_rate, diff, status))
+            else:
+                unavailable_count += 1
+                cap_rows.append((quarter, avg_rate, MISSING, MISSING, UNAVAILABLE))
             continue
         cap_rate = ofgem_caps[quarter]["unit_rate"]
         diff = avg_rate - cap_rate
@@ -782,6 +855,16 @@ def create_ofgem_comparison(
         # REQUIRED" without an OFGEM comparison. Surface that.
         table.rows[summary_idx].cells[3].text = f"{unavailable_count} period(s) not benchmarked"
         table.rows[summary_idx].cells[4].text = "INCOMPLETE"
+    elif carried_count > 0:
+        # All matched but some were carried forward — mirrors
+        # ``edf_report.create_ofgem_comparison:1526-1529``.  An
+        # honest "compliant with cap data that was projected forward
+        # from the last published quarter" verdict rather than the
+        # silent "INCOMPLETE" label the pre-fix DOCX emitted.
+        table.rows[summary_idx].cells[
+            3
+        ].text = f"{carried_count} period(s) used carried-forward cap"
+        table.rows[summary_idx].cells[4].text = "COMPLIANT (CARRIED)"
     else:
         table.rows[summary_idx].cells[3].text = "No exceedances"
         table.rows[summary_idx].cells[4].text = "COMPLIANT"
@@ -794,7 +877,10 @@ def create_ofgem_comparison(
     # generators always show the same values.  The old code hard-coded
     # a 7-row table that diverged from the PDF (e.g. "34.0" here vs
     # the correct 28.34 for Oct–Dec 2022).
-    recent_caps = {k: v for k, v in ofgem_caps.items() if int(k[:4]) >= 2022}
+    # Filter out the ``_LATEST_KNOWN`` carry-forward sentinel — it's
+    # not a real cap quarter and would crash the ``int(k[:4])`` parse
+    # below AND pollute the published-cap reference table.
+    recent_caps = {k: v for k, v in ofgem_caps.items() if k.startswith("20") and int(k[:4]) >= 2022}
     # Human-readable quarter labels, e.g. "2022-Q4" → "Oct 2022 – Dec 2022"
     _q_start = {1: "Jan", 2: "Apr", 3: "Jul", 4: "Oct"}
     _q_end = {1: "Mar", 2: "Jun", 3: "Sep", 4: "Dec"}
@@ -1107,6 +1193,13 @@ def create_appendix_glossary(doc: Any, styles: Any, ctx: RenderContext | None = 
     table = doc.add_table(rows=len(glossary) + 1, cols=2)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
+    # Row 0 is the real header.  Pre-fix this was never populated so
+    # ``_format_table`` painted an empty header row with header shading
+    # — adding the two-column header here mirrors the PDF and lets
+    # ``_format_table`` style it correctly.
+    table.rows[0].cells[0].text = "Term"
+    table.rows[0].cells[1].text = "Definition"
+
     for i, (term, definition) in enumerate(glossary.items(), 1):
         table.rows[i].cells[0].text = term
         table.rows[i].cells[1].text = definition
@@ -1361,7 +1454,11 @@ def generate_ombudsman_docx(
     filtered: list | None = None,
 ) -> str:
     """
-    Generate a professional DOCX report for Energy Ombudsman submission.
+    Generate a DOCX report from the supplied records.
+
+    The output sections are derived from ``edf_report.REPORT_SECTIONS``
+    via the dispatcher wired up below; the section keys selected via
+    ``config["report_sections"]`` control which sections render.
 
     Args:
         records: List of extracted billing records
@@ -1544,7 +1641,7 @@ def generate_ombudsman_docx(
             lambda kwargs: create_timeline_section(**kwargs),
         ),
         "ofgem": (
-            lambda: {"doc": doc, "styles": styles, "df": df},
+            lambda: {"doc": doc, "styles": styles, "df": df, "config": config},
             lambda kwargs: create_ofgem_comparison(**kwargs),
         ),
         "statistical": (

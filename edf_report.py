@@ -1,9 +1,14 @@
 """
-Professional PDF Report Generator for EDF Energy Ombudsman Submissions.
+EDF Energy PDF Billing-Dispute Report Generator.
 
-Generates a professional, court-ready PDF report optimized for Energy Ombudsman review.
-Includes: Executive Summary, Evidence Index, Key Findings, Timeline, Calculations,
-OFGEM Price Cap Comparison, and full Evidence Appendix.
+Generates a PDF report from extracted billing records.  Output
+sections are pulled from ``REPORT_SECTIONS`` so titles and
+numbering line up with the DOCX renderer defined in
+``edf_report_docx``.  Each section is built by an entry in the
+``section_builders`` dispatch dict inside
+``generate_ombudsman_pdf``; the
+``tests/test_dispatch_parity.py`` test pins the registry ↔
+dispatcher ↔ DOCX dispatcher key set parity.
 """
 
 from __future__ import annotations
@@ -611,7 +616,7 @@ def _get_package_version() -> str:
 
     The function is intentionally defensive — a missing or rotated
     pyproject.toml should not break report generation. The cover
-    page is what a paying client will see first, and a missing
+    page is what a user will see first, and a missing
     version string is uglier than a stable fallback.
     """
     try:
@@ -796,13 +801,16 @@ def create_cover_page(
     )
     elements.append(
         Paragraph(
-            f"Period Covered: <b>{period_start}</b> to <b>{period_end}</b>", STYLES["CoverInfo"]
+            f"Period Covered: <b>{xml_escape(str(period_start))}</b> to <b>{xml_escape(str(period_end))}</b>",
+            STYLES["CoverInfo"],
         )
     )
     elements.append(Spacer(1, 1 * cm))
 
     # Report metadata
-    elements.append(Paragraph(f"Report Generated: <b>{report_date}</b>", STYLES["CoverInfo"]))
+    elements.append(
+        Paragraph(f"Report Generated: <b>{xml_escape(str(report_date))}</b>", STYLES["CoverInfo"])
+    )
     elements.append(Paragraph("Prepared by: <b>EDF Evidence Collector</b>", STYLES["CoverInfo"]))
     elements.append(Spacer(1, 2 * cm))
 
@@ -900,8 +908,9 @@ def create_executive_summary(
     # Overview paragraph
     overview = (
         f"This report presents the findings of a comprehensive analysis of EDF Energy billing data "
-        f"for account <b>{xml_escape(account_ref)}</b>, covering the period <b>{period_start}</b> to "
-        f"<b>{period_end}</b>. The analysis encompasses <b>{total_records}</b> billing records "
+        f"for account <b>{xml_escape(account_ref)}</b>, covering the period "
+        f"<b>{xml_escape(str(period_start))}</b> to <b>{xml_escape(str(period_end))}</b>. "
+        f"The analysis encompasses <b>{total_records}</b> billing records "
         f"sourced from EDF bills (PDF), HTM account exports, and email archives (PST/OST)."
     )
     elements.append(Paragraph(overview, STYLES["BodyText"]))
@@ -1048,7 +1057,11 @@ def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> 
         for i, (ftype, date, amt, detail, _sev) in enumerate(high, 1):
             date_str = fmt_date(date)
             amt_str = fmt_money(amt) if amt else ""
-            text = f"<b>{i}. {ftype}</b> ({date_str}, {amt_str}) — {detail}"
+            text = (
+                f"<b>{i}. {xml_escape(str(ftype))}</b> "
+                f"({xml_escape(str(date_str))}, {xml_escape(str(amt_str))}) — "
+                f"{xml_escape(str(detail))}"
+            )
             elements.append(Paragraph(text, STYLES["BulletText"]))
 
     if medium:
@@ -1059,7 +1072,11 @@ def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> 
         for i, (ftype, date, amt, detail, _sev) in enumerate(medium, 1):
             date_str = fmt_date(date)
             amt_str = fmt_money(amt) if amt else ""
-            text = f"<b>{i}. {ftype}</b> ({date_str}, {amt_str}) — {detail}"
+            text = (
+                f"<b>{i}. {xml_escape(str(ftype))}</b> "
+                f"({xml_escape(str(date_str))}, {xml_escape(str(amt_str))}) — "
+                f"{xml_escape(str(detail))}"
+            )
             elements.append(Paragraph(text, STYLES["BulletText"]))
 
     elements.append(PageBreak())
@@ -1086,7 +1103,7 @@ def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | No
     source_data = [["Source", "Records", "Percentage"]]
     total = len(df)
     for src, cnt in source_counts.items():
-        source_data.append([src, str(cnt), f"{cnt / total:.1%}"])
+        source_data.append([xml_escape(str(src)), str(cnt), f"{cnt / total:.1%}"])
     source_data.append(["TOTAL", str(total), "100.0%"])
 
     t = Table(source_data, colWidths=[8 * cm, 3 * cm, 3 * cm])
@@ -1105,20 +1122,29 @@ def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | No
         src_df = src_df.sort_values("_dt")
 
         elements.append(
-            Paragraph(f"<b>{src}</b> ({len(src_df)} records)", STYLES["SubSubSectionHeader"])
+            Paragraph(
+                f"<b>{xml_escape(str(src))}</b> ({len(src_df)} records)",
+                STYLES["SubSubSectionHeader"],
+            )
         )
 
         # Summary table for this source
         detail_data = [["Date", "Invoice #", "Amount", "Period", "Entry Type", "Reading"]]
         for _, row in src_df.iterrows():
+            # Every column carries user-derived data — escape each
+            # so any literal `<`, `>`, or `&` shows as visible text
+            # rather than being rendered as a tag.  See
+            # ``tests/test_pdf_tablecell_xml.py``.
             detail_data.append(
                 [
-                    fmt_date(row.get("Date")),
-                    str(row.get("Invoice #", "N/A")),
-                    fmt_money(row.get("Amount (£)")),
-                    f"{fmt_date(row.get('Period From'))}–{fmt_date(row.get('Period To'))}",
-                    str(row.get("Entry Type", "")),
-                    str(row.get("Reading", "")),
+                    xml_escape(str(fmt_date(row.get("Date")))),
+                    xml_escape(str(row.get("Invoice #", "N/A"))),
+                    xml_escape(str(fmt_money(row.get("Amount (£)")))),
+                    xml_escape(
+                        f"{fmt_date(row.get('Period From'))}–{fmt_date(row.get('Period To'))}"
+                    ),
+                    xml_escape(str(row.get("Entry Type", ""))),
+                    xml_escape(str(row.get("Reading", ""))),
                 ]
             )
 
@@ -1183,13 +1209,18 @@ def create_anomaly_detail_section(
         # Table of findings
         detail_data = [["#", "Date", "Amount", "Severity", "Detail"]]
         for i, (_ftype, date, amt, detail, sev) in enumerate(cat_flags, 1):
+            # ``detail`` carries user-derived strings (PDF/PST source
+            # names plus computed rationale).  The table rendering
+            # path treats string cells as plain text, but escape
+            # anyway so audit-log readers see literal chars.
+            truncated = detail[:200] + ("..." if len(detail) > 200 else "")
             detail_data.append(
                 [
                     str(i),
-                    fmt_date(date),
-                    fmt_money(amt) if amt else "",
-                    sev,
-                    detail[:200] + ("..." if len(detail) > 200 else ""),
+                    xml_escape(str(fmt_date(date))),
+                    xml_escape(str(fmt_money(amt) if amt else "")),
+                    xml_escape(str(sev)),
+                    xml_escape(truncated),
                 ]
             )
 
@@ -1753,10 +1784,10 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
             pay_detail.append(
                 [
                     fmt_date(row["Date"]),
-                    str(row["Entry Type"]),
+                    xml_escape(str(row["Entry Type"])),
                     fmt_money(row["Amount (£)"]),
                     fmt_money(row["Amount (£)"]),
-                    str(row.get("Details", ""))[:80],
+                    xml_escape(str(row.get("Details", "")))[:80],
                 ]
             )
         t = Table(
@@ -2187,7 +2218,7 @@ def create_appendix_methodology(config: dict, ctx: RenderContext | None = None) 
         elements.append(Paragraph(title, STYLES["SubSectionHeader"]))
         elements.append(Spacer(1, 0.1 * cm))
         for bullet in bullets:
-            elements.append(Paragraph(bullet, STYLES["BulletText"]))
+            elements.append(Paragraph(xml_escape(bullet), STYLES["BulletText"]))
         elements.append(Spacer(1, 0.2 * cm))
 
     elements.append(PageBreak())
@@ -2208,6 +2239,13 @@ def create_appendix_full_evidence(
 
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
+
+    # Local short-form for cell sanitisation.  All user-data
+    # strings fed into a Table cell go through this so a string
+    # with `<bad>` shows the literal `<bad>` rather than any
+    # markup interpretation.  See ``tests/test_pdf_tablecell_xml.py``.
+    def _xf(value: object) -> str:
+        return xml_escape(str(value))
 
     elements.append(
         Paragraph(
@@ -2250,21 +2288,28 @@ def create_appendix_full_evidence(
     for _, row in df_sorted.iterrows():
         evidence_data.append(
             [
-                fmt_date(row.get("Date", "")),
-                str(row.get("Source", ""))[:30],
-                str(row.get("Entry Type", "")),
+                _xf(fmt_date(row.get("Date", ""))),
+                _xf(row.get("Source", ""))[:30],
+                _xf(row.get("Entry Type", "")),
+                # fmt_money output is numeric (no special chars)
                 fmt_money(row.get("Amount (£)", 0)),
                 fmt_money(row.get("Period Charge (£)", 0))
                 if row.get("Period Charge (£)") not in ("", "N/A", None)
                 else "N/A",
-                str(row.get("Period From", "")),
-                str(row.get("Period To", "")),
-                str(row.get("Invoice #", ""))[:15],
-                str(row.get("Reading", ""))[:15],
-                str(row.get("Units (kWh)", ""))[:10],
-                str(row.get("Standing Chg (p/day)", ""))[:10],
-                str(row.get("Attachment Name", ""))[:20],
-                str(row.get("Details", ""))[:50],
+                _xf(row.get("Period From", "")),
+                _xf(row.get("Period To", "")),
+                _xf(row.get("Invoice #", ""))[:15],
+                _xf(row.get("Reading", ""))[:15],
+                # Units / Standing Chg: try to keep as numeric if
+                # parseable — those are safe; only escape the raw
+                # fallback when coercion fails.  For brevity here
+                # we escape the displayed value as a whole string
+                # because the underlying cells are normally
+                # already-numeric str()s.
+                _xf(row.get("Units (kWh)", ""))[:10],
+                _xf(row.get("Standing Chg (p/day)", ""))[:10],
+                _xf(row.get("Attachment Name", ""))[:20],
+                _xf(row.get("Details", ""))[:50],
             ]
         )
 
@@ -2330,21 +2375,21 @@ def create_appendix_full_evidence(
         for row in filtered:
             filt_data.append(
                 [
-                    fmt_date(row.get("Date", "")),
-                    str(row.get("Source", ""))[:30],
-                    str(row.get("Entry Type", "")),
+                    _xf(fmt_date(row.get("Date", ""))),
+                    _xf(row.get("Source", ""))[:30],
+                    _xf(row.get("Entry Type", "")),
                     fmt_money(row.get("Amount (£)", 0)),
                     fmt_money(row.get("Period Charge (£)", 0))
                     if row.get("Period Charge (£)") not in ("", "N/A", None)
                     else "N/A",
-                    str(row.get("Period From", "")),
-                    str(row.get("Period To", "")),
-                    str(row.get("Invoice #", ""))[:15],
-                    str(row.get("Reading", ""))[:15],
-                    str(row.get("Units (kWh)", ""))[:10],
-                    str(row.get("Standing Chg (p/day)", ""))[:10],
-                    str(row.get("Attachment Name", ""))[:20],
-                    str(row.get("Details", ""))[:50],
+                    _xf(row.get("Period From", "")),
+                    _xf(row.get("Period To", "")),
+                    _xf(row.get("Invoice #", ""))[:15],
+                    _xf(row.get("Reading", ""))[:15],
+                    _xf(row.get("Units (kWh)", ""))[:10],
+                    _xf(row.get("Standing Chg (p/day)", ""))[:10],
+                    _xf(row.get("Attachment Name", ""))[:20],
+                    _xf(row.get("Details", ""))[:50],
                 ]
             )
 
@@ -2457,7 +2502,11 @@ def generate_ombudsman_pdf(
     engine: Any,
     filtered: list | None = None,
 ) -> str:
-    """Generate a professional PDF report for Energy Ombudsman submission.
+    """Generate a PDF report from the supplied records.
+
+    The output sections are derived from ``REPORT_SECTIONS`` via the
+    dispatcher wired up below; the section keys selected via
+    ``config["report_sections"]`` control which sections render.
 
     Args:
         records: List of extracted billing records
@@ -2604,7 +2653,12 @@ def generate_ombudsman_pdf(
         try:
             elements.extend(create_table_of_contents(render_ctx))
         except Exception as e:
-            elements.append(Paragraph(f"<i>Table of Contents failed: {e}</i>", STYLES["BodyText"]))
+            elements.append(
+                Paragraph(
+                    f"<i>Table of Contents failed: {xml_escape(str(e))}</i>",
+                    STYLES["BodyText"],
+                )
+            )
 
     # === SECTION DISPATCH (data-driven — keys/ordering live in REPORT_SECTIONS) ===
     # Each entry: (key, required_factory(ctx) -> dict of kwargs, builder_callable)
@@ -2699,7 +2753,12 @@ def generate_ombudsman_pdf(
             kwargs["ctx"] = render_ctx
             elements.extend(invoke(kwargs))
         except Exception as e:
-            elements.append(Paragraph(f"<i>{section.title} failed: {e}</i>", STYLES["BodyText"]))
+            elements.append(
+                Paragraph(
+                    f"<i>{section.title} failed: {xml_escape(str(e))}</i>",
+                    STYLES["BodyText"],
+                )
+            )
 
     # Build
     doc.build(elements)

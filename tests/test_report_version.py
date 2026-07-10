@@ -1,7 +1,7 @@
 """Tests for the report-version helper.
 
 Versioning the report directly off the project's pyproject.toml
-means a paying client always sees the version string we ship —
+means a user always sees the version string we ship —
 not a stale literal baked into cover-page code. The fallback
 path is checked here to lock in the no-crash behaviour for
 builds where pyproject is missing (wheeled installs, sandboxed
@@ -73,7 +73,7 @@ def test_get_package_version_falls_back_to_zero_when_pyproject_missing(
     ``open`` in the ``edf_report`` module's namespace so any read
     attempt raises ``OSError``. The function must feed the
     fallback chain instead of propagating — the cover page is what a
-    paying client sees first and a missing version string is uglier
+    user sees first and a missing version string is uglier
     than a stable fallback. Avoid relying on ``Path.resolve`` /
     platform-specific ``_flavour`` (CI Windows runners differ from
     Linux / macOS in how pathlib's POSIXPath / WindowsPath copies

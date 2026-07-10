@@ -1,13 +1,13 @@
 # EDF Energy Billing Evidence Collector
 
-A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, local PDF bills, and HTM account history exports. Produces a comprehensive Excel evidence workbook and a professional PDF **or** DOCX report designed for direct submission to the **Energy Ombudsman** for dispute resolution.
+A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, local PDF bills, and HTM account history exports. Produces a multi-sheet Excel evidence workbook and a PDF **or** DOCX report suitable for Energy Ombudsman submission.
 
 ## Features
 
 - **Multi-source extraction**: PST/OST email files, local PDF folders, HTM account exports.
 - **Dual format support**: Parses both old-style and new-style (KI/KCR) EDF invoice formats.
 - **Smart amount detection**: Prioritized regex patterns with configurable fallback.
-- **Cross-source deduplication**: Two-pass dedup — Period To + Amount (primary), Amount within a 60-day window (secondary).
+- **Cross-source deduplication**: Two-pass dedup — Period To + Amount (primary), Amount within a 60-day window (secondary). Within a duplicate cluster the *most complete* row wins (substantive field fill-rate), with source precedence as the tie-breaker. Set `amalgamate_duplicates=True` to merge columns across all duplicate siblings into a single hybrid kept row (each sibling still surfaces on the Duplicate Entries sheet for audit).
 - **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets.
 - **Professional PDF + DOCX output**: 14 dynamically-numbered sections. Numbering is **derived from `REPORT_SECTIONS` so the Table of Contents and body always agree**, regardless of which sections a user selects in the report options dialog.
 - **GUI interface**: tkinter-based desktop application with progress tracking.

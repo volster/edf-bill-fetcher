@@ -212,7 +212,7 @@ class TestAccountNumberFilter:
         """A filter of just whitespace/letters shouldn't reject everything."""
         from edf_collector import _account_number_matches
 
-        # Defensive: if a paying client types a non-digit-only filter
+        # Defensive: if a user types a non-digit-only filter
         # by accident, we should not silently drop every record.
         assert _account_number_matches("ab-cd", "any text") is True
 

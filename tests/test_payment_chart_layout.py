@@ -4,7 +4,7 @@ The ``write_payment_analysis_sheet`` function in ``edf_collector``
 historically anchored the in-sheet chart at column H, row
 ``r + 2`` — the default chart width of 28 chart-units ~ 28 Excel
 columns rendered the chart far to the right of the visible data
-table (which only spans columns A-E), so a paying client /
+table (which only spans columns A-E), so a user /
 ombudsman reviewer opening the file saw the chart title render
 *off-screen* (half-hidden).  This regression test pins the new
 contract: chart sits at column B, below the data table, on a

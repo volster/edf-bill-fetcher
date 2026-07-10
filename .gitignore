@@ -51,3 +51,10 @@ coverage.xml
 *.pst
 *.ost
 data/
+
+# Scratch / debug scripts moved out of the source tree during
+# cleanup.  These are one-off investigation scripts that the
+# night-shift model left in the working tree; they don't belong in
+# version control but should stay on disk in case the user wants
+# to recover a probe.
+scratch/
