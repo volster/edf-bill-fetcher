@@ -5250,6 +5250,15 @@ class App:
             ),
         )
 
+        # Output Folder picker (new - spec Design Section 1)
+        browse_row(s1, "Output Folder:", self.output_folder, self._pick_output_folder)
+
+        # Output filename row relocated from Section 2 to Section 1
+        r_out = ttk.Frame(s1)
+        r_out.pack(fill=tk.X, pady=2)
+        ttk.Label(r_out, text="Output filename:", width=14).pack(side=tk.LEFT)
+        ttk.Entry(r_out, textvariable=self.output_name, width=30).pack(side=tk.LEFT, padx=5)
+
         # --- Section 2: Extraction options ---
         s2 = ttk.LabelFrame(main, text=" 2. Search & Filter Options ", padding=10)
         s2.pack(fill=tk.X, pady=5)
@@ -5298,11 +5307,6 @@ class App:
         r4d.pack(fill=tk.X, pady=2)
         ttk.Label(r4d, text="Report account reference:", width=24).pack(side=tk.LEFT)
         ttk.Entry(r4d, textvariable=self.report_account_ref, width=20).pack(side=tk.LEFT, padx=5)
-
-        r4e = ttk.Frame(s2)
-        r4e.pack(fill=tk.X, pady=2)
-        ttk.Label(r4e, text="Output filename:", width=24).pack(side=tk.LEFT)
-        ttk.Entry(r4e, textvariable=self.output_name, width=30).pack(side=tk.LEFT, padx=5)
 
         chk_sf = tk.Checkbutton(
             s2,
@@ -5392,6 +5396,12 @@ class App:
         p = filedialog.askdirectory()
         if p:
             self.pdf_dir.set(p)
+
+    def _pick_output_folder(self):
+        p = filedialog.askdirectory()
+        if p:
+            self.output_folder.set(p)
+            self._save_config()
 
     def set_status(self, text):
         def _apply():
