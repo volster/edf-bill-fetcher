@@ -7,6 +7,7 @@ Fixed version: correct Excel date serials, dynamic range references, new PDF for
 
 import gc
 import hashlib
+import json
 import os
 import pickle
 import re
@@ -5042,8 +5043,121 @@ class App:
         self.output_name = tk.StringVar(value="EDF_Dispute_Evidence.xlsx")
         self.report_account_ref = tk.StringVar(value="")
 
+        # New vars for UI refresh (see spec 2026-07-10-ui-refresh-design.md)
+        self.output_folder = tk.StringVar(value="")
+        self.amalgamate_duplicates = tk.BooleanVar(value=False)
+        self.auto_generate_report = tk.BooleanVar(value=False)
+        self._report_options: dict = {}
+        self._CONFIG_PATH = os.path.expanduser("~/.edf_collector/config.json")
+
+        # Load persisted config (may override the var defaults above)
+        self._load_config()
+
         self.cancel_event = threading.Event()
         self.build_ui()
+
+    # -- Config persistence --
+
+    def _load_config(self):
+        """Read config file and mutate tk vars via .set().
+
+        Silently falls back to hardcoded defaults when the file is
+        missing, unreadable, or malformed.
+        """
+        try:
+            with open(self._CONFIG_PATH) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+
+        gui = data.get("gui_state", {})
+        _bool_keys: dict[str, tk.Variable] = {
+            "use_anchors": self.use_anchors,
+            "use_large": self.use_large,
+            "use_reading_class": self.use_reading_class,
+            "use_pdf_fields": self.use_pdf_fields,
+            "use_acc_filt": self.use_acc_filt,
+            "filter_below": self.filter_below,
+            "save_filtered": self.save_filtered,
+            "use_dedup": self.use_dedup,
+            "save_dups": self.save_dups,
+            "amalgamate_duplicates": self.amalgamate_duplicates,
+            "use_domain_filter": self.use_domain_filter,
+            "auto_generate_report": self.auto_generate_report,
+        }
+        for key, var in _bool_keys.items():
+            if key in gui:
+                var.set(bool(gui[key]))
+
+        _str_keys: dict[str, tk.Variable] = {
+            "acc_num": self.acc_num,
+            "domain_filter": self.domain_filter,
+            "output_name": self.output_name,
+            "report_account_ref": self.report_account_ref,
+            "output_folder": self.output_folder,
+        }
+        for key, var in _str_keys.items():
+            if key in gui:
+                var.set(str(gui[key]))
+
+        _float_keys: dict[str, tk.Variable] = {
+            "min_amount": self.min_amount,
+            "analysis_min": self.analysis_min,
+        }
+        for key, var in _float_keys.items():
+            if key in gui:
+                try:
+                    var.set(float(gui[key]))
+                except (ValueError, TypeError):
+                    pass
+
+        ro = data.get("report_options", {})
+        if ro:
+            self._report_options = ro
+
+    def _save_config(self):
+        """Persist GUI state + report options to config file atomically.
+
+        Write to <path>.tmp, fsync, os.replace.  Permissions 0o600.
+        """
+        config_dir = os.path.dirname(self._CONFIG_PATH)
+        os.makedirs(config_dir, exist_ok=True)
+
+        gui = {
+            "use_anchors": self.use_anchors.get(),
+            "use_large": self.use_large.get(),
+            "use_reading_class": self.use_reading_class.get(),
+            "use_pdf_fields": self.use_pdf_fields.get(),
+            "use_acc_filt": self.use_acc_filt.get(),
+            "acc_num": self.acc_num.get(),
+            "min_amount": self.min_amount.get(),
+            "analysis_min": self.analysis_min.get(),
+            "filter_below": self.filter_below.get(),
+            "save_filtered": self.save_filtered.get(),
+            "use_dedup": self.use_dedup.get(),
+            "save_dups": self.save_dups.get(),
+            "amalgamate_duplicates": self.amalgamate_duplicates.get(),
+            "use_domain_filter": self.use_domain_filter.get(),
+            "domain_filter": self.domain_filter.get(),
+            "output_name": self.output_name.get(),
+            "report_account_ref": self.report_account_ref.get(),
+            "auto_generate_report": self.auto_generate_report.get(),
+            "output_folder": self.output_folder.get(),
+        }
+
+        payload = {
+            "output_folder": self.output_folder.get(),
+            "report_options": getattr(self, "_report_options", {}),
+            "gui_state": gui,
+        }
+
+        tmp_path = self._CONFIG_PATH + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, self._CONFIG_PATH)
 
     def build_ui(self):
         hdr = tk.Frame(self.root, bg=EDF_ORANGE, height=60)
