@@ -6,6 +6,8 @@ The project root is added to ``sys.path`` automatically via
 needed here.
 """
 
+import os
+
 import pytest
 
 
@@ -65,3 +67,35 @@ def sample_config():
         "use_domain_filter": True,
         "domain_filter": "edfenergy.com",
     }
+
+
+def _can_create_tk_root() -> bool:
+    """Probe whether we can actually create a Tk root.
+
+    GUI tests require a display. On headless CI (no $DISPLAY) tkinter raises
+    TclError, so we skip gracefully rather than erroring.
+    """
+    try:
+        import tkinter as tk
+    except ImportError:
+        return False
+    if not os.environ.get("DISPLAY") and os.name != "nt":
+        return False
+    try:
+        root = tk.Tk()
+        root.destroy()
+        return True
+    except Exception:
+        return False
+
+
+if not _can_create_tk_root():
+    collect_ignore = [
+        "test_config_persistence.py",
+        "test_output_folder_var.py",
+        "test_sequential_naming.py",
+        "test_output_folder_picker.py",
+        "test_ui_section2_section3.py",
+        "test_extract_button_state.py",
+        "test_report_dialog_persist.py",
+    ]
