@@ -11,6 +11,12 @@ A personal desktop application that collects and analyses EDF Energy billing dat
 - **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets.
 - **Professional PDF + DOCX output**: 14 dynamically-numbered sections. Numbering is **derived from `REPORT_SECTIONS` so the Table of Contents and body always agree**, regardless of which sections a user selects in the report options dialog.
 - **GUI interface**: tkinter-based desktop application with progress tracking.
+  - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
+  - **Sequential file naming**: `<stem>_<YYYY-MM-DD>_<N>.xlsx` (and `_Report.pdf` / `_Report.docx` variants). Counter is per-day per-folder and shared across all outputs in one batch.
+  - **Auto-generate report**: a checkbox in Section 2 to produce xlsx + PDF + DOCX from a single EXTRACT run, sharing the same batch counter.
+  - **Three-state EXTRACT button**: `EXTRACT TO EXCEL → Cancel → Cancelling... → EXTRACT TO EXCEL` — theEXTRACT and Cancel buttons are now collapsed into one.
+  - **Config persistence**: GUI state and report options stored at `~/.edf_collector/config.json` (atomic write, `0o600`); deleting the file resets state cleanly.
+  - **Amalgamate toggle**: the `amalgamate_duplicates` checkbox surfaces as a nested child under Deduplication (enabled only when both *Drop duplicates* and *Record dropped duplicates* are on; default OFF).
 - **CLI mode**: Headless batch/report generation for automation.
 
 ## Installation
@@ -75,10 +81,11 @@ Or run the built executable `EDF_Evidence_Collector.exe`.
    - **Minimum Amount**: Filter out records below this threshold (default: £500)
    - **Analysis Threshold**: Minimum bill amount for analysis tabs (default: £500)
    - **Report Account Ref**: Override account reference in report header
-3. **Click "EXTRACT TO EXCEL"** — produces the evidence workbook.
-4. **Click "EXPORT PDF REPORT" / "EXPORT WORD REPORT"** — produces the Ombudsman-grade report.
-
-When launching either report you can also click **"LOAD & REPORT"** to extract and report in one step.
+3. **Click "EXTRACT TO EXCEL"** — produces the evidence workbook. The same button toggles to `Cancel` while running and `Cancelling...` after you click Cancel; it returns to `EXTRACT TO EXCEL` when the worker exits.
+4. **Optional: pick Output Folder** (Section 1) — defaults to the source-file directory; override to send xlsx + reports elsewhere.
+5. **Optional: tick "Auto-generate report after extraction"** (Section 2) — produces a PDF + DOCX report (per the saved Report Options) in the same batch as the xlsx, sharing the same sequential counter.
+6. **Report Options**: the navy `Report Options` button opens the format + section-picker dialog; selections persist across sessions.
+7. **Click "LOAD & REPORT"** — load an existing xlsx and regenerate the report from it (uses sequential naming into the output folder, no save-as dialog).
 
 ### CLI Mode — headless report generation
 

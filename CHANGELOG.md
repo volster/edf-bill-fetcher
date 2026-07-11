@@ -3,10 +3,94 @@
 All notable changes to the EDF Energy Billing Evidence Collector
 project. Dates are YYYY-MM-DD.
 
-The format is loosely [Keep a Changelog](https://keepachangelog.com/),
+The format is loosely [Keep a Changelog](https://keepachangelog.com),
 semver-friendly.
 
-## [Unreleased] — Dev-branch review pass (2026-06 → 2026-07)
+## [Unreleased] — UI refresh (2026-07-11)
+
+A focused QOL pass on the tkinter desktop GUI. No changes to the
+extraction pipeline, the dedup walker, or the report renderers
+beyond plumbing the already-existing `amalgamate_duplicates` config
+key through to the UI. Test count rose from 347 to 395 (+48 new
+tests, 8 new test files). Gate stays green across all 9 CI legs
+(Python 3.10/3.11/3.12 × linux/macos/windows).
+
+### Added — features
+
+- **Output Folder picker** in Section 1. Empty value falls back to
+  the first source-file's directory at run time, preserving the
+  pre-refresh default behaviour.
+- **Sequential non-overwriting file naming**: `<stem>_<YYYY-MM-DD>_<N>.xlsx`
+  and `_Report.pdf` / `_Report.docx` variants. Counter is per-day
+  per-folder and shared across all outputs in one EXTRACT batch.
+- **Auto-generate report after extraction** checkbox in Section 2.
+  When ON, EXTRACT also runs the configured PDF / DOCX report
+  generators with the same batch counter as the xlsx. When OFF, only
+  the xlsx is written (today's behaviour).
+- **Report Options** button in the action bar (replaces the former
+  EXPORT REPORT button). Opens the same `ReportOptionsDialog`; the
+  selected format + sections are persisted to the config file on OK.
+- **`~/.edf_collector/config.json`** persistence for GUI state and
+  report options. Atomic write (temp + fsync + `os.replace`),
+  `0o600` permissions, silent fallback to defaults when the file is
+  missing or malformed. Deleting the file resets state cleanly.
+- **Amalgamate toggle** now surfaces as a third nested checkbox in
+  Section 3, enabled only when both *Drop duplicates found across
+  sources* and *Record dropped duplicates on side sheet* are ON.
+  Default OFF (matches the `export_to_excel` default).
+- **Three-state EXTRACT button**: `EXTRACT TO EXCEL` → `Cancel`
+  (navy) → `Cancelling...` (grey) → `EXTRACT TO EXCEL`. The separate
+  Cancel button is gone; clicks on the running button call
+  `_cancel`, which flips the button to `Cancelling...` and disables
+  further clicks until `_finish` resets it to Idle.
+
+### Changed — labels
+
+- "Filter duplicate records (same date & amount)" → "Drop
+  duplicates found across sources".
+- "Save duplicates to separate worksheet" → "Record dropped
+  duplicates on side sheet (Duplicate Entries)".
+- "Save filtered-out records to worksheet" → "Keep filtered-out
+  records on side sheet (Filtered (Below Min))" (relocated as an
+  indented child of the filter-below row).
+- "Output filename:" row moved from Section 2 to Section 1, beside
+  the new Output Folder picker.
+
+### Removed — dead code
+
+- `App.export_report` and `App._export_legacy` deleted
+  (~270 LOC). The three-state button + auto-generate flow removes
+  any call site that previously reached them.
+
+### Tests
+
+- `test_config_persistence.py` (7) — round-trip, missing/malformed
+  file, atomic write, permissions, report_options persistence.
+- `test_output_folder_var.py` (4) — App declares new tk vars.
+- `test_sequential_naming.py` (7) — empty folder, increment, shared
+  batch counter, per-day reset, non-numeric suffix ignored.
+- `test_output_folder_picker.py` (4) — label exists, var set/get,
+  empty default.
+- `test_ui_section2_section3.py` (14) — relocated save_filtered,
+  enable/disable chain, auto-gen checkbox, relabelled dedup labels,
+  amalgamate toggle state wiring.
+- `test_extract_button_state.py` (8) — three-state flip + buttons.
+- `test_report_dialog_persist.py` (2) — OK persists, cancel no-op.
+- `test_dead_code_removed.py` (2) — export_report/_export_legacy
+  are gone.
+
+### CI
+
+- `tests/conftest.py` probes for a usable Tk display and skips the
+  GUI test files via `collect_ignore` when none is found
+  (headless Linux / macOS runners). The Windows-only failure on
+  `test_save_config_file_permissions_0600` is skipped via
+  `@pytest.mark.skipif(os.name == "nt", ...)` because `os.chmod`
+  doesn't enforce Unix mode bits there.
+
+---
+
+## [Dev-branch review pass] (2026-06 → 2026-07)
 
 Two audit passes landed on the `dev` branch. The June pass hardened
 the public API surface and the test/gate contract; the July pass
