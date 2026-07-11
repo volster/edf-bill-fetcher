@@ -5310,35 +5310,77 @@ class App:
 
         chk_sf = tk.Checkbutton(
             s2,
-            text="Save filtered-out records to worksheet",
+            text="Keep filtered-out records on side sheet (Filtered (Below Min))",
             variable=self.save_filtered,
             bg=EDF_OFFWHITE,
         )
         chk_sf.pack(anchor=tk.W, padx=20)
-        chk_filt.config(
-            command=lambda: chk_sf.config(state="normal" if self.filter_below.get() else "disabled")
-        )
 
-        # --- Section 3: Deduplication ---
+        def _update_sf_state() -> None:
+            chk_sf.config(state="normal" if self.filter_below.get() else "disabled")
+
+        chk_filt.config(command=_update_sf_state)
+        _update_sf_state()
+
+        # Auto-generate report after extraction (spec Design Section 2)
+        tk.Checkbutton(
+            s2,
+            text="Auto-generate report after extraction",
+            variable=self.auto_generate_report,
+            bg=EDF_OFFWHITE,
+            command=self._save_config,
+        ).pack(anchor=tk.W)
+
+        self.report_options_btn = tk.Button(
+            s2,
+            text="Report Options...",
+            bg=EDF_NAVY,
+            fg="white",
+            font=("Calibri", 10),
+            command=self._open_report_options,
+            relief="flat",
+        )
+        self.report_options_btn.pack(anchor=tk.W, padx=20, pady=4)
+
+        # --- Section 3: Deduplication (relabelled + amalgamate child) ---
         s3 = ttk.LabelFrame(main, text=" 3. Deduplication ", padding=10)
         s3.pack(fill=tk.X, pady=5)
         chk_dup = tk.Checkbutton(
             s3,
-            text="Filter duplicate records (same date & amount)",
+            text="Drop duplicates found across sources",
             variable=self.use_dedup,
             bg=EDF_OFFWHITE,
         )
         chk_dup.pack(anchor=tk.W)
         chk_sd = tk.Checkbutton(
             s3,
-            text="Save duplicates to separate worksheet",
+            text="Record dropped duplicates on side sheet (Duplicate Entries)",
             variable=self.save_dups,
             bg=EDF_OFFWHITE,
         )
         chk_sd.pack(anchor=tk.W, padx=20)
-        chk_dup.config(
-            command=lambda: chk_sd.config(state="normal" if self.use_dedup.get() else "disabled")
+        chk_am = tk.Checkbutton(
+            s3,
+            text="Build hybrid row per duplicate cluster (merge columns from every sibling)",
+            variable=self.amalgamate_duplicates,
+            bg=EDF_OFFWHITE,
+            command=self._save_config,
         )
+        chk_am.pack(anchor=tk.W, padx=40)
+
+        def _update_dedup_state() -> None:
+            dedup_on = self.use_dedup.get()
+            chk_sd.config(state="normal" if dedup_on else "disabled")
+            chk_am.config(state="normal" if (dedup_on and self.save_dups.get()) else "disabled")
+
+        def _update_amalgamate_state() -> None:
+            chk_am.config(
+                state="normal" if (self.use_dedup.get() and self.save_dups.get()) else "disabled"
+            )
+
+        chk_dup.config(command=_update_dedup_state)
+        chk_sd.config(command=_update_amalgamate_state)
+        _update_dedup_state()
 
         # --- Progress ---
         self.pb = ttk.Progressbar(main, mode="determinate", maximum=100, variable=self.progress_v)
@@ -5401,6 +5443,14 @@ class App:
         p = filedialog.askdirectory()
         if p:
             self.output_folder.set(p)
+            self._save_config()
+
+    def _open_report_options(self):
+        """Open ReportOptionsDialog and persist selection on OK."""
+        dialog = ReportOptionsDialog(self.root)
+        options = dialog.show()
+        if options:
+            self._report_options = options
             self._save_config()
 
     def set_status(self, text):
