@@ -1,7 +1,4 @@
-"""ReportOptionsDialog persists format+sections on OK via _open_report_options.
-
-Spec: docs/superpowers/specs/2026-07-10-ui-refresh-design.md Design Section 4.
-"""
+"""ReportOptionsDialog persists format+sections on OK via _open_report_options."""
 
 import tkinter as tk
 from unittest.mock import MagicMock, patch

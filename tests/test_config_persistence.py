@@ -1,11 +1,11 @@
 """Config-file persistence for App GUI state.
 
-Spec: docs/superpowers/specs/2026-07-10-ui-refresh-design.md Design - Section 3.
 Config path: ~/.edf_collector/config.json; atomic write (temp+rename);
 silent fallback to defaults when file missing/unreadable.
 """
 
 import json
+import os
 import tkinter as tk
 
 import pytest
@@ -120,6 +120,7 @@ class TestConfigLoadSave:
         finally:
             root.destroy()
 
+    @pytest.mark.skipif(os.name == "nt", reason="Unix permission bits not enforced on Windows")
     def test_save_config_file_permissions_0600(self, tmp_config_path):
         """Config file should have 0o600 permissions (user-only)."""
         root = tk.Tk()

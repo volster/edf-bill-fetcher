@@ -1,7 +1,4 @@
-"""App.__init__ declares output_folder, amalgamate_duplicates, auto_generate_report.
-
-Spec: docs/superpowers/specs/2026-07-10-ui-refresh-design.md
-"""
+"""App.__init__ declares output_folder, amalgamate_duplicates, auto_generate_report."""
 
 import tkinter as tk
 

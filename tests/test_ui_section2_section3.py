@@ -1,7 +1,4 @@
-"""Section 2 + Section 3 -- relocate save_filtered, auto-generate, relabel dedup, amalgamate.
-
-Spec: docs/superpowers/specs/2026-07-10-ui-refresh-design.md
-"""
+"""Section 2 + Section 3 -- relocate save_filtered, auto-generate, relabel dedup, amalgamate."""
 
 import tkinter as tk
 from collections.abc import Iterator

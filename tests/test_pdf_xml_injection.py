@@ -15,7 +15,6 @@ markup and verifying that ``Paragraph.text`` contains the *escaped* form
 markup characters are no longer present.
 
 Each test class corresponds to one of the nine fixed sites listed in
-``docs/superpowers/specs/2026-07-08-pdf-xml-injection.md``.
 """
 
 from __future__ import annotations
