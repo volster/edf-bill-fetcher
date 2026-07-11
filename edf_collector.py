@@ -5331,7 +5331,7 @@ class App:
             command=self._save_config,
         ).pack(anchor=tk.W)
 
-        self.report_options_btn = tk.Button(
+        self.report_options_section2_btn = tk.Button(
             s2,
             text="Report Options...",
             bg=EDF_NAVY,
@@ -5340,7 +5340,7 @@ class App:
             command=self._open_report_options,
             relief="flat",
         )
-        self.report_options_btn.pack(anchor=tk.W, padx=20, pady=4)
+        self.report_options_section2_btn.pack(anchor=tk.W, padx=20, pady=4)
 
         # --- Section 3: Deduplication (relabelled + amalgamate child) ---
         s3 = ttk.LabelFrame(main, text=" 3. Deduplication ", padding=10)
@@ -5401,19 +5401,18 @@ class App:
             relief="flat",
         )
         self.run_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8)
-        self.cancel_btn = ttk.Button(btns, text="Cancel", command=self._cancel, state="disabled")
-        self.cancel_btn.pack(side=tk.LEFT, padx=8)
-        self.pdf_report_btn = tk.Button(
+
+        self.report_options_btn = tk.Button(
             btns,
-            text="EXPORT REPORT",
+            text="Report Options",
             bg=EDF_NAVY,
             fg="white",
             font=("Calibri", 12, "bold"),
-            command=self.export_report,
+            command=self._open_report_options,
             relief="flat",
-            state="disabled" if not (HAS_PDF_REPORT or HAS_DOCX_REPORT) else "normal",
+            state="normal" if (HAS_PDF_REPORT or HAS_DOCX_REPORT) else "disabled",
         )
-        self.pdf_report_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(8, 0))
+        self.report_options_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(8, 0))
 
         # Load Spreadsheet & Generate Report button
         self.load_report_btn = tk.Button(
@@ -5491,184 +5490,46 @@ class App:
             self.root.after(0, _s)
 
     def _finish(self):
-        self.run_btn.config(state="normal")
-        self.cancel_btn.config(state="disabled")
-        if hasattr(self, "pdf_report_btn"):
-            self.pdf_report_btn.config(state="normal" if HAS_PDF_REPORT else "disabled")
+        self._set_extract_idle()
         self.progress_v.set(0)
         self.set_status("Cancelled." if self.cancel_event.is_set() else "Ready.")
         gc.collect()
 
-    def export_report(self):
-        """Unified report export — opens modern options dialog."""
-        if not HAS_PDF_REPORT and not HAS_DOCX_REPORT:
-            self._show(
-                "error",
-                "Report Unavailable",
-                "Report generation requires 'reportlab' (PDF) and/or 'python-docx' (Word).\n"
-                "Install with: pip install reportlab python-docx",
-            )
-            return
-
-        if not hasattr(self, "engine") or not self.engine or not self.engine.records:
-            self._show("warning", "No Data", "No records available. Run extraction first.")
-            return
-
-        # Show modern options dialog
-        dialog = ReportOptionsDialog(self.root)
-        options = dialog.show()
-
-        if not options:
-            return  # User cancelled
-
-        # Ask for output path(s)
-        base_dir = (
-            os.path.dirname(self.pst_path.get().strip())
-            if self.pst_path.get().strip()
-            else self.pdf_dir.get().strip()
-            if self.pdf_dir.get().strip()
-            else os.path.dirname(self.htm_path.get().strip())
-            if self.htm_path.get().strip()
-            else os.getcwd()
+    def _set_extract_idle(self):
+        """Flip run_btn to Idle: orange, EXTRACT TO EXCEL."""
+        self.run_btn.config(
+            text="EXTRACT TO EXCEL",
+            bg=EDF_ORANGE,
+            fg="white",
+            command=self.start_thread,
+            state="normal",
         )
 
-        output_paths = {}
-        fmt = options["format"]
+    def _set_extract_running(self):
+        """Flip run_btn to Running: navy, Cancel."""
+        self.run_btn.config(
+            text="Cancel",
+            bg=EDF_NAVY,
+            fg="white",
+            command=self._cancel,
+            state="normal",
+        )
 
-        if fmt in ("pdf", "both"):
-            if not HAS_PDF_REPORT:
-                self._show(
-                    "warning",
-                    "PDF Unavailable",
-                    "PDF generation requires 'reportlab'. Install with: pip install reportlab",
-                )
-            else:
-                default_name = "EDF_Ombudsman_Report.pdf"
-                out_path = filedialog.asksaveasfilename(
-                    initialdir=base_dir,
-                    initialfile=default_name,
-                    defaultextension=".pdf",
-                    filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")],
-                    title="Save Ombudsman PDF Report As",
-                )
-                if out_path:
-                    output_paths["pdf"] = out_path
-                elif fmt == "pdf":
-                    return  # User cancelled PDF-only
-
-        if fmt in ("docx", "both"):
-            if not HAS_DOCX_REPORT:
-                self._show(
-                    "warning",
-                    "DOCX Unavailable",
-                    "DOCX generation requires 'python-docx'. Install with: pip install python-docx",
-                )
-            else:
-                default_name = "EDF_Ombudsman_Report.docx"
-                out_path = filedialog.asksaveasfilename(
-                    initialdir=base_dir,
-                    initialfile=default_name,
-                    defaultextension=".docx",
-                    filetypes=[("Word Documents", "*.docx"), ("All Files", "*.*")],
-                    title="Save Ombudsman Word Report As",
-                )
-                if out_path:
-                    output_paths["docx"] = out_path
-                elif fmt == "docx":
-                    return  # User cancelled DOCX-only
-
-        if not output_paths:
-            return  # User cancelled all
-
-        self.set_status("Generating report…")
-        self.pdf_report_btn.config(state="disabled")
-        self.run_btn.config(state="disabled")
-        self.cancel_btn.config(state="disabled")
-
-        config = {
-            "min_amount": self.min_amount.get(),
-            "analysis_min": self.analysis_min.get(),
-            "acc_num": self.acc_num.get(),
-            "report_account_ref": self.report_account_ref.get().strip(),
-            "report_sections": options["sections"],
-        }
-
-        def _generate():
-            # Lazy import to avoid circular import
-            from edf_report import generate_pdf_from_gui
-            from edf_report_docx import generate_docx_from_gui
-
-            try:
-                messages = []
-                if "pdf" in output_paths:
-                    success, msg = generate_pdf_from_gui(
-                        records=self.engine.records,
-                        output_path=output_paths["pdf"],
-                        config=config,
-                        engine=self.engine,
-                        filtered=self.engine.filtered_records,
-                    )
-                    messages.append(("PDF", success, msg))
-
-                if "docx" in output_paths:
-                    success, msg = generate_docx_from_gui(
-                        records=self.engine.records,
-                        output_path=output_paths["docx"],
-                        config=config,
-                        engine=self.engine,
-                        filtered=self.engine.filtered_records,
-                    )
-                    messages.append(("DOCX", success, msg))
-
-                # Report results
-                combined_msgs = []
-                all_success = True
-                for fmt_label, success, msg in messages:
-                    if success:
-                        combined_msgs.append(
-                            f"✓ {fmt_label}: {msg.split(chr(10))[-1] if msg else 'Generated'}"
-                        )
-                    else:
-                        all_success = False
-                        self.root.after(
-                            0,
-                            lambda m=msg, f=fmt_label: self._show(
-                                "error", f"{f} Generation Failed", m
-                            ),
-                        )
-
-                if all_success and combined_msgs:
-                    self.root.after(
-                        0,
-                        lambda msgs=combined_msgs: self._show(
-                            "info", "Reports Generated", "\n\n".join(msgs)
-                        ),
-                    )
-
-            except Exception as e:
-                self.root.after(
-                    0, lambda err=e: self._show("error", "Error", f"An error occurred:\n\n{err}")
-                )
-            finally:
-                self.root.after(
-                    0,
-                    lambda: (
-                        self.pdf_report_btn.config(
-                            state="normal" if HAS_PDF_REPORT else "disabled"
-                        ),
-                        self.run_btn.config(state="normal"),
-                        self.cancel_btn.config(state="disabled"),
-                        self.set_status("Ready."),
-                    ),
-                )
-
-        threading.Thread(target=_generate, daemon=True).start()
+    def _set_extract_cancelling(self):
+        """Flip run_btn to Cancelling: grey, Cancelling..."""
+        self.run_btn.config(
+            text="Cancelling...",
+            bg=MEDIUM_GREY,
+            fg="white",
+            state="disabled",
+        )
 
     def load_spreadsheet_and_report(self):
-        """Load records from an existing spreadsheet and open report options dialog.
+        """Load records from an existing spreadsheet and auto-generate reports.
 
-        Assumes the spreadsheet has the standard EDF Evidence Report format with
-        an 'EDF Evidence Report' sheet. The user may have corrected/tweaked the data.
+        Assumes the spreadsheet has standard EDF Evidence Report format with
+        an 'EDF Evidence Report' sheet.  Sequential-named reports written
+        into output_folder (or the picked file's directory if unset).
         """
         if not HAS_PDF_REPORT and not HAS_DOCX_REPORT:
             self._show(
@@ -5680,15 +5541,14 @@ class App:
             return
 
         file_path = filedialog.askopenfilename(
-            initialdir=os.getcwd(),
+            initialdir=self.output_folder.get() or os.getcwd(),
             filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")],
             title="Select EDF Evidence Report Spreadsheet",
         )
         if not file_path:
-            return  # User cancelled
+            return
 
         try:
-            # Load the spreadsheet
             df = pd.read_excel(file_path, sheet_name="EDF Evidence Report")
             if df.empty:
                 self._show(
@@ -5699,13 +5559,41 @@ class App:
                 return
 
             records = df.to_dict("records")
+            ro = getattr(self, "_report_options", {})
+            fmt = ro.get("format", "both")
+            sections = ro.get("sections", [s[0] for s in ReportOptionsDialog.SECTIONS])
 
-            # Create a minimal engine-like object for metadata.
-            # A dataclass is used instead of bare class-level annotations
-            # so the attributes have a clear constructor contract and are
-            # self-documenting (previously these were bare class-level
-            # annotations that looked like static type hints but were only
-            # ever set on instances after construction).
+            base_dir = self.output_folder.get().strip() or os.path.dirname(file_path)
+            self.output_folder.set(base_dir)
+            stem = os.path.basename(file_path).replace(".xlsx", "")
+
+            output_paths: dict[str, str] = {}
+            if fmt in ("pdf", "both") and HAS_PDF_REPORT:
+                output_paths["pdf"] = self._resolve_output_path(stem, "pdf", is_report=True)
+            if fmt in ("docx", "both") and HAS_DOCX_REPORT:
+                output_paths["docx"] = self._resolve_output_path(
+                    stem, "docx", batch_n=1, is_report=True
+                )
+
+            if not output_paths:
+                self._show(
+                    "warning",
+                    "No Reports",
+                    "No report paths resolved (check pdf/docx availability).",
+                )
+                return
+
+            self.set_status("Generating report…")
+            self.load_report_btn.config(state="disabled")
+
+            config = {
+                "min_amount": self.min_amount.get(),
+                "analysis_min": self.analysis_min.get(),
+                "acc_num": self.acc_num.get(),
+                "report_account_ref": self.report_account_ref.get().strip(),
+                "report_sections": sections,
+            }
+
             from dataclasses import dataclass
 
             @dataclass
@@ -5714,130 +5602,59 @@ class App:
                 filtered_records: list
                 pdf_count: int
                 email_count: int
+                error_log: list
 
-            engine = MockEngine(records=records, filtered_records=[], pdf_count=0, email_count=0)
-
-            # Open report options
-            dialog = ReportOptionsDialog(self.root)
-            options = dialog.show()
-
-            if not options:
-                return  # User cancelled
-
-            # Ask for output paths
-            fmt = options["format"]
-            base_dir = os.path.dirname(file_path)
-            output_paths = {}
-
-            if fmt in ("pdf", "both"):
-                if not HAS_PDF_REPORT:
-                    self._show(
-                        "warning",
-                        "PDF Unavailable",
-                        "PDF generation requires 'reportlab'. Install with: pip install reportlab",
-                    )
-                else:
-                    default_name = os.path.basename(file_path).replace(".xlsx", "_Report.pdf")
-                    out_path = filedialog.asksaveasfilename(
-                        initialdir=base_dir,
-                        initialfile=default_name,
-                        defaultextension=".pdf",
-                        filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")],
-                        title="Save Ombudsman PDF Report As",
-                    )
-                    if out_path:
-                        output_paths["pdf"] = out_path
-                    elif fmt == "pdf":
-                        return
-
-            if fmt in ("docx", "both"):
-                if not HAS_DOCX_REPORT:
-                    self._show(
-                        "warning",
-                        "DOCX Unavailable",
-                        "DOCX generation requires 'python-docx'. Install with: pip install python-docx",
-                    )
-                else:
-                    default_name = os.path.basename(file_path).replace(".xlsx", "_Report.docx")
-                    out_path = filedialog.asksaveasfilename(
-                        initialdir=base_dir,
-                        initialfile=default_name,
-                        defaultextension=".docx",
-                        filetypes=[("Word Documents", "*.docx"), ("All Files", "*.*")],
-                        title="Save Ombudsman Word Report As",
-                    )
-                    if out_path:
-                        output_paths["docx"] = out_path
-                    elif fmt == "docx":
-                        return
-
-            if not output_paths:
-                return
-
-            self.set_status("Generating report…")
-            self.pdf_report_btn.config(state="disabled")
-            self.load_report_btn.config(state="disabled")
-
-            config = {
-                "min_amount": self.min_amount.get(),
-                "analysis_min": self.analysis_min.get(),
-                "acc_num": self.acc_num.get(),
-                "report_account_ref": self.report_account_ref.get().strip(),
-                "report_sections": options["sections"],
-            }
+            engine = MockEngine(
+                records=records, filtered_records=[], pdf_count=0, email_count=0, error_log=[]
+            )
 
             def _generate():
-                # Lazy import to avoid circular import
                 from edf_report import generate_pdf_from_gui
                 from edf_report_docx import generate_docx_from_gui
 
                 try:
-                    messages = []
+                    msgs = []
                     if "pdf" in output_paths:
-                        success, msg = generate_pdf_from_gui(
+                        s, m = generate_pdf_from_gui(
                             records=records,
                             output_path=output_paths["pdf"],
                             config=config,
                             engine=engine,
                             filtered=[],
                         )
-                        messages.append(("PDF", success, msg))
-
+                        msgs.append(("PDF", s, m))
                     if "docx" in output_paths:
-                        success, msg = generate_docx_from_gui(
+                        s, m = generate_docx_from_gui(
                             records=records,
                             output_path=output_paths["docx"],
                             config=config,
                             engine=engine,
                             filtered=[],
                         )
-                        messages.append(("DOCX", success, msg))
+                        msgs.append(("DOCX", s, m))
 
-                    # Report results (single combined message)
-                    combined_msgs = []
-                    all_success = True
-                    for fmt_label, success, msg in messages:
-                        if success:
-                            combined_msgs.append(
-                                f"✓ {fmt_label}: {msg.split(chr(10))[-1] if msg else 'Generated'}"
+                    combined = []
+                    all_ok = True
+                    for label, ok, m in msgs:
+                        if ok:
+                            combined.append(
+                                f"✓ {label}: {m.split(chr(10))[-1] if m else 'Generated'}\n{output_paths[label.lower()]}"
                             )
                         else:
-                            all_success = False
+                            all_ok = False
                             self.root.after(
                                 0,
-                                lambda m=msg, f=fmt_label: self._show(
-                                    "error", f"{f} Generation Failed", m
+                                lambda mn=m, lb=label: self._show(
+                                    "error", f"{lb} Generation Failed", mn
                                 ),
                             )
-
-                    if all_success and combined_msgs:
+                    if all_ok and combined:
                         self.root.after(
                             0,
-                            lambda msgs=combined_msgs: self._show(
-                                "info", "Reports Generated", "\n\n".join(msgs)
+                            lambda c=combined: self._show(
+                                "info", "Reports Generated", "\n\n".join(c)
                             ),
                         )
-
                 except Exception as e:
                     self.root.after(
                         0,
@@ -5847,11 +5664,6 @@ class App:
                     self.root.after(
                         0,
                         lambda: (
-                            self.pdf_report_btn.config(
-                                state="normal"
-                                if (HAS_PDF_REPORT or HAS_DOCX_REPORT)
-                                else "disabled"
-                            ),
                             self.load_report_btn.config(state="normal"),
                             self.set_status("Ready."),
                         ),
@@ -5862,118 +5674,9 @@ class App:
         except Exception as e:
             self._show("error", "Load Error", f"Failed to load spreadsheet:\n\n{e}")
 
-    def _export_legacy(self, fmt: str) -> None:
-        """Legacy single-format export with all sections."""
-        if fmt == "pdf" and not HAS_PDF_REPORT:
-            self._show(
-                "error",
-                "PDF Unavailable",
-                "PDF generation requires 'reportlab'.\nInstall with: pip install reportlab",
-            )
-            return
-        if fmt == "docx" and not HAS_DOCX_REPORT:
-            self._show(
-                "error",
-                "DOCX Unavailable",
-                "DOCX generation requires 'python-docx'.\nInstall with: pip install python-docx",
-            )
-            return
-
-        if not hasattr(self, "engine") or not self.engine or not self.engine.records:
-            self._show("warning", "No Data", "No records available. Run extraction first.")
-            return
-
-        base_dir = (
-            os.path.dirname(self.pst_path.get().strip())
-            if self.pst_path.get().strip()
-            else self.pdf_dir.get().strip()
-            if self.pdf_dir.get().strip()
-            else os.path.dirname(self.htm_path.get().strip())
-            if self.htm_path.get().strip()
-            else os.getcwd()
-        )
-
-        ext = ".pdf" if fmt == "pdf" else ".docx"
-        default_name = f"EDF_Ombudsman_Report{ext}"
-        filetypes = [("PDF Files", "*.pdf")] if fmt == "pdf" else [("Word Documents", "*.docx")]
-        title = f"Save Ombudsman {'PDF' if fmt == 'pdf' else 'Word'} Report As"
-
-        out_path = filedialog.asksaveasfilename(
-            initialdir=base_dir,
-            initialfile=default_name,
-            defaultextension=ext,
-            filetypes=filetypes + [("All Files", "*.*")],
-            title=title,
-        )
-        if not out_path:
-            return
-
-        self.set_status(f"Generating {'PDF' if fmt == 'pdf' else 'Word'} report…")
-        getattr(self, f"{fmt}_report_btn").config(state="disabled")
-        self.run_btn.config(state="disabled")
-        self.cancel_btn.config(state="disabled")
-
-        # Use all sections for legacy
-        config = {
-            "min_amount": self.min_amount.get(),
-            "analysis_min": self.analysis_min.get(),
-            "acc_num": self.acc_num.get(),
-            "report_account_ref": self.report_account_ref.get().strip(),
-            "report_sections": [s[0] for s in ReportOptionsDialog.SECTIONS],
-        }
-
-        def _generate():
-            # Lazy import to avoid circular import
-            from edf_report import generate_pdf_from_gui
-            from edf_report_docx import generate_docx_from_gui
-
-            try:
-                if fmt == "pdf":
-                    success, msg = generate_pdf_from_gui(
-                        records=self.engine.records,
-                        output_path=out_path,
-                        config=config,
-                        engine=self.engine,
-                        filtered=self.engine.filtered_records,
-                    )
-                else:
-                    success, msg = generate_docx_from_gui(
-                        records=self.engine.records,
-                        output_path=out_path,
-                        config=config,
-                        engine=self.engine,
-                        filtered=self.engine.filtered_records,
-                    )
-
-                if success:
-                    self.root.after(0, lambda: self._show("info", "Success", msg))
-                else:
-                    self.root.after(
-                        0, lambda: self._show("error", f"{fmt.upper()} Generation Failed", msg)
-                    )
-            except Exception as e:
-                self.root.after(
-                    0, lambda err=e: self._show("error", "Error", f"An error occurred:\n\n{err}")
-                )
-            finally:
-                self.root.after(
-                    0,
-                    lambda: (
-                        getattr(self, f"{fmt}_report_btn").config(
-                            state="normal"
-                            if (HAS_PDF_REPORT if fmt == "pdf" else HAS_DOCX_REPORT)
-                            else "disabled"
-                        ),
-                        self.run_btn.config(state="normal"),
-                        self.cancel_btn.config(state="disabled"),
-                        self.set_status("Ready."),
-                    ),
-                )
-
-        threading.Thread(target=_generate, daemon=True).start()
-
     def _cancel(self):
         self.cancel_event.set()
+        self._set_extract_cancelling()
         self.set_status("Cancelling…")
 
     def start_thread(self):
@@ -6000,8 +5703,7 @@ class App:
             )
             return
         self.cancel_event.clear()
-        self.run_btn.config(state="disabled")
-        self.cancel_btn.config(state="normal")
+        self._set_extract_running()
         self.progress_v.set(0)
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -6020,6 +5722,7 @@ class App:
             "save_filtered": self.save_filtered.get(),
             "use_dedup": self.use_dedup.get(),
             "save_dups": self.save_dups.get(),
+            "amalgamate_duplicates": self.amalgamate_duplicates.get(),
             "use_domain_filter": self.use_domain_filter.get(),
             "domain_filter": self.domain_filter.get().strip(),
         }
@@ -6037,7 +5740,6 @@ class App:
                     try:
                         pff = pypff.file()
                     except AttributeError:
-                        # Fallback for different pypff API versions
                         pff = getattr(pypff, "File", None)
                         if pff is None:
                             raise AttributeError(
@@ -6065,26 +5767,30 @@ class App:
 
             if engine.records:
                 self.set_status("Writing Excel report…")
-                base_dir = (
-                    os.path.dirname(pst_path)
-                    if pst_path
-                    else pdf_path
-                    if pdf_path
-                    else os.path.dirname(htm_path)
-                    if htm_path
-                    else os.getcwd()
-                )
-                out_name = self.output_name.get().strip() or "EDF_Dispute_Evidence.xlsx"
-                if not out_name.lower().endswith(".xlsx"):
-                    out_name += ".xlsx"
-                out_path = os.path.join(base_dir, out_name)
+                # Fall back to source dir when output_folder unset
+                if not self.output_folder.get().strip():
+                    base_dir = (
+                        os.path.dirname(pst_path)
+                        if pst_path
+                        else pdf_path
+                        if pdf_path
+                        else os.path.dirname(htm_path)
+                        if htm_path
+                        else os.getcwd()
+                    )
+                    self.output_folder.set(base_dir)
+                stem = self.output_name.get().strip() or "EDF_Dispute_Evidence"
+                if stem.lower().endswith(".xlsx"):
+                    stem = stem[:-5]
+                xlsx_path = self._resolve_output_path(stem, "xlsx")
                 export_to_excel(
                     engine.records,
-                    out_path,
+                    xlsx_path,
                     engine.error_log,
                     config,
                     filtered=engine.filtered_records,
                 )
+                self._save_config()
                 summary = (
                     f"Extraction complete.\n\n"
                     f"  Emails matched: {engine.email_count}\n"
@@ -6093,7 +5799,13 @@ class App:
                 )
                 if engine.error_log:
                     summary += f"\n  Parse errors: {len(engine.error_log)} (see Parse Errors tab)"
-                summary += f"\n\nSaved to:\n{out_path}"
+                summary += f"\n\nSaved to:\n{xlsx_path}"
+
+                if self.auto_generate_report.get():
+                    report_paths = self._run_auto_report(engine, stem, 1)
+                    if report_paths:
+                        summary += "\n\nReports:\n" + "\n".join(report_paths)
+
                 self._show("info", "Success", summary)
             else:
                 self._show(
@@ -6109,6 +5821,54 @@ class App:
             self._show("error", "Error", f"An error occurred:\n\n{traceback.format_exc()}")
         finally:
             self.root.after(0, self._finish)
+
+    def _run_auto_report(self, engine, stem, batch_n):
+        """Run report generation for the auto-generate flow.
+
+        Uses persisted _report_options; writes to output_folder;
+        returns list of written paths.
+        """
+        from edf_report import generate_pdf_from_gui
+        from edf_report_docx import generate_docx_from_gui
+
+        ro = getattr(self, "_report_options", {})
+        fmt = ro.get("format", "both")
+        sections = ro.get("sections", [s[0] for s in ReportOptionsDialog.SECTIONS])
+
+        config = {
+            "min_amount": self.min_amount.get(),
+            "analysis_min": self.analysis_min.get(),
+            "acc_num": self.acc_num.get(),
+            "report_account_ref": self.report_account_ref.get().strip(),
+            "report_sections": sections,
+        }
+
+        written: list[str] = []
+        if fmt in ("pdf", "both") and HAS_PDF_REPORT:
+            pdf_path = self._resolve_output_path(stem, "pdf", batch_n=batch_n, is_report=True)
+            success, _ = generate_pdf_from_gui(
+                records=engine.records,
+                output_path=pdf_path,
+                config=config,
+                engine=engine,
+                filtered=engine.filtered_records,
+            )
+            if success:
+                written.append(pdf_path)
+
+        if fmt in ("docx", "both") and HAS_DOCX_REPORT:
+            docx_path = self._resolve_output_path(stem, "docx", batch_n=batch_n, is_report=True)
+            success, _ = generate_docx_from_gui(
+                records=engine.records,
+                output_path=docx_path,
+                config=config,
+                engine=engine,
+                filtered=engine.filtered_records,
+            )
+            if success:
+                written.append(docx_path)
+
+        return written
 
 
 # ---------------------------------------------------------------------------
