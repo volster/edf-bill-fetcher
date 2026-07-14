@@ -1410,7 +1410,7 @@ class EvidenceEngine:
                 if not pdf.pages:
                     self.log_error(f"PDF: {detail_label}", "PDF has no pages")
                     return
-                pdf_text_parts = []
+                pdf_text_parts: list[str] = []
                 for p in pdf.pages:
                     try:
                         page_text = p.extract_text()
@@ -1429,42 +1429,66 @@ class EvidenceEngine:
                         self.log_error(
                             f"PDF page {detail_label}", f"Page extraction failed: {page_err}"
                         )
-                pdf_text = " ".join(pdf_text_parts)
             del raw
 
             # Use original filename as attachment_name if not already set
             if not attachment_name:
                 attachment_name = detail_label or ""
 
-            fmt = detect_pdf_format(pdf_text)
+            # Multi-invoice PDF slicer. Merged PDFs (e.g. evidence-2026
+            # ``D2 - T-series invoices (Sep 2023 - May 2024, merged).pdf``)
+            # contain multiple invoices end-to-end. ``slice_pdf_pages``
+            # partitions per-page text on ``Invoice number:`` or
+            # ``Page 1 of N`` boundaries. Single-invoice PDFs return a
+            # one-chunk list -- semantically identical to the legacy
+            # whole-document concat.
+            slices = slice_pdf_pages(pdf_text_parts)
+            multi = len(slices) > 1
 
-            if fmt == "new_invoice":
-                self._process_new_invoice(
-                    pdf_text,
-                    source_label,
-                    detail_label,
-                    fallback_date,
-                    sender=sender,
-                    attachment_name=attachment_name,
-                )
-            elif fmt == "new_credit":
-                self._process_new_credit(
-                    pdf_text,
-                    source_label,
-                    detail_label,
-                    fallback_date,
-                    sender=sender,
-                    attachment_name=attachment_name,
-                )
-            else:
-                self.process_text(
-                    pdf_text,
-                    source_label,
-                    detail_label,
-                    fallback_date,
-                    sender=sender,
-                    attachment_name=attachment_name,
-                )
+            for i, slice_pages in enumerate(slices, start=1):
+                slice_text = " ".join(slice_pages)
+                if multi:
+                    slice_detail = f"{detail_label} #{i}"
+                    slice_attachment = f"{attachment_name} #{i}"
+                else:
+                    slice_detail = detail_label
+                    slice_attachment = attachment_name
+
+                try:
+                    fmt = detect_pdf_format(slice_text)
+                    if fmt == "new_invoice":
+                        self._process_new_invoice(
+                            slice_text,
+                            source_label,
+                            slice_detail,
+                            fallback_date,
+                            sender=sender,
+                            attachment_name=slice_attachment,
+                        )
+                    elif fmt == "new_credit":
+                        self._process_new_credit(
+                            slice_text,
+                            source_label,
+                            slice_detail,
+                            fallback_date,
+                            sender=sender,
+                            attachment_name=slice_attachment,
+                        )
+                    else:
+                        self.process_text(
+                            slice_text,
+                            source_label,
+                            slice_detail,
+                            fallback_date,
+                            sender=sender,
+                            attachment_name=slice_attachment,
+                        )
+                except Exception as slice_err:
+                    # One bad slice must not lose the rest of the
+                    # file's invoices. Swallow + log so the user still
+                    # gets rows for any invoices that did parse.
+                    self.log_error(f"PDF slice {i} {slice_detail}", str(slice_err))
+                    continue
 
         except Exception as e:
             self.log_error(f"PDF: {detail_label}", str(e))
