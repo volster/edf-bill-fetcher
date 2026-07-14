@@ -709,6 +709,63 @@ def extract_new_credit_fields(text):
 # non-grouping alternation so existing group numbers are preserved.
 
 
+# ---------------------------------------------------------------------
+# Multi-invoice PDF slicer
+# ---------------------------------------------------------------------
+#
+# Merged PDFs (e.g. ``D2 - T-series invoices (Sep 2023 - May 2024, merged).pdf``)
+# contain multiple invoices concatenated end-to-end. The previous parser ran
+# format detection on the whole-document text concat, so only the first
+# invoice's data was extracted. This slicer partitions the page list into
+# one chunk per invoice using two independent boundary signals:
+#
+# 1. ``Invoice number: <REF>``  -- canonical EDF marker, present on page 1
+# 2. ``Page 1 of N`` (variants: ``1 of 4``, ``one of four``, ``1/4``)
+#
+# The ``Page N of N`` final page is *inclusive* -- it stays with its current
+# invoice. The next slice starts at the next page-1 OR invoice-number
+# marker. A single-invoice PDF (zero or one boundary markers) returns a
+# single chunk containing every page -- identical to the legacy
+# whole-document concat.
+
+_INV_BOUNDARY_RE = re.compile(r"Invoice number:\s*[A-Z0-9-]+", re.I)
+_PAGE1_BOUNDARY_RE = re.compile(
+    r"(?ix)\b"
+    r"(?:page\s+)?"
+    r"(?:1|one)"
+    r"\s*(?:of|/)\s+"
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+    r"\b"
+)
+
+
+def slice_pdf_pages(page_texts: list[str]) -> list[list[str]]:
+    """Slice a PDF's per-page text into one chunk per invoice.
+
+    A page is a slice-start if it contains ``Invoice number:`` OR a
+    ``Page 1 of N`` marker (variants ``1 of 4``, ``one of four``,
+    ``1/4`` all match). The final page of an invoice is inclusive --
+    it stays with its slice. Single-invoice PDFs return
+    ``[list(page_texts)]`` (no behaviour change vs. the legacy
+    whole-document concat).
+    """
+    boundaries: list[int] = []
+    for i, text in enumerate(page_texts):
+        if not text:
+            continue
+        if _INV_BOUNDARY_RE.search(text) or _PAGE1_BOUNDARY_RE.search(text):
+            boundaries.append(i)
+
+    if len(boundaries) <= 1:
+        return [list(page_texts)]
+
+    slices: list[list[str]] = []
+    for j, start in enumerate(boundaries):
+        end = boundaries[j + 1] if j + 1 < len(boundaries) else len(page_texts)
+        slices.append(page_texts[start:end])
+    return slices
+
+
 def parse_htm_account_history(text):
     """
     Parse the EDF MyAccount 'Payments and Invoices' HTM export.
