@@ -5360,6 +5360,114 @@ def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
     return out[columns]
 
 
+def write_rebilling_sheet(
+    ws: Worksheet,
+    rb: pd.DataFrame,
+    account: str = "",
+) -> None:
+    """Render the Rebilling / Corrections tab (spec \u00a74.2)."""
+    ws.title = "Rebilling & Corrections"
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+
+    # Row 1: banner with account
+    title = "REBILLING / CORRECTION EVENTS \u2014 Cancel-and-Repost Patterns"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    t1.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, 11):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+
+    # Row 2: subheader (merged)
+    sub = (
+        "Each row identifies a pair of invoices where the later invoice "
+        "effectively cancelled and re-billed an earlier invoice's period. "
+        "Heuristic: period overlap > 30 days OR billing starts >30 days "
+        "earlier than the new invoice. Trigger Reason lists every "
+        "matching heuristic."
+    )
+    sub_cell = ws.cell(row=2, column=1, value=sub)
+    sub_cell.font = Font(name="Calibri", size=10, italic=True)
+    sub_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=10)
+    ws.row_dimensions[2].height = 45
+
+    # Row 7: table headers (7 cols per spec \u00a74.2).
+    headers = [
+        "Killer Invoice",
+        "Killed Invoice",
+        "Killer Date",
+        "Killed Date",
+        "Period Overlap (days)",
+        "Jump-back (days)",
+        "Trigger Reason",
+    ]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 7, col, h, bg=NAVY)
+    ws.row_dimensions[7].height = 28
+
+    r = 8
+    for _, row in rb.iterrows():
+        bg = "EEF2FF" if r % 2 == 0 else None
+        killer = str(row.get("Killer Invoice", ""))
+        killed = str(row.get("Killed Invoice", ""))
+        _text(ws, r, 1, killer, fill_hex=bg)
+        _text(ws, r, 2, killed, fill_hex=bg)
+        _text(ws, r, 3, row.get("Killer Date", ""), fill_hex=bg)
+        _text(ws, r, 4, row.get("Killed Date", ""), fill_hex=bg)
+        _num(
+            ws,
+            r,
+            5,
+            int(row.get("Period Overlap (days)", 0)),
+            fmt="#,##0",
+            fill_hex=bg,
+        )
+        _num(
+            ws,
+            r,
+            6,
+            int(row.get("Jump-back (days)", 0)),
+            fmt="#,##0",
+            fill_hex=bg,
+        )
+        _text(
+            ws,
+            r,
+            7,
+            str(row.get("Trigger Reason", "")),
+            wrap=True,
+            fill_hex=bg,
+        )
+        if bool(row.get("Cancel/Rebill Admitted (Killer)", False)):
+            ws.cell(row=r, column=7).font = Font(name="Calibri", size=10, bold=True, color="C00000")
+        r += 1
+
+    # Column widths tailored for the table cells.
+    widths = {
+        "A": 18,
+        "B": 18,
+        "C": 14,
+        "D": 14,
+        "E": 18,
+        "F": 16,
+        "G": 50,
+        "H": 14,
+        "I": 14,
+        "J": 14,
+    }
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A8"
+
+
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
