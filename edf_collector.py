@@ -4934,6 +4934,124 @@ def write_tariff_analysis_sheet(ws, dfc):
 
 
 # ---------------------------------------------------------------------------
+# Back-billing, rebilling, meter-rollover, and contract-inference analysis.
+# Pure-pandas detectors (``detect_*``) feed thin sheet writers
+# (``write_*_sheet``).  Both halves keep the existing module style: a
+# detector returns a tidy DataFrame, a writer paints it onto an
+# openpyxl worksheet using the shared cell helpers above.
+# ---------------------------------------------------------------------------
+
+
+def _assess_reason(
+    invoice: str,
+    days: int,
+    admitted: bool,
+    period_from: pd.Timestamp,
+    period_to: pd.Timestamp,
+) -> str:
+    """Return a short, deterministic narrative for the Reason Assessment
+    column of the Back-billing sheet. Template-driven (no LLM).
+    """
+    pf = period_from.strftime("%d %b %Y")
+    pt = period_to.strftime("%d %b %Y")
+    excess = days - 365
+    if admitted:
+        head = (
+            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
+            f"{excess} days past the 12-month back-billing limit. "
+            "EDF's cover page admits a cancellation/reversal, which is "
+            "direct evidence the bill is a back-billing remedy."
+        )
+    else:
+        head = (
+            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
+            f"{excess} days past the 12-month back-billing limit. No "
+            "admit-phrase was found on the cover page."
+        )
+    return head
+
+
+def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
+    """Return invoices whose billing period exceeds 12 months.
+
+    Back-billing (Ofgem / Electricity Act 1989 s.84B) bars suppliers
+    from charging a domestic customer for energy supplied more than
+    12 months before the bill that first raised the charge. This
+    detector surfaces any single invoice whose ``Period From`` ->>
+    ``Period To`` window exceeds 365 days, alongside whether the
+    cover page admits a cancellation/reversal (the
+    ``Cancel/Rebill Admitted`` column populated earlier in the
+    pipeline by :func:`extract_admit_phrase`).
+
+    The function tolerates a missing ``Cancel/Rebill Admitted``
+    column (treated as ``False``).
+
+    Output columns:
+        Invoice #, Bill Date, Period From, Period To, Days Billed,
+        Net Charge (£), 12-Month Limit (days), Excess Days,
+        Cancel/Rebill Admitted, Reason Assessment.
+
+    Rows with unparseable ``Period From``/``Period To`` are skipped
+    silently. Output is sorted by ``Bill Date`` and re-indexed.
+    """
+    columns = [
+        "Invoice #",
+        "Bill Date",
+        "Period From",
+        "Period To",
+        "Days Billed",
+        "Net Charge (£)",
+        "12-Month Limit (days)",
+        "Excess Days",
+        "Cancel/Rebill Admitted",
+        "Reason Assessment",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    has_admit = "Cancel/Rebill Admitted" in df.columns
+    rows = []
+    for _, r in df.iterrows():
+        pf = pd.to_datetime(r.get("Period From"), errors="coerce")
+        pt = pd.to_datetime(r.get("Period To"), errors="coerce")
+        if pd.isna(pf) or pd.isna(pt):
+            continue
+        days = int((pt - pf).days)
+        if days <= 365:
+            continue
+        net_raw = r.get("Amount (£)", 0)
+        try:
+            net = float(net_raw)
+        except (TypeError, ValueError):
+            net = 0.0
+        admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
+        bill_date_raw = r.get("Date", "")
+        bill_date_dt = pd.to_datetime(bill_date_raw, errors="coerce")
+        rows.append(
+            {
+                "Invoice #": r.get("Invoice #", ""),
+                "Bill Date": bill_date_raw,
+                "_bill_date_sort": bill_date_dt if not pd.isna(bill_date_dt) else pd.Timestamp.max,
+                "Period From": pf,
+                "Period To": pt,
+                "Days Billed": days,
+                "Net Charge (£)": net,
+                "12-Month Limit (days)": 365,
+                "Excess Days": days - 365,
+                "Cancel/Rebill Admitted": admitted,
+                "Reason Assessment": _assess_reason(r.get("Invoice #", ""), days, admitted, pf, pt),
+            }
+        )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(columns=columns)
+    sort_key = out["_bill_date_sort"]
+    out = out.drop(columns=["_bill_date_sort"])
+    # Reorder rows by the sort key (parsed Bill Date, ascending).
+    out = out.loc[sort_key.sort_values().index].reset_index(drop=True)
+    return out[columns]
+
+
+# ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
 
