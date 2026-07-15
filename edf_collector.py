@@ -737,6 +737,17 @@ _PAGE1_BOUNDARY_RE = re.compile(
     r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
     r"\b"
 )
+_ADMIT_RE = re.compile(
+    r"(?ix)\b"
+    r"(?:we['\u2019]?ve|we\ have|we\ are|we['\u2019]?re)?\s*"
+    r"(?:recently\s+|previously\s+)?"
+    r"(?:cancel(?:l?ed|ing)|cancell?ed|cancel(?:l?ing)"
+    r"|revers(?:ed|ing)"
+    r"|credit(?:ed|ing))"
+    r".{0,40}?"
+    r"(?:charges?|some\ charges|charges\ for\ you|your\ account)"
+    r"\b"
+)
 
 
 def slice_pdf_pages(page_texts: list[str]) -> list[list[str]]:
@@ -764,6 +775,49 @@ def slice_pdf_pages(page_texts: list[str]) -> list[list[str]]:
         end = boundaries[j + 1] if j + 1 < len(boundaries) else len(page_texts)
         slices.append(page_texts[start:end])
     return slices
+
+
+def extract_admit_phrase(text: str) -> str | None:
+    """Return the first admit-phrase match in *text*, or ``None``.
+
+    An admit phrase is EDF's cover-page wording acknowledging that they
+    have cancelled / reversed / credited charges (the "we've recently
+    cancelled some charges for you" family). The returned string is the
+    matched substring (trimmed) -- callers can store it verbatim as
+    evidence.
+    """
+    if not text:
+        return None
+    m = _ADMIT_RE.search(text)
+    if m is None:
+        return None
+    return m.group(0).strip()
+
+
+_LEGAL_CONTEXT: str = (
+    "Back-billing protections (Ofgem / Electricity Act 1989 s.84B):\n"
+    "Suppliers may not charge a domestic customer for energy supplied\n"
+    "more than 12 months before the date of the bill that first raised\n"
+    "the charge, unless one of the statutory exceptions applies\n"
+    "(customer has been obstructive, has unreasonably refused access,\n"
+    "or has not cooperated with the supplier's reasonable requests). A\n"
+    "supervisor's admission of an earlier billing error -- typically\n"
+    "worded as 'we've recently cancelled some charges for you' on the\n"
+    "cover page of a corrective bill -- is direct evidence that the\n"
+    "cancellation is a back-billing remedy rather than a goodwill\n"
+    "adjustment, and so preserves the 12-month back-billing bar for any\n"
+    "superseded invoices on the same period. This workbook flags any\n"
+    "invoice admitting such a cancellation as evidence of back-billing."
+)
+
+
+def legal_context() -> str:
+    """Return the static legal-context blurb placed on the Back-billing
+    sheet. Kept as a function (not a bare module constant) so the text
+    can be regenerated / internationalised later without changing
+    call-sites.
+    """
+    return _LEGAL_CONTEXT
 
 
 def parse_htm_account_history(text):
