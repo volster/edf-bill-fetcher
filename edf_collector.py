@@ -5249,6 +5249,117 @@ def write_back_billing_sheet(
     ws.freeze_panes = "A8"
 
 
+def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
+    """Return cancel-and-repost pairs identified by the rebilling
+    heuristic (spec \u00a73.2).
+
+    For each ordered pair ``(Killer, Killed)`` where ``Killer.Date`` is
+    strictly later than ``Killed.Date``, emit a row if any of these
+    triggers fire:
+
+    1. ``overlap_d > 30`` -- the two invoice periods overlap by more
+       than 30 days (where ``overlap_d = max(0, min(to_killer,
+       to_killed) - max(from_killer, from_killed)).days``).
+    2. ``jumpback_d > 30`` -- the killer's Period From starts more
+       than 30 days earlier than the killed's Period From (the killer
+       bill reaches back to a date the killed already covered).
+    3. Killer's Days Billed >= 60 AND killer's Period From <=
+       killed's Period From (long-period killer reaching back into
+       the killed's window).
+
+    Output is sorted by ``Killer Date`` (older killers first), then by
+    ``Killed Date``.
+
+    Output columns:
+        Killer Invoice, Killed Invoice, Killer Date, Killed Date,
+        Period Overlap (days), Jump-back (days), Trigger Reason,
+        Cancel/Rebill Admitted (Killer).
+
+    ``Cancel/Rebill Admitted (Killer)`` is the admit-phrase flag
+    lifted from the killer invoice.
+    """
+    columns = [
+        "Killer Invoice",
+        "Killed Invoice",
+        "Killer Date",
+        "Killed Date",
+        "Period Overlap (days)",
+        "Jump-back (days)",
+        "Trigger Reason",
+        "Cancel/Rebill Admitted (Killer)",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    has_admit = "Cancel/Rebill Admitted" in df.columns
+    rows = []
+    # Pre-parse dates and stash as a tuple list so we can sort stably.
+    parsed = []
+    for _, r in df.iterrows():
+        pf = pd.to_datetime(r.get("Period From"), errors="coerce")
+        pt = pd.to_datetime(r.get("Period To"), errors="coerce")
+        bd = pd.to_datetime(r.get("Date"), errors="coerce")
+        if pd.isna(pf) or pd.isna(pt) or pd.isna(bd):
+            continue
+        admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
+        parsed.append(
+            {
+                "Invoice #": r.get("Invoice #", ""),
+                "Date_raw": r.get("Date", ""),
+                "Date": bd,
+                "Period From": pf,
+                "Period To": pt,
+                "Days Billed": int((pt - pf).days),
+                "Admitted": admitted,
+            }
+        )
+    if len(parsed) < 2:
+        return pd.DataFrame(columns=columns)
+    # Sort by issue date so each later invoice becomes a killer relative
+    # to every earlier invoice.
+    parsed.sort(key=lambda x: x["Date"])
+    for i, killer in enumerate(parsed):
+        for killed in parsed[:i]:
+            overlap_d = max(
+                0,
+                (
+                    min(killer["Period To"], killed["Period To"])
+                    - max(killer["Period From"], killed["Period From"])
+                ).days,
+            )
+            jumpback_d = (killed["Period From"] - killer["Period From"]).days
+            triggers: list[str] = []
+            if overlap_d > 30:
+                triggers.append("period overlap > 30d")
+            if jumpback_d > 30:
+                triggers.append("jump-back > 30d")
+            if killer["Days Billed"] >= 60 and killer["Period From"] <= killed["Period From"]:
+                triggers.append("long period \u2265 60d starting \u2264 killed start")
+            if not triggers:
+                continue
+            trigger_reason = "; ".join(triggers)
+            rows.append(
+                {
+                    "Killer Invoice": killer["Invoice #"],
+                    "Killed Invoice": killed["Invoice #"],
+                    "Killer Date": killer["Date_raw"],
+                    "Killed Date": killed["Date_raw"],
+                    "Period Overlap (days)": overlap_d,
+                    "Jump-back (days)": max(0, jumpback_d),
+                    "Trigger Reason": trigger_reason,
+                    "Cancel/Rebill Admitted (Killer)": killer["Admitted"],
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows, columns=columns)
+    # Sort by Killer Date then Killed Date (oldest killers first).
+    out["_k_sort"] = pd.to_datetime(out["Killer Date"], errors="coerce")
+    out["_d_sort"] = pd.to_datetime(out["Killed Date"], errors="coerce")
+    sort_idx = out.sort_values(["_k_sort", "_d_sort"]).index
+    out = out.loc[sort_idx].drop(columns=["_k_sort", "_d_sort"]).reset_index(drop=True)
+    return out[columns]
+
+
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
