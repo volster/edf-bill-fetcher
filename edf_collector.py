@@ -38,6 +38,7 @@ from bs4 import BeautifulSoup
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.worksheet.worksheet import Worksheet
 
 # Optional imports — gracefully degrade if missing
 try:
@@ -5049,6 +5050,203 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     # Reorder rows by the sort key (parsed Bill Date, ascending).
     out = out.loc[sort_key.sort_values().index].reset_index(drop=True)
     return out[columns]
+
+
+def _disclosed_label(
+    admitted: bool,
+    overlaps: bool,
+) -> str:
+    """Return the human-readable value of the 'Cancel/Rebill Disclosed'
+    cell used on the Back-billing and Rebilling tabs.
+
+    The disclosed column joins two independent signals:
+      * admit-phrase (the cover-page wording 'we've recently
+        cancelled some charges for you'), captured as a bool on the
+        record; and
+      * period overlap, flagged by :func:`detect_rebilling`.
+    """
+    if admitted and overlaps:
+        return "Admitted + overlap"
+    if admitted:
+        return "Admitted phrase"
+    if overlaps:
+        return "Period overlap"
+    return ""
+
+
+def write_back_billing_sheet(
+    ws: "Worksheet",
+    bb: pd.DataFrame,
+    account: str = "",
+    overlapping_invoices: set[str] | None = None,
+) -> None:
+    """Render the Back-billing Analysis tab.
+
+    Layout follows the design spec (§4.1):
+      row 1: title banner with SAP account
+      row 2: 'LEGAL CONTEXT' section label
+      row 3: legal_context() body (one merged paragraph)
+      row 4: empty
+      row 5: short instruction
+      row 6: empty
+      row 7: column headers (10 cols)
+      rows 8+: data rows (sorted by Bill Date as produced by
+              :func:`detect_back_billing`)
+      trailing: 'TOTAL RETROSPECTIVE CHARGES IN BACK-BILLED INVOICES'
+
+    The ``Cancel/Rebill Disclosed`` cell (col 9) is the
+    :func:`_disclosed_label` value taking the row's
+    ``Cancel/Rebill Admitted`` bool AND whether this invoice also
+    appears in ``overlapping_invoices`` (a set populated by the
+    rebilling detector; defaults to empty).
+    """
+    ws.title = "Back-billing Analysis"
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+    overlaps = overlapping_invoices or set()
+
+    # Row 1: banner with account
+    title = "BACK-BILLING EVENTS ANALYSIS"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    t1.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, 11):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+
+    # Row 2: 'LEGAL CONTEXT' label
+    lc_hdr = ws.cell(row=2, column=1, value="LEGAL CONTEXT")
+    lc_hdr.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    lc_hdr.fill = PatternFill("solid", start_color=NAVY)
+    lc_hdr.border = CELL_BORDER
+    for c in range(2, 11):
+        x = ws.cell(row=2, column=c)
+        x.fill = PatternFill("solid", start_color=NAVY)
+        x.border = CELL_BORDER
+
+    # Row 3: legal_context body (merged across the whole width so the
+    # paragraph is readable in one cell).
+    lc_text = legal_context()
+    lc_cell = ws.cell(row=3, column=1, value=lc_text)
+    lc_cell.font = Font(name="Calibri", size=10)
+    lc_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    lc_cell.border = CELL_BORDER
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=10)
+    ws.row_dimensions[3].height = 90
+
+    # Row 5: instruction
+    inst = (
+        "Each row identifies an invoice where EDF billed more than 12 "
+        "months retrospectively. The Excess Days column shows by how "
+        "many days beyond the Standard Licence Condition 7A (SLC 7A) "
+        "12-month limit the invoice went."
+    )
+    inst_cell = ws.cell(row=5, column=1, value=inst)
+    inst_cell.font = Font(name="Calibri", size=10, italic=True)
+    inst_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=10)
+    ws.row_dimensions[5].height = 45
+
+    # Row 7: headers
+    headers = [
+        "Invoice #",
+        "Bill Date",
+        "Period From",
+        "Period To",
+        "Days Billed",
+        "Net Charge (£)",
+        "12-Month Limit (days)",
+        "Excess Days",
+        "Cancel/Rebill Disclosed",
+        "Reason Assessment",
+    ]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 7, col, h, bg=NAVY)
+    ws.row_dimensions[7].height = 28
+
+    # Data rows + running total
+    r = 8
+    total = 0.0
+    alt_fill = PatternFill("solid", start_color="EEF2FF")
+    for _, row in bb.iterrows():
+        row_fill = alt_fill if r % 2 == 0 else PatternFill()
+        bg = None if row_fill.fill_type is None else "EEF2FF"
+        inv = str(row.get("Invoice #", ""))
+        overlap_flag = inv in overlaps
+        disclosed = _disclosed_label(bool(row.get("Cancel/Rebill Admitted")), overlap_flag)
+        net = float(row.get("Net Charge (£)", 0.0) or 0.0)
+        total += net
+        bill_date_val = row.get("Bill Date", "")
+        if isinstance(bill_date_val, (pd.Timestamp, datetime)):
+            bill_date_val = bill_date_val.strftime("%d %b %Y")
+        pf = row.get("Period From")
+        if isinstance(pf, (pd.Timestamp, datetime)):
+            pf = pf.strftime("%d %b %Y")
+        pt = row.get("Period To")
+        if isinstance(pt, (pd.Timestamp, datetime)):
+            pt = pt.strftime("%d %b %Y")
+        _text(ws, r, 1, inv, fill_hex=bg)
+        _text(ws, r, 2, bill_date_val, fill_hex=bg)
+        _text(ws, r, 3, pf, fill_hex=bg)
+        _text(ws, r, 4, pt, fill_hex=bg)
+        _num(ws, r, 5, int(row.get("Days Billed", 0)), fmt="#,##0", fill_hex=bg)
+        _money(ws, r, 6, net, fill_hex=bg)
+        _num(ws, r, 7, int(row.get("12-Month Limit (days)", 365)), fmt="#,##0", fill_hex=bg)
+        _num(ws, r, 8, int(row.get("Excess Days", 0)), fmt="#,##0", fill_hex=bg)
+        # Highlight excess-days when >30 (i.e. back-billing is materially over)
+        if int(row.get("Excess Days", 0)) > 30:
+            ws.cell(row=r, column=8).font = Font(name="Calibri", size=10, bold=True, color="C00000")
+        _text(ws, r, 9, disclosed, fill_hex=bg)
+        _text(ws, r, 10, row.get("Reason Assessment", ""), wrap=True, fill_hex=bg)
+        r += 1
+
+    # Trailing totals row
+    if not bb.empty:
+        total_label = "TOTAL RETROSPECTIVE CHARGES IN BACK-BILLED INVOICES"
+        label_cell = ws.cell(row=r, column=1, value=total_label)
+        label_cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        label_cell.fill = PatternFill("solid", start_color=NAVY)
+        label_cell.border = CELL_BORDER
+        label_cell.alignment = Alignment(horizontal="left", vertical="center")
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
+        for c in range(2, 6):
+            x = ws.cell(row=r, column=c)
+            x.fill = PatternFill("solid", start_color=NAVY)
+            x.border = CELL_BORDER
+        total_cell = ws.cell(row=r, column=6, value=total)
+        total_cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        total_cell.fill = PatternFill("solid", start_color=NAVY)
+        total_cell.border = CELL_BORDER
+        total_cell.number_format = "#,##0.00"
+        for c in range(7, 11):
+            x = ws.cell(row=r, column=c)
+            x.fill = PatternFill("solid", start_color=NAVY)
+            x.border = CELL_BORDER
+        ws.row_dimensions[r].height = 22
+        r += 1
+
+    # Column widths
+    widths = {
+        "A": 18,
+        "B": 14,
+        "C": 14,
+        "D": 14,
+        "E": 12,
+        "F": 16,
+        "G": 18,
+        "H": 12,
+        "I": 22,
+        "J": 60,
+    }
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A8"
 
 
 # ---------------------------------------------------------------------------
