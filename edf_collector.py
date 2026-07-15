@@ -5646,6 +5646,200 @@ def write_rebilling_sheet(
     ws.freeze_panes = "A8"
 
 
+def _reading_type_to_aem(reading_value: str) -> str:
+    """Map the Reading column's value (Actual/Estimated/Smart/Unknown)
+    to the single-letter A/E/M code used on the Meter Readings tab.
+    """
+    if reading_value == "Actual":
+        return "A"
+    if reading_value == "Estimated":
+        return "E"
+    if reading_value == "Smart":
+        return "A"
+    return "E"
+
+
+def write_meter_readings_sheet(
+    ws: Worksheet,
+    df: pd.DataFrame,
+    rollovers: pd.DataFrame,
+    account: str = "",
+) -> None:
+    """Render the Meter Readings tab (spec \u00a74.3).
+
+    Layout:
+      row 1: title banner with account
+      row 2: legend 'A = Actual, E = Estimated, M = Meter rollover'
+      row 7: table header (6 cols)
+      rows 8+: one row per evidence record, ordered by Date
+
+    The 'Type (A/E/M)' column maps each evidence row's Reading
+    column to A / E, with M overriding when this invoice appears in
+    the ``rollovers`` table. The Estimated Source column carries
+    Details verbatim (e.g. 'Automatic estimate' or 'SAP estimate')
+    for Estimated rows, else blank.
+    """
+    ws.title = "Meter Readings"
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+
+    rollover_invoices: set[str] = set()
+    if rollovers is not None and not rollovers.empty and "Invoice #" in rollovers.columns:
+        rollover_invoices = {str(x) for x in rollovers["Invoice #"].tolist() if x}
+
+    # Row 1: title banner with account
+    title = "METER READING HISTORY \u2014 Actual vs Estimated"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    t1.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, 7):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+
+    # Row 2: legend subheader
+    sub = (
+        "A = Actual (supplier-confirmed reading)  |  E = Estimated  |  "
+        "M = Meter rollover candidate (negative delta near rollover threshold)"
+    )
+    sub_cell = ws.cell(row=2, column=1, value=sub)
+    sub_cell.font = Font(name="Calibri", size=10, italic=True)
+    sub_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=6)
+    ws.row_dimensions[2].height = 28
+
+    # Row 7: table header (6 cols per spec \u00a74.3).
+    headers = [
+        "Date",
+        "Reading (kWh)",
+        "Type (A/E/M)",
+        "Estimated Source",
+        "Invoice #",
+        "Notes",
+    ]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 7, col, h, bg=NAVY)
+    ws.row_dimensions[7].height = 28
+
+    # Sort rows by Date before writing.
+    work = df.copy() if df is not None and not df.empty else pd.DataFrame()
+    if not work.empty:
+        work["_dt"] = pd.to_datetime(work.get("Date"), errors="coerce")
+        work = work.sort_values("_dt").drop(columns=["_dt"])
+
+    r = 8
+    for _, row in work.iterrows():
+        bg = "EEF2FF" if r % 2 == 0 else None
+        inv = str(row.get("Invoice #", ""))
+        reading = row.get("Reading", "")
+        units_raw = row.get("Units (kWh)", "N/A")
+        try:
+            units = float(units_raw)
+        except (TypeError, ValueError):
+            units = units_raw  # keep as-is in cell
+        # Type code: M overrides if invoice flagged in rollovers.
+        type_code = "M" if inv in rollover_invoices else _reading_type_to_aem(str(reading))
+        est_src = ""
+        if str(reading) == "Estimated":
+            est_src = str(row.get("Details", "") or "")
+        notes = (
+            "Meter rollover candidate -- see rollover table." if inv in rollover_invoices else ""
+        )
+        _text(ws, r, 1, row.get("Date", ""), fill_hex=bg)
+        if isinstance(units, (int, float)):
+            _num(ws, r, 2, units, fmt="#,##0.0", fill_hex=bg)
+        else:
+            _text(ws, r, 2, str(units), fill_hex=bg)
+        _text(ws, r, 3, type_code, fill_hex=bg)
+        _text(ws, r, 4, est_src, fill_hex=bg)
+        _text(ws, r, 5, inv, fill_hex=bg)
+        _text(ws, r, 6, notes, wrap=True, fill_hex=bg)
+        # Colour the type cell for clarity: amber for E, blue for M.
+        type_cell = ws.cell(row=r, column=3)
+        if type_code == "M":
+            type_cell.font = Font(name="Calibri", size=10, bold=True, color="003F87")
+        elif type_code == "E":
+            type_cell.font = Font(name="Calibri", size=10, color="C08000")
+        r += 1
+
+    # Column widths tailored for the table cells.
+    widths = {
+        "A": 14,
+        "B": 16,
+        "C": 16,
+        "D": 26,
+        "E": 20,
+        "F": 50,
+    }
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A8"
+
+
+def write_contract_history_sheet(
+    ws: Worksheet,
+    contracts: pd.DataFrame,
+    account: str = "",
+) -> None:
+    """Render the Contract History tab (spec \u00a74.4)."""
+    ws.title = "Contract History"
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+
+    # Row 1: title banner with account
+    title = "INFERRED CONTRACT HISTORY"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    t1.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, 6):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+
+    # Row 2: subheader
+    sub = (
+        "Contract periods inferred from tariff transitions in the parsed "
+        "invoice stream. Boundaries are approximate (\u2264 30-day merges)."
+    )
+    sub_cell = ws.cell(row=2, column=1, value=sub)
+    sub_cell.font = Font(name="Calibri", size=10, italic=True)
+    sub_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=5)
+    ws.row_dimensions[2].height = 30
+
+    # Row 7: table headers (5 cols per spec \u00a74.4).
+    headers = ["Contract From", "Contract To", "Tariff", "Days", "# Invoices"]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 7, col, h, bg=NAVY)
+    ws.row_dimensions[7].height = 28
+
+    r = 8
+    for _, row in contracts.iterrows() if contracts is not None and not contracts.empty else []:
+        bg = "EEF2FF" if r % 2 == 0 else None
+        _text(ws, r, 1, row.get("Contract From", ""), fill_hex=bg)
+        _text(ws, r, 2, row.get("Contract To", ""), fill_hex=bg)
+        _text(ws, r, 3, row.get("Tariff", ""), fill_hex=bg)
+        _num(ws, r, 4, int(row.get("Days", 0)), fmt="#,##0", fill_hex=bg)
+        _num(ws, r, 5, int(row.get("# Invoices", 0)), fmt="#,##0", fill_hex=bg)
+        r += 1
+
+    # Column widths.
+    widths = {"A": 16, "B": 16, "C": 24, "D": 10, "E": 12}
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A8"
+
+
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
