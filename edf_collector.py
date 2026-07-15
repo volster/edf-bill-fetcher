@@ -5360,6 +5360,184 @@ def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
     return out[columns]
 
 
+# Default 99,999 - 5,000 rollover threshold per spec \u00a73.3.
+_DEFAULT_ROLLOVER_THRESHOLD = 99999 - 5000
+
+
+def detect_meter_rollover(
+    df: pd.DataFrame, rollover_threshold: int = _DEFAULT_ROLLOVER_THRESHOLD
+) -> pd.DataFrame:
+    """Return meter-rollover candidate events (spec \u00a73.3).
+
+    Walks the rows of *df* keeping only ones tagged ``Actual'' or
+    ``Smart'' in the ``Reading`` column (supplier-confirmed readings
+    only -- ``Estimated``/``Unknown`` rows don't count). For each
+    consecutive (actual-or-smart, actual-or-smart) pair, computes
+    delta = (curr Units (kWh)) - (prev Units (kWh)) -- i.e. the
+    change in per-period kWh consumption -- and emits a row when the
+    delta is negative AND its magnitude exceeds
+    ``rollover_threshold`` (default 99,999 - 5,000 = 94,999).
+
+    Output columns:
+        Date, Invoice #, Prev Units (kWh), Curr Units (kWh),
+        Delta, Reading Type, Notes.
+
+    Rows with unparseable ``Units (kWh)`` or ``Date`` are skipped
+    silently.
+    """
+    columns = [
+        "Date",
+        "Invoice #",
+        "Prev Units (kWh)",
+        "Curr Units (kWh)",
+        "Delta",
+        "Reading Type",
+        "Notes",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    # Restrict to Actual/Smart only.
+    mask = df.get("Reading", pd.Series(dtype=str)).isin(["Actual", "Smart"])
+    candidates = df[mask].copy()
+    if candidates.empty:
+        return pd.DataFrame(columns=columns)
+    # Parse dates so we can sort.
+    candidates["_date_dt"] = pd.to_datetime(candidates["Date"], errors="coerce")
+    candidates = candidates.dropna(subset=["_date_dt"])
+    candidates = candidates.sort_values("_date_dt")
+    rows = []
+    prev_units: float | None = None
+    prev_invoice = ""
+    prev_date_raw = ""
+    for _, r in candidates.iterrows():
+        u_raw = r.get("Units (kWh)", "N/A")
+        try:
+            u = float(u_raw)
+        except (TypeError, ValueError):
+            prev_units = None
+            continue
+        if prev_units is not None:
+            delta = u - prev_units
+            if delta < 0 and abs(delta) > rollover_threshold:
+                rows.append(
+                    {
+                        "Date": r.get("Date", ""),
+                        "Invoice #": r.get("Invoice #", ""),
+                        "Prev Units (kWh)": prev_units,
+                        "Curr Units (kWh)": u,
+                        "Delta": int(delta),
+                        "Reading Type": r.get("Reading", ""),
+                        "Notes": (
+                            f"Negative jump of {abs(int(delta))} kWh between "
+                            f"{prev_invoice} ({prev_date_raw}) and "
+                            f"{r.get('Invoice #', '')} ({r.get('Date', '')}) -- "
+                            "consistent with a meter rollover near the "
+                            f"{rollover_threshold + 5000}-rollover cap."
+                        ),
+                    }
+                )
+        prev_units = u
+        prev_invoice = r.get("Invoice #", "")
+        prev_date_raw = r.get("Date", "")
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows, columns=columns)
+    sort_idx = pd.to_datetime(out["Date"], errors="coerce").sort_values().index
+    out = out.loc[sort_idx].reset_index(drop=True)
+    return out[columns]
+
+
+def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
+    """Infer contract periods from tariff transitions (spec \u00a73.4).
+
+    Walks the rows of *df* sorted by ``Date``, skips ``N/A`` tariffs,
+    groups consecutive rows sharing the same ``Tariff`` into one
+    contract, and merges adjacent same-tariff groups whose gap is
+    shorter than ``merge_gap_days`` (default 30). Returns one row per
+    contract with the start/end dates, total days, and invoice count.
+
+    Output columns:
+        Contract From, Contract To, Tariff, Days, # Invoices.
+    """
+    columns = ["Contract From", "Contract To", "Tariff", "Days", "# Invoices"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    work = df.copy()
+    work["_dt"] = pd.to_datetime(work.get("Date"), errors="coerce")
+    work = work.dropna(subset=["_dt", "Tariff"])
+    work = work[work["Tariff"] != "N/A"]
+    if work.empty:
+        return pd.DataFrame(columns=columns)
+    work = work.sort_values("_dt").reset_index(drop=True)
+    # Build raw runs: consecutive rows with the same tariff value.
+    runs: list[dict] = []
+    cur_start_idx = 0
+    cur_tariff = work.iloc[0]["Tariff"]
+    for i in range(1, len(work)):
+        if work.iloc[i]["Tariff"] != cur_tariff:
+            runs.append(
+                {
+                    "start_idx": cur_start_idx,
+                    "end_idx": i - 1,
+                    "tariff": cur_tariff,
+                }
+            )
+            cur_start_idx = i
+            cur_tariff = work.iloc[i]["Tariff"]
+    runs.append(
+        {
+            "start_idx": cur_start_idx,
+            "end_idx": len(work) - 1,
+            "tariff": cur_tariff,
+        }
+    )
+    # Merge adjacent runs of the same tariff if gap < merge_gap_days.
+    merged: list[dict] = []
+    for run in runs:
+        # Calculate this run's dates.
+        start_dt = work.iloc[run["start_idx"]]["_dt"]
+        end_dt = work.iloc[run["end_idx"]]["_dt"]
+        start_raw = work.iloc[run["start_idx"]]["Date"]
+        end_raw = work.iloc[run["end_idx"]]["Date"]
+        n = run["end_idx"] - run["start_idx"] + 1
+        candidate = {
+            "Contract From": start_raw,
+            "Contract To": end_raw,
+            "_from_dt": start_dt,
+            "_to_dt": end_dt,
+            "Tariff": run["tariff"],
+            "# Invoices": n,
+        }
+        if merged and merged[-1]["Tariff"] == candidate["Tariff"]:
+            prev_end = merged[-1]["_to_dt"]
+            gap_days = (candidate["_from_dt"] - prev_end).days
+            if 0 <= gap_days < merge_gap_days:
+                # Merge: extend previous contract's end and invoice count.
+                merged[-1]["Contract To"] = candidate["Contract To"]
+                merged[-1]["_to_dt"] = candidate["_to_dt"]
+                merged[-1]["# Invoices"] += candidate["# Invoices"]
+                continue
+        merged.append(candidate)
+    rows = []
+    for c in merged:
+        days = int((c["_to_dt"] - c["_from_dt"]).days)
+        rows.append(
+            {
+                "Contract From": c["Contract From"],
+                "Contract To": c["Contract To"],
+                "Tariff": c["Tariff"],
+                "Days": days,
+                "# Invoices": int(c["# Invoices"]),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows, columns=columns)
+    sort_idx = pd.to_datetime(out["Contract From"], errors="coerce").sort_values().index
+    out = out.loc[sort_idx].reset_index(drop=True)
+    return out[columns]
+
+
 def write_rebilling_sheet(
     ws: Worksheet,
     rb: pd.DataFrame,
