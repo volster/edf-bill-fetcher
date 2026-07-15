@@ -211,6 +211,48 @@ Removing a section: same steps in reverse.
 | **Statistical Analysis** | Descriptive stats, rolling 6-period stats, EMA, momentum, volatility, z-score/IQR anomalies, Shapiro-Wilk normality tests |
 | **Payment Analysis** | Payment/credit patterns, intervals, amounts, chronological detail with chart |
 | **Forecast & Projection** | Linear regression, Holt-Winters exponential smoothing, EMA projection, confidence intervals, accuracy metrics |
+| **Data Quality Report** | Completeness and read-quality metrics |
+| **Tariff Analysis** | Tariff impact analysis |
+| **Back-billing Analysis** | Invoices whose `Period From` → `Period To` window exceeds the SLC 7A 12-month limit (365 days), with the cancel/rebill ad- mission disclosed as `Admitted phrase`, `Period overlap`, `Admitted + overlap`, or blank. Legal context block cites Electricity Act 1989 s.84B and Ofgem's back-billing rule. |
+| **Rebilling & Corrections** | Killer/killed invoice pairs identified by period overlap > 30 days OR jump-back > 30 days OR long-period killer ≥ 60 days reaching back into a prior invoice's window. Trigger Reason lists every matching heuristic. |
+| **Meter Readings** | Actual vs Estimated timeline with meter-rollover candidates flagged `M`. Estimated Source mirrors the row's `Details` column (e.g. `Automatic estimate`). |
+| **Contract History** | Contract periods inferred from tariff transitions, with ≤ 30-day gaps merging across same-tariff runs. |
+
+## Back-billing & rebilling detection
+
+The workbook carries four analysis tabs after the existing sheet set:
+
+- **Back-billing Analysis**: surfaces any single invoice whose `Period From` → `Period To` window exceeds the 12-month SLC 7A back-billing limit (>365 days). Each row shows the excess days and a deterministic Reason Assessment narrative. The `Cancel/Rebill Disclosed` column flags invoices whose cover page contains an admit phrase (e.g. *"we've recently cancelled some charges for you"*) — matched case-insensitively against EDF's wording — or that overlap a prior invoice's period (`Period overlap`), or both.
+- **Rebilling & Corrections**: pairs of invoices where a "killer" later-issued bill effectively cancels and reposts a "killed" earlier bill. Heuristics — period overlap > 30 days, jump-back > 30 days, or long-period (≥60 days) killer reaching back into the killed's start. Trigger Reason lists every trigger that fired.
+- **Meter Readings**: A/E/M timeline (`A`=Actual, `E`=Estimated, `M`=Meter rollover candidate). Actual/Smart readings only count toward rollover detection; a negative kWh delta within 94,999 of the 5-digit cap flags the row.
+- **Contract History**: one row per inferred tariff run. Adjacent same-tariff runs merge when their gap is ≤30 days (default).
+
+The four detectors are pure-pandas functions keyed off the deduplicated evidence DataFrame — no LLM, no external service. Detectors:
+
+| Detector | Output columns |
+| --- | --- |
+| `detect_back_billing(df)` | Invoice #, Bill Date, Period From, Period To, Days Billed, Net Charge (£), 12-Month Limit (days), Excess Days, Cancel/Rebill Admitted, Reason Assessment |
+| `detect_rebilling(df)` | Killer Invoice, Killed Invoice, Killer Date, Killed Date, Period Overlap (days), Jump-back (days), Trigger Reason, Cancel/Rebill Admitted (Killer) |
+| `detect_meter_rollover(df, rollover_threshold=94999)` | Date, Invoice #, Prev Units (kWh), Curr Units (kWh), Delta, Reading Type, Notes |
+| `infer_contracts(df, merge_gap_days=30)` | Contract From, Contract To, Tariff, Days, # Invoices |
+
+The detectors can be called directly from Python:
+
+```python
+from edf_collector import (
+    detect_back_billing,
+    detect_rebilling,
+    detect_meter_rollover,
+    infer_contracts,
+    run_analysers,
+)
+
+# One-shot — returns a dict with keys back_billing, rebilling,
+# meter_rollover, contracts.
+analyses = run_analysers(deduped_df)
+```
+
+Multi-invoice (merged) PDF inputs — e.g. a bundle of 30+ pages containing 8 T-series invoices or 40 pages containing 10 KI-series invoices — are sliced at invoice boundaries before parsing, so each invoice gets its own row instead of being lost in the whole-file concat. The slicer looks for either an `Invoice number:` line or a `Page 1 of N` boundary marker (variants `1 of 4`, `one of four`, `1/4`).
 
 ## Supported EDF Formats
 

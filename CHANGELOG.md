@@ -6,6 +6,79 @@ project. Dates are YYYY-MM-DD.
 The format is loosely [Keep a Changelog](https://keepachangelog.com),
 semver-friendly.
 
+## [Unreleased] — Back-billing & rebilling detection (2026-07-15)
+
+Adds four Excel analysis tabs (Back-billing Analysis, Rebilling &
+Corrections, Meter Readings, Contract History) backed by four
+pure-pandas detectors, plus multi-invoice PDF support and admit-
+phrase extraction. No existing sheet writer is modified; the new
+tabs append after the existing set. Test count rises from 395 to
+498 (+103 new tests across 9 new test files). Gate stays green
+across all 9 CI legs (Python 3.10/3.11/3.12 × linux/macos/windows).
+
+### Added — features
+
+- **Multi-invoice PDF slicing** (`slice_pdf_pages`): a PDF's per-page
+  text is sliced at `Invoice number:` or `Page 1 of N` boundaries
+  (variants `1 of 4`, `one of four`, `1/4`), so each invoice in a
+  merged PDF becomes its own row. Single-invoice PDFs are unchanged
+  (one slice = whole document). `process_pdf_file` dispatches each
+  slice through the existing format-detect path with the `#i` slice
+  index suffixed to `detail_label` and `attachment_name`. Per-slice
+  try/except isolates a bad slice from the rest of the file.
+- **Admit-phrase extraction** (`extract_admit_phrase`): recognises
+  EDF's cover-page wording (the "we've recently cancelled some
+  charges for you" family) under the new `_ADMIT_RE` regex. Returns
+  the matched substring or `None`; rejects `cancel your direct
+  debit`-style false positives that lack the operative charge-
+  cancellation verb.
+- **Back-billing detector** (`detect_back_billing`): surfaces any
+  single invoice whose `Period From` → `Period To` window exceeds
+  the SLC 7A 12-month limit (>365 days). `Reason Assessment` is a
+  deterministic narrative (no LLM) calling out the excess days and
+  whether the cover page admits a cancellation. `Cancel/Rebill
+  Admitted` column comes from the admit-phrase extractor.
+- **Rebilling detector** (`detect_rebilling`): pairs of invoices
+  where a "killer" later-issued bill cancels and reposts a "killed"
+  earlier bill. Fires on period overlap > 30 days OR jump-back > 30
+  days OR long-period (≥60 days) killer whose Period From ≤ the
+  killed's Period From. `Trigger Reason` lists every trigger that
+  fired, joined by `; `.
+- **Meter rollover detector** (`detect_meter_rollover`): walks
+  Actual/Smart readings, computes delta on the `Units (kWh)` column,
+  and emits a row when the delta is negative with `abs(delta)` above
+  `rollover_threshold` (default 94,999 = 99,999 − 5,000). Caller-
+  supplied threshold lets the algorithm tune for shorter or longer
+  meter caps.
+- **Contract inferrer** (`infer_contracts`): groups consecutive rows
+  with the same `Tariff` value into one contract, merging adjacent
+  same-tariff runs whose inter-group gap is < `merge_gap_days`
+  (default 30). `N/A` tariffs are skipped.
+- **Back-billing Analysis tab** (`write_back_billing_sheet`): title
+  banner with SAP account, legal-context header citing Electricity
+  Act 1989 s.84B and Ofgem's back-billing rule, 10-col table, total
+  retrospective charges footer. `Cancel/Rebill Disclosed` carries
+  one of `Admitted phrase`, `Period overlap`, `Admitted + overlap`,
+  or blank, taking the row's admit-phrase flag plus an optional set
+  of overlapping invoice numbers supplied by the rebilling
+  detector.
+- **Rebilling & Corrections tab** (`write_rebilling_sheet`): title
+  banner, subheader paragraph, 7-col table.
+- **Meter Readings tab** (`write_meter_readings_sheet`): A/E/M
+  timeline (`A`=Actual, `E`=Estimated, `M`=Meter rollover
+  candidate). Estimated Source mirrors the row's `Details` column
+  for Estimated rows. Rollover rows flagged `M` show a Notes blurb
+  pointing at the rollover table.
+- **Contract History tab** (`write_contract_history_sheet`):
+  title, 5-col table.
+- **Orchestrator** (`run_analysers`): thin wrapper returning a dict
+  of the four detector outputs so `export_to_excel` calls them with
+  one line.
+- **Wiring**: `export_to_excel` now calls `run_analysers(dfc)` after
+  the existing sheet writers and before `wb.save`, appending the
+  four new tabs. Account label pulled from `config['acc_num']`. No
+  existing sheet writer touched.
+
 ## [Unreleased] — UI refresh (2026-07-11)
 
 A focused QOL pass on the tkinter desktop GUI. No changes to the
