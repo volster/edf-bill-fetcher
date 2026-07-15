@@ -3725,6 +3725,43 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # Tariff Analysis (if data available)
     write_tariff_analysis_sheet(wb.create_sheet(title="Tariff Analysis"), dfc)
 
+    # ------------------------------------------------------------------
+    # Phase-2 analysis tabs (back-billing, rebilling, meter rollover,
+    # contract history). run_analysers runs the four detectors on the
+    # same `dfc` (post-dedup, post-filter) the rest of the workbook
+    # uses, then each writer paints the result onto its own tab.
+    # The new tabs append AFTER the existing 16 -- no existing sheet
+    # is touched. Account label is pulled from config['acc_num'].
+    # ------------------------------------------------------------------
+    account_label = str(config.get("acc_num", "") or "")
+    analyses = run_analysers(dfc)
+    rb = analyses["rebilling"]
+    overlapping_invoices: set[str] = (
+        {str(x) for x in rb["Killer Invoice"].tolist()} if not rb.empty else set()
+    )
+    write_back_billing_sheet(
+        wb.create_sheet(title="Back-billing Analysis"),
+        analyses["back_billing"],
+        account=account_label,
+        overlapping_invoices=overlapping_invoices,
+    )
+    write_rebilling_sheet(
+        wb.create_sheet(title="Rebilling & Corrections"),
+        analyses["rebilling"],
+        account=account_label,
+    )
+    write_meter_readings_sheet(
+        wb.create_sheet(title="Meter Readings"),
+        dfc,
+        analyses["meter_rollover"],
+        account=account_label,
+    )
+    write_contract_history_sheet(
+        wb.create_sheet(title="Contract History"),
+        analyses["contracts"],
+        account=account_label,
+    )
+
     wb.save(output_path)
 
 
@@ -5644,6 +5681,28 @@ def write_rebilling_sheet(
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A8"
+
+
+def run_analysers(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Run all Phase-2 detection analyses on the deduplicated
+    DataFrame and return their outputs in a dict.
+
+    The orchestrator is a thin wrapper so :func:`export_to_excel` can
+    call four detectors with one line and downstream tests can
+    inspect the full set without re-running each individually.
+
+    Returns:
+        dict with keys ``back_billing``, ``rebilling``,
+        ``meter_rollover``, ``contracts``. Each value is a tidy
+        DataFrame (possibly empty) ready to feed the corresponding
+        ``write_*_sheet`` writer.
+    """
+    return {
+        "back_billing": detect_back_billing(df),
+        "rebilling": detect_rebilling(df),
+        "meter_rollover": detect_meter_rollover(df),
+        "contracts": infer_contracts(df),
+    }
 
 
 def _reading_type_to_aem(reading_value: str) -> str:
