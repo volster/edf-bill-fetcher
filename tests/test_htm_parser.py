@@ -112,8 +112,13 @@ class TestHTMParserPayment:
         assert r["Date"] == "27/02/2026"
         # The running balance is captured as Amount (£).
         assert r["Amount (£)"] == 45111.65
-        # No period info for a payment.
-        assert r["Period Charge (£)"] == "N/A"
+        # The actual payment amount (£850) is captured as
+        # Period Charge (£) -- the column downstream Payment/Credit
+        # analyses read for "this row's transaction value" (the
+        # naming is a slight misnomer for non-bill rows but it's
+        # the canonical home for the per-row transaction amount
+        # across all HTM record types).
+        assert r["Period Charge (£)"] == 850.00
         assert r["Period From"] == "N/A"
         assert r["Period To"] == "N/A"
         # Classifier for this row type.
@@ -141,6 +146,8 @@ class TestHTMParserReversal:
         assert r["Source"] == "HTM Account History"
         assert r["Date"] == "26/02/2026"
         assert r["Amount (£)"] == 44011.65
+        # The actual reversal amount (£100) lives in Period Charge (£).
+        assert r["Period Charge (£)"] == 100.0
         assert r["Entry Type"] == "Credit"
         assert r["Logic Used"] == "HTM Reversal"
 
@@ -231,7 +238,9 @@ class TestHTMCreditBalance:
         assert len(records) == 1
         r = records[0]
         assert r["Entry Type"] == "Payment"
+        # Running balance in Amount (£); payment amount in Period Charge (£).
         assert r["Amount (£)"] == 150.0
+        assert r["Period Charge (£)"] == 200.0
 
     def test_standalone_balance_in_credit_is_parsed(self):
         # A credit-balance line with no preceding charge/payment/reversal

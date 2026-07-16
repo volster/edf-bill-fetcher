@@ -890,6 +890,7 @@ def parse_htm_account_history(text):
     for m in pay_re.finditer(text):
         covered.append((m.start(0), m.end(0)))
         date_str = parse_to_display_date(m.group(1))
+        payment_amt = float(m.group(2).replace(",", ""))
         balance = float(m.group(3).replace(",", ""))
         records.append(
             {
@@ -900,7 +901,16 @@ def parse_htm_account_history(text):
                 "Period To": "N/A",
                 "Invoice #": "N/A",
                 "Amount (£)": balance,
-                "Period Charge (£)": "N/A",
+                # Period Charge (£) holds the actual payment amount for
+                # Payment/Credit rows -- yes, it's a misnomer (there is no
+                # period) but the column is where downstream code -- the
+                # Payment Analysis sheet, ``_detect_payment_patterns``,
+                # and the line-detail painter -- looks for "this row's
+                # transaction amount". The running balance lives in
+                # ``Amount (£)`` so cross-source dedup (which keys on
+                # ``Amount (£)`` for bill rows) still de-duplicates the
+                # credit-account row against the matching bill.
+                "Period Charge (£)": payment_amt,
                 "Entry Type": "Payment",
                 "Reading": "N/A",
                 "Units (kWh)": "N/A",
@@ -921,6 +931,7 @@ def parse_htm_account_history(text):
     for m in rev_re.finditer(text):
         covered.append((m.start(0), m.end(0)))
         date_str = parse_to_display_date(m.group(1))
+        credit_amt = float(m.group(2).replace(",", ""))
         balance = float(m.group(3).replace(",", ""))
         records.append(
             {
@@ -931,7 +942,12 @@ def parse_htm_account_history(text):
                 "Period To": "N/A",
                 "Invoice #": "N/A",
                 "Amount (£)": balance,
-                "Period Charge (£)": "N/A",
+                # See note on the Payment regex above: the actual
+                # credit (the "Reversed account charge £X.XX" amount)
+                # goes into Period Charge (£) so downstream
+                # Payment/Credit analyses see the real transaction
+                # value rather than the running balance.
+                "Period Charge (£)": credit_amt,
                 "Entry Type": "Credit",
                 "Reading": "N/A",
                 "Units (kWh)": "N/A",
@@ -3925,7 +3941,18 @@ def _holt_winters_forecast(series, steps=6, seasonal_periods=None):
 
 
 def _detect_payment_patterns(df):
-    """Analyze payment/credit patterns in the data."""
+    """Analyze payment/credit patterns in the data.
+
+    The per-row transaction amount (the customer's actual payment or
+    EDF's actual credit) lives in ``Period Charge (£)`` for HTM
+    Payment/Credit rows. ``Amount (£)`` on those rows carries the
+    *running balance after the transaction* -- using it as the
+    "payment amount" used to flood the Payment Analysis sheet with
+    huge balance figures masquerading as payments. Prefer
+    ``Period Charge (£)`` when the row has a numeric value there,
+    falling back to ``Amount (£)`` for legacy / PST-only rows that
+    never populated ``Period Charge (£)``.
+    """
     payments = df[df["Entry Type"].isin(["Payment", "Credit"])].copy()
     if payments.empty:
         return {}
@@ -3937,8 +3964,16 @@ def _detect_payment_patterns(df):
     pay_dates = payments["_dt"].dropna()
     intervals = pay_dates.diff().dt.days.dropna()
 
-    # Payment amounts (negative values for credits/payments)
-    pay_amounts = payments["Amount (£)"].astype(float)
+    # Per-row transaction amount: prefer Period Charge (£) (the actual
+    # payment / credit), fall back to Amount (£) when Period Charge is
+    # missing or non-numeric (legacy rows that never populated it, or
+    # older callers passing a DataFrame without the column).
+    if "Period Charge (£)" in payments.columns:
+        pc_numeric = pd.to_numeric(payments["Period Charge (£)"], errors="coerce")
+    else:
+        pc_numeric = pd.Series([float("nan")] * len(payments), index=payments.index)
+    amt_numeric = pd.to_numeric(payments["Amount (£)"], errors="coerce")
+    pay_amounts = pc_numeric.where(pc_numeric.notna() & (pc_numeric > 0), amt_numeric)
 
     return {
         "count": len(payments),
@@ -4405,14 +4440,26 @@ def write_payment_analysis_sheet(ws, dfc):
         bg = LGREY if i % 2 == 0 else None
         _text(ws, r, 1, row["Date"], fill_hex=bg)
         _text(ws, r, 2, row["Entry Type"], fill_hex=bg, bold=True)
-        _money(ws, r, 3, float(row["Amount (£)"]), fill_hex=bg)
-        # Balance After (column 4) — Historical Note: this column shows
-        # the per-row transaction amount rather than the running account
-        # balance.  Real "balance-after" data is not currently parsed
-        # from EDF bills, so we display the same amount as a placeholder
-        # (open Low-severity follow-up B6: parse the running balance
-        # column from EDF statements when available).
-        _money(ws, r, 4, float(row["Amount (£)"]), fill_hex=bg)
+        # Amount (£) column: the actual transaction amount (customer
+        # payment or EDF credit). HTM Payment/Credit rows carry this
+        # in Period Charge (£); legacy rows that only populated
+        # Amount (£) use that instead.
+        pc_val = row.get("Period Charge (£)")
+        try:
+            amount_to_show = float(pc_val)
+        except (TypeError, ValueError):
+            amount_to_show = float(row["Amount (£)"])
+        _money(ws, r, 3, amount_to_show, fill_hex=bg)
+        # Balance After (£) -- the running balance stored in
+        # ``Amount (£)`` for HTM rows. For legacy rows where Amount
+        # WAS the transaction, we have no separate balance, so show
+        # the same amount (with a note that real balance-after is
+        # not parsed for legacy formats).
+        try:
+            balance_after = float(row["Amount (£)"])
+        except (TypeError, ValueError):
+            balance_after = amount_to_show
+        _money(ws, r, 4, balance_after, fill_hex=bg)
         _text(ws, r, 5, str(row.get("Details", ""))[:60], fill_hex=bg, wrap=True)
 
     # Chart - Payment amounts over time.
@@ -4466,7 +4513,15 @@ def write_payment_analysis_sheet(ws, dfc):
         for i, (_, row) in enumerate(payments.iterrows(), 1):
             payload_row = chart_data_start_row + i
             _text(ws, payload_row, 1, row["Date"])
-            _money(ws, payload_row, 2, float(row["Amount (£)"]))
+            # Same preference logic as the detail table above:
+            # the per-row transaction value (Period Charge (£))
+            # over the running balance (Amount (£)).
+            pc_val = row.get("Period Charge (£)")
+            try:
+                amount_for_chart = float(pc_val)
+            except (TypeError, ValueError):
+                amount_for_chart = float(row["Amount (£)"])
+            _money(ws, payload_row, 2, amount_for_chart)
 
         # Step 2: build the chart from the labelled mini-table so
         # the title ("C2", "D2") series is unambiguous when a
