@@ -5762,6 +5762,46 @@ def _source_excerpt_for_invoice(
     return _format_source_excerpt(text, trace, failed)
 
 
+# ---------------------------------------------------------------------------
+# Evidence Report row index (Stream P4 / Task 7)
+# ---------------------------------------------------------------------------
+# A ``dict[str, int]`` mapping per-row signatures to the 1-indexed Excel row
+# on the ``EDF Evidence Report`` sheet so the 4 analyser writers can emit a
+# ``View on Evidence Report`` hotlink on each row. Two signatures per row are
+# emitted:
+#   - ``inv:<Invoice #>`` -- exact Invoice # match, used when the analyser
+#     DataFrame carries the Invoice # in its key column.
+#   - ``amt_days:<Amount £ with 2dp>|<days>`` -- fallback signature keyed on
+#     the diagnostic pair `` (£, days-billed)``, used when Invoice # is N/A
+#     or otherwise unparseable. ``setdefault`` keeps the first hit.
+
+
+def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[str, int]:
+    """Map match-key signatures to the Excel row on the Evidence Report."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return {}
+    index: dict[str, int] = {}
+    rows_iter = df.iterrows()
+    for i, r in rows_iter:
+        row_no = header_row_offset + 1 + i  # Excel row (header row + i + 1)
+        inv = r.get("Invoice #", "")
+        if isinstance(inv, str) and inv and inv != "N/A":
+            key = f"inv:{inv}"
+            index.setdefault(key, row_no)
+        amt = r.get("Amount (£)", "")
+        pf = pd.to_datetime(r.get("Period From"), dayfirst=True, errors="coerce")
+        pt = pd.to_datetime(r.get("Period To"), dayfirst=True, errors="coerce")
+        if pd.isna(pf) or pd.isna(pt):
+            continue
+        try:
+            amt_f = float(amt)
+        except (TypeError, ValueError):
+            continue
+        days = str((pt - pf).days)
+        index.setdefault(f"amt_days:{amt_f:.2f}|{days}", row_no)
+    return index
+
+
 def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     """Return invoices whose billing period exceeds 12 months.
 
@@ -5870,6 +5910,7 @@ def write_back_billing_sheet(
     account: str = "",
     overlapping_invoices: set[str] | None = None,
     evidence_df: pd.DataFrame | None = None,
+    evidence_index: dict[str, int] | None = None,
 ) -> None:
     """Render the Back-billing Analysis tab.
 
@@ -5961,6 +6002,7 @@ def write_back_billing_sheet(
         "Cancel/Rebill Disclosed",
         "Reason Assessment",
         "Source Excerpt",
+        "View on Evidence Report",
     ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 7, col, h, bg=NAVY)
@@ -6009,6 +6051,32 @@ def write_back_billing_sheet(
             if looked is not None:
                 excerpt = looked
         _text(ws, r, 11, excerpt, wrap=True, fill_hex=bg)
+        # View on Evidence Report (col 12): bidirectional hotlink back to the
+        # row on the EDF Evidence Report sheet. Match by Invoice # first,
+        # falling back to the amt|days signature.
+        target_row = None
+        if evidence_index is not None:
+            target_row = evidence_index.get(f"inv:{inv}")
+            if target_row is None:
+                try:
+                    amt = float(row.get("Net Charge (£)", 0.0) or 0.0)
+                    days = int(row.get("Days Billed", 0) or 0)
+                    key = f"amt_days:{amt:.2f}|{days}"
+                    target_row = evidence_index.get(key)
+                except (TypeError, ValueError):
+                    pass
+        if target_row is not None:
+            cell = ws.cell(row=r, column=12, value="→")
+            cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                ref=cell.coordinate,
+                location=f"'EDF Evidence Report'!A{target_row}",
+                display="→",
+                tooltip=f"Jump to EDF Evidence Report!A{target_row}",
+            )
+            cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        else:
+            cell = ws.cell(row=r, column=12, value="No match")
+            cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
         r += 1
 
     # Trailing totals row
@@ -6029,7 +6097,7 @@ def write_back_billing_sheet(
         total_cell.fill = PatternFill("solid", start_color=NAVY)
         total_cell.border = CELL_BORDER
         total_cell.number_format = "#,##0.00"
-        for c in range(7, 12):
+        for c in range(7, 13):
             x = ws.cell(row=r, column=c)
             x.fill = PatternFill("solid", start_color=NAVY)
             x.border = CELL_BORDER
@@ -6049,6 +6117,7 @@ def write_back_billing_sheet(
         "I": 22,
         "J": 60,
         "K": 60,  # Source Excerpt
+        "L": 22,  # View on Evidence Report
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
@@ -6349,6 +6418,7 @@ def write_rebilling_sheet(
     rb: pd.DataFrame,
     account: str = "",
     evidence_df: pd.DataFrame | None = None,
+    evidence_index: dict[str, int] | None = None,
 ) -> None:
     """Render the Rebilling / Corrections tab (spec §4.2)."""
     ws.title = "Rebilling & Corrections"
@@ -6364,7 +6434,7 @@ def write_rebilling_sheet(
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
     t1.alignment = Alignment(horizontal="left", vertical="center")
-    for c in range(2, 9):
+    for c in range(2, 10):
         x = ws.cell(row=1, column=c)
         x.fill = PatternFill("solid", start_color=ORANGE)
         x.border = CELL_BORDER
@@ -6381,10 +6451,10 @@ def write_rebilling_sheet(
     sub_cell = ws.cell(row=2, column=1, value=sub)
     sub_cell.font = Font(name="Calibri", size=10, italic=True)
     sub_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=9)
     ws.row_dimensions[2].height = 45
 
-    # Row 7: table headers (8 cols incl. Source Excerpt).
+    # Row 7: table headers (9 cols incl. Source Excerpt + View on Evidence Report).
     headers = [
         "Killer Invoice",
         "Killed Invoice",
@@ -6394,6 +6464,7 @@ def write_rebilling_sheet(
         "Jump-back (days)",
         "Trigger Reason",
         "Source Excerpt",
+        "View on Evidence Report",
     ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 7, col, h, bg=NAVY)
@@ -6445,6 +6516,22 @@ def write_rebilling_sheet(
             if looked is not None:
                 excerpt = looked
         _text(ws, r, 8, excerpt, wrap=True, fill_hex=bg)
+        # View on Evidence Report (col 9): hotlink on the killer invoice row.
+        target_row = None
+        if evidence_index is not None:
+            target_row = evidence_index.get(f"inv:{killer}") or evidence_index.get(f"inv:{killed}")
+        if target_row is not None:
+            cell = ws.cell(row=r, column=9, value="→")
+            cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                ref=cell.coordinate,
+                location=f"'EDF Evidence Report'!A{target_row}",
+                display="→",
+                tooltip=f"Jump to EDF Evidence Report!A{target_row}",
+            )
+            cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        else:
+            cell = ws.cell(row=r, column=9, value="No match")
+            cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
         r += 1
 
     # Column widths tailored for the table cells.
@@ -6457,13 +6544,14 @@ def write_rebilling_sheet(
         "F": 16,
         "G": 50,
         "H": 60,  # Source Excerpt
+        "I": 22,  # View on Evidence Report
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A8"
 
 
-def run_analysers(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
     """Run all Phase-2 detection analyses on the deduplicated
     DataFrame and return their outputs in a dict.
 
@@ -6473,15 +6561,18 @@ def run_analysers(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
     Returns:
         dict with keys ``back_billing``, ``rebilling``,
-        ``meter_rollover``, ``contracts``. Each value is a tidy
-        DataFrame (possibly empty) ready to feed the corresponding
-        ``write_*_sheet`` writer.
+        ``meter_rollover``, ``contracts``, ``evidence_index``. The
+        first four are tidy DataFrames; ``evidence_index`` is a
+        ``dict[str, int]`` mapping per-row signatures to the Excel row
+        on the ``EDF Evidence Report`` sheet so the analyser tabs can
+        emit a ``View on Evidence Report`` hotlink.
     """
     return {
         "back_billing": detect_back_billing(df),
         "rebilling": detect_rebilling(df),
         "meter_rollover": detect_meter_rollover(df),
         "contracts": infer_contracts(df),
+        "evidence_index": build_evidence_index(df, header_row_offset=1),
     }
 
 
