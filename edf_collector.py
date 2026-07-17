@@ -5,9 +5,11 @@ Collects billing data from PST/OST files, local PDF folders, and HTM account exp
 Fixed version: correct Excel date serials, dynamic range references, new PDF format support.
 """
 
+import csv as _stdcsv
 import gc
 import glob
 import hashlib
+import io as _io
 import json
 import os
 import pickle
@@ -684,8 +686,184 @@ def extract_new_credit_fields(text):
 
 
 # ---------------------------------------------------------------------------
-# HTM account-history parser
+# SAP CSV-in-PDF data dump parsers
 # ---------------------------------------------------------------------------
+#
+# EDF exports three types of structured data dump from its SAP / Kraken
+# back-end as quoted CSV records inside a PDF (one record per line, with
+# the first row a quoted CSV header). These are the canonical source
+# for contract history, meter-read history, and the financial ledger.
+# Filename is not used as a routing signal — detection is header-row
+# based so the same parser works on any filename the user supplies.
+
+
+_SAP_HEADER_RE = re.compile(r'"Kraken ID"\s*,\s*"SAP Account [Nn]umber"', re.IGNORECASE)
+_SAP_CONTRACT_COLS = re.compile(
+    r'"Product"\s*,\s*"Product[\s\n]*Description"\s*,\s*"Contract[\s\n]*Reason"', re.I
+)
+_SAP_METER_COLS = re.compile(
+    r'"Meter Read Reason"\s*,\s*"Scheduled[\s\n]*Meter[\s\n]*Read[\s\n]*Date"', re.I
+)
+_SAP_FINANCIAL_COLS = re.compile(
+    r'"Main[\s\n]*Transactions"\s*,\s*"Sub[\s\n]*Transactions"\s*,\s*"Transaction[\s\n]*Text"', re.I
+)
+_SAP_DDMMYYYY_RE = re.compile(r"\b(\d{2})-(\d{2})-(\d{4})\b")
+
+
+def detect_sap_dump(text: str) -> str | None:
+    """Return ``'contract'`` / ``'meter_read'`` / ``'financial'`` / ``None``.
+
+    Detection is header-row based: the dump's first non-empty CSV row is
+    ``"Kraken ID","SAP Account Number", ...``. Robust to any filename.
+    """
+    if not _SAP_HEADER_RE.search(text[:600]):
+        return None
+    if _SAP_CONTRACT_COLS.search(text[:1500]):
+        return "contract"
+    if _SAP_METER_COLS.search(text[:1500]):
+        return "meter_read"
+    if _SAP_FINANCIAL_COLS.search(text[:1500]):
+        return "financial"
+    return None
+
+
+def _sap_to_iso_date(s: str) -> str:
+    """Convert a ``DD-MM-YYYY`` substring to ISO ``YYYY-MM-DD``. Non-matching
+    input is returned unchanged."""
+    m = _SAP_DDMMYYYY_RE.search(s or "")
+    if not m:
+        return s or ""
+    return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+
+
+def _parse_sap_csv(text: str) -> list[dict]:
+    """Parse a SAP-data-dump CSV-in-PDF body into a list of dict rows keyed
+    by the CSV header column names. Empty input -> empty list. Page-break
+    artifacts in pdfplumber output are handled transparently by the
+    standard ``csv`` quoting rule that says a quoted field may contain
+    newlines.
+    """
+    if not text:
+        return []
+    reader = _stdcsv.reader(_io.StringIO(text), skipinitialspace=True)
+    rows: list[list[str]] = []
+    for raw_row in reader:
+        rows.append(raw_row)
+    while rows and not rows[0]:
+        rows.pop(0)
+    if not rows:
+        return []
+    header = rows[0]
+    out: list[dict] = []
+    for raw_row in rows[1:]:
+        if not raw_row or all(not (c or "").strip() for c in raw_row):
+            continue
+        row = {header[i]: (raw_row[i] if i < len(raw_row) else "") for i in range(len(header))}
+        out.append(row)
+    return out
+
+
+def parse_sap_contract_history(text: str, source_file: str = "") -> list[dict]:
+    """Parse the Contract-and-Product-Change-History CSV-in-PDF.
+
+    One dict row per SAP contract record. Output columns:
+      Contract From, Contract To, Product Code, Product Description,
+      Contract Reason, Set Up By, Notes, Cancelled Flag, Source File.
+    """
+    rows = _parse_sap_csv(text)
+    out: list[dict] = []
+    for r in rows:
+        out.append(
+            {
+                "Contract From": _sap_to_iso_date(r.get("Start Date", "")),
+                "Contract To": _sap_to_iso_date(r.get("End Date", "")),
+                "Product Code": r.get("Product", ""),
+                "Product Description": r.get("Product Description", ""),
+                "Contract Reason": r.get("Contract Reason", ""),
+                "Set Up By": r.get("Created by", ""),
+                "Notes": "",
+                "Cancelled Flag": r.get("Cancelled Flag", ""),
+                "Source File": source_file,
+            }
+        )
+    return out
+
+
+def parse_sap_meter_read_history(text: str, source_file: str = "") -> list[dict]:
+    """Parse the Meter-Read-History CSV-in-PDF.
+
+    One dict row per read event. Read Type is derived from the
+    ``Meter Read Status`` / ``Meter Read Category`` columns:
+      * ``"Released by Agent"`` -> ``A`` (Actual)
+      * Anything with "estimate" in the category or status -> ``E``
+      * Otherwise blank (unknown)
+    """
+    rows = _parse_sap_csv(text)
+    out: list[dict] = []
+    for r in rows:
+        status = (r.get("Meter Read Status") or "").strip()
+        category = (r.get("Meter Read Category") or "").strip()
+        if "Released" in status:
+            rtype = "A"
+            rsrc = (r.get("Meter Read Type") or "").strip()
+        elif "estim" in (category + " " + status).lower():
+            rtype = "E"
+            rsrc = (r.get("Meter Read Type") or "Automatic estimation").strip()
+        else:
+            rtype = ""
+            rsrc = (r.get("Meter Read Type") or "").strip()
+        out.append(
+            {
+                "Scheduled Read Date": _sap_to_iso_date(r.get("Scheduled Meter Read Date", "")),
+                "Meter Read Date": _sap_to_iso_date(r.get("Meter Read Date", "")),
+                "Reading (kWh)": r.get("Meter Read", "N/A"),
+                "Read Type": rtype,
+                "Read Source": rsrc,
+                "Read Status": status,
+                "Meter Read Reason": (r.get("Meter Read Reason") or "").strip(),
+                "Register": r.get("Register", ""),
+                "Source File": source_file,
+            }
+        )
+    return out
+
+
+def parse_sap_financial_transactions(text: str, source_file: str = "") -> list[dict]:
+    """Parse the Financial-Transactions CSV-in-PDF.
+
+    One dict row per financial transaction. The real SAP header has a
+    trailing-space variant ``"Posting Date "``; both that and the
+    no-trailing-space form are accepted.
+    """
+    rows = _parse_sap_csv(text)
+    out: list[dict] = []
+    for r in rows:
+        posting_raw = ""
+        for k in ("Posting Date ", "Posting Date"):
+            if k in r:
+                posting_raw = r.get(k, "")
+                break
+        out.append(
+            {
+                "Document No.": r.get("Document No.", ""),
+                "Item": r.get("Item", ""),
+                "Document Date": _sap_to_iso_date(r.get("Document Date", "")),
+                "Posting Date": _sap_to_iso_date(posting_raw.strip()),
+                "Net Due Date": _sap_to_iso_date(r.get("Net Due Date", "")),
+                "Main Transaction": r.get("Main Transactions", ""),
+                "Sub Transaction": r.get("Sub Transactions", ""),
+                "Transaction Text": r.get("Transaction Text", ""),
+                "Amount": r.get("Amount", ""),
+                "Clearing Status": r.get("Clearing Status", ""),
+                "Clearing Document": r.get("Clearing Document", ""),
+                "Clearing Date": _sap_to_iso_date(r.get("Clearing Date", "")),
+                "Clearing Reason": r.get("Clearing Reason", ""),
+                "Document Type": r.get("Document Type", ""),
+                "Document Type Description": r.get("Document Type Description", ""),
+                "Source File": source_file,
+            }
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
