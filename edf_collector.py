@@ -6613,6 +6613,350 @@ def _write_sap_header_row(ws: Worksheet, row: int, columns: list) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cross-source reconciliation sheet writer
+# ---------------------------------------------------------------------------
+# Compares rows from the three SAP dump writers against the inferred analyser
+# tables (Contract History / Meter Readings) and the EDF Evidence Report, line
+# by line, with one Matched/Discrepancy/Missing row per comparison. Each
+# matched row carries an openpyxl Hyperlink whose ``location`` points at the
+# row on the source sheet that owns the matched side, so a reviewer can jump
+# straight from a Discrepancy on the Reconciliation tab to the underlying row.
+
+
+def _recon_parse_iso_date(s: str) -> pd.Timestamp | pd._libs.tslibs.nattype.NaTType:
+    if not s:
+        return pd.NaT
+    s = str(s).strip()
+    if not s:
+        return pd.NaT
+    # ISO first (YYYY-MM-DD), then day-first for DD/MM/YYYY.
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return pd.to_datetime(s, errors="coerce")
+    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+
+
+def _recon_amount_to_float(v: object) -> float:
+    if v is None:
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).replace(",", "").strip().lstrip("£"))
+    except ValueError:
+        return 0.0
+
+
+def _recon_hyperlink(ws: Worksheet, row: int, col: int, sheet: str, target_row: int) -> None:
+    cell = ws.cell(row=row, column=col)
+    location = f"'{sheet}'!A{target_row}"
+    cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+        ref=cell.coordinate,
+        location=location,
+        display="→",
+        tooltip=f"Jump to {sheet}!A{target_row}",
+    )
+    cell.value = "→"
+    cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+
+
+def write_reconciliation_sheet(
+    ws: Worksheet,
+    sap_contract: list[dict],
+    inferred_contract: pd.DataFrame,
+    sap_meter: list[dict],
+    inferred_meter: pd.DataFrame,
+    sap_financial: list[dict],
+    evidence_df: pd.DataFrame,
+    account: str = "",
+) -> None:
+    """Render the cross-source Reconciliation tab."""
+    ws.title = "Reconciliation"
+    ORANGE = "FE5716"
+    NAVY = "10367A"
+
+    def _banner(row: int, text: str) -> None:
+        ws.cell(row=row, column=1, value=text)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        for c in range(1, 9):
+            cell = ws.cell(row=row, column=c)
+            cell.fill = PatternFill("solid", start_color=NAVY)
+            cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    def _section_banner(row: int, text: str) -> None:
+        ws.cell(row=row, column=1, value=f"== {text} ==")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        for c in range(1, 9):
+            cell = ws.cell(row=row, column=c)
+            cell.fill = PatternFill("solid", start_color=ORANGE)
+            cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    def _header(row: int, cols: list[str]) -> None:
+        for i, name in enumerate(cols, start=1):
+            cell = ws.cell(row=row, column=i, value=name)
+            cell.fill = PatternFill("solid", start_color="DDDDDD")
+            cell.font = Font(name="Calibri", size=10, bold=True, color="000000")
+
+    # Top banner
+    _banner(1, "EDF CROSS-SOURCE RECONCILIATION")
+    second_line = "SAP dumps vs inferred eater evidence + reconciled evidence_df rows"
+    if account:
+        second_line += f"  •  Account: {account}"
+    ws.cell(row=2, column=1, value=second_line)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
+
+    r = 4
+
+    # ---------------- Contract reconciliation ----------------
+    _section_banner(r, "Contract Reconciliation")
+    r += 1
+    _header(
+        r,
+        [
+            "Status",
+            "SAP Contract From",
+            "SAP Product Code",
+            "Inferred Contract From",
+            "Inferred Product Code",
+            "Notes",
+            "Source",
+            "Hyperlink",
+        ],
+    )
+    r += 1
+    contract_body_start = r
+
+    # Normalise inferred_contract into a list of dicts.
+    inferred_rows: list[dict] = []
+    if inferred_contract is not None and not inferred_contract.empty:
+        inferred_rows = inferred_contract.to_dict(orient="records")
+
+    matched_inferred_stack = list(range(len(inferred_rows)))
+    for sap in sap_contract:
+        sap_from = _recon_parse_iso_date(sap.get("Contract From", ""))
+        matched = False
+        for i in matched_inferred_stack[:]:
+            inf = inferred_rows[i]
+            inf_from = _recon_parse_iso_date(inf.get("Contract From", ""))
+            product_match = sap.get("Product Code", "") != "" and sap.get(
+                "Product Code", ""
+            ) == inf.get("Product Code", "")
+            if not product_match:
+                continue
+            date_close = (
+                abs((sap_from - inf_from).days) <= 7
+                if not pd.isna(sap_from) and not pd.isna(inf_from)
+                else False
+            )
+            if not date_close:
+                continue
+            matched = True
+            # Determine which sheet owns the inferred row (Contract History).
+            # Without exact row matching, default to the inferred row index + 4 header offset.
+            target_row = i + 4
+            status = "Matched"
+            note = "Contract dates + product code match."
+            ws.cell(row=r, column=1, value=status)
+            ws.cell(row=r, column=2, value=sap.get("Contract From", ""))
+            ws.cell(row=r, column=3, value=sap.get("Product Code", ""))
+            ws.cell(row=r, column=4, value=inf.get("Contract From", ""))
+            ws.cell(row=r, column=5, value=inf.get("Product Code", ""))
+            ws.cell(row=r, column=6, value=note)
+            ws.cell(row=r, column=7, value="Contract History")
+            _recon_hyperlink(ws, r, 8, "Contract History", target_row)
+            r += 1
+            matched_inferred_stack.remove(i)
+            break
+        if not matched:
+            sap_target = sap_contract.index(sap) + 4
+            ws.cell(row=r, column=1, value="Missing in Inferred")
+            ws.cell(row=r, column=2, value=sap.get("Contract From", ""))
+            ws.cell(row=r, column=3, value=sap.get("Product Code", ""))
+            ws.cell(row=r, column=4, value="—")
+            ws.cell(row=r, column=5, value="—")
+            ws.cell(row=r, column=6, value="SAP contract row not present in inferred eater data")
+            ws.cell(row=r, column=7, value="SAP Contract History")
+            _recon_hyperlink(ws, r, 8, "SAP Contract History", sap_target)
+            r += 1
+    for i in matched_inferred_stack:
+        inf = inferred_rows[i]
+        inf_target = i + 4
+        ws.cell(row=r, column=1, value="Missing in SAP")
+        ws.cell(row=r, column=2, value="—")
+        ws.cell(row=r, column=3, value="—")
+        ws.cell(row=r, column=4, value=inf.get("Contract From", ""))
+        ws.cell(row=r, column=5, value=inf.get("Product Code", ""))
+        ws.cell(row=r, column=6, value="Inferred contract row not present in SAP dump")
+        ws.cell(row=r, column=7, value="Contract History")
+        _recon_hyperlink(ws, r, 8, "Contract History", inf_target)
+        r += 1
+
+    contract_body_end = r - 1
+    _ = contract_body_start, contract_body_end  # for tests
+    r += 1
+
+    # ---------------- Meter Read reconciliation ----------------
+    _section_banner(r, "Meter Read Reconciliation")
+    r += 1
+    _header(
+        r,
+        [
+            "Status",
+            "SAP Meter Read Date",
+            "SAP Reading (kWh)",
+            "Inferred Meter Read Date",
+            "Inferred Reading (kWh)",
+            "Notes",
+            "Source",
+            "Hyperlink",
+        ],
+    )
+    r += 1
+
+    inferred_meter_rows: list[dict] = []
+    if inferred_meter is not None and not inferred_meter.empty:
+        inferred_meter_rows = inferred_meter.to_dict(orient="records")
+
+    matched_stack = list(range(len(inferred_meter_rows)))
+    for sap in sap_meter:
+        sap_date = _recon_parse_iso_date(sap.get("Meter Read Date", ""))
+        sap_read = _recon_amount_to_float(sap.get("Reading (kWh)", ""))
+        matched = False
+        for i in matched_stack[:]:
+            inf = inferred_meter_rows[i]
+            inf_date = _recon_parse_iso_date(inf.get("Meter Read Date", ""))
+            inf_read = _recon_amount_to_float(inf.get("Reading (kWh)", ""))
+            same_date = sap_date == inf_date and not pd.isna(sap_date)
+            same_read = abs(sap_read - inf_read) < 0.001
+            if same_date and same_read:
+                matched = True
+                target_row = i + 4
+                ws.cell(row=r, column=1, value="Matched")
+                ws.cell(row=r, column=2, value=sap.get("Meter Read Date", ""))
+                ws.cell(row=r, column=3, value=sap.get("Reading (kWh)", ""))
+                ws.cell(row=r, column=4, value=inf.get("Meter Read Date", ""))
+                ws.cell(row=r, column=5, value=inf.get("Reading (kWh)", ""))
+                ws.cell(row=r, column=6, value="Meter-read date + kWh match")
+                ws.cell(row=r, column=7, value="Meter Readings")
+                _recon_hyperlink(ws, r, 8, "Meter Readings", target_row)
+                r += 1
+                matched_stack.remove(i)
+                break
+        if not matched:
+            sap_idx = sap_meter.index(sap) + 4
+            ws.cell(row=r, column=1, value="Missing in Inferred")
+            ws.cell(row=r, column=2, value=sap.get("Meter Read Date", ""))
+            ws.cell(row=r, column=3, value=sap.get("Reading (kWh)", ""))
+            ws.cell(row=r, column=4, value="—")
+            ws.cell(row=r, column=5, value="—")
+            ws.cell(row=r, column=6, value="SAP meter read absent in inferred eater data")
+            ws.cell(row=r, column=7, value="SAP Meter Readings")
+            _recon_hyperlink(ws, r, 8, "SAP Meter Readings", sap_idx)
+            r += 1
+    for i in matched_stack:
+        inf = inferred_meter_rows[i]
+        inf_target = i + 4
+        ws.cell(row=r, column=1, value="Missing in SAP")
+        ws.cell(row=r, column=2, value="—")
+        ws.cell(row=r, column=3, value="—")
+        ws.cell(row=r, column=4, value=inf.get("Meter Read Date", ""))
+        ws.cell(row=r, column=5, value=inf.get("Reading (kWh)", ""))
+        ws.cell(row=r, column=6, value="Inferred meter read absent in SAP dump")
+        ws.cell(row=r, column=7, value="Meter Readings")
+        _recon_hyperlink(ws, r, 8, "Meter Readings", inf_target)
+        r += 1
+
+    r += 1
+
+    # ---------------- Financial reconciliation ----------------
+    _section_banner(r, "Financial Reconciliation")
+    r += 1
+    _header(
+        r,
+        [
+            "Status",
+            "SAP Document No.",
+            "SAP Posting Date",
+            "SAP Amount",
+            "Evidence Date",
+            "Evidence Amount",
+            "Notes",
+            "Hyperlink",
+        ],
+    )
+    r += 1
+
+    evidence_rows: list[dict] = []
+    if evidence_df is not None and not evidence_df.empty:
+        evidence_rows = evidence_df.to_dict(orient="records")
+
+    # Pre-compute the Excel row index of the first data row on the Evidence
+    # Report sheet (row 4 after a banner on row 1 + blank on row 3).
+    evidence_start_row = 4
+    ev_stack = list(range(len(evidence_rows)))
+    for sap in sap_financial:
+        sap_date = _recon_parse_iso_date(sap.get("Posting Date", ""))
+        sap_amt = _recon_amount_to_float(sap.get("Amount", ""))
+        matched = False
+        for i in ev_stack[:]:
+            ev = evidence_rows[i]
+            ev_date = _recon_parse_iso_date(ev.get("Date", ""))
+            ev_amt = _recon_amount_to_float(ev.get("Amount (£)", 0))
+            date_close = (
+                abs((sap_date - ev_date).days) <= 7
+                if not pd.isna(sap_date) and not pd.isna(ev_date)
+                else False
+            )
+            amount_close = abs(sap_amt - ev_amt) <= 0.50
+            if date_close and amount_close:
+                matched = True
+                target_row = evidence_start_row + i
+                # Decide on a status: Matched vs Discrepancy.
+                abs_amt_diff = abs(sap_amt - ev_amt)
+                status = "Matched" if abs_amt_diff < 0.01 else "Discrepancy"
+                note = (
+                    f"Amount Δ = £{abs_amt_diff:,.2f}"
+                    if status == "Discrepancy"
+                    else "Exact match on date (±7d) + amount (£±0.50)"
+                )
+                ws.cell(row=r, column=1, value=status)
+                ws.cell(row=r, column=2, value=sap.get("Document No.", ""))
+                ws.cell(row=r, column=3, value=sap.get("Posting Date", ""))
+                ws.cell(row=r, column=4, value=sap_amt)
+                ws.cell(row=r, column=5, value=ev.get("Date", ""))
+                ws.cell(row=r, column=6, value=ev_amt)
+                ws.cell(row=r, column=7, value=note)
+                _recon_hyperlink(ws, r, 8, "EDF Evidence Report", target_row)
+                r += 1
+                ev_stack.remove(i)
+                break
+        if not matched:
+            sap_idx = sap_financial.index(sap) + 4
+            ws.cell(row=r, column=1, value="Missing in Evidence")
+            ws.cell(row=r, column=2, value=sap.get("Document No.", ""))
+            ws.cell(row=r, column=3, value=sap.get("Posting Date", ""))
+            ws.cell(row=r, column=4, value=sap_amt)
+            ws.cell(row=r, column=5, value="—")
+            ws.cell(row=r, column=6, value="—")
+            ws.cell(row=r, column=7, value="SAP financial row not on Evidence Report")
+            _recon_hyperlink(ws, r, 8, "SAP Financial Transactions", sap_idx)
+            r += 1
+    for i in ev_stack:
+        ev = evidence_rows[i]
+        ev_target = evidence_start_row + i
+        ws.cell(row=r, column=1, value="Missing in SAP")
+        ws.cell(row=r, column=2, value="—")
+        ws.cell(row=r, column=3, value="—")
+        ws.cell(row=r, column=4, value="—")
+        ws.cell(row=r, column=5, value=ev.get("Date", ""))
+        ws.cell(row=r, column=6, value=ev.get("Amount (£)", ""))
+        ws.cell(row=r, column=7, value="Evidence row not present in SAP Financial dump")
+        _recon_hyperlink(ws, r, 8, "EDF Evidence Report", ev_target)
+        r += 1
+
+
+# ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
 
