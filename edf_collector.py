@@ -6133,6 +6133,186 @@ def write_contract_history_sheet(
 
 
 # ---------------------------------------------------------------------------
+# SAP data-dump sheet writers
+# ---------------------------------------------------------------------------
+
+
+def write_sap_contract_history_sheet(
+    ws: Worksheet,
+    rows: list[dict],
+    account: str = "",
+) -> None:
+    """Render the SAP Contract History tab.
+
+    Layout:
+      row 1: title banner noting SAP/Kraken origin
+      row 2: empty
+      row 3: column headers (9 cols)
+      rows 4+: one row per contract
+    """
+    ws.title = "SAP Contract History"
+    ORANGE = "FE5716"
+    columns = [
+        "Contract From",
+        "Contract To",
+        "Product Code",
+        "Product Description",
+        "Contract Reason",
+        "Set Up By",
+        "Notes",
+        "Cancelled Flag",
+        "Source File",
+    ]
+    ncol = len(columns)
+
+    title = "EDF SAP CONTRACT AND PRODUCT CHANGE HISTORY"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    for c in range(2, ncol + 1):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+
+    ws.row_dimensions[2].height = 4
+
+    _write_sap_header_row(ws, row=3, columns=columns)
+
+    for i, row in enumerate(rows):
+        r = 4 + i
+        for j, col in enumerate(columns):
+            cell = ws.cell(row=r, column=j + 1, value=row.get(col, ""))
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = CELL_BORDER
+            if i % 2 == 0:
+                cell.fill = PatternFill("solid", start_color=EDF_OFFWHITE.lstrip("#"))
+
+
+def write_sap_meter_readings_sheet(
+    ws: Worksheet,
+    rows: list[dict],
+    account: str = "",
+) -> None:
+    """Render the SAP Meter Readings tab.
+
+    Layout:
+      row 1: banner
+      row 2: legend
+      row 3: column headers (9 cols)
+      rows 4+: data
+    """
+    ws.title = "SAP Meter Readings"
+    ORANGE = "FE5716"
+    columns = [
+        "Scheduled Read Date",
+        "Meter Read Date",
+        "Meter Read Reason",
+        "Reading (kWh)",
+        "Read Type",
+        "Read Source",
+        "Read Status",
+        "Register",
+        "Source File",
+    ]
+    ncol = len(columns)
+
+    title = "EDF SAP METER-READ HISTORY"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    for c in range(2, ncol + 1):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+
+    l2 = ws.cell(row=2, column=1, value="A = Actual (supplier-confirmed)  |  E = Estimated")
+    l2.font = Font(name="Calibri", size=9, italic=True, color=MEDIUM_GREY.lstrip("#"))
+    for c in range(2, ncol + 1):
+        ws.cell(row=2, column=c).border = CELL_BORDER
+
+    _write_sap_header_row(ws, row=3, columns=columns)
+
+    for i, row in enumerate(rows):
+        r = 4 + i
+        for j, col in enumerate(columns):
+            c = j + 1
+            val = row.get(col, "")
+            cell = ws.cell(row=r, column=c, value=val)
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = CELL_BORDER
+            if i % 2 == 0:
+                cell.fill = PatternFill("solid", start_color=EDF_OFFWHITE.lstrip("#"))
+            if col == "Read Type":
+                if val == "A":
+                    cell.font = Font(name="Calibri", size=10, bold=True, color="006100")
+                    cell.fill = PatternFill("solid", start_color="C6EFCE")
+                if val == "E":
+                    cell.font = Font(
+                        name="Calibri", size=10, italic=True, color=MEDIUM_GREY.lstrip("#")
+                    )
+                    cell.fill = PatternFill("solid", start_color=EDF_OFFWHITE.lstrip("#"))
+
+
+def write_sap_financial_transactions_sheet(
+    ws: Worksheet,
+    rows: list[dict],
+    account: str = "",
+) -> None:
+    """Render the SAP Financial Transactions tab."""
+    ws.title = "SAP Financial Transactions"
+    ORANGE = "FE5716"
+    columns = list(rows[0].keys()) if rows else ["Source File"]
+    ncol = len(columns)
+
+    title = "EDF SAP FINANCIAL TRANSACTIONS"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    for c in range(2, ncol + 1):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+
+    ws.row_dimensions[2].height = 4
+
+    _write_sap_header_row(ws, row=3, columns=columns)
+
+    for i, row in enumerate(rows):
+        r = 4 + i
+        for j, col in enumerate(columns):
+            cell = ws.cell(row=r, column=j + 1, value=row.get(col, ""))
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = CELL_BORDER
+            if i % 2 == 0:
+                cell.fill = PatternFill("solid", start_color=EDF_OFFWHITE.lstrip("#"))
+
+
+def _write_sap_header_row(ws: Worksheet, row: int, columns: list) -> None:
+    NAVY = "10367A"
+    for j, col in enumerate(columns):
+        cell = ws.cell(row=row, column=j + 1, value=col)
+        cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", start_color=NAVY)
+        cell.border = CELL_BORDER
+        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+
+# ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
 
