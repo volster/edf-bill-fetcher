@@ -434,6 +434,22 @@ _TARIFF_NAME_RE = re.compile(r"Tariff name\s+(\w[\w\s]+?)(?:Payment type|$)", re
 _CREDIT_NUMBER_RE = re.compile(r"Credit note number:\s*(KCR-[\w-]+)", re.IGNORECASE)
 # Credit-note accounts can use the same rendering as KI invoices.
 _CREDIT_TOTAL_RE = re.compile(r"Total credits for this bill\s+£([\d,]+\.\d{2})", re.IGNORECASE)
+
+# Multi-regex fallback chain (Task 5) -- used when `_INV_NUMBER_RE` /
+# `_BILLING_PERIOD_RE` / `_PERIOD_CHARGE_RE` miss. Each fallback returns a
+# (value, regex_name) tuple so the Source Excerpt column can show a
+# regex-trace ("inv_num via _COVER_BLOCK_INV_RE; period via ...") per spec
+# Stream P3.
+_COVER_BLOCK_INV_RE = re.compile(r"Invoice\s+number:?\s*([A-Z0-9-]+)", re.IGNORECASE)
+_COVER_BLOCK_PERIOD_RE = re.compile(
+    r"(?:for\s+the\s+period|covering|bill\s+period)\s*[:]?\s*"
+    r"(\d{1,2}\s+\w+\s+\d{4})\s*(?:-|to|--)\s*"
+    r"(\d{1,2}\s+\w+\s+\d{4})",
+    re.IGNORECASE,
+)
+_FALLBACK_INV_RE = re.compile(r"\b((?:KI|KCR|T\d{7}|A-\d{8})-\d{3,})\b")
+_FALLBACK_AMOUNT_RE = _POUND_AMOUNT_FALLBACK_RE
+
 # Format-detection: cheap presence tests for the invoice number prefix.
 _KI_PRESENCE_RE = re.compile(r"invoice number:\s*KI-", re.IGNORECASE)
 _KCR_PRESENCE_RE = re.compile(r"credit note number:\s*KCR-", re.IGNORECASE)
@@ -709,6 +725,70 @@ _SAP_FINANCIAL_COLS = re.compile(
     r'"Main[\s\n]*Transactions"\s*,\s*"Sub[\s\n]*Transactions"\s*,\s*"Transaction[\s\n]*Text"', re.I
 )
 _SAP_DDMMYYYY_RE = re.compile(r"\b(\d{2})-(\d{2})-(\d{4})\b")
+
+
+# ---------------------------------------------------------------------------
+# Multi-regex fallback chain (Stream P3 / Task 5)
+# ---------------------------------------------------------------------------
+# Each fallback chain scans the input text in a fixed precedence order and
+# returns ``(value, regex_name)`` so the Source Excerpt column can show the
+# technical trace ("inv_num via _COVER_BLOCK_INV_RE; period via ..."). This
+# reduces the N/A count on the analyser tabs (Back-billing, Rebilling,
+# Meter Readings, Contract History) since many invoice PDFs sidestep the
+# canonical "Invoice number: KI-<n>" / "Your charges: <from> - <to>" markers
+# but still surface the data under alternative phrasings on the cover sheet.
+
+
+def _fallback_inv_num(text: str) -> tuple[str | None, str]:
+    """Try the canonical invoice-number regex, then the cover-body regex,
+    then a loose bare-token regex. Returns (value, regex_name) or (None, "")."""
+    for label, pat in (
+        ("_INV_NUMBER_RE", _INV_NUMBER_RE),
+        ("_CREDIT_NUMBER_RE", _CREDIT_NUMBER_RE),
+        ("_COVER_BLOCK_INV_RE", _COVER_BLOCK_INV_RE),
+        ("_FALLBACK_INV_RE", _FALLBACK_INV_RE),
+    ):
+        m = pat.search(text[:3000])
+        if m:
+            val = m.group(1).strip() if m.lastindex else m.group(0)
+            return val, label
+    return None, ""
+
+
+def _fallback_period_from(text: str) -> tuple[str | None, str]:
+    """Return (period_from_str, regex_name)."""
+    m = _BILLING_PERIOD_RE.search(text[:3000])
+    if m:
+        return m.group(1).strip(), "_BILLING_PERIOD_RE"
+    m = _COVER_BLOCK_PERIOD_RE.search(text[:3000])
+    if m:
+        return m.group(1).strip(), "_COVER_BLOCK_PERIOD_RE"
+    return None, ""
+
+
+def _fallback_period_to(text: str) -> tuple[str | None, str]:
+    """Return (period_to_str, regex_name)."""
+    m = _BILLING_PERIOD_RE.search(text[:3000])
+    if m:
+        return m.group(2).strip(), "_BILLING_PERIOD_RE"
+    m = _COVER_BLOCK_PERIOD_RE.search(text[:3000])
+    if m:
+        return m.group(2).strip(), "_COVER_BLOCK_PERIOD_RE"
+    return None, ""
+
+
+def _fallback_amount(text: str) -> tuple[float | None, str]:
+    """Return (amount, regex_name) or (None, "")."""
+    m = _PERIOD_CHARGE_RE.search(text[:3000])
+    if m:
+        return float(m.group(1).replace(",", "")), "_PERIOD_CHARGE_RE"
+    m = _CREDIT_TOTAL_RE.search(text[:3000])
+    if m:
+        return float(m.group(1).replace(",", "")), "_CREDIT_TOTAL_RE"
+    m = _POUND_AMOUNT_FALLBACK_RE.search(text[:3000])
+    if m:
+        return float(m.group(1).replace(",", "")), "_POUND_AMOUNT_FALLBACK_RE"
+    return None, ""
 
 
 def detect_sap_dump(text: str) -> str | None:
@@ -1669,6 +1749,45 @@ class EvidenceEngine:
                 r_type = label
                 break
 
+        # Multi-regex fallback chain (Stream P3): when the canonical
+        # extractors miss, try the cover-block / loose-token fallbacks so
+        # the analyser tabs see fewer N/A entries. Each fallback records
+        # the regex that produced the value into ``_regex_trace`` so the
+        # Source Excerpt column (Stream P3 / Task 6) can show a parse trace.
+        regex_trace: list[str] = []
+        inv_num = fields.get("inv_num")
+        if not inv_num or inv_num == "N/A":
+            val, label = _fallback_inv_num(text)
+            if val:
+                fields["inv_num"] = val
+                regex_trace.append(f"inv_num via {label}")
+        else:
+            regex_trace.append("inv_num via _INV_NUMBER_RE")
+
+        period_from = fields.get("period_from")
+        if not period_from or period_from == "N/A":
+            val, label = _fallback_period_from(text)
+            if val:
+                fields["period_from"] = val
+                regex_trace.append(f"period_from via {label}")
+        else:
+            regex_trace.append("period_from via _BILLING_PERIOD_RE")
+
+        period_to = fields.get("period_to")
+        if not period_to or period_to == "N/A":
+            val, label = _fallback_period_to(text)
+            if val:
+                fields["period_to"] = val
+                regex_trace.append(f"period_to via {label}")
+        else:
+            regex_trace.append("period_to via _BILLING_PERIOD_RE")
+
+        if "period_charge" not in fields:
+            amt_val, label = _fallback_amount(text)
+            if amt_val is not None:
+                fields["period_charge"] = amt_val
+                regex_trace.append(f"period_charge via {label}")
+
         # Classify entry type: New Bill if it has period charges, else Ongoing Balance
         entry_type = (
             "New Bill"
@@ -1704,6 +1823,8 @@ class EvidenceEngine:
                 "Attachment Name": attachment_name or "N/A",
                 "Details": (detail_label or "New invoice")[:60],
                 "Logic Used": "New Invoice Format",
+                "Source PDF Text": text[:4000],
+                "_regex_trace": "; ".join(regex_trace) if regex_trace else "",
             }
         )
         return True
@@ -1720,13 +1841,35 @@ class EvidenceEngine:
             if acc and not _account_number_matches(acc, text):
                 return False
 
+        # Multi-regex fallback chain (Stream P3): borrow the same patterns
+        # used in ``_process_new_invoice`` to recover fields the canonical
+        # extractor missed.
+        regex_trace: list[str] = []
+        inv_num = fields.get("inv_num")
+        if not inv_num or inv_num == "N/A":
+            val, label = _fallback_inv_num(text)
+            if val:
+                fields["inv_num"] = val
+                regex_trace.append(f"inv_num via {label}")
+        else:
+            regex_trace.append("inv_num via _CREDIT_NUMBER_RE")
+
+        pf_val, pf_label = _fallback_period_from(text)
+        pt_val, pt_label = _fallback_period_to(text)
+        period_from = pf_val or "N/A"
+        period_to = pt_val or "N/A"
+        if pf_val:
+            regex_trace.append(f"period_from via {pf_label}")
+        if pt_val:
+            regex_trace.append(f"period_to via {pt_label}")
+
         self._add_record(
             {
                 "Source": source_label,
                 "Sender": sender,
                 "Date": fields.get("date", fallback_date),
-                "Period From": "N/A",
-                "Period To": "N/A",
+                "Period From": period_from,
+                "Period To": period_to,
                 "Invoice #": fields.get("inv_num", "N/A"),
                 "Amount (£)": fields["amount"],
                 "Period Charge (£)": "N/A",
@@ -1744,6 +1887,8 @@ class EvidenceEngine:
                 "Attachment Name": attachment_name or "N/A",
                 "Details": (detail_label or "Credit note")[:60],
                 "Logic Used": "New Credit Note Format",
+                "Source PDF Text": text[:4000],
+                "_regex_trace": "; ".join(regex_trace) if regex_trace else "",
             }
         )
         return True
