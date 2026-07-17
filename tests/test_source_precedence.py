@@ -66,22 +66,31 @@ class TestSourcePrecedence:
 
     def test_precedence_is_strictly_descending(self) -> None:
         # The user-stated order is total, so no two distinct
-        # sources should share a precedence number — that would
+        # sources should share a precedence number -- that would
         # silently undefined which one wins a tie.  Email Body
         # and Email Body (RTF) are the explicit exception: both
         # are alternative representations of the same
         # mail.body pipeline and the user has accepted that
         # they'll be tie-broken by the secondary sort key
-        # (date, then invoice number).
-        tie_buckets = ["Email Body", "Email Body (RTF)"]
+        # (date, then invoice number).  Local PDF Folder and
+        # Statement Reconciliation also share precedence 1:
+        # both are direct paper/PDF artifacts produced by EDF
+        # for the same account, so when a standalone credit
+        # note collides with a "reversal" line on the
+        # consolidated statement, the dedup logic collapses
+        # them by Amount (£) regardless of which one wins.
+        tie_buckets = [
+            ("Email Body", "Email Body (RTF)"),
+            ("Local PDF Folder", "Statement Reconciliation"),
+        ]
         seen: dict[int, list[str]] = {}
         for label, pri in _SOURCE_PRECEDENCE.items():
-            if pri in seen and not all(lbl in tie_buckets for lbl in (*seen[pri], label)):
+            this_pair = {label, seen[pri][-1]} if pri in seen else set()
+            if pri in seen and not any(this_pair <= set(bucket) for bucket in tie_buckets):
                 raise AssertionError(
                     f"Source {label!r} duplicates precedence {pri}; "
-                    f"first user: {seen[pri]!r}.  The Email Body / "
-                    f"Email Body (RTF) pair is the only allowed "
-                    f"tie (they are alternative renderings of the "
-                    f"same mail.body pipeline)."
+                    f"first user: {seen[pri]!r}.  The allowed tie "
+                    f"buckets are {tie_buckets!r}; any other shared "
+                    f"precedence number is a configuration error."
                 )
             seen.setdefault(pri, []).append(label)

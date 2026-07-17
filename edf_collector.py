@@ -116,6 +116,7 @@ MEDIUM_GREY = "#666666"
 _SOURCE_PRECEDENCE: dict[str, int] = {
     "HTM Account History": 0,
     "Local PDF Folder": 1,
+    "Statement Reconciliation": 1,
     "PST PDF Attachment": 2,
     "Email Body": 3,
     "Email Body (RTF)": 3,
@@ -929,6 +930,293 @@ _ADMIT_RE = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# Reconciliation statement detector + multi-row extractor
+# ---------------------------------------------------------------------------
+# A consolidated reconciliation statement PDF (e.g. EDF's "Bill reference:
+# <N> (<date>) / Account number: A-<N> / Balance on your last bill £X /
+# Charges... / Payments... / Your new balance £Y") lists many individual
+# charge, reversal, late-payment, and payment rows under a single statement
+# header.  Without this extractor it was parsed as a single row carrying only
+# the "Balance on your last bill £37,301.48" line -- losing ~50 underlying
+# rows.  Each emitted row is written through ``_add_record`` so it takes part
+# in the same downstream dedup/analyser pipeline as a standalone PDF.
+
+_RECON_STATEMENT_RE = re.compile(
+    r"Bill\s+reference:\s*(\d+)\s*\(([^)]+)\)\s*\n?\s*"
+    r"Account\s+number:\s*A-\d+",
+    re.IGNORECASE,
+)
+
+# Electricity <from> - <to> £<amt>
+# Months appear abbreviated or full (e.g. "Sept." vs "September"); the day
+# suffix is sometimes wrapped in a thousands-separator comma for amounts.
+_RECON_CHARGE_RE = re.compile(
+    r"Electricity\s+"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s*-\s*"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s+"
+    r"£([\d,]+\.\d{2})",
+    re.IGNORECASE,
+)
+
+# Reversed electricity charge <date> £<amt>
+# The next non-empty line typically carries the reversed period in parens,
+# e.g. "(14 May 2024 - 30 Sept. 2024)" -- captured by a follow-up search.
+_RECON_REVERSAL_RE = re.compile(
+    r"Reversed\s+electricity\s+charge\s+"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s+"
+    r"£([\d,]+\.\d{2})",
+    re.IGNORECASE,
+)
+
+# Parenthetical period sometimes follows a reversal row.
+_RECON_REVERSAL_PERIOD_RE = re.compile(
+    r"\(\s*(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s*-\s*"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s*\)",
+    re.IGNORECASE,
+)
+
+_RECON_LATE_PAYMENT_RE = re.compile(
+    r"Late\s+Payment\s+Charge\s+£([\d,]+\.\d{2})",
+    re.IGNORECASE,
+)
+
+# Payment rows: a date followed by £<amount>. Only matches inside the
+# Payments section -- see ``extract_reconciliation_statement_rows`` which
+# scopes the search to the post-"Payments" text block.
+_RECON_PAYMENT_RE = re.compile(
+    r"\b(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s+£([\d,]+\.\d{2})",
+    re.IGNORECASE,
+)
+
+_RECON_BALANCE_LAST_RE = re.compile(
+    r"Balance\s+on\s+your\s+last\s+bill\s+£([\d,]+\.\d{2})\s*(debit|credit)?",
+    re.IGNORECASE,
+)
+
+_RECON_NEW_BALANCE_RE = re.compile(
+    r"Your\s+new\s+balance\s+£([\d,]+\.\d{2})\s*(debit|credit)?",
+    re.IGNORECASE,
+)
+
+_RECON_MONTH_MAP = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+
+def _recon_to_iso(s: str) -> str:
+    """Convert a single date string like ``14 May 2024`` to ``14/05/2024``."""
+    s = s.strip().rstrip(".")
+    m = re.match(r"(\d{1,2})\s+([A-Za-z\.]+)\s+(\d{4})", s)
+    if not m:
+        return "N/A"
+    day = int(m.group(1))
+    month_str = m.group(2).rstrip(".").lower()
+    year = int(m.group(3))
+    month = _RECON_MONTH_MAP.get(month_str)
+    if month is None:
+        return "N/A"
+    return f"{day:02d}/{month:02d}/{year:04d}"
+
+
+def _recon_money(s: str) -> float:
+    return float(s.replace(",", ""))
+
+
+def detect_reconciliation_statement(text: str) -> bool:
+    return bool(_RECON_STATEMENT_RE.search(text[:2000]))
+
+
+def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> list[dict]:
+    """Extract every charge, reversal, late-payment, payment + one meta row
+    from a consolidation reconciliation statement PDF."""
+    rows: list[dict] = []
+    src = "Statement Reconciliation"
+
+    bill_ref = ""
+    bill_date_display = "N/A"
+    bill_ref_match = _RECON_STATEMENT_RE.search(text)
+    if bill_ref_match:
+        bill_ref = bill_ref_match.group(1)
+        bill_date_display = _recon_to_iso(bill_ref_match.group(2))
+
+    bal_last: object = "N/A"
+    bal_last_match = _RECON_BALANCE_LAST_RE.search(text)
+    if bal_last_match:
+        bal_last = _recon_money(bal_last_match.group(1))
+
+    new_bal: object = "N/A"
+    new_bal_match = _RECON_NEW_BALANCE_RE.search(text)
+    if new_bal_match:
+        new_bal = _recon_money(new_bal_match.group(1))
+
+    # Charge rows
+    for m in _RECON_CHARGE_RE.finditer(text):
+        rows.append(
+            {
+                "Source": src,
+                "Sender": "",
+                "Date": bill_date_display,
+                "Period From": _recon_to_iso(m.group(1)),
+                "Period To": _recon_to_iso(m.group(2)),
+                "Invoice #": bill_ref or "N/A",
+                "Amount (£)": _recon_money(m.group(3)),
+                "Period Charge (£)": _recon_money(m.group(3)),
+                "Entry Type": "Charge",
+                "Reading": "N/A",
+                "Units (kWh)": "N/A",
+                "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
+                "Attachment Name": attachment_name,
+                "Details": "Electricity charge (reconciliation statement)",
+                "Logic Used": "Reconciliation Statement Charge",
+                "Balance Last Bill (£)": bal_last,
+            }
+        )
+
+    # Reversed-electricity-charge rows
+    for m in _RECON_REVERSAL_RE.finditer(text):
+        date_iso = _recon_to_iso(m.group(1))
+        amount = _recon_money(m.group(2))
+        # Look for a parenthetical period on the next non-empty line.
+        details = "Reversed electricity charge"
+        tail = text[m.end() : m.end() + 400]
+        period_match = _RECON_REVERSAL_PERIOD_RE.search(tail)
+        if period_match:
+            details = (
+                f"Reversed electricity charge ({period_match.group(1)} - {period_match.group(2)})"
+            )
+        rows.append(
+            {
+                "Source": src,
+                "Sender": "",
+                "Date": date_iso,
+                "Period From": "N/A",
+                "Period To": "N/A",
+                "Invoice #": bill_ref or "N/A",
+                "Amount (£)": -abs(amount),
+                "Period Charge (£)": -abs(amount),
+                "Entry Type": "Credit",
+                "Reading": "N/A",
+                "Units (kWh)": "N/A",
+                "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
+                "Attachment Name": attachment_name,
+                "Details": details,
+                "Logic Used": "Reconciliation Statement Reversal",
+                "Balance Last Bill (£)": bal_last,
+            }
+        )
+
+    # Late payment rows
+    for m in _RECON_LATE_PAYMENT_RE.finditer(text):
+        amount = _recon_money(m.group(1))
+        rows.append(
+            {
+                "Source": src,
+                "Sender": "",
+                "Date": bill_date_display,
+                "Period From": "N/A",
+                "Period To": "N/A",
+                "Invoice #": bill_ref or "N/A",
+                "Amount (£)": amount,
+                "Period Charge (£)": amount,
+                "Entry Type": "Late Payment",
+                "Reading": "N/A",
+                "Units (kWh)": "N/A",
+                "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
+                "Attachment Name": attachment_name,
+                "Details": "Late Payment Charge (reconciliation statement)",
+                "Logic Used": "Reconciliation Statement Late Payment",
+                "Balance Last Bill (£)": bal_last,
+            }
+        )
+
+    # Payment rows -- scoped to the section starting "Payments" through either
+    # "Your new balance" or end-of-text. EDF lists payments with a date column
+    # then a £ column.
+    payments_block = ""
+    pay_section_match = re.search(r"Payments\s*\n", text, re.IGNORECASE)
+    if pay_section_match:
+        block_start = pay_section_match.end()
+        # End payment block at "Your new balance" or end-of-text.
+        end_match = re.search(r"Your\s+new\s+balance", text[block_start:], re.IGNORECASE)
+        block_end = block_start + end_match.start() if end_match else len(text)
+        payments_block = text[block_start:block_end]
+
+    if payments_block:
+        for m in _RECON_PAYMENT_RE.finditer(payments_block):
+            rows.append(
+                {
+                    "Source": src,
+                    "Sender": "",
+                    "Date": _recon_to_iso(m.group(1)),
+                    "Period From": "N/A",
+                    "Period To": "N/A",
+                    "Invoice #": bill_ref or "N/A",
+                    "Amount (£)": _recon_money(m.group(2)),
+                    "Period Charge (£)": "N/A",
+                    "Entry Type": "Payment",
+                    "Reading": "N/A",
+                    "Units (kWh)": "N/A",
+                    "Standing Chg (p/day)": "N/A",
+                    "Tariff": "N/A",
+                    "Attachment Name": attachment_name,
+                    "Details": "Payment received (reconciliation statement)",
+                    "Logic Used": "Reconciliation Statement Payment",
+                    "Balance Last Bill (£)": bal_last,
+                }
+            )
+
+    # Always emit one meta row carrying the statement-level context.
+    rows.append(
+        {
+            "Source": src,
+            "Sender": "",
+            "Date": bill_date_display,
+            "Period From": "N/A",
+            "Period To": "N/A",
+            "Invoice #": bill_ref or "N/A",
+            "Amount (£)": new_bal,
+            "Period Charge (£)": "N/A",
+            "Entry Type": "Statement Reconciliation",
+            "Reading": "N/A",
+            "Units (kWh)": "N/A",
+            "Standing Chg (p/day)": "N/A",
+            "Tariff": "N/A",
+            "Attachment Name": attachment_name,
+            "Balance Last Bill (£)": bal_last,
+            "Details": f"Statement reconciliation: bill ref {bill_ref}",
+            "Logic Used": "Reconciliation Statement Meta",
+        }
+    )
+    return rows
+
+
 def slice_pdf_pages(page_texts: list[str]) -> list[list[str]]:
     """Slice a PDF's per-page text into one chunk per invoice.
 
@@ -1704,6 +1992,18 @@ class EvidenceEngine:
                     slice_attachment = attachment_name
 
                 try:
+                    # Reconciliation statement PDFs (e.g. EDF's
+                    # consolidated "Bill reference: … / Account number:
+                    # A-… / Balance on your last bill" statements) carry
+                    # many individual charge/reversal/payment rows under
+                    # a single statement header. Detect them early and
+                    # bypass the regular invoice-format dispatch so they
+                    # emit one record per underlying row.
+                    if detect_reconciliation_statement(slice_text):
+                        rows = extract_reconciliation_statement_rows(slice_text, slice_attachment)
+                        for row in rows:
+                            self._add_record(row)
+                        continue
                     fmt = detect_pdf_format(slice_text)
                     if fmt == "new_invoice":
                         self._process_new_invoice(
