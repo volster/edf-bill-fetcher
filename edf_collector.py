@@ -1728,6 +1728,14 @@ class EvidenceEngine:
         self.error_log = []
         self.seen_pdf_hashes = set()
         self.lock = threading.Lock()
+        # Stream P1: SAP CSV-in-PDF data dumps are detected in
+        # ``process_pdf_file`` and routed to three row accumulators
+        # (contract / meter_read / financial). ``export_to_excel``
+        # reads these through ``sap_rows={...}`` to render the
+        # dedicated SAP sheets + the cross-source Reconciliation sheet.
+        self.sap_contract_rows: list[dict] = []
+        self.sap_meter_rows: list[dict] = []
+        self.sap_financial_rows: list[dict] = []
 
     # ------------------------------------------------------------------
     # Pickle support — Phase 1.4
@@ -2234,6 +2242,31 @@ class EvidenceEngine:
                     slice_attachment = attachment_name
 
                 try:
+                    # Stream P1: SAP CSV-in-PDF data dumps (Contract /
+                    # Meter-Read / Financial-Transactions). Detected
+                    # via the header-row marker; routed to dedicated
+                    # parsers and stored on the engine's SAP-row
+                    # accumulators (not engine.records -- they get
+                    # their own dedicated Excel sheets via
+                    # ``export_to_excel(..., sap_rows=...)``).
+                    sap_kind = detect_sap_dump(slice_text)
+                    if sap_kind is not None:
+                        source_file = slice_attachment or slice_detail or ""
+                        if sap_kind == "contract":
+                            self.sap_contract_rows.extend(
+                                parse_sap_contract_history(slice_text, source_file=source_file)
+                            )
+                        elif sap_kind == "meter_read":
+                            self.sap_meter_rows.extend(
+                                parse_sap_meter_read_history(slice_text, source_file=source_file)
+                            )
+                        elif sap_kind == "financial":
+                            self.sap_financial_rows.extend(
+                                parse_sap_financial_transactions(
+                                    slice_text, source_file=source_file
+                                )
+                            )
+                        continue
                     # Reconciliation statement PDFs (e.g. EDF's
                     # consolidated "Bill reference: … / Account number:
                     # A-… / Balance on your last bill" statements) carry
@@ -3138,7 +3171,7 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
 # ---------------------------------------------------------------------------
 
 
-def export_to_excel(data, output_path, error_log, config, filtered=None):
+def export_to_excel(data, output_path, error_log, config, filtered=None, sap_rows=None):
     NAVY = "10367A"
     ORANGE = "FE5716"
     RED = "FF6B6B"
@@ -3591,7 +3624,14 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
     # Tab 1: Evidence (created first — summary formulas reference it by name)
     ws_main = wb.active
     ws_main.title = "EDF Evidence Report"
-    write_evidence_sheet(ws_main, df, is_duplicate=False)
+    # The ``Source PDF Text`` column is captured by the parsers for
+    # diagnostic purposes (rendered in the analysers' ``Source
+    # Excerpt`` column) but it's a 4 KB chunk per row -- too noisy to
+    # include on the main Evidence Report tab. Drop it from a copy
+    # passed to the sheet writer; the underlying ``df`` is left
+    # intact so subsequent analyser renders can keep accessing it.
+    evidence_df = df.drop(columns=["Source PDF Text"]) if "Source PDF Text" in df.columns else df
+    write_evidence_sheet(ws_main, evidence_df, is_duplicate=False)
 
     # Tab 2: Annual Summary
     ws_summary = wb.create_sheet(title="Annual Summary", index=0)
@@ -4480,6 +4520,50 @@ def export_to_excel(data, output_path, error_log, config, filtered=None):
         analyses["contracts"],
         account=account_label,
     )
+
+    # Stream P1 + P2: SAP CSV-in-PDF data dumps and the cross-source
+    # Reconciliation sheet. When ``sap_rows`` is supplied (from the
+    # engine's three SAP-row accumulators) and the user hasn't opted
+    # out via ``config["scan_sap_dumps"] = False``, emit the three SAP
+    # sheets. The Reconciliation sheet additionally honours
+    # ``config["generate_reconciliation_sheet"]`` (default True) so a
+    # reviewer can toggle it off independently when only the SAP data
+    # is wanted.
+    sap_rows = sap_rows or {}
+    sap_contract = list(sap_rows.get("contract") or [])
+    sap_meter = list(sap_rows.get("meter") or [])
+    sap_financial = list(sap_rows.get("financial") or [])
+    scan_sap_dumps = config.get("scan_sap_dumps", True)
+    if scan_sap_dumps and (sap_contract or sap_meter or sap_financial):
+        if sap_contract:
+            write_sap_contract_history_sheet(
+                wb.create_sheet(title="SAP Contract History"),
+                sap_contract,
+                account=account_label,
+            )
+        if sap_meter:
+            write_sap_meter_readings_sheet(
+                wb.create_sheet(title="SAP Meter Readings"),
+                sap_meter,
+                account=account_label,
+            )
+        if sap_financial:
+            write_sap_financial_transactions_sheet(
+                wb.create_sheet(title="SAP Financial Transactions"),
+                sap_financial,
+                account=account_label,
+            )
+        if config.get("generate_reconciliation_sheet", True):
+            write_reconciliation_sheet(
+                wb.create_sheet(title="Reconciliation"),
+                sap_contract,
+                analyses["contracts"],
+                sap_meter,
+                dfc,
+                sap_financial,
+                dfc,
+                account=account_label,
+            )
 
     wb.save(output_path)
 
@@ -6714,7 +6798,7 @@ def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
     """
     return {
         "back_billing": detect_back_billing(df),
-        "rebilling": detect_rebilling(df),
+        "rebilling": detect_rebilling(df, evidence_df=df),
         "meter_rollover": detect_meter_rollover(df),
         "contracts": infer_contracts(df),
         "evidence_index": build_evidence_index(df, header_row_offset=1),
@@ -7694,6 +7778,17 @@ class App:
         # Defaults to True so the bundle is produced alongside the workbook
         # by default; reviewer can uncheck if they only want the XLSX.
         self.save_evidence_files_var = tk.BooleanVar(value=True)
+        # Stream P1/P2 GUI toggles. SAP CSV-in-PDF data dumps render
+        # their own dedicated sheets when "scan_sap_dumps" is set; the
+        # cross-source Reconciliation sheet is independently controllable
+        # via "generate_reconciliation_sheet" so a reviewer can keep the
+        # SAP data without the cross-sheet matching view if desired.
+        # Both default to True so the new sheets appear in the standard
+        # extraction output; toggle off if the reviewer doesn't want
+        # the legacy SAP dump analysis at all (e.g. on a clean run with
+        # only invoice PDFs).
+        self.scan_sap_dumps_var = tk.BooleanVar(value=True)
+        self.generate_reconciliation_sheet_var = tk.BooleanVar(value=True)
         self._report_options: dict = {}
         self._CONFIG_PATH = os.path.expanduser("~/.edf_collector/config.json")
 
@@ -7732,6 +7827,8 @@ class App:
             "use_domain_filter": self.use_domain_filter,
             "auto_generate_report": self.auto_generate_report,
             "save_evidence_files": self.save_evidence_files_var,
+            "scan_sap_dumps": self.scan_sap_dumps_var,
+            "generate_reconciliation_sheet": self.generate_reconciliation_sheet_var,
         }
         for key, var in _bool_keys.items():
             if key in gui:
@@ -7792,6 +7889,8 @@ class App:
             "auto_generate_report": self.auto_generate_report.get(),
             "output_folder": self.output_folder.get(),
             "save_evidence_files": self.save_evidence_files_var.get(),
+            "scan_sap_dumps": self.scan_sap_dumps_var.get(),
+            "generate_reconciliation_sheet": self.generate_reconciliation_sheet_var.get(),
         }
 
         payload = {
@@ -7985,6 +8084,30 @@ class App:
             s2,
             text="Save evidence files + bundle index (output/evidence_files + evidence_index.docx)",
             variable=self.save_evidence_files_var,
+            bg=EDF_OFFWHITE,
+            command=self._save_config,
+        ).pack(anchor=tk.W)
+
+        # Stream P1: detect + render the three SAP CSV-in-PDF data
+        # dumps (Contract / Meter-Read / Financial-Transactions) on
+        # their own dedicated sheets.
+        tk.Checkbutton(
+            s2,
+            text="Scan SAP CSV-in-PDF data dumps (adds SAP Contract History / Meter Readings / Financial Transactions sheets)",
+            variable=self.scan_sap_dumps_var,
+            bg=EDF_OFFWHITE,
+            command=self._save_config,
+        ).pack(anchor=tk.W)
+
+        # Stream P2: cross-source Reconciliation sheet (SAP rows vs
+        # inferred analyser data). Independent of the SAP-scan
+        # toggle so a reviewer can keep the SAP data without the
+        # cross-source match view if they want only the raw SAP
+        # signals.
+        tk.Checkbutton(
+            s2,
+            text="Generate cross-source Reconciliation sheet (SAP vs inferred analyser rows)",
+            variable=self.generate_reconciliation_sheet_var,
             bg=EDF_OFFWHITE,
             command=self._save_config,
         ).pack(anchor=tk.W)
@@ -8383,6 +8506,12 @@ class App:
             "amalgamate_duplicates": self.amalgamate_duplicates.get(),
             "use_domain_filter": self.use_domain_filter.get(),
             "domain_filter": self.domain_filter.get().strip(),
+            # Stream P1/P2 toggles -- threaded through to
+            # export_to_excel which gates SAP sheet writes + the
+            # Reconciliation sheet.
+            "save_evidence_files": self.save_evidence_files_var.get(),
+            "scan_sap_dumps": self.scan_sap_dumps_var.get(),
+            "generate_reconciliation_sheet": self.generate_reconciliation_sheet_var.get(),
         }
 
         engine = EvidenceEngine(config, self.set_status, self.set_progress, self.cancel_event)
@@ -8447,6 +8576,11 @@ class App:
                     engine.error_log,
                     config,
                     filtered=engine.filtered_records,
+                    sap_rows={
+                        "contract": engine.sap_contract_rows,
+                        "meter": engine.sap_meter_rows,
+                        "financial": engine.sap_financial_rows,
+                    },
                 )
                 self._save_config()
                 summary = (
@@ -8880,6 +9014,11 @@ def run_cli_extract(args: list[str]) -> None:
             engine.error_log,
             config,
             filtered=engine.filtered_records,
+            sap_rows={
+                "contract": engine.sap_contract_rows,
+                "meter": engine.sap_meter_rows,
+                "financial": engine.sap_financial_rows,
+            },
         )
 
         # Optionally save records as JSON
