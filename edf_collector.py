@@ -42,6 +42,11 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
+# Re-export the evidence-bundle helpers so callers who already import
+# everything from ``edf_collector`` transparently gain access to the new
+# module (per the spec / plan: Stream P5).
+from evidence_bundle import build_bundle_index, save_evidence_files  # noqa: E402,F401
+
 # Optional imports — gracefully degrade if missing
 try:
     import pypff
@@ -7544,6 +7549,11 @@ class App:
         self.output_folder = tk.StringVar(value="")
         self.amalgamate_duplicates = tk.BooleanVar(value=False)
         self.auto_generate_report = tk.BooleanVar(value=False)
+        # Stream P5: save evidence files referenced by the workbook into a
+        # flat ``output/evidence_files/`` folder and a themed DOCX index.
+        # Defaults to True so the bundle is produced alongside the workbook
+        # by default; reviewer can uncheck if they only want the XLSX.
+        self.save_evidence_files_var = tk.BooleanVar(value=True)
         self._report_options: dict = {}
         self._CONFIG_PATH = os.path.expanduser("~/.edf_collector/config.json")
 
@@ -7581,6 +7591,7 @@ class App:
             "amalgamate_duplicates": self.amalgamate_duplicates,
             "use_domain_filter": self.use_domain_filter,
             "auto_generate_report": self.auto_generate_report,
+            "save_evidence_files": self.save_evidence_files_var,
         }
         for key, var in _bool_keys.items():
             if key in gui:
@@ -7640,6 +7651,7 @@ class App:
             "report_account_ref": self.report_account_ref.get(),
             "auto_generate_report": self.auto_generate_report.get(),
             "output_folder": self.output_folder.get(),
+            "save_evidence_files": self.save_evidence_files_var.get(),
         }
 
         payload = {
@@ -7823,6 +7835,16 @@ class App:
             s2,
             text="Auto-generate report after extraction",
             variable=self.auto_generate_report,
+            bg=EDF_OFFWHITE,
+            command=self._save_config,
+        ).pack(anchor=tk.W)
+
+        # Stream P5: save evidence files + themed DOCX bundle index alongside
+        # the workbook (spec Design Section 2 + §7). Defaults True.
+        tk.Checkbutton(
+            s2,
+            text="Save evidence files + bundle index (output/evidence_files + evidence_index.docx)",
+            variable=self.save_evidence_files_var,
             bg=EDF_OFFWHITE,
             command=self._save_config,
         ).pack(anchor=tk.W)
@@ -8296,6 +8318,38 @@ class App:
                 if engine.error_log:
                     summary += f"\n  Parse errors: {len(engine.error_log)} (see Parse Errors tab)"
                 summary += f"\n\nSaved to:\n{xlsx_path}"
+
+                # Stream P5: save evidence files + themed DOCX bundle index
+                # into a sibling ``evidence_files/`` folder when the toggle is
+                # set on (default True).
+                if self.save_evidence_files_var.get():
+                    try:
+                        import pandas as pd
+
+                        out_dir = os.path.dirname(xlsx_path) or os.getcwd()
+                        ev_dir = os.path.join(out_dir, "evidence_files")
+                        dfc = pd.DataFrame(engine.records)
+                        # Build the source-paths reverse-lookup from the
+                        # crawl attribute the engine carries internally.
+                        source_paths = getattr(engine, "source_paths", {}) or {}
+                        saved = save_evidence_files(dfc, source_paths, ev_dir)
+                        index_docx = os.path.join(out_dir, "evidence_index.docx")
+                        build_bundle_index(
+                            dfc, saved, index_docx, account=str(config.get("acc_num", ""))
+                        )
+                        summary += f"\n\nSaved {len(saved)} evidence files to:\n{ev_dir}"
+                        summary += f"\nBundle index:\n{index_docx}"
+                    except Exception as bundle_err:
+                        # Don't lose the run if the bundle step blows up --
+                        # log it loudly but still keep the XLSX.
+                        self._show(
+                            "warning",
+                            "Bundle step failed",
+                            (
+                                f"Evidence file save failed:\n{bundle_err}"
+                                f"\n\nThe XLSX workbook is still saved at:\n{xlsx_path}"
+                            ),
+                        )
 
                 if self.auto_generate_report.get():
                     report_paths = self._run_auto_report(engine, stem, 1)
