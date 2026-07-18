@@ -6204,26 +6204,71 @@ def write_back_billing_sheet(
     ws.freeze_panes = "A8"
 
 
-def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
+def _reversal_match(
+    evidence_df: pd.DataFrame | None,
+    killed_inv: str,
+    killed_amount: float | None,
+    killed_pf: "pd.Timestamp",
+    killed_pt: "pd.Timestamp",
+) -> bool:
+    """Return whether a reversal-credit row in *evidence_df* matches the
+    killed invoice well enough to count as rebilling evidence.
+
+    Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
+    invoice when its amount is within ±£0.50 AND either its period
+    overlaps the killed period by ≥ 30 days OR its period is
+    unparseable (so we accept on amount alone, Entry Type == Credit).
+    """
+    if evidence_df is None or evidence_df.empty:
+        return False
+    if "Entry Type" not in evidence_df.columns:
+        return False
+    try:
+        amount = abs(float(killed_amount or 0.0))
+    except (TypeError, ValueError):
+        return False
+    matching = evidence_df[evidence_df["Entry Type"].isin(["Credit", "Payment"])]
+    for _, row in matching.iterrows():
+        try:
+            row_amt = abs(float(row.get("Amount (£)", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        if abs(row_amt - amount) > 0.50:
+            continue
+        rpf = pd.to_datetime(row.get("Period From"), errors="coerce")
+        rpt = pd.to_datetime(row.get("Period To"), errors="coerce")
+        if pd.isna(rpf) or pd.isna(rpt):
+            return True
+        overlap = (min(killed_pt, rpt) - max(killed_pf, rpf)).days
+        if overlap >= 30:
+            return True
+    return False
+
+
+def detect_rebilling(
+    df: pd.DataFrame,
+    *,
+    evidence_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Return cancel-and-repost pairs identified by the rebilling
-    heuristic (spec \u00a73.2).
+    heuristic (spec §11, tightened gate).
 
-    For each ordered pair ``(Killer, Killed)`` where ``Killer.Date`` is
-    strictly later than ``Killed.Date``, emit a row if any of these
-    triggers fire:
+    For each ordered pair ``(Killer, Killed)`` where ``Killer.Date``
+    is strictly later than ``Killed.Date``, emit a row IFF ALL hold:
 
-    1. ``overlap_d > 30`` -- the two invoice periods overlap by more
-       than 30 days (where ``overlap_d = max(0, min(to_killer,
-       to_killed) - max(from_killer, from_killed)).days``).
-    2. ``jumpback_d > 30`` -- the killer's Period From starts more
-       than 30 days earlier than the killed's Period From (the killer
-       bill reaches back to a date the killed already covered).
-    3. Killer's Days Billed >= 60 AND killer's Period From <=
-       killed's Period From (long-period killer reaching back into
-       the killed's window).
-
-    Output is sorted by ``Killer Date`` (older killers first), then by
-    ``Killed Date``.
+    1. ``Killer.Period From ≤ Killed.Period From AND Killer.Period To ≥
+       Killed.Period To`` -- the killer's billing window fully contains
+       the killed's billing window.
+    2. ANY of these signals also fires:
+       - ``Killer.Days Billed ≥ 365`` (wholesale cancel-and-repost of a
+         long period),
+       - the killer invoice has ``Cancel/Rebill Admitted = True``
+         (an admission phrase like ``corrected`` / ``amended`` was
+         detected on the source PDF), OR
+       - a reversal credit row in ``evidence_df`` matches the killed
+         invoice's amount within ±£0.50 and period overlap ≥ 30 days
+         (or its period is unparseable, in which case amount alone
+         suffices).
 
     Output columns:
         Killer Invoice, Killed Invoice, Killer Date, Killed Date,
@@ -6232,6 +6277,11 @@ def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
 
     ``Cancel/Rebill Admitted (Killer)`` is the admit-phrase flag
     lifted from the killer invoice.
+
+    ``evidence_df`` is optional -- when omitted, the reversal-credit
+    check is skipped and only the long-period / admit-phrase signals
+    fire. ``run_analysers`` passes the evidence DataFrame so the
+    reversal signal participates in normal pipeline use.
     """
     columns = [
         "Killer Invoice",
@@ -6247,7 +6297,6 @@ def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
     has_admit = "Cancel/Rebill Admitted" in df.columns
     rows = []
-    # Pre-parse dates and stash as a tuple list so we can sort stably.
     parsed = []
     for _, r in df.iterrows():
         pf = pd.to_datetime(r.get("Period From"), errors="coerce")
@@ -6255,6 +6304,10 @@ def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
         bd = pd.to_datetime(r.get("Date"), errors="coerce")
         if pd.isna(pf) or pd.isna(pt) or pd.isna(bd):
             continue
+        try:
+            amount = float(r.get("Amount (£)", 0) or 0)
+        except (TypeError, ValueError):
+            amount = None
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         parsed.append(
             {
@@ -6264,16 +6317,39 @@ def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
                 "Period From": pf,
                 "Period To": pt,
                 "Days Billed": int((pt - pf).days),
+                "Amount": amount,
                 "Admitted": admitted,
             }
         )
     if len(parsed) < 2:
         return pd.DataFrame(columns=columns)
-    # Sort by issue date so each later invoice becomes a killer relative
-    # to every earlier invoice.
     parsed.sort(key=lambda x: x["Date"])
     for i, killer in enumerate(parsed):
         for killed in parsed[:i]:
+            # Containment -- the only structural requirement.
+            if not (
+                killer["Period From"] <= killed["Period From"]
+                and killer["Period To"] >= killed["Period To"]
+            ):
+                continue
+            triggers: list[str] = []
+            if killer["Days Billed"] >= 365:
+                triggers.append("killer period \u2265 365d")
+            admitted = killer["Admitted"]
+            if admitted:
+                triggers.append("admit-phrase on killer")
+            reversal_match = _reversal_match(
+                evidence_df,
+                killed["Invoice #"],
+                killed["Amount"],
+                killed["Period From"],
+                killed["Period To"],
+            )
+            if reversal_match:
+                triggers.append("reversal credit row matches killed")
+            if not triggers:
+                continue
+            trigger_reason = "; ".join(triggers)
             overlap_d = max(
                 0,
                 (
@@ -6282,16 +6358,6 @@ def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
                 ).days,
             )
             jumpback_d = (killed["Period From"] - killer["Period From"]).days
-            triggers: list[str] = []
-            if overlap_d > 30:
-                triggers.append("period overlap > 30d")
-            if jumpback_d > 30:
-                triggers.append("jump-back > 30d")
-            if killer["Days Billed"] >= 60 and killer["Period From"] <= killed["Period From"]:
-                triggers.append("long period \u2265 60d starting \u2264 killed start")
-            if not triggers:
-                continue
-            trigger_reason = "; ".join(triggers)
             rows.append(
                 {
                     "Killer Invoice": killer["Invoice #"],
@@ -6301,13 +6367,12 @@ def detect_rebilling(df: pd.DataFrame) -> pd.DataFrame:
                     "Period Overlap (days)": overlap_d,
                     "Jump-back (days)": max(0, jumpback_d),
                     "Trigger Reason": trigger_reason,
-                    "Cancel/Rebill Admitted (Killer)": killer["Admitted"],
+                    "Cancel/Rebill Admitted (Killer)": admitted,
                 }
             )
     if not rows:
         return pd.DataFrame(columns=columns)
     out = pd.DataFrame(rows, columns=columns)
-    # Sort by Killer Date then Killed Date (oldest killers first).
     out["_k_sort"] = pd.to_datetime(out["Killer Date"], errors="coerce")
     out["_d_sort"] = pd.to_datetime(out["Killed Date"], errors="coerce")
     sort_idx = out.sort_values(["_k_sort", "_d_sort"]).index

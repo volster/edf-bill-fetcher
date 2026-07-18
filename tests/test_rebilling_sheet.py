@@ -158,10 +158,10 @@ def test_write_rebilling_sheet_cascade_renders_all_pairs() -> None:
             {
                 "Invoice #": "T68",
                 "Date": "01 Oct 2023",
-                "Period From": "01 May 2023",
+                "Period From": "01 Feb 2023",  # extends back; contains T67 fully
                 "Period To": "30 Sep 2023",
                 "Amount (£)": 100.0,
-                "Cancel/Rebill Admitted": False,
+                "Cancel/Rebill Admitted": True,  # admit-phrase on the killer
             },
         ]
     )

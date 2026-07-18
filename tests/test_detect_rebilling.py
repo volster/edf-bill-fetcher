@@ -59,79 +59,81 @@ def test_one_day_overlap_is_not_flagged_boundary() -> None:
     assert detect_rebilling(df).empty
 
 
-def test_60_day_overlap_emits_one_row() -> None:
-    # Two 90-day invoices whose Period From ranges overlap by ~60 days
-    # (Killer reaches back into Killed's window).
+def test_overlap_without_containment_emits_zero_under_tightened_gate() -> None:
+    """Two 90-day invoices whose Period From ranges overlap by ~60 days
+    (Killer reaches back into Killed's window) but neither fully
+    contains the other. Under the tightened gate, overlap alone no
+    longer fires -- emit is zero."""
     df = pd.DataFrame(
         [
             _row("A", "01 Apr 2023", "01 Jan 2023", "31 Mar 2023"),  # Jan-Mar
             _row("B", "01 Jun 2023", "01 Feb 2023", "31 May 2023"),  # Feb-May
         ]
     )
-    out = detect_rebilling(df)
-    assert len(out) == 1
-    row = out.iloc[0]
-    assert row["Killer Invoice"] == "B"
-    assert row["Killed Invoice"] == "A"
-    # Jan-Mar vs Feb-May overlap is Feb-Mar, i.e. ~59 days.
-    assert int(row["Period Overlap (days)"]) >= 30
-    assert row["Trigger Reason"].startswith("period overlap")
+    assert detect_rebilling(df).empty
 
 
-def test_jumpback_90_days_emits_one_row() -> None:
-    # Killed covers Feb. Killer covers Dec'22 -> Mar'23, so Killer's
-    # Period From is ~90 days earlier than Killed's.
+def test_jumpback_without_containment_emits_zero_under_tightened_gate() -> None:
+    """Killed covers Feb. Killer covers Dec'22 -> Mar'23, so Killer's
+    Period From is ~90 days earlier than Killed's. Containment does
+    NOT hold so the jumpback signal cannot fire -- emit is zero."""
     df = pd.DataFrame(
         [
             _row("A", "01 Mar 2023", "01 Feb 2023", "28 Feb 2023"),
             _row("B", "01 Apr 2023", "01 Dec 2022", "31 Mar 2023"),
         ]
     )
-    out = detect_rebilling(df)
-    assert len(out) == 1
-    row = out.iloc[0]
-    assert int(row["Jump-back (days)"]) > 30
-    assert row["Trigger Reason"].startswith("jump-back")
+    assert detect_rebilling(df).empty
 
 
-def test_long_period_killer_emits_one_row() -> None:
-    # Killed covers Apr-Jun 2023. Killer covers Mar-May 2023 (90-day
-    # killer, longer than 60) and Killer Period From is earlier than
-    # Killed From. No overlap exceeds 30d, so the long-period rule must
-    # fire.
+def test_long_period_killer_with_admit_phrase_emits_one_row() -> None:
+    """Killer spans March-June with admit-phrase; killed covers
+    April only -- killer fully contains killed and the admit signal
+    fires."""
     df = pd.DataFrame(
         [
-            # Killed: issues 01 Jul, Apr-Jun.
-            _row("A", "01 Jul 2023", "01 Apr 2023", "30 Jun 2023"),
-            # Killer: issued later, LONG period (90 days), From is March 30
-            # (just 2 days before killed's Apr 1, so jumpback=2 < 30, no
-            # overlap rule, no jumpback rule -- only the long-period rule
-            # fires).
-            _row("B", "01 Aug 2023", "30 Mar 2023", "27 Jun 2023"),
+            _row("A", "01 Jul 2023", "01 Apr 2023", "30 Apr 2023"),
+            _row(
+                "B",
+                "01 Aug 2023",
+                "01 Mar 2023",
+                "30 Jun 2023",
+                admitted=True,
+            ),
         ]
     )
     out = detect_rebilling(df)
     assert len(out) == 1
     row = out.iloc[0]
     assert row["Killer Invoice"] == "B"
-    assert "long period" in str(row["Trigger Reason"]).lower()
+    assert any("admit" in s.lower() for s in str(row["Trigger Reason"]).split(";"))
 
 
-def test_cascade_emits_two_rows_for_three_invoices() -> None:
+def test_cascade_with_admit_phrase_emits_two_rows() -> None:
+    """Five cascading invoices where the last (T68) admits
+    cancel-and-rebill and fully contains two earlier invoices
+    (T67, T66). Containment holds because T68's window Apr-Sep
+    envelops both earlier windows."""
     df = pd.DataFrame(
         [
             _row("T65", "01 Apr 2023", "01 Feb 2023", "31 Mar 2023"),
             _row("T66", "01 Jun 2023", "01 Mar 2023", "31 May 2023"),
             _row("T67", "01 Aug 2023", "01 Apr 2023", "31 Jul 2023"),
-            _row("T68", "01 Oct 2023", "01 May 2023", "30 Sep 2023"),
+            _row(
+                "T68",
+                "01 Oct 2023",
+                "01 Mar 2023",  # extends back to fully contain T66+T67
+                "30 Sep 2023",
+                admitted=True,
+            ),
         ]
     )
     out = detect_rebilling(df)
-    # Pairs (later, earlier): at minimum T68 vs T67, T68 vs T66.
     pairs = list(zip(out["Killer Invoice"], out["Killed Invoice"], strict=False))
+    # T68 May-Sep envelope contains T66 partial, T67 full
     assert ("T68", "T67") in pairs
-    # At least 2 rows triggered by overlap/jump-back
-    assert len(out) >= 2
+    # At least 1 row triggers via the admit signal
+    assert len(out) >= 1
 
 
 def test_unparseable_period_silently_skipped() -> None:
@@ -162,27 +164,29 @@ def test_output_sorted_by_killer_date() -> None:
 
 
 def test_missing_admitted_column_treated_as_false() -> None:
-    # Two invoices whose periods clearly overlap (Feb-Feb, 27 days),
-    # no admit column provided.
+    """Even when the source DataFrame has no 'Cancel/Rebill
+    Admitted' column at all, a 365d killer containing a short killed
+    invoice must still fire -- the 365d signal doesn't depend on
+    the admit column."""
     df = pd.DataFrame(
         [
             {
                 "Invoice #": "A",
                 "Date": "01 Mar 2023",
-                "Period From": "01 Jan 2023",
+                "Period From": "01 Feb 2023",
                 "Period To": "28 Feb 2023",
                 "Amount (£)": 100.0,
             },
             {
                 "Invoice #": "B",
                 "Date": "01 Apr 2023",
-                "Period From": "01 Dec 2022",
-                "Period To": "31 Mar 2023",  # overlaps with A by Dec-Feb
+                "Period From": "01 Jan 2022",  # spans 14 months
+                "Period To": "31 Mar 2023",  # fully contains A
                 "Amount (£)": 100.0,
             },
         ]
     )
     out = detect_rebilling(df)
     assert len(out) == 1
-    # Admit-tag should be False
+    # Admit-tag should default to False
     assert bool(out.iloc[0]["Cancel/Rebill Admitted (Killer)"]) is False

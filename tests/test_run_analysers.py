@@ -22,8 +22,8 @@ def _df() -> pd.DataFrame:
             {
                 "Invoice #": "T-X2",
                 "Date": "01 Sep 2023",
-                "Period From": "01 Feb 2022",
-                "Period To": "31 Aug 2023",  # overlaps T-X1
+                "Period From": "01 Jan 2022",  # fully contains T-X1 from 2022-01-01
+                "Period To": "31 Aug 2023",
                 "Reading": "Actual",
                 "Units (kWh)": 400.0,
                 "Amount (£)": 1500.0,
