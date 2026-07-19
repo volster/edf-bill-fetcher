@@ -90,27 +90,6 @@ def fmt_money(val: Any) -> str:
 # =============================================================================
 
 
-def _add_heading_style(
-    doc: Any,
-    level: int,
-    name: str,
-    font_size: int,
-    color: RGBColor = NAVY,
-    bold: bool = True,
-    space_before: int = 12,
-    space_after: int = 6,
-) -> Any:
-    """Add a heading style to the document."""
-    style = doc.styles.add_style(name, 1)  # WD_STYLE_TYPE.PARAGRAPH
-    style.font.size = Pt(font_size)
-    style.font.color.rgb = color
-    style.font.bold = bold
-    style.paragraph_format.space_before = Pt(space_before)
-    style.paragraph_format.space_after = Pt(space_after)
-    style.paragraph_format.keep_with_next = True
-    return style
-
-
 def _get_or_create_styles(doc: Any) -> Any:
     """Create custom styles for the document."""
     # Title
@@ -359,10 +338,6 @@ def create_table_of_contents(doc: Any, styles: Any, ctx: RenderContext | None = 
         run.font.bold = True
 
     doc.add_page_break()
-
-
-def _add_banner_heading(doc: Any, text: str) -> None:
-    doc.add_paragraph(text, style="Heading 1")
 
 
 def create_executive_summary(

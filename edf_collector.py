@@ -4503,22 +4503,30 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         analyses["back_billing"],
         account=account_label,
         overlapping_invoices=overlapping_invoices,
+        evidence_df=dfc,
+        evidence_index=analyses["evidence_index"],
     )
     write_rebilling_sheet(
         wb.create_sheet(title="Rebilling & Corrections"),
         analyses["rebilling"],
         account=account_label,
+        evidence_df=dfc,
+        evidence_index=analyses["evidence_index"],
     )
     write_meter_readings_sheet(
         wb.create_sheet(title="Meter Readings"),
         dfc,
         analyses["meter_rollover"],
         account=account_label,
+        evidence_df=dfc,
+        evidence_index=analyses["evidence_index"],
     )
     write_contract_history_sheet(
         wb.create_sheet(title="Contract History"),
         analyses["contracts"],
         account=account_label,
+        evidence_df=dfc,
+        evidence_index=analyses["evidence_index"],
     )
 
     # Stream P1 + P2: SAP CSV-in-PDF data dumps and the cross-source
@@ -6823,13 +6831,16 @@ def write_meter_readings_sheet(
     df: pd.DataFrame,
     rollovers: pd.DataFrame,
     account: str = "",
+    *,
+    evidence_df: pd.DataFrame | None = None,
+    evidence_index: dict[str, int] | None = None,
 ) -> None:
-    """Render the Meter Readings tab (spec \u00a74.3).
+    """Render the Meter Readings tab (spec §4.3).
 
     Layout:
       row 1: title banner with account
       row 2: legend 'A = Actual, E = Estimated, M = Meter rollover'
-      row 7: table header (6 cols)
+      row 7: table header (8 cols)
       rows 8+: one row per evidence record, ordered by Date
 
     The 'Type (A/E/M)' column maps each evidence row's Reading
@@ -6837,6 +6848,15 @@ def write_meter_readings_sheet(
     the ``rollovers`` table. The Estimated Source column carries
     Details verbatim (e.g. 'Automatic estimate' or 'SAP estimate')
     for Estimated rows, else blank.
+
+    Spec §5.2 adds a "Source Excerpt" column (col 7): the truncated
+    source-PDF-text + regex trace for that invoice, fetched from
+    ``evidence_df`` via :func:`_source_excerpt_for_invoice` when
+    available.
+
+    Spec §10.2 adds a "View on Evidence Report" column (col 8): a
+    hyperlinked right-arrow that jumps to the matched row on the
+    EDF Evidence Report sheet, looked up from ``evidence_index``.
     """
     ws.title = "Meter Readings"
     NAVY = "10367A"
@@ -6872,7 +6892,7 @@ def write_meter_readings_sheet(
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=6)
     ws.row_dimensions[2].height = 28
 
-    # Row 7: table header (6 cols per spec \u00a74.3).
+    # Row 7: table header (8 cols per spec \u00a74.3 + \u00a75.2 + \u00a710.2).
     headers = [
         "Date",
         "Reading (kWh)",
@@ -6880,6 +6900,8 @@ def write_meter_readings_sheet(
         "Estimated Source",
         "Invoice #",
         "Notes",
+        "Source Excerpt",
+        "View on Evidence Report",
     ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 7, col, h, bg=NAVY)
@@ -6924,6 +6946,42 @@ def write_meter_readings_sheet(
             type_cell.font = Font(name="Calibri", size=10, bold=True, color="003F87")
         elif type_code == "E":
             type_cell.font = Font(name="Calibri", size=10, color="C08000")
+        # Source Excerpt (col 7): truncated source-PDF text + regex
+        # trace so a reviewer can see why N/A entries are N/A on
+        # this row.
+        excerpt = ""
+        if evidence_df is not None:
+            looked = _source_excerpt_for_invoice(evidence_df, inv)
+            if looked is not None:
+                excerpt = looked
+        _text(ws, r, 7, excerpt, wrap=True, fill_hex=bg)
+        # View on Evidence Report (col 8): hyperlinked right-arrow
+        # that jumps to the matched invoice's row on the Evidence
+        # Report sheet.
+        target_row = None
+        if evidence_index is not None:
+            target_row = evidence_index.get(f"inv:{inv}")
+            if target_row is None:
+                # Fall back to date+units signature.
+                try:
+                    amt = float(units)
+                    units_sig = int(round(amt))
+                    key = f"date_units:{row.get('Date', '')}|{units_sig}"
+                    target_row = evidence_index.get(key)
+                except (TypeError, ValueError):
+                    pass
+        if target_row is not None:
+            cell = ws.cell(row=r, column=8, value="\u2192")
+            cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                ref=cell.coordinate,
+                location=f"'EDF Evidence Report'!A{target_row}",
+                display="\u2192",
+                tooltip=f"Jump to EDF Evidence Report!A{target_row}",
+            )
+            cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        else:
+            cell = ws.cell(row=r, column=8, value="No match")
+            cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
         r += 1
 
     # Column widths tailored for the table cells.
@@ -6934,6 +6992,8 @@ def write_meter_readings_sheet(
         "D": 26,
         "E": 20,
         "F": 50,
+        "G": 60,  # Source Excerpt
+        "H": 22,  # View on Evidence Report
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
@@ -6944,11 +7004,38 @@ def write_contract_history_sheet(
     ws: Worksheet,
     contracts: pd.DataFrame,
     account: str = "",
+    *,
+    evidence_df: pd.DataFrame | None = None,
+    evidence_index: dict[str, int] | None = None,
 ) -> None:
-    """Render the Contract History tab (spec \u00a74.4)."""
+    """Render the Contract History tab (spec \u00a74.4).
+
+    Spec \u00a75.2 adds a "Source Excerpt" column populated from any
+    invoice in ``evidence_df`` whose Period falls inside each
+    inferred contract's [Contract From, Contract To] window.
+    Spec \u00a710.2 adds a "View on Evidence Report" hotlink to
+    that matching invoice's row.
+    """
     ws.title = "Contract History"
     NAVY = "10367A"
     ORANGE = "FE5716"
+
+    def _first_matching_invoice(cf: pd.Timestamp, ct: pd.Timestamp) -> str:
+        if evidence_df is None or evidence_df.empty or "Invoice #" not in evidence_df.columns:
+            return ""
+        for _, er in evidence_df.iterrows():
+            try:
+                ipf = pd.to_datetime(er.get("Period From"), errors="coerce")
+                ipt = pd.to_datetime(er.get("Period To"), errors="coerce")
+            except Exception:
+                continue
+            if pd.isna(ipf) or pd.isna(ipt):
+                continue
+            if (ipf <= ct) and (ipt >= cf):
+                inv = str(er.get("Invoice #", ""))
+                if inv:
+                    return inv
+        return ""
 
     # Row 1: title banner with account
     title = "INFERRED CONTRACT HISTORY"
@@ -6958,8 +7045,7 @@ def write_contract_history_sheet(
     t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
-    t1.alignment = Alignment(horizontal="left", vertical="center")
-    for c in range(2, 6):
+    for c in range(2, 8):
         x = ws.cell(row=1, column=c)
         x.fill = PatternFill("solid", start_color=ORANGE)
         x.border = CELL_BORDER
@@ -6973,11 +7059,20 @@ def write_contract_history_sheet(
     sub_cell = ws.cell(row=2, column=1, value=sub)
     sub_cell.font = Font(name="Calibri", size=10, italic=True)
     sub_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=5)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=7)
     ws.row_dimensions[2].height = 30
 
-    # Row 7: table headers (5 cols per spec \u00a74.4).
-    headers = ["Contract From", "Contract To", "Tariff", "Days", "# Invoices"]
+    # Row 7: table headers (5 data + Source Excerpt + View on ER = 7
+    # cols per spec \u00a74.4 + \u00a75.2 + \u00a710.2).
+    headers = [
+        "Contract From",
+        "Contract To",
+        "Tariff",
+        "Days",
+        "# Invoices",
+        "Source Excerpt",
+        "View on Evidence Report",
+    ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 7, col, h, bg=NAVY)
     ws.row_dimensions[7].height = 28
@@ -6985,23 +7080,65 @@ def write_contract_history_sheet(
     r = 8
     for _, row in contracts.iterrows() if contracts is not None and not contracts.empty else []:
         bg = "EEF2FF" if r % 2 == 0 else None
-        _text(ws, r, 1, row.get("Contract From", ""), fill_hex=bg)
-        _text(ws, r, 2, row.get("Contract To", ""), fill_hex=bg)
+        cf = pd.to_datetime(row.get("Contract From"), errors="coerce")
+        ct = pd.to_datetime(row.get("Contract To"), errors="coerce")
+        cf_text = row.get("Contract From", "")
+        if isinstance(cf, pd.Timestamp) and not pd.isna(cf):
+            cf_text = cf.strftime("%d %b %Y")
+        ct_text = row.get("Contract To", "")
+        if isinstance(ct, pd.Timestamp) and not pd.isna(ct):
+            ct_text = ct.strftime("%d %b %Y")
+        _text(ws, r, 1, cf_text, fill_hex=bg)
+        _text(ws, r, 2, ct_text, fill_hex=bg)
         _text(ws, r, 3, row.get("Tariff", ""), fill_hex=bg)
         _num(ws, r, 4, int(row.get("Days", 0)), fmt="#,##0", fill_hex=bg)
         _num(ws, r, 5, int(row.get("# Invoices", 0)), fmt="#,##0", fill_hex=bg)
+        matched_inv = (
+            _first_matching_invoice(cf, ct)
+            if (
+                isinstance(cf, pd.Timestamp)
+                and not pd.isna(cf)
+                and isinstance(ct, pd.Timestamp)
+                and not pd.isna(ct)
+            )
+            else ""
+        )
+        excerpt = ""
+        if evidence_df is not None and matched_inv:
+            looked = _source_excerpt_for_invoice(evidence_df, matched_inv)
+            if looked is not None:
+                excerpt = looked
+        _text(ws, r, 6, excerpt, wrap=True, fill_hex=bg)
+        target_row = None
+        if evidence_index is not None and matched_inv:
+            target_row = evidence_index.get(f"inv:{matched_inv}")
+        if target_row is not None:
+            cell = ws.cell(row=r, column=7, value="\u2192")
+            cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                ref=cell.coordinate,
+                location=f"'EDF Evidence Report'!A{target_row}",
+                display="\u2192",
+                tooltip=f"Jump to EDF Evidence Report!A{target_row}",
+            )
+            cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        else:
+            cell = ws.cell(row=r, column=7, value="No match")
+            cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
         r += 1
 
     # Column widths.
-    widths = {"A": 16, "B": 16, "C": 24, "D": 10, "E": 12}
+    widths = {
+        "A": 16,
+        "B": 16,
+        "C": 24,
+        "D": 10,
+        "E": 12,
+        "F": 60,  # Source Excerpt
+        "G": 22,  # View on Evidence Report
+    }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A8"
-
-
-# ---------------------------------------------------------------------------
-# SAP data-dump sheet writers
-# ---------------------------------------------------------------------------
 
 
 def write_sap_contract_history_sheet(
