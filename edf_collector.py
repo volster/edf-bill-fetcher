@@ -6125,6 +6125,31 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
 
     Rows with unparseable ``Period From``/``Period To`` are skipped
     silently. Output is sorted by ``Bill Date`` and re-indexed.
+
+    Architectural note (SAP cross-feeding):
+    This detector takes only the inferred-evidence dataframe. SAP
+    data-dump rows (Contract-and-Product-Change-History,
+    Meter-Read-History, Financial-Transactions) are surfaced in
+    their own tabs (SAP Contract History / SAP Meter Readings /
+    SAP Financial Transactions) plus the cross-source
+    Reconciliation tab; they are NOT joined back into
+    ``detect_back_billing`` because:
+
+      * SAP financial transactions carry a Document No. (e.g.
+        ``531000424090``) not an Invoice #, and their Transaction
+        Text is the generic ledger description
+        (``Dr- Consum Billing Receivable`` etc.) -- they cannot
+        be unambiguously matched to an inferred invoice.
+      * SAP records have no ``Period From`` / ``Period To`` span
+        (only Posting Date / Document Date) so they cannot
+        independently drive a back-billing judgement.
+      * The Reconciliation sheet is the proper place to surface
+        agreements and disagreements between the inferred and
+        SAP samples; naively joining SAP amounts into the
+        backbilling tab would mislead the reviewer.
+    If a future resource joins the two sources by a higher-fidelity
+    key (e.g. PDF receipt number + SAP Document No. mapping
+    table), wire the intersection through ``run_analysers`` here.
     """
     columns = [
         "Invoice #",
