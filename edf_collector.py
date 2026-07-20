@@ -3709,13 +3709,26 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     # Tab 1: Evidence (created first — summary formulas reference it by name)
     ws_main = wb.active
     ws_main.title = "EDF Evidence Report"
-    # The ``Source PDF Text`` column is captured by the parsers for
-    # diagnostic purposes (rendered in the analysers' ``Source
-    # Excerpt`` column) but it's a 4 KB chunk per row -- too noisy to
-    # include on the main Evidence Report tab. Drop it from a copy
-    # passed to the sheet writer; the underlying ``df`` is left
-    # intact so subsequent analyser renders can keep accessing it.
-    evidence_df = df.drop(columns=["Source PDF Text"]) if "Source PDF Text" in df.columns else df
+    # The diagnostic-only columns (``Source PDF Text``, ``_regex_trace``,
+    # ``Balance Last Bill (£)``) are captured by the parsers for the
+    # analyser tabs' Source Excerpt column / balance-context rendering.
+    # They are intentionally NOT written to the visible Evidence Report
+    # tab: ``Source PDF Text`` is a 4 KB chunk per row (too noisy),
+    # ``_regex_trace`` is internal pipeline metadata, and
+    # ``Balance Last Bill (£)`` is a reconciliation-statement field that
+    # only the Reconciliation tab needs.
+    # Drop them from the copy handed to the writer; the underlying
+    # ``df`` is left intact so subsequent analyser renders (``dfc``)
+    # retain them for in-memory Source Excerpt lookups.
+    _diagnostic_columns_for_evidence_report = [
+        "Source PDF Text",
+        "_regex_trace",
+        "Balance Last Bill (£)",
+    ]
+    evidence_df = df.drop(
+        columns=[c for c in _diagnostic_columns_for_evidence_report if c in df.columns],
+        errors="ignore",
+    )
     write_evidence_sheet(ws_main, evidence_df, is_duplicate=False)
 
     # Tab 2: Annual Summary
@@ -3724,8 +3737,16 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
 
     # Tab 3: Duplicates
     if not dup_df.empty:
+        # Same diagnostic-column cleanup as the main evidence sheet:
+        # dup_df inherits the diagnostic-only columns from reindex so
+        # the duplication hotspot is visible here, but they're
+        # inappropriate on the Duplicate Entries tab itself.
+        dup_df_for_report = dup_df.drop(
+            columns=[c for c in _diagnostic_columns_for_evidence_report if c in dup_df.columns],
+            errors="ignore",
+        )
         ws_dup = wb.create_sheet(title="Duplicate Entries")
-        write_evidence_sheet(ws_dup, dup_df, is_duplicate=True)
+        write_evidence_sheet(ws_dup, dup_df_for_report, is_duplicate=True)
 
     # Tab 4: Filtered
     if filtered and config.get("save_filtered", True):
