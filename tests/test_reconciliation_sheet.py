@@ -120,13 +120,28 @@ _EVIDENCE_DF = pd.DataFrame(
 
 
 def _section_row_indexes(ws: Worksheet) -> dict[str, tuple[int, int]]:
-    """Return dict  {section_label: (start_row_excl_banner, end_row_incl)}."""
+    """Return dict  {section_label: (start_row_excl_banner, end_row_incl)}.
+
+    The section banners are written with a leading/trailing ``■`` visual
+    marker (see ``_section_banner``).  Pre-fix the banners used a
+    ``"== {text} =="`` literal that openpyxl was silently serialising
+    as a worksheet formula (because the value starts with ``=``),
+    triggering Excel's "Removed Records: Formula" recover prompt.  The
+    helper therefore accepts BOTH the legacy ``"=="``-delimited form
+    (for backwards compatibility with any pre-fix snapshots still in
+    flight) and the current ``■ {text} ■`` form.
+    """
     rows = {}
     for row in ws.iter_rows():
         v0 = row[0].value
-        if isinstance(v0, str) and v0.startswith("=="):
-            label = v0.strip("=").strip()
-            rows[label] = (row[0].row, -1)
+        if isinstance(v0, str):
+            stripped = v0.strip()
+            if stripped.startswith("==") and stripped.endswith("=="):
+                label = stripped.strip("=").strip()
+                rows[label] = (row[0].row, -1)
+            elif stripped.startswith("\u25a0") and stripped.endswith("\u25a0"):
+                label = stripped.replace("\u25a0", "").strip()
+                rows[label] = (row[0].row, -1)
     out = {}
     keys = list(rows.keys())
     for i, key in enumerate(keys):
@@ -321,3 +336,52 @@ def test_discrepancy_emitted_when_amount_differs() -> None:
             found_disc = True
             break
     assert found_disc, "expected a Discrepancy row given amount differs > £0.01 but ≤ £0.50"
+
+
+def test_section_banners_are_not_serialised_as_formulas(tmp_path: object) -> None:
+    """Regression: ``_section_banner`` used to write ``"== Contract
+    Reconciliation =="`` as the cell value.  openpyxl sees any string
+    that starts with ``=`` and serialises it as a worksheet formula
+    (``<f>...</f>``).  Excel then errors on file-open with:
+
+        "We found a problem with some content ... do you want us to
+        try and recover ... " / "Removed Records: Formula from
+        /xl/worksheets/sheetN.xml"
+
+    Pre-fix this corrupted every Reconciliation sheet, prompting the
+    user each open even though the sheet content itself was intact.
+
+    The fix changed the banner visual marker from ``"== {text} =="``
+    to ``"\u25a0 {text} \u25a0"`` so the cell value no longer begins
+    with ``=``.  This test unzips the saved workbook and asserts ZERO
+    ``<f>`` (formula) tags across ALL worksheets so a regression in
+    any writer surfaces fast.
+    """
+    import zipfile
+
+    wb = Workbook()
+    ws = wb.active
+    write_reconciliation_sheet(
+        ws,
+        _SAP_CONTRACT,
+        _INFERRED_CONTRACT,
+        _SAP_METER,
+        _INFERRED_METER,
+        _SAP_FINANCIAL,
+        _EVIDENCE_DF,
+        account="A-31105244",
+    )
+    out = tmp_path / "recon.xlsx"  # type: ignore[operator]
+    wb.save(out)
+
+    with zipfile.ZipFile(out) as z:
+        for n in z.namelist():
+            if not n.startswith("xl/worksheets/sheet") or not n.endswith(".xml"):
+                continue
+            xml = z.read(n).decode("utf-8", errors="replace")
+            nf = xml.count("<f>") + xml.count("<f ") + xml.count("<f/")
+            assert nf == 0, (
+                f"{n} contains {nf} <f> formula tag(s) -- banner cells must "
+                f"be inline strings, not formulas (Excel 'Removed Records: "
+                f"Formula' corruption)."
+            )

@@ -1141,6 +1141,12 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
     rows: list[dict] = []
     src = "Statement Reconciliation"
 
+    def _excerpt_around(m: "re.Match", window: int = 400) -> str:
+        """Return up to ``window`` chars around the regex match."""
+        start = max(0, m.start(0) - 20)
+        end = min(len(text), m.end(0) + window)
+        return text[start:end]
+
     bill_ref = ""
     bill_date_display = "N/A"
     bill_ref_match = _RECON_STATEMENT_RE.search(text)
@@ -1179,6 +1185,8 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
                 "Details": "Electricity charge (reconciliation statement)",
                 "Logic Used": "Reconciliation Statement Charge",
                 "Balance Last Bill (£)": bal_last,
+                "Source PDF Text": _excerpt_around(m),
+                "_regex_trace": "recon _RECON_CHARGE_RE",
             }
         )
 
@@ -1213,6 +1221,8 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
                 "Details": details,
                 "Logic Used": "Reconciliation Statement Reversal",
                 "Balance Last Bill (£)": bal_last,
+                "Source PDF Text": _excerpt_around(m),
+                "_regex_trace": "recon _RECON_REVERSAL_RE",
             }
         )
 
@@ -1238,6 +1248,8 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
                 "Details": "Late Payment Charge (reconciliation statement)",
                 "Logic Used": "Reconciliation Statement Late Payment",
                 "Balance Last Bill (£)": bal_last,
+                "Source PDF Text": _excerpt_around(m),
+                "_regex_trace": "recon _RECON_LATE_PAYMENT_RE",
             }
         )
 
@@ -1274,6 +1286,8 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
                     "Details": "Payment received (reconciliation statement)",
                     "Logic Used": "Reconciliation Statement Payment",
                     "Balance Last Bill (£)": bal_last,
+                    "Source PDF Text": _excerpt_around(m),
+                    "_regex_trace": "recon _RECON_PAYMENT_RE",
                 }
             )
 
@@ -1297,6 +1311,12 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
             "Balance Last Bill (£)": bal_last,
             "Details": f"Statement reconciliation: bill ref {bill_ref}",
             "Logic Used": "Reconciliation Statement Meta",
+            # The meta row carries the statement-level context
+            # (bill ref + balances); there is no single regex match
+            # to excerpt. Provide the first 600 chars of the statement
+            # so a reviewer sees the statement header context.
+            "Source PDF Text": text[:600],
+            "_regex_trace": "recon meta",
         }
     )
     return rows
@@ -1464,6 +1484,22 @@ def legal_context() -> str:
     return _LEGAL_CONTEXT
 
 
+def _htm_excerpt(text: str, m: re.Match, window: int = 400) -> str:
+    """Return a small window of the HTM source around a regex match.
+
+    Used by :func:`parse_htm_account_history` to populate the
+    ``Source PDF Text`` column captured for the analyser tabs' Source
+    Excerpt lookup.  Capturing the entire HTM document per-record
+    would balloon memory (every record would carry the same ~5-50 KB
+    body); a 400-char window around each match is enough for a
+    reviewer to see the verb phrase + balance clause that produced
+    the row.
+    """
+    start = max(0, m.start(0) - 20)
+    end = min(len(text), m.end(0) + window)
+    return text[start:end]
+
+
 def parse_htm_account_history(text):
     """
     Parse the EDF MyAccount 'Payments and Invoices' HTM export.
@@ -1499,6 +1535,7 @@ def parse_htm_account_history(text):
         units = m.group(3) if m.group(3) else "N/A"
         charge_amt = float(m.group(2).replace(",", ""))
         balance = float(m.group(6).replace(",", ""))
+        excerpt = _htm_excerpt(text, m)
         records.append(
             {
                 "Source": "HTM Account History",
@@ -1521,6 +1558,11 @@ def parse_htm_account_history(text):
                 "Attachment Name": "N/A",
                 "Details": "HTM: charged account",
                 "Logic Used": "HTM Charge",
+                # Stream P3 (Source Excerpt): a small window around the
+                # regex match so the analyser tabs can show the
+                # HTM-charged clause that produced this row.
+                "Source PDF Text": excerpt,
+                "_regex_trace": "HTM charge_re",
             }
         )
 
@@ -1535,6 +1577,7 @@ def parse_htm_account_history(text):
         date_str = parse_to_display_date(m.group(1))
         payment_amt = float(m.group(2).replace(",", ""))
         balance = float(m.group(3).replace(",", ""))
+        excerpt = _htm_excerpt(text, m)
         records.append(
             {
                 "Source": "HTM Account History",
@@ -1562,6 +1605,8 @@ def parse_htm_account_history(text):
                 "Attachment Name": "N/A",
                 "Details": "HTM: payment received",
                 "Logic Used": "HTM Payment",
+                "Source PDF Text": excerpt,
+                "_regex_trace": "HTM pay_re",
             }
         )
 
@@ -1576,6 +1621,7 @@ def parse_htm_account_history(text):
         date_str = parse_to_display_date(m.group(1))
         credit_amt = float(m.group(2).replace(",", ""))
         balance = float(m.group(3).replace(",", ""))
+        excerpt = _htm_excerpt(text, m)
         records.append(
             {
                 "Source": "HTM Account History",
@@ -1599,6 +1645,8 @@ def parse_htm_account_history(text):
                 "Attachment Name": "N/A",
                 "Details": "HTM: reversed account charge",
                 "Logic Used": "HTM Reversal",
+                "Source PDF Text": excerpt,
+                "_regex_trace": "HTM rev_re",
             }
         )
 
@@ -1651,6 +1699,8 @@ def parse_htm_account_history(text):
                 "Attachment Name": "N/A",
                 "Details": "HTM: standalone credit balance",
                 "Logic Used": "HTM StandaloneBalance",
+                "Source PDF Text": _htm_excerpt(text, m),
+                "_regex_trace": "HTM bal_re (standalone)",
             }
         )
 
@@ -2107,6 +2157,17 @@ class EvidenceEngine:
                 "Attachment Name": attachment_name or "N/A",
                 "Details": detail[:60],
                 "Logic Used": strategy,
+                # Stream P3 (Source Excerpt): ``process_text`` is the
+                # fallback path used when ``detect_pdf_format`` does not
+                # classify the slice as new_invoice/new_credit (i.e. the
+                # "Smart Context" / "Large Amount Fallback" strategy
+                # rows shown on the Back-billing / Rebilling analyser
+                # tabs). Capture the cleaned bill body so the analyser's
+                # Source Excerpt column can show the regex-source text
+                # for these rows -- the previous absence left every
+                # analyser row reading "Source text unavailable".
+                "Source PDF Text": clean_text[:4000],
+                "_regex_trace": "",
             }
         )
 
@@ -5908,12 +5969,29 @@ def _source_excerpt_for_invoice(
     evidence_df: pd.DataFrame | None,
     invoice_number: str,
 ) -> str | None:
-    """Look up the source-text excerpt for a record by Invoice #."""
+    """Look up the source-text excerpt for a record by Invoice #.
+
+    Returns ``None`` when no useful lookup can be performed -- the caller
+    (``write_back_billing_sheet`` etc.) then leaves the Source Excerpt
+    cell empty.  Returns a diagnostic excerpt string otherwise.
+
+    ``"N/A"``/empty Invoice # values short-circuit to ``None``: those
+    rows cannot be uniquely identified by Invoice # alone (every HTM
+    record carries Invoice # = "N/A") so a by-Invoice-# lookup would
+    just return whichever HTM row happened to sort first, which is
+    misleading.  The analyser writers fall back to their
+    ``amt_days:``/``date_units:`` signature lookups via
+    ``evidence_index`` for those rows.
+    """
     if evidence_df is None or evidence_df.empty or not invoice_number:
+        return None
+    if not isinstance(invoice_number, str):
+        invoice_number = str(invoice_number)
+    if invoice_number.strip() in ("", "N/A", "n/a", "na"):
         return None
     if "Invoice #" not in evidence_df.columns:
         return None
-    matches = evidence_df[evidence_df["Invoice #"].astype(str) == str(invoice_number)]
+    matches = evidence_df[evidence_df["Invoice #"].astype(str) == invoice_number]
     if matches.empty:
         return None
     row = matches.iloc[0]
@@ -7388,7 +7466,15 @@ def write_reconciliation_sheet(
             cell.alignment = Alignment(horizontal="left", vertical="center")
 
     def _section_banner(row: int, text: str) -> None:
-        ws.cell(row=row, column=1, value=f"== {text} ==")
+        # NOTE: openpyxl serialises any cell value that begins with "=" as
+        # a formula tag (<f>...</f>) in the worksheet XML.  Excel then
+        # refuses to open the sheet ("Removed Records: Formula from
+        # sheetN.xml") because the bogus formula is non-parseable.
+        # Using a non-"=" visual marker (the ORANGE fill on the row
+        # itself provides the visual banner cue) keeps the text as a
+        # normal inline string.  See tests/test_reconciliation_sheet.py
+        # `test_section_banners_are_not_serialised_as_formulas`.
+        ws.cell(row=row, column=1, value=f"\u25a0 {text} \u25a0")
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
         for c in range(1, 9):
             cell = ws.cell(row=row, column=c)
