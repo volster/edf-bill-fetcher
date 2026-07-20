@@ -6006,12 +6006,23 @@ def _format_source_excerpt(
     if isinstance(source_text, str) and source_text:
         body = source_text[:_SOURCE_EXCERPT_TEXT_CAP]
         if len(source_text) > _SOURCE_EXCERPT_TEXT_CAP:
-            body += " …"
+            body += " ..."
         parts.append(body)
     elif failed_fields or (isinstance(regex_trace, str) and regex_trace):
         # Trace present but no source text -- still useful diagnostic.
         pass
     else:
+        # Defensive fallback: reached only when the upstream record
+        # builder did NOT capture either ``Source PDF Text`` or
+        # ``_regex_trace`` for the matched row -- which should no
+        # longer occur given the post-fix invariant that every
+        # record builder populates both (see ``_process_new_invoice``,
+        # ``_process_new_credit``, ``process_text``,
+        # ``parse_htm_account_history``,
+        # ``extract_reconciliation_statement_rows``).  Kept as a
+        # placeholder so a regression in any of those builders
+        # produces a visible diagnostic in the reviewer-facing
+        # Source Excerpt cell rather than a literal ``None``.
         return "Source text unavailable"
     return "\n".join(parts)
 
