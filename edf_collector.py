@@ -3620,15 +3620,39 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         "Anomaly Flag",
         "Duplicate Of",
     ]
-    df = df.reindex(columns=col_order)
+    # Diagnostic-only columns that the analyser writers (Back-billing,
+    # Rebilling, Meter Readings, Contract History) need for their
+    # Source Excerpt column lookup, but which must NOT appear on the
+    # EDF Evidence Report tab.  They survive the canonical ``reindex``
+    # below so ``dfc = df_an[...]`` retains them for the analyser
+    # writers' ``evidence_df=dfc`` argument.  ``write_evidence_sheet``
+    # drops them via the ``evidence_df = df.drop(columns=[...])`` pass
+    # at line ~3694 just before the Evidence Report is written.
+    # 'Balance Last Bill (£)' is captured by the reconciliation-statement
+    # parser and is consumed by the analyser writers as a diagnostic; it
+    # stays here for the same reason.
+    diagnostic_cols = [
+        "Source PDF Text",
+        "_regex_trace",
+        "Balance Last Bill (£)",
+    ]
+    # Only carry forward the diagnostic cols that are actually present
+    # on the records -- avoids reindex inserting all-NaN cols when no
+    # record builder emitted them (e.g. a synthetic test DataFrame).
+    diagnostic_present = [c for c in diagnostic_cols if c in df.columns]
+    df = df.reindex(columns=col_order + diagnostic_present)
     # Belt-and-braces invariant: every column the *kept* set still
     # carries must be in the canonical order list — otherwise a
     # future record builder that adds a new column without updating
     # col_order would survive the reindex and land as a
     # mysteries-leading-column in the saved workbook.  We assert
     # loudly here (developer-visible) rather than silently dropping
-    # the unknown column.
-    _unexpected = [c for c in df.columns if c not in col_order]
+    # the unknown column.  The diagnostic cols (``Source PDF Text``,
+    # ``_regex_trace``, ``Balance Last Bill (£)``) are intentionally
+    # excluded from the canonical ``col_order`` so they're not written
+    # to the Evidence Report sheet; the assertion below permits them.
+    _allowed_extras = {"Source PDF Text", "_regex_trace", "Balance Last Bill (£)"}
+    _unexpected = [c for c in df.columns if c not in col_order and c not in _allowed_extras]
     if _unexpected:
         raise ValueError(
             "export_to_excel received columns not in col_order: "
@@ -5136,11 +5160,14 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         anom_dates = series[z_anoms].index
         for dt in anom_dates:
             r += 1
+            amount_val = series[dt]
+            if isinstance(amount_val, pd.Series):
+                amount_val = amount_val.iloc[0]
             _text(
                 ws,
                 r,
                 1,
-                f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({series[dt]:,.2f})",
+                f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({amount_val:,.2f})",
             )
 
     if iqr_count > 0:
@@ -5149,11 +5176,14 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         anom_dates = series[iqr_anoms].index
         for dt in anom_dates:
             r += 1
+            amount_val = series[dt]
+            if isinstance(amount_val, pd.Series):
+                amount_val = amount_val.iloc[0]
             _text(
                 ws,
                 r,
                 1,
-                f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({series[dt]:,.2f})",
+                f"  • {dt.strftime('%d/%m/%Y') if hasattr(dt, 'strftime') else dt} ({amount_val:,.2f})",
             )
 
     # Normality test (if scipy available)

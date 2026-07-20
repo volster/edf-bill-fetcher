@@ -334,3 +334,112 @@ def test_process_text_fed_backbilling_writer_emits_real_source_excerpt() -> None
     # an acceptable regression target; the previous "Source text
     # unavailable" string is no longer emitted for this path.
     assert body_excerpt != "Source text unavailable"
+
+
+def test_export_to_excel_preserves_source_pdf_text_for_analysers(tmp_path: object) -> None:
+    """End-to-end regression: the ``export_to_excel`` pipeline's
+    ``df = df.reindex(columns=col_order)`` step used to silently drop
+    ``Source PDF Text`` and ``_regex_trace`` columns from the dedup'd
+    DataFrame that the four analyser writers receive as
+    ``evidence_df=dfc``.  Per that bug every Back-billing row sourced
+    through ``process_text``/``parse_htm_account_history``/
+    ``extract_reconciliation_statement_rows`` rendered "Source text
+    unavailable" on the rendered workbook, even though the in-memory
+    records had captured the source bytes.
+
+    Fix: the reindex adds the diagnostic-only cols (``Source PDF
+    Text``, ``_regex_trace``, ``Balance Last Bill (£)``) onto the
+    canonical ``col_order`` so they survive into ``dfc`` while still
+    being dropped from the saved Evidence Report sheet via the
+    existing ``evidence_df = df.drop(...)`` pass.
+
+    This test feeds a small record set with one ``process_text``-style
+    row (carrying ``Source PDF Text`` + ``_regex_trace`` but no
+    ``Invoice #`` parser trace; the Smart Context path) through the
+    full ``export_to_excel`` pipeline then opens the saved workbook
+    and asserts the Back-billing tab's Source Excerpt column carries
+    the captured PDF body, not the unhelpful "Source text
+    unavailable" fallback.
+    """
+    import os
+
+    from openpyxl import load_workbook
+
+    from edf_collector import export_to_excel
+
+    # Build a record that mirrors what process_text would emit:
+    # anchors caught the amount (Strategy = Smart Context), invoice #
+    # populated via _OLD_PDF_INV_RE, period parsed. The record carries
+    # Source PDF Text + _regex_trace (post-fix contract).
+    records = [
+        {
+            "Source": "Local PDF Folder",
+            "Sender": "",
+            "Date": "01/08/2023",
+            "Period From": "01/01/2022",
+            "Period To": "31/07/2023",
+            "Invoice #": "T-TEST-001",
+            "Amount (£)": 1500.0,
+            "Period Charge (£)": 1200.0,
+            "Entry Type": "New Bill",
+            "Reading": "Estimated",
+            "Units (kWh)": "400",
+            "Standing Chg (p/day)": "50.00",
+            "Tariff": "Standard",
+            "Attachment Name": "test.pdf",
+            "Details": "PDF new-format",
+            "Logic Used": "Smart Context",
+            "Source PDF Text": "Invoice number: T-TEST-001\nLong bill body text " * 50,
+            "_regex_trace": "",
+            "Cancel/Rebill Admitted": True,
+        },
+        # Second row -- the analyser writers require >=2 records in dfc
+        # (export_to_excel short-circuits at line 3758 if len(dfc) < 2
+        # because downstream summary sheets need at least one period pair).
+        {
+            "Source": "Local PDF Folder",
+            "Sender": "",
+            "Date": "01/09/2023",
+            "Period From": "01/01/2023",
+            "Period To": "31/08/2023",
+            "Invoice #": "T-TEST-002",
+            "Amount (£)": 800.0,
+            "Period Charge (£)": 600.0,
+            "Entry Type": "New Bill",
+            "Reading": "Actual",
+            "Units (kWh)": "200",
+            "Standing Chg (p/day)": "50.00",
+            "Tariff": "Standard",
+            "Attachment Name": "test2.pdf",
+            "Details": "PDF new-format",
+            "Logic Used": "Smart Context",
+            "Source PDF Text": "Invoice number: T-TEST-002\nShort body.",
+            "_regex_trace": "",
+            "Cancel/Rebill Admitted": False,
+        },
+    ]
+    df = pd.DataFrame(records)
+    out_path = tmp_path / "ear.xlsx"  # type: ignore[operator]
+    cfg = {
+        "use_dedup": False,
+        "acc_num": "0123456789",
+        "scan_sap_dumps": False,  # no SAP rows supplied, skip the SAP sheets
+        "generate_reconciliation_sheet": False,
+    }
+    export_to_excel(
+        data=df,
+        output_path=str(out_path),
+        error_log=[],
+        config=cfg,
+    )
+    assert os.path.exists(out_path)
+    wb = load_workbook(out_path, read_only=True)
+    assert "Back-billing Analysis" in wb.sheetnames
+    ws = wb["Back-billing Analysis"]
+    # row 8 should have the back-billing row, col 11 = Source Excerpt
+    body_excerpt = ws.cell(row=8, column=11).value
+    wb.close()
+    assert isinstance(body_excerpt, str)
+    assert body_excerpt != "Source text unavailable"
+    # The captured PDF body bytes should appear in the excerpt.
+    assert "Invoice number: T-TEST-001" in body_excerpt
