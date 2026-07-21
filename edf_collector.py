@@ -543,6 +543,7 @@ def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp |
             # Series ("Could not infer format, ..."). The behaviour is
             # intentional (the caller accepts NaT for non-parseable rows).
             import warnings as _w
+
             with _w.catch_warnings():
                 _w.simplefilter("ignore", UserWarning)
                 s = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
@@ -2029,6 +2030,15 @@ class EvidenceEngine:
                 "Logic Used": "New Invoice Format",
                 "Source PDF Text": text[:4000],
                 "_regex_trace": "; ".join(regex_trace) if regex_trace else "",
+                # Stream P5 (Cancel/Rebill Admitted) -- surface the
+                # cover-page admit-phrase flag via extract_admit_phrase
+                # so the Back-billing / Rebilling analysers'
+                # 'Cancel/Rebill Disclosed' indicator is meaningful
+                # in production.  Previously the column was never
+                # populated by record builders, so the user-facing
+                # indicator was always FALSE regardless of how many
+                # admit phrases were actually on the cover page.
+                "Cancel/Rebill Admitted": bool(extract_admit_phrase(text)),
             }
         )
         return True
@@ -2093,6 +2103,9 @@ class EvidenceEngine:
                 "Logic Used": "New Credit Note Format",
                 "Source PDF Text": text[:4000],
                 "_regex_trace": "; ".join(regex_trace) if regex_trace else "",
+                # See _process_new_invoice -- wires the cover-page
+                # admit phrase into the user-facing indicator.
+                "Cancel/Rebill Admitted": bool(extract_admit_phrase(text)),
             }
         )
         return True
@@ -2217,6 +2230,10 @@ class EvidenceEngine:
                 # analyser row reading "Source text unavailable".
                 "Source PDF Text": clean_text[:4000],
                 "_regex_trace": "",
+                # See note on _process_new_invoice -- wires the
+                # cover-page admit phrase into the user-facing
+                # 'Cancel/Rebill Disclosed' indicator.
+                "Cancel/Rebill Admitted": bool(extract_admit_phrase(clean_text)),
             }
         )
 
