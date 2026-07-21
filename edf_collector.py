@@ -512,6 +512,48 @@ def parse_to_sort_date(date_input):
         return pd.NaT
 
 
+def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp | pd.Series:
+    """Parse ``value`` as a date without triggering Pandas UserWarning noise.
+
+    The codebase's date strings come from UK-format EDF documents
+    (``DD/MM/YYYY`` -- e.g. ``01/02/2025`` = 1 Feb 2025).  Calling
+    ``pd.to_datetime`` with no ``dayfirst`` argument triggers a
+    ``UserWarning: Parsing dates in %d/%m/%Y format when dayfirst=False``
+    on every call.  Hot loops in the analyser detectors hit it dozens
+    of times per analyser row, generating hundreds of UserWarnings
+    that obscure real problems in the run logs.
+
+    Use ``dayfirst=True`` first (UK convention); for scalar input,
+    if that produces ``NaT`` (e.g. an ISO date sneaks through), fall
+    back to ``dayfirst=False``.  This mirrors
+    :func:`parse_to_sort_date`'s tolerance so all hot-loop callers
+    converge on the same parsing contract without each one having
+    to repeat the fallback dance.
+
+    Passing a ``pd.Series`` calls underlying ``pd.to_datetime`` with
+    ``dayfirst=True`` and a single vectorised call -- no scalar
+    fallback loop.  Per-element day-first retry on a Series would
+    require O(n) Python overhead so we accept the vectorised
+    interpretation: anything that did not parse as day-first-month
+    becomes ``NaT``.
+    """
+    if isinstance(value, (pd.Series, pd.Index)):
+        try:
+            return pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+        except (TypeError, ValueError):
+            return value if isinstance(value, pd.Index) else pd.Series([], dtype="datetime64[ns]")
+    try:
+        dt = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+    except (TypeError, ValueError):
+        return pd.NaT
+    if pd.isna(dt) and dayfirst:
+        try:
+            dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
+        except (TypeError, ValueError):
+            return pd.NaT
+    return dt
+
+
 def parse_to_display_date(date_input):
     dt = parse_to_sort_date(date_input)
     return dt.strftime("%d/%m/%Y") if not pd.isna(dt) else str(date_input)
@@ -6179,8 +6221,8 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     has_admit = "Cancel/Rebill Admitted" in df.columns
     rows = []
     for _, r in df.iterrows():
-        pf = pd.to_datetime(r.get("Period From"), errors="coerce")
-        pt = pd.to_datetime(r.get("Period To"), errors="coerce")
+        pf = _safe_to_datetime(r.get("Period From"))
+        pt = _safe_to_datetime(r.get("Period To"))
         if pd.isna(pf) or pd.isna(pt):
             continue
         days = int((pt - pf).days)
@@ -6193,7 +6235,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
             net = 0.0
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
-        bill_date_dt = pd.to_datetime(bill_date_raw, errors="coerce")
+        bill_date_dt = _safe_to_datetime(bill_date_raw)
         rows.append(
             {
                 "Invoice #": r.get("Invoice #", ""),
@@ -6492,8 +6534,8 @@ def _reversal_match(
             continue
         if abs(row_amt - amount) > 0.50:
             continue
-        rpf = pd.to_datetime(row.get("Period From"), errors="coerce")
-        rpt = pd.to_datetime(row.get("Period To"), errors="coerce")
+        rpf = _safe_to_datetime(row.get("Period From"))
+        rpt = _safe_to_datetime(row.get("Period To"))
         if pd.isna(rpf) or pd.isna(rpt):
             return True
         overlap = (min(killed_pt, rpt) - max(killed_pf, rpf)).days
@@ -6556,9 +6598,9 @@ def detect_rebilling(
     rows = []
     parsed = []
     for _, r in df.iterrows():
-        pf = pd.to_datetime(r.get("Period From"), errors="coerce")
-        pt = pd.to_datetime(r.get("Period To"), errors="coerce")
-        bd = pd.to_datetime(r.get("Date"), errors="coerce")
+        pf = _safe_to_datetime(r.get("Period From"))
+        pt = _safe_to_datetime(r.get("Period To"))
+        bd = _safe_to_datetime(r.get("Date"))
         if pd.isna(pf) or pd.isna(pt) or pd.isna(bd):
             continue
         try:
@@ -6630,8 +6672,8 @@ def detect_rebilling(
     if not rows:
         return pd.DataFrame(columns=columns)
     out = pd.DataFrame(rows, columns=columns)
-    out["_k_sort"] = pd.to_datetime(out["Killer Date"], errors="coerce")
-    out["_d_sort"] = pd.to_datetime(out["Killed Date"], errors="coerce")
+    out["_k_sort"] = _safe_to_datetime(out["Killer Date"])
+    out["_d_sort"] = _safe_to_datetime(out["Killed Date"])
     sort_idx = out.sort_values(["_k_sort", "_d_sort"]).index
     out = out.loc[sort_idx].drop(columns=["_k_sort", "_d_sort"]).reset_index(drop=True)
     return out[columns]
@@ -6679,7 +6721,7 @@ def detect_meter_rollover(
     if candidates.empty:
         return pd.DataFrame(columns=columns)
     # Parse dates so we can sort.
-    candidates["_date_dt"] = pd.to_datetime(candidates["Date"], errors="coerce")
+    candidates["_date_dt"] = _safe_to_datetime(candidates["Date"])
     candidates = candidates.dropna(subset=["_date_dt"])
     candidates = candidates.sort_values("_date_dt")
     rows = []
@@ -6719,7 +6761,7 @@ def detect_meter_rollover(
     if not rows:
         return pd.DataFrame(columns=columns)
     out = pd.DataFrame(rows, columns=columns)
-    sort_idx = pd.to_datetime(out["Date"], errors="coerce").sort_values().index
+    sort_idx = _safe_to_datetime(out["Date"]).sort_values().index
     out = out.loc[sort_idx].reset_index(drop=True)
     return out[columns]
 
@@ -6740,7 +6782,7 @@ def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=columns)
     work = df.copy()
-    work["_dt"] = pd.to_datetime(work.get("Date"), errors="coerce")
+    work["_dt"] = _safe_to_datetime(work.get("Date"))
     work = work.dropna(subset=["_dt", "Tariff"])
     work = work[work["Tariff"] != "N/A"]
     if work.empty:
@@ -6810,7 +6852,7 @@ def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=columns)
     out = pd.DataFrame(rows, columns=columns)
-    sort_idx = pd.to_datetime(out["Contract From"], errors="coerce").sort_values().index
+    sort_idx = _safe_to_datetime(out["Contract From"]).sort_values().index
     out = out.loc[sort_idx].reset_index(drop=True)
     return out[columns]
 
@@ -7075,7 +7117,7 @@ def write_meter_readings_sheet(
     # Sort rows by Date before writing.
     work = df.copy() if df is not None and not df.empty else pd.DataFrame()
     if not work.empty:
-        work["_dt"] = pd.to_datetime(work.get("Date"), errors="coerce")
+        work["_dt"] = _safe_to_datetime(work.get("Date"))
         work = work.sort_values("_dt").drop(columns=["_dt"])
 
     r = 8
@@ -7189,11 +7231,8 @@ def write_contract_history_sheet(
         if evidence_df is None or evidence_df.empty or "Invoice #" not in evidence_df.columns:
             return ""
         for _, er in evidence_df.iterrows():
-            try:
-                ipf = pd.to_datetime(er.get("Period From"), errors="coerce")
-                ipt = pd.to_datetime(er.get("Period To"), errors="coerce")
-            except Exception:
-                continue
+            ipf = _safe_to_datetime(er.get("Period From"))
+            ipt = _safe_to_datetime(er.get("Period To"))
             if pd.isna(ipf) or pd.isna(ipt):
                 continue
             if (ipf <= ct) and (ipt >= cf):
@@ -7245,8 +7284,8 @@ def write_contract_history_sheet(
     r = 8
     for _, row in contracts.iterrows() if contracts is not None and not contracts.empty else []:
         bg = "EEF2FF" if r % 2 == 0 else None
-        cf = pd.to_datetime(row.get("Contract From"), errors="coerce")
-        ct = pd.to_datetime(row.get("Contract To"), errors="coerce")
+        cf = _safe_to_datetime(row.get("Contract From"))
+        ct = _safe_to_datetime(row.get("Contract To"))
         cf_text = row.get("Contract From", "")
         if isinstance(cf, pd.Timestamp) and not pd.isna(cf):
             cf_text = cf.strftime("%d %b %Y")
