@@ -539,7 +539,14 @@ def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp |
     """
     if isinstance(value, (pd.Series, pd.Index)):
         try:
-            return pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+            # Suppress the UserWarning pandas emits on mixed-format
+            # Series ("Could not infer format, ..."). The behaviour is
+            # intentional (the caller accepts NaT for non-parseable rows).
+            import warnings as _w
+            with _w.catch_warnings():
+                _w.simplefilter("ignore", UserWarning)
+                s = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+            return s
         except (TypeError, ValueError):
             return value if isinstance(value, pd.Index) else pd.Series([], dtype="datetime64[ns]")
     try:
@@ -3341,7 +3348,11 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         # Rows with NaT here are rerouted through Pass-2's no-period
         # bucket logic below, which uses ``Period To == "N/A" | NaN``
         # as the explicit handling mask.
-        period_to_dt = pd.to_datetime(df["Period To"], dayfirst=True, errors="coerce")
+        # Vectorised pass via _safe_to_datetime to suppress the
+        # 'format-inference fallback' UserWarning pandas emits on
+        # mixed-format Series when a single string passes the
+        # simple-format regex gate.
+        period_to_dt = _safe_to_datetime(df["Period To"])
         df["_dedup_date"] = period_to_dt
         is_dup = df.duplicated(subset=["_dedup_date", "Amount (£)"], keep="first")
         # Pass 1 (period+amount): build ``kept_pass1_index`` keyed on
