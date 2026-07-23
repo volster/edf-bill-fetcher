@@ -18,6 +18,8 @@ import tempfile
 import threading
 import traceback
 import warnings
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, cast
 
@@ -970,6 +972,17 @@ def parse_sap_financial_transactions(text: str, source_file: str = "") -> list[d
     One dict row per financial transaction. The real SAP header has a
     trailing-space variant ``"Posting Date "``; both that and the
     no-trailing-space form are accepted.
+
+    The source PDF emits 32 CSV columns per row. This parser retains
+    the 16 historically-surfaced columns plus 8 columns used by the
+    SAP Back-billing analyser (Contract, Sub Item, Clearing Posting
+    Date, Clearing Amount, Statistical Key Flag, Tax Code,
+    Tax Code Description, G/L Account, G/L Description, Deferral
+    Date). The remaining 8 source columns (Kraken ID, SAP Account
+    Number, Business Partner, Account Determination ID, Fuel Type,
+    Payment Method, Down Payment Flag, Restriction) carry values
+    that are either constant per account or not consumed by any
+    downstream analyser, and are intentionally dropped.
     """
     rows = _parse_sap_csv(text)
     out: list[dict] = []
@@ -978,6 +991,11 @@ def parse_sap_financial_transactions(text: str, source_file: str = "") -> list[d
         for k in ("Posting Date ", "Posting Date"):
             if k in r:
                 posting_raw = r.get(k, "")
+                break
+        clearing_posting_raw = ""
+        for k in ("Clearing Posting Date ", "Clearing Posting Date"):
+            if k in r:
+                clearing_posting_raw = r.get(k, "")
                 break
         out.append(
             {
@@ -997,9 +1015,420 @@ def parse_sap_financial_transactions(text: str, source_file: str = "") -> list[d
                 "Document Type": r.get("Document Type", ""),
                 "Document Type Description": r.get("Document Type Description", ""),
                 "Source File": source_file,
+                # Analyser-relevant extensions (spec §3.1):
+                "Contract": r.get("Contract", ""),
+                "Sub Item": r.get("Sub Item", ""),
+                "Clearing Posting Date": _sap_to_iso_date(clearing_posting_raw.strip()),
+                "Clearing Amount": r.get("Clearing Amount", ""),
+                "Statistical Key Flag": r.get("Statistical Key Flag", ""),
+                "Tax Code": r.get("Tax Code", ""),
+                "Tax Code Description": r.get("Tax Code Description", ""),
+                "G/L Account": r.get("G/L Account", ""),
+                "G/L Description": r.get("G/L Description", ""),
+                "Deferral Date": _sap_to_iso_date(r.get("Deferral Date", "")),
             }
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# SAP Back-billing analysis (spec: 2026-07-21-sap-back-billing-analysis-design.md)
+# ---------------------------------------------------------------------------
+#
+# EDF's SAP financial ledger is the *behind-the-scenes* truth of every
+# billing event; the EDF-branded invoice PDFs only show what EDF chose to
+# send the customer.  Two SAP-native signals reveal back-billing activity
+# without any cross-system join:
+#
+# 1. ``Cr- Credit for Consum Billing`` rows — a credit posted against a
+#    previously-raised consumption billing (18 instances in this account).
+# 2. ``Clearing Document`` clusters — a SAP bookkeeping event that
+#    simultaneously clears multiple prior document numbers; the canonical
+#    back-billing signature is a cluster whose rows net to exactly £0.00
+#    (one or more ``Dr- Consum Billing Receivable`` postings paired with
+#    matching ``Cr- Credit for Consum Billing`` reversals on the same day).
+#
+# Joining SAP rows to EDF invoices by ``Invoice #`` is impossible (the two
+# numbering schemes have zero string overlap — verified empirically), but
+# a *cluster-level* join by ``Clearing Date`` ↔ EDF ``Period To`` finds
+# real back-billing events.  See the spec for details.
+
+_SAP_DEBT_MGMT_FLAG_VALUE = "Installment Plan Item"
+_SAP_MIN_CLUSTER_SIZE = 4
+_SAP_MATCH_DAY_BANDS = ((0, 50), (3, 25), (14, 5))
+_SAP_MATCH_AMOUNT_BANDS = ((0.05, 40), (0.25, 20), (0.50, 5))
+_SAP_CONFIDENCE_BANDS = (("High", 75), ("Medium", 40), ("Low", 10))
+
+
+@dataclass
+class SapBackBillingEvent:
+    """One SAP clearing event containing one or more underlying SAP rows.
+
+    Populated by ``detect_sap_back_billing_events``.  The underlying SAP
+    rows are retained so the writer can render them as a collapsible
+    sub-block beneath each event summary on sheet 'SAP Back-billing
+    Events'.
+    """
+
+    clearing_doc: str
+    clearing_date: pd.Timestamp | pd._libs.tslibs.nattype.NaTType
+    clearing_reason: str
+    rows: list[dict] = field(default_factory=list)
+    net_amount: float = 0.0
+    has_credit_for_consum_billing: bool = False
+    has_account_maintenance: bool = False
+    largest_single_posting: float = 0.0
+    posting_date_range: tuple[str, str] = ("", "")
+    evidence_trail: str = ""
+    matched_edf_invoice: str | None = None
+
+
+@dataclass
+class SapEdfMatch:
+    """One (SAP event × matched EDF candidate) pair.
+
+    Populated by ``match_sap_events_to_edf``.  Only SAP events that
+    produced at least one EDF candidate at Low confidence or above
+    appear in the returned list — unmatched events remain on Sheet 1
+    only.
+    """
+
+    event: SapBackBillingEvent
+    edf_record: dict
+    confidence_band: str
+    confidence_score: int
+    amount_delta: float
+    date_delta_days: int
+    notes: str
+
+
+def _parse_amount_for_event(v: object) -> float:
+    """Parse the SAP ``Amount`` field (often a string with commas)."""
+    if v is None:
+        return 0.0
+    try:
+        s = str(v).strip().lstrip("£").replace(",", "")
+        if not s:
+            return 0.0
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _build_evidence_trail(rows: list[dict]) -> str:
+    """Stitch a human-readable one-line narrative of the cluster.
+
+    Sorts the underlying rows by Posting Date.  When two rows on the
+    same day net to ~£0.00 (one positive, one negative), calls them
+    out as an explicit reversal-pair — that's the textbook
+    back-billing signature a reviewer is trained to look for.
+
+    Keeps the output to a single line (no ``\\n``) so it lands cleanly
+    in one Excel cell.
+    """
+    if not rows:
+        return ""
+
+    # Sort by Posting Date then Document No. for stability
+    def sort_key(r: dict) -> tuple[str, str]:
+        pd_str = str(r.get("Posting Date") or "")
+        dn_str = str(r.get("Document No.") or "")
+        return (pd_str, dn_str)
+
+    ordered = sorted(rows, key=sort_key)
+    parts: list[str] = []
+    # Walk pairs of (same-day, opposite-sign) rows and emit as reversals
+    used: set[int] = set()
+    for i, row in enumerate(ordered):
+        if i in used:
+            continue
+        amt_i = _parse_amount_for_event(row.get("Amount"))
+        pd_i = str(row.get("Posting Date") or "") or "—"
+        dn_i = str(row.get("Document No.") or "") or "—"
+        # Search forward for a same-day opposite counterpart
+        paired = False
+        for j in range(i + 1, len(ordered)):
+            if j in used:
+                continue
+            pd_j = str(ordered[j].get("Posting Date") or "")
+            if pd_j != pd_i:
+                continue
+            amt_j = _parse_amount_for_event(ordered[j].get("Amount"))
+            if abs(amt_i + amt_j) <= 0.01 and abs(amt_i) > 0.01:
+                dn_j = str(ordered[j].get("Document No.") or "") or "—"
+                parts.append(
+                    f"DOC {dn_i} {pd_i} £{amt_i:.2f} → reversed by "
+                    f"DOC {dn_j} £{amt_j:.2f} (net £0.00)"
+                )
+                used.add(i)
+                used.add(j)
+                paired = True
+                break
+        if not paired:
+            parts.append(f"DOC {dn_i} {pd_i} £{amt_i:.2f}")
+    return "; ".join(parts)
+
+
+def detect_sap_back_billing_events(
+    sap_rows: list[dict],
+    *,
+    min_cluster_size: int = _SAP_MIN_CLUSTER_SIZE,
+) -> list[SapBackBillingEvent]:
+    """Cluster SAP Financial Transaction rows into back-billing events.
+
+    Spec §3.2 pipeline.  Returns events sorted by Clearing Date
+    ascending; events whose Clearing Date is NaT sort last.
+
+    Each event carries its underlying row list so the writer can render
+    both summary and drill-down.  No SAP-to-EDF matching is performed
+    here — see ``match_sap_events_to_edf``.
+    """
+    if not sap_rows:
+        return []
+
+    # -------------- stage 1: filter debt-management noise --------------
+    filtered = [
+        r
+        for r in sap_rows
+        if str(r.get("Statistical Key Flag", "")).strip() != _SAP_DEBT_MGMT_FLAG_VALUE
+    ]
+
+    # -------------- stage 2: group by Clearing Document --------------
+    clusters: dict[str, list[dict]] = {}
+    skipped_no_cd = 0
+    for r in filtered:
+        cd = str(r.get("Clearing Document", "")).strip()
+        if not cd or cd in ("NA", "None", "*"):
+            # Rows without a Clearing Document don't belong to any
+            # cluster (and weren't part of a SAP bookkeeping event).
+            skipped_no_cd += 1
+            continue
+        clusters.setdefault(cd, []).append(r)
+
+    # -------------- stage 3: apply minimum cluster size --------------
+    clusters_kept = {cd: rows for cd, rows in clusters.items() if len(rows) >= min_cluster_size}
+
+    # -------------- stage 4: compute per-cluster aggregates --------------
+    events: list[SapBackBillingEvent] = []
+    for cd, rows in clusters_kept.items():
+        # Clearing Date = min non-empty Clearing Date in cluster
+        clear_dates = [
+            pd.to_datetime(str(r.get("Clearing Date", "")).strip(), errors="coerce")
+            for r in rows
+            if str(r.get("Clearing Date", "")).strip()
+            and str(r.get("Clearing Date", "")).strip() not in ("NA", "None")
+        ]
+        clear_dates = [d for d in clear_dates if not pd.isna(d)]
+        if clear_dates:
+            clearing_date = min(clear_dates)
+        else:
+            clearing_date = pd.NaT
+
+        # Clearing Reason = most common non-empty value
+        reasons = [
+            str(r.get("Clearing Reason", "")).strip()
+            for r in rows
+            if str(r.get("Clearing Reason", "")).strip()
+        ]
+        if reasons:
+            clearing_reason = Counter(reasons).most_common(1)[0][0]
+        else:
+            clearing_reason = ""
+
+        net_amount = sum(_parse_amount_for_event(r.get("Amount")) for r in rows)
+        has_credit = any(
+            "Credit for Consum Billing" in str(r.get("Transaction Text", "")) for r in rows
+        )
+        has_acct_maint = any(
+            str(r.get("Transaction Text", "")).strip() == "Account maintenance" for r in rows
+        )
+        amounts = [_parse_amount_for_event(r.get("Amount")) for r in rows]
+        non_zero = [a for a in amounts if abs(a) > 0.001]
+        largest = max(non_zero, key=lambda x: abs(x)) if non_zero else 0.0
+        # Posting Date Range (iso strings, min..max)
+        post_dates = [
+            str(r.get("Posting Date", "")).strip()
+            for r in rows
+            if str(r.get("Posting Date", "")).strip()
+            and str(r.get("Posting Date", "")).strip() not in ("NA", "None")
+        ]
+        if post_dates:
+            posting_date_range = (min(post_dates), max(post_dates))
+        else:
+            posting_date_range = ("", "")
+        evidence_trail = _build_evidence_trail(rows)
+
+        events.append(
+            SapBackBillingEvent(
+                clearing_doc=cd,
+                clearing_date=clearing_date,
+                clearing_reason=clearing_reason,
+                rows=rows,
+                net_amount=round(net_amount, 2),
+                has_credit_for_consum_billing=has_credit,
+                has_account_maintenance=has_acct_maint,
+                largest_single_posting=round(largest, 2),
+                posting_date_range=posting_date_range,
+                evidence_trail=evidence_trail,
+            )
+        )
+
+    # -------------- stage 5: sort by Clearing Date ascending --------------
+    # NaT sorts last (use Timestamp.max as the sort key); ties broken by
+    # Clearing Doc string for stable output.
+    events_sorted = sorted(
+        events,
+        key=lambda ev: (
+            ev.clearing_date if not pd.isna(ev.clearing_date) else pd.Timestamp.max,
+            ev.clearing_doc,
+        ),
+    )
+    return events_sorted
+
+
+def _confidence_band(score: int) -> str | None:
+    """Map a numeric match score to High/Medium/Low/None (Unmatched)."""
+    for band, threshold in _SAP_CONFIDENCE_BANDS:
+        if score >= threshold:
+            return band
+    return None
+
+
+def match_sap_events_to_edf(
+    events: list[SapBackBillingEvent],
+    edf_records: list[dict],
+) -> list[SapEdfMatch]:
+    """Fuzzy-match SAP events to EDF Evidence Report rows.
+
+    Spec §3.3.  Returns one SapEdfMatch per (event × matched EDF
+    candidate).  SAP events with no candidate at Low confidence or
+    above are omitted from the returned list (but remain on Sheet 1).
+    """
+    if not events or not edf_records:
+        return []
+
+    # Parse the EDF records into a list of (idx, period_from, period_to, amount, invoice).
+    # Reuse the module-level _safe_to_datetime so EDF UK-format dates
+    # (DD/MM/YYYY) are parsed day-first; the earlier inline ``_to_ts``
+    # helper called ``pd.to_datetime`` with the default MM/DD, which
+    # mis-split the smoking-gun cluster-vs-EDF pairing by ~30 days.
+    parsed_edf: list[
+        tuple[
+            int,
+            pd.Timestamp | pd._libs.tslibs.nattype.NaTType,
+            pd.Timestamp | pd._libs.tslibs.nattype.NaTType,
+            float,
+            str,
+        ]
+    ] = []
+    for i, rec in enumerate(edf_records):
+        invoice = str(rec.get("Invoice #", "")).strip()
+        if not invoice or invoice in ("N/A", "None"):
+            continue
+        pf = _safe_to_datetime(rec.get("Period From"))
+        pt = _safe_to_datetime(rec.get("Period To"))
+        amt_raw = rec.get("Amount (£)")
+        try:
+            amt = float(str(amt_raw).replace(",", "").lstrip("£").strip())
+        except (TypeError, ValueError):
+            amt = 0.0
+        parsed_edf.append((i, pf, pt, amt, invoice))
+
+    matches: list[SapEdfMatch] = []
+    for ev in events:
+        if pd.isna(ev.clearing_date):
+            continue
+        ev_cd = pd.Timestamp(ev.clearing_date)
+        for idx, pf, pt, edf_amt, _invoice in parsed_edf:
+            # Compute the date delta in days vs Period To (or From fallback)
+            if not pd.isna(pt):
+                date_delta_days = int(abs((ev_cd - pd.Timestamp(pt)).days))
+            elif not pd.isna(pf):
+                date_delta_days = int(abs((ev_cd - pd.Timestamp(pf)).days))
+            else:
+                continue
+
+            # Date score — Clearing Date within EDF Period span is the
+            # canonical back-billing signature
+            date_score = 0
+            date_in_span = False
+            if (
+                not pd.isna(pf)
+                and not pd.isna(pt)
+                and pd.Timestamp(pf) <= ev_cd <= pd.Timestamp(pt)
+            ):
+                date_in_span = True
+                date_score = 50
+            else:
+                for band_days, band_score in _SAP_MATCH_DAY_BANDS:
+                    if date_delta_days <= band_days:
+                        date_score = band_score
+                        break
+
+            # Amount score
+            amount_score = 0
+            if abs(ev.net_amount) < 1.0 and edf_amt > 0:
+                # Net-zero cluster: try matching any underlying row's
+                # gross amount against the EDF invoice.  Find the best
+                # (lowest) band that the closest row fits.
+                best_rel_delta = float("inf")
+                for r in ev.rows:
+                    row_amt = _parse_amount_for_event(r.get("Amount"))
+                    if abs(row_amt) < 1 or abs(edf_amt) < 1:
+                        continue
+                    rel_delta = abs(abs(row_amt) - edf_amt) / max(abs(edf_amt), 0.01)
+                    if rel_delta < best_rel_delta:
+                        best_rel_delta = rel_delta
+                if best_rel_delta != float("inf"):
+                    for band_amt, band_score in _SAP_MATCH_AMOUNT_BANDS:
+                        if best_rel_delta <= band_amt:
+                            amount_score = band_score
+                            break
+            elif ev.net_amount != 0 and edf_amt > 0:
+                ratio = ev.net_amount / edf_amt
+                if 0.95 <= ratio <= 1.05:
+                    amount_score = 40
+                elif 0.75 <= ratio <= 1.25:
+                    amount_score = 20
+                elif 0.50 <= ratio <= 1.50:
+                    amount_score = 5
+
+            total_score = date_score + amount_score
+            band = _confidence_band(total_score)
+            if band is None:
+                continue
+
+            amt_delta = round(ev.net_amount - edf_amt, 2)
+            if band == "High":
+                notes = (
+                    "Clearing date inside EDF period + amount within 5%"
+                    if date_in_span
+                    else f"Within {date_delta_days}d of period-end + amount within 5%"
+                )
+            elif band == "Medium":
+                if date_in_span and amount_score > 0:
+                    notes = "Clearing date inside EDF period + amount within 25%"
+                elif date_in_span:
+                    notes = "Clearing date inside EDF period (no amount band hit)"
+                elif amount_score > 0:
+                    notes = f"Within {date_delta_days}d of period-end + amount within 25%"
+                else:
+                    notes = f"Within {date_delta_days}d of period-end (no amount band hit)"
+            else:
+                notes = f"Within {date_delta_days}d of period-end; may be coincidental"
+
+            matches.append(
+                SapEdfMatch(
+                    event=ev,
+                    edf_record=edf_records[idx],
+                    confidence_band=band,
+                    confidence_score=total_score,
+                    amount_delta=amt_delta,
+                    date_delta_days=date_delta_days,
+                    notes=notes,
+                )
+            )
+    return matches
 
 
 # ---------------------------------------------------------------------------
@@ -4737,6 +5166,42 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
                 sap_financial,
                 account=account_label,
             )
+            # SAP Back-billing analyser (spec §6):
+            # uses the EDF Evidence Report rows (filter/dedup-applied
+            # ``dfc``) as the join target. Both new sheets appear under
+            # the existing ``scan_sap_dumps`` toggle alongside the
+            # existing SAP sheets.
+            edf_records_for_bb: list[dict] = []
+            if dfc is not None and not dfc.empty:
+                edf_records_for_bb = dfc.to_dict(orient="records")
+            bb_events = detect_sap_back_billing_events(sap_financial)
+            bb_matches = match_sap_events_to_edf(bb_events, edf_records_for_bb)
+            # Populate Sheet 1's "Matched EDF Invoice #" column with the
+            # highest-confidence match per event (tiebreak: smallest
+            # date_delta_days).
+            for ev in bb_events:
+                ev_matches = [m for m in bb_matches if m.event is ev]
+                if ev_matches:
+                    conf_rank = {"High": 0, "Medium": 1, "Low": 2}
+                    best = sorted(
+                        ev_matches,
+                        key=lambda m: (
+                            conf_rank.get(m.confidence_band, 3),
+                            m.date_delta_days,
+                        ),
+                    )[0]
+                    ev.matched_edf_invoice = str(best.edf_record.get("Invoice #", "") or "") or None
+            write_sap_back_billing_sheets(
+                wb,
+                bb_events,
+                bb_matches,
+                sap_financial_first_row=4,
+                edf_rows=edf_records_for_bb,
+                edf_sheet_name="EDF Evidence Report",
+                edf_first_row=4,
+                account=account_label,
+                sap_row_index_map=_build_sap_row_index_map(sap_financial),
+            )
         if config.get("generate_reconciliation_sheet", True):
             write_reconciliation_sheet(
                 wb.create_sheet(title="Reconciliation"),
@@ -7546,6 +8011,494 @@ def _write_sap_header_row(ws: Worksheet, row: int, columns: list) -> None:
         cell.fill = PatternFill("solid", start_color=NAVY)
         cell.border = CELL_BORDER
         cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+
+# ---------------------------------------------------------------------------
+# SAP Back-billing sheet writers (spec: 2026-07-21-sap-back-billing-analysis-design.md)
+# ---------------------------------------------------------------------------
+#
+# Two adjacent sheets:
+# 1. "SAP Back-billing Events" (Sheet 1) — one summary row per SAP
+#    Clearing Document cluster, with the underlying SAP rows rendered
+#    as collapsed outline groups beneath each summary.
+# 2. "SAP ↔ EDF Matched Events" (Sheet 2) — one row per (SAP event ×
+#    matched EDF invoice candidate), only High/Medium/Low confidence
+#    pairs included.
+#
+# Hyperlinks cross-reference each other, the source SAP Financial
+# Transactions sheet (using the first underlying row's row index),
+# and the matched EDF Evidence Report row (using the pre-dedup index
+# into ``evidence_rows`` passed by the caller).
+
+ORANGE = "FE5716"
+NAVY_BLUE = "10367A"
+SAP_BB_SUMMARY_FILL_PAIR = ("EFF4FB", "ffffff")
+SAP_BB_DETAIL_FILL_PAIR = ("F8FAFC", "ffffff")
+SAP_BB_MEDIUM_BORDER = Side(style="medium", color="10367A")
+
+
+def _bb_invoice_value(rec: dict, key: str) -> object:
+    """Look up an invoice field, tolerating 'N/A' / None."""
+    v = rec.get(key)
+    if v in (None, "", "N/A", "None"):
+        return ""
+    return v
+
+
+def write_sap_back_billing_sheets(
+    wb: "openpyxl.Workbook",
+    events: list[SapBackBillingEvent],
+    matches: list[SapEdfMatch],
+    sap_financial_first_row: int,
+    edf_rows: list[dict],
+    edf_sheet_name: str = "EDF Evidence Report",
+    edf_first_row: int = 4,
+    account: str = "",
+    sap_row_index_map: dict[int, int] | None = None,
+) -> tuple[Worksheet, Worksheet]:
+    """Write both new sheets to the workbook (spec §4).
+
+    Returns ``(sheet1_ws, sheet2_ws)`` so callers can pass them around
+    if needed (e.g. the GUI's status line).
+    """
+    ws1 = wb.create_sheet(title="SAP Back-billing Events")
+    ws2 = wb.create_sheet(title="SAP ↔ EDF Matched Events")
+    _write_sap_bb_events_sheet(
+        ws1,
+        events,
+        sap_financial_first_row,
+        sap_row_index_map=sap_row_index_map,
+        account=account,
+    )
+    _write_sap_bb_matches_sheet(
+        ws2,
+        events,
+        matches,
+        ws1,
+        edf_rows,
+        edf_sheet_name=edf_sheet_name,
+        edf_first_row=edf_first_row,
+        account=account,
+    )
+    return ws1, ws2
+
+
+def _build_sap_row_index_map(
+    sap_financial: list[dict],
+) -> dict[int, int]:
+    """Return a map from ``id(sap_row)`` -> Excel row on SAP Financial Transactions.
+
+    The SAP Financial Transactions sheet writes the header at row 3
+    and the first data row at row 4.  Returns a dict keyed by
+    ``id(row)`` with value = Excel row index of that row on the sheet.
+    """
+    out: dict[int, int] = {}
+    for i, r in enumerate(sap_financial):
+        out[id(r)] = 4 + i
+    return out
+
+
+def _write_sap_bb_events_sheet(
+    ws: Worksheet,
+    events: list[SapBackBillingEvent],
+    sap_financial_first_row: int,
+    sap_row_index_map: dict[int, int] | None = None,
+    account: str = "",
+) -> None:
+    """Sheet 1 of the SAP Back-billing pair."""
+    ws.title = "SAP Back-billing Events"
+    # Outline groups sit ABOVE (summary at top of each cluster).
+    ws.sheet_properties.outlinePr.summaryBelow = False
+
+    summary_cols = [
+        "Clearing Doc #",
+        "Clearing Date",
+        "Clearing Reason",
+        "# SAP Rows",
+        "Net Amount (£)",
+        "Has Cr-Credit for Consum Billing?",
+        "Has Account Maintenance?",
+        "Largest Single Posting (£)",
+        "Posting Date Range",
+        "Evidence Trail",
+        "Matched EDF Invoice #",
+        "Link to SAP Financial Transactions",
+    ]
+    ncol = len(summary_cols)
+
+    # ---------- rows 1-6: banner + legal context + intro ----------
+    title = "EDF SAP BACK-BILLING EVENTS"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    for c in range(2, ncol + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill = PatternFill("solid", start_color=ORANGE)
+        cell.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+
+    ws.row_dimensions[2].height = 4
+
+    legal = (
+        "LEGAL CONTEXT\n\n"
+        "Back-billing protections (Ofgem / Electricity Act 1989 s.84B):\n"
+        "suppliers may not charge a domestic customer for energy supplied\n"
+        "more than 12 months before the date of the bill that first raised\n"
+        "the charge, unless one of the statutory exceptions applies\n"
+        "(customer has been obstructive, has unreasonably refused access,\n"
+        "or has not cooperated with the supplier's reasonable requests).\n\n"
+        "The events below are visible in EDF's own SAP financial ledger —\n"
+        "the *behind-the-scenes* truth of every billing event. Where the\n"
+        "cluster nets to ~£0.00, one or more underlying charges have been\n"
+        "reversed; where a 'Cr- Credit for Consum Billing' appears, the\n"
+        "supplier has explicitly credited a previously-raised consumption\n"
+        "billing. The absence of a matching EDF-side invoice for some\n"
+        "rows is itself evidence — EDF's ledger admits to a correction\n"
+        "without the customer being sent a corrective bill."
+    )
+    legal_cell = ws.cell(row=3, column=1, value=legal)
+    legal_cell.font = Font(name="Calibri", size=10)
+    legal_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncol)
+    ws.row_dimensions[3].height = 175
+
+    intro = (
+        "Each row below identifies one SAP clearing event (a Clearing\n"
+        "Document cluster). Boxed outline groups are expandable —\n"
+        "click the '+' in the left margin to see the underlying SAP\n"
+        "rows that make up each event. Unmatched events are the most\n"
+        "evidentially valuable (an EDF self-correction with no\n"
+        "companion invoice)."
+    )
+    intro_cell = ws.cell(row=5, column=1, value=intro)
+    intro_cell.font = Font(name="Calibri", size=10, italic=True)
+    intro_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=ncol)
+    ws.row_dimensions[5].height = 60
+
+    # ---------- row 7: header ----------
+    _write_sap_header_row(ws, row=7, columns=summary_cols)
+
+    r = 8
+    # Need to look up the index of each underlying row inside the
+    # global sap_financial_rows list to point at the SAP Financial
+    # Transactions sheet. The caller passes sap_financial_first_row
+    # (typically 4, matching the existing writer's first_row=4).
+    # We rely on the events' rows retaining insertion order so we
+    # can show the first underlying row's hyperlink.
+
+    for ev_i, ev in enumerate(events):
+        # Alternating summary tint per event (option C)
+        summary_fill = SAP_BB_SUMMARY_FILL_PAIR[ev_i % 2]
+        # ----- summary row -----
+        cd_iso = (
+            pd.Timestamp(ev.clearing_date).strftime("%Y-%m-%d")
+            if not pd.isna(ev.clearing_date)
+            else ""
+        )
+        posting_range = (
+            f"{ev.posting_date_range[0]} … {ev.posting_date_range[1]}"
+            if ev.posting_date_range[0] and ev.posting_date_range[1]
+            else ""
+        )
+        summary_vals = [
+            ev.clearing_doc,
+            cd_iso,
+            ev.clearing_reason,
+            len(ev.rows),
+            ev.net_amount,
+            "Yes" if ev.has_credit_for_consum_billing else "No",
+            "Yes" if ev.has_account_maintenance else "No",
+            ev.largest_single_posting,
+            posting_range,
+            ev.evidence_trail,
+            ev.matched_edf_invoice or "",
+        ]
+        # Write values
+        for j, val in enumerate(summary_vals, start=1):
+            cell = ws.cell(row=r, column=j, value=val)
+            cell.font = Font(name="Calibri", size=10, bold=True)
+            cell.border = CELL_BORDER
+            cell.fill = PatternFill("solid", start_color=summary_fill)
+            cell.alignment = Alignment(
+                horizontal="left" if j == 10 else "center", vertical="top", wrap_text=True
+            )
+        # Last column: hyperlink (added below once we know target row)
+        # Add medium top border on the first event visible in a band
+        # — actually we want a top border on every summary row to
+        # visually separate events.
+        for j in range(1, ncol + 1):
+            cell = ws.cell(row=r, column=j)
+            existing = cell.border
+            cell.border = Border(
+                left=existing.left,
+                right=existing.right,
+                bottom=existing.bottom,
+                top=SAP_BB_MEDIUM_BORDER,
+            )
+        summary_row_idx = r
+        r += 1
+
+        # ----- underlying rows (outline level 1, hidden by default) -----
+        detail_fill_pair_idx = ev_i % 2
+        for k, row_dict in enumerate(ev.rows):
+            # Mirror the visible columns of the SAP Financial Transactions sheet.
+            # We pick a reduced column set that mirrors what readers will recognise.
+            detail_cols = [
+                "Document No.",
+                "Item",
+                "Document Date",
+                "Posting Date",
+                "Net Due Date",
+                "Main Transaction",
+                "Sub Transaction",
+                "Transaction Text",
+                "Amount",
+                "Clearing Status",
+                "Clearing Document",
+                "Clearing Date",
+                "Clearing Reason",
+                "Document Type",
+                "Document Type Description",
+            ]
+            # Pad with blanks where this row's columns run out vs ncol header.
+            for j, col_name in enumerate(detail_cols, start=1):
+                v = row_dict.get(col_name, "")
+                cell = ws.cell(row=r, column=j, value=v)
+                cell.font = Font(name="Calibri", size=9, color="333333")
+                cell.fill = PatternFill(
+                    "solid",
+                    start_color=SAP_BB_DETAIL_FILL_PAIR[(detail_fill_pair_idx + k) % 2],
+                )
+            # Blank-fill remaining cells so the row visually ends at the
+            # right margin (otherwise alternating-band widths match the
+            # summary band, which has more columns than detail).
+            for j in range(len(detail_cols) + 1, ncol + 1):
+                cell = ws.cell(row=r, column=j)
+                cell.fill = PatternFill(
+                    "solid",
+                    start_color=SAP_BB_DETAIL_FILL_PAIR[(detail_fill_pair_idx + k) % 2],
+                )
+            ws.row_dimensions[r].outline_level = 1
+            ws.row_dimensions[r].hidden = True
+            r += 1
+        # Link to the first underlying row on the SAP Financial Transactions sheet,
+        # using the actual Excel row of that underlying row (via ``id(row)`` lookup
+        # into the caller-provided ``sap_row_index_map``).
+        first_doc = (ev.rows[0].get("Document No.") or "") if ev.rows else ""
+        cell = ws.cell(row=summary_row_idx, column=ncol, value="→")
+        cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        cell.alignment = Alignment(horizontal="center", vertical="top")
+        if sap_row_index_map is not None and ev.rows:
+            target_excel_row = sap_row_index_map.get(id(ev.rows[0]), sap_financial_first_row)
+        else:
+            target_excel_row = sap_financial_first_row
+        summary_cell_location = f"'SAP Financial Transactions'!A{target_excel_row}"
+        cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+            ref=cell.coordinate,
+            location=summary_cell_location,
+            display="→",
+            tooltip=f"Jump to SAP Financial Transactions row {target_excel_row} (DOC {first_doc})",
+        )
+
+    # Widths
+    widths = [18, 12, 28, 9, 13, 14, 14, 14, 22, 60, 18, 20]
+    for i, w in enumerate(widths, start=1):
+        col_letter = openpyxl.utils.get_column_letter(i)
+        ws.column_dimensions[col_letter].width = w
+
+    # Freeze top header
+    ws.freeze_panes = "A8"
+
+
+def _write_sap_bb_matches_sheet(
+    ws: Worksheet,
+    events: list[SapBackBillingEvent],
+    matches: list[SapEdfMatch],
+    sheet1: Worksheet,
+    edf_rows: list[dict],
+    edf_sheet_name: str = "EDF Evidence Report",
+    edf_first_row: int = 4,
+    account: str = "",
+) -> None:
+    """Sheet 2 of the SAP Back-billing pair."""
+    ws.title = "SAP ↔ EDF Matched Events"
+
+    header_cols = [
+        "SAP Clearing Doc #",
+        "SAP Clearing Date",
+        "SAP Event Net Amount (£)",
+        "EDF Invoice #",
+        "EDF Bill Date",
+        "EDF Period From → To",
+        "EDF Invoice Amount (£)",
+        "Amount Δ (£)",
+        "Date Δ (days)",
+        "Match Confidence",
+        "Has Cr-Credit for Consum Billing?",
+        "Notes",
+    ]
+    ncol = len(header_cols)
+
+    # Rows 1-3: banner + intro
+    title = "SAP ↔ EDF MATCHED EVENTS"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    for c in range(2, ncol + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill = PatternFill("solid", start_color=ORANGE)
+        cell.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+
+    ws.row_dimensions[2].height = 4
+
+    intro = (
+        "Each row pairs a SAP back-billing event (sheet 'SAP Back-billing\n"
+        "Events') with the EDF invoice(s) whose period overlaps the\n"
+        "event's clear date. Confidence is computed from date proximity\n"
+        "and amount agreement; Low-confidence rows may be coincidental.\n"
+        "Click the SAP Clearing Doc link to view the event's underlying\n"
+        "SAP rows on sheet 'SAP Back-billing Events'. Click the EDF\n"
+        "Invoice # link to view the matched row on the EDF Evidence\n"
+        "Report."
+    )
+    intro_cell = ws.cell(row=3, column=1, value=intro)
+    intro_cell.font = Font(name="Calibri", size=10, italic=True)
+    intro_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncol)
+    ws.row_dimensions[3].height = 90
+
+    # Row 5: header
+    _write_sap_header_row(ws, row=5, columns=header_cols)
+
+    # Sort matches: by Clearing Date asc, then by score desc within date.
+    def sort_key(m: SapEdfMatch) -> tuple:
+        cd = m.event.clearing_date
+        cd_iso = pd.Timestamp(cd).strftime("%Y-%m-%d") if not pd.isna(cd) else "9999"
+        # Score desc → negate.
+        conf_order = {"High": 0, "Medium": 1, "Low": 2}.get(m.confidence_band, 3)
+        return (cd_iso, conf_order, -m.confidence_score)
+
+    sorted_matches = sorted(matches, key=sort_key)
+
+    # Map Clearing Doc -> summary row on Sheet 1 so we can link back.
+    # Summary row index = 8 + sum_{j<i}(1 + len(events[j].rows))
+    # (summary row + N underlying rows per event).
+    summary_row_for_doc: dict[str, int] = {}
+    sheet1_summary_row = 8
+    for ev in events:
+        summary_row_for_doc[ev.clearing_doc] = sheet1_summary_row
+        sheet1_summary_row += 1 + len(ev.rows)
+
+    confidence_band_fill = {
+        "High": "E5F5E5",  # pale green
+        "Medium": "FFF4D6",  # pale amber
+        "Low": "F2EAEA",  # pale grey-pink
+    }
+
+    r = 6
+    for m in sorted_matches:
+        ev = m.event
+        rec = m.edf_record
+        # Build EDF period From→To display
+        pf = rec.get("Period From")
+        pt = rec.get("Period To")
+        period_span = ""
+        if pf and pt:
+            period_span = f"{pf} → {pt}"
+        elif pt:
+            period_span = f"? → {pt}"
+        elif pf:
+            period_span = f"{pf} → ?"
+        cd_iso = (
+            pd.Timestamp(ev.clearing_date).strftime("%Y-%m-%d")
+            if not pd.isna(ev.clearing_date)
+            else ""
+        )
+        edf_amt_val = rec.get("Amount (£)")
+        vals = [
+            ev.clearing_doc,
+            cd_iso,
+            ev.net_amount,
+            rec.get("Invoice #", ""),
+            rec.get("Date", ""),
+            period_span,
+            edf_amt_val if edf_amt_val not in (None, "") else "",
+            m.amount_delta,
+            m.date_delta_days,
+            m.confidence_band,
+            "Yes" if ev.has_credit_for_consum_billing else "No",
+            m.notes,
+        ]
+        row_fill = confidence_band_fill.get(m.confidence_band, "")
+        for j, v in enumerate(vals, start=1):
+            cell = ws.cell(row=r, column=j, value=v)
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = CELL_BORDER
+            if row_fill:
+                cell.fill = PatternFill("solid", start_color=row_fill)
+            cell.alignment = Alignment(
+                horizontal="left" if j in (6, 12) else "center",
+                vertical="center",
+                wrap_text=(j == 12),
+            )
+        # Hyperlinks:
+        # col 1 (SAP Clearing Doc #) -> Sheet 1 summary row for this event
+        sap_target_row = summary_row_for_doc.get(ev.clearing_doc, 8)
+        c1 = ws.cell(row=r, column=1)
+        summary_loc = f"'SAP Back-billing Events'!A{sap_target_row}"
+        c1.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+            ref=c1.coordinate,
+            location=summary_loc,
+            display=ev.clearing_doc,
+            tooltip=f"Jump to SAP event summary row {sap_target_row}",
+        )
+        c1.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        # col 4 (EDF Invoice #) -> EDF Evidence Report row for this invoice
+        # The row index on EDF Evidence Report = edf_first_row + position in edf_rows.
+        # Need to find the index. We use the edf_records list (which match_sap_events_to_edf
+        # was given) — the caller has passed the same list as edf_rows.
+        edf_idx = None
+        for i, er in enumerate(edf_rows):
+            if er is rec:
+                edf_idx = i
+                break
+        if edf_idx is None:
+            # Try matching by Invoice # as a fallback
+            target_inv = str(rec.get("Invoice #", "")).strip()
+            if target_inv:
+                for i, er in enumerate(edf_rows):
+                    if str(er.get("Invoice #", "")).strip() == target_inv:
+                        edf_idx = i
+                        break
+        if edf_idx is not None:
+            edf_target_row = edf_first_row + edf_idx
+            c4 = ws.cell(row=r, column=4)
+            c4_loc = f"'{edf_sheet_name}'!A{edf_target_row}"
+            c4.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                ref=c4.coordinate,
+                location=c4_loc,
+                display=str(rec.get("Invoice #", "")),
+                tooltip=f"Jump to {edf_sheet_name} row {edf_target_row}",
+            )
+            c4.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        r += 1
+
+    # Column widths
+    widths = [18, 14, 18, 20, 14, 30, 18, 14, 12, 16, 16, 50]
+    for i, w in enumerate(widths, start=1):
+        col_letter = openpyxl.utils.get_column_letter(i)
+        ws.column_dimensions[col_letter].width = w
+    ws.freeze_panes = "A6"
 
 
 # ---------------------------------------------------------------------------

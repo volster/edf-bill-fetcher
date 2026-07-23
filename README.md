@@ -8,7 +8,8 @@ A personal desktop application that collects and analyses EDF Energy billing dat
 - **Dual format support**: Parses both old-style and new-style (KI/KCR) EDF invoice formats.
 - **Smart amount detection**: Prioritized regex patterns with configurable fallback.
 - **Cross-source deduplication**: Two-pass dedup — Period To + Amount (primary), Amount within a 60-day window (secondary). Within a duplicate cluster the *most complete* row wins (substantive field fill-rate), with source precedence as the tie-breaker. Set `amalgamate_duplicates=True` to merge columns across all duplicate siblings into a single hybrid kept row (each sibling still surfaces on the Duplicate Entries sheet for audit).
-- **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets.
+- **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets — see the *Output Sheets* section for the full conditional-emission list.
+- **SAP financial-ledger integration**: when `scan_sap_dumps` is on (default), the engine also digests EDF's three SAP-CSV-in-PDF dumps (`*_Contract-History.pdf`, `*_Meter-Readings.pdf`, `*_Financial-Transactions.pdf`) and renders three source sheets + two analyser sheets (`SAP Back-billing Events` and `SAP ↔ EDF Matched Events`) + a cross-source `Reconciliation` sheet. See the *SAP ledger integration* section below for the full design.
 - **Professional PDF + DOCX output**: 14 dynamically-numbered sections. Numbering is **derived from `REPORT_SECTIONS` so the Table of Contents and body always agree**, regardless of which sections a user selects in the report options dialog.
 - **GUI interface**: tkinter-based desktop application with progress tracking.
   - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
@@ -195,28 +196,36 @@ Removing a section: same steps in reverse.
 
 ## Output Sheets (Excel)
 
-| Sheet              | Description |
-| ------------------ | ----------- |
-| **Annual Summary** | Yearly balance range, average, peak, low |
-| **EDF Evidence Report** | All extracted records with live formulas |
-| **Duplicate Entries** | Deduplicated records (if enabled) |
-| **Filtered (Below Min)** | Records below the minimum-threshold |
-| **Parse Errors** | Any extraction errors encountered |
-| **Key Statistics** | Account overview, balance figures, periodic charges, reading quality, unit rates |
-| **Balance Trend** | Time-series chart with rolling average and linear trend |
-| **Year-on-Year** | Yearly comparison with YoY changes |
-| **Period Charges** | Per-period charges with daily rates and dispute flags |
-| **Dispute Flags** | Automated detection of anomalies (large jumps, billing gaps, estimated runs, reconciliation mismatches) |
-| **Dispute Timeline** | Chronological event timeline for the dispute narrative |
-| **Statistical Analysis** | Descriptive stats, rolling 6-period stats, EMA, momentum, volatility, z-score/IQR anomalies, Shapiro-Wilk normality tests |
-| **Payment Analysis** | Payment/credit patterns, intervals, amounts, chronological detail with chart |
-| **Forecast & Projection** | Linear regression, Holt-Winters exponential smoothing, EMA projection, confidence intervals, accuracy metrics |
-| **Data Quality Report** | Completeness and read-quality metrics |
-| **Tariff Analysis** | Tariff impact analysis |
-| **Back-billing Analysis** | Invoices whose `Period From` → `Period To` window exceeds the SLC 7A 12-month limit (365 days), with the cancel/rebill ad- mission disclosed as `Admitted phrase`, `Period overlap`, `Admitted + overlap`, or blank. Legal context block cites Electricity Act 1989 s.84B and Ofgem's back-billing rule. |
-| **Rebilling & Corrections** | Killer/killed invoice pairs identified by period overlap > 30 days OR jump-back > 30 days OR long-period killer ≥ 60 days reaching back into a prior invoice's window. Trigger Reason lists every matching heuristic. |
-| **Meter Readings** | Actual vs Estimated timeline with meter-rollover candidates flagged `M`. Estimated Source mirrors the row's `Details` column (e.g. `Automatic estimate`). |
-| **Contract History** | Contract periods inferred from tariff transitions, with ≤ 30-day gaps merging across same-tariff runs. |
+Sheets are written in roughly this order; conditional sheets only appear when their gating input is non-empty and the relevant toggle is on:
+
+| Sheet | When emitted | Description |
+| --- | --- | --- |
+| **Annual Summary** | always | Yearly balance range, average, peak, low |
+| **EDF Evidence Report** | always | All extracted records with live formulas |
+| **Duplicate Entries** | `use_dedup and save_dups` (default on/ off respectively) | Deduplicated records, retained for audit so the dropped siblings are visible |
+| **Filtered (Below Min)** | `filter_below and save_filtered` (default on/on) when there *are* records below the minimum-threshold | Records below the minimum-threshold |
+| **Parse Errors** | when the engine captured one or more extraction errors | Any extraction errors encountered |
+| **Key Statistics** | always (when ≥2 records survive dedup) | Account overview, balance figures, periodic charges, reading quality, unit rates |
+| **Balance Trend** | always (≥2 records) | Time-series chart with rolling average and linear trend |
+| **Year-on-Year** | always (≥2 records) | Yearly comparison with YoY changes |
+| **Period Charges** | always (≥2 records) | Per-period charges with daily rates and dispute flags |
+| **Dispute Flags** | always (≥2 records) | Automated detection of anomalies — large jumps, billing gaps, estimated runs, reconciliation mismatches |
+| **Dispute Timeline** | always (≥2 records) | Chronological event timeline for the dispute narrative |
+| **Statistical Analysis** | always (≥2 records) | Descriptive stats, rolling 6-period stats, EMA, momentum, volatility, z-score/IQR anomalies, Shapiro-Wilk normality tests |
+| **Payment Analysis** | always (≥2 records) | Payment/credit patterns, intervals, amounts, chronological detail with chart |
+| **Forecast & Projection** | always (≥2 records) | Linear regression, Holt-Winters exponential smoothing, EMA projection, confidence intervals, accuracy metrics |
+| **Data Quality Report** | always | Completeness and read-quality metrics |
+| **Tariff Analysis** | always (≥2 records) | Tariff impact analysis |
+| **Back-billing Analysis** | always (≥2 records) | Invoices whose `Period From` → `Period To` window exceeds the SLC 7A 12-month limit (365 days), with the cancel/rebill admission disclosed as `Admitted phrase`, `Period overlap`, `Admitted + overlap`, or blank. Legal context block cites Electricity Act 1989 s.84B and Ofgem's back-billing rule. |
+| **Rebilling & Corrections** | always (≥2 records) | Killer/killed invoice pairs identified by period overlap > 30 days OR jump-back > 30 days OR long-period killer ≥ 60 days reaching back into a prior invoice's window. Trigger Reason lists every matching heuristic. |
+| **Meter Readings** | always (≥2 records) | Actual vs Estimated timeline with meter-rollover candidates flagged `M`. Estimated Source mirrors the row's `Details` column (e.g. `Automatic estimate`). |
+| **Contract History** | always (≥2 records) | Contract periods inferred from tariff transitions, with ≤ 30-day gaps merging across same-tariff runs. |
+| **SAP Contract History** | `scan_sap_dumps` (default on) and a SAP Contract History PDF is supplied | Contract periods extracted from the SAP Contract History PDF dump |
+| **SAP Meter Readings** | `scan_sap_dumps` and a SAP Meter Readings PDF is supplied | Meter readings from the SAP Meter Readings PDF dump, parsed by a multi-regex fallback chain |
+| **SAP Financial Transactions** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | Per-row extract of every financial transaction from the SAP Financial Transactions PDF. The widened parser surfaces **26 columns** per row (the 16 historically-surfaced columns plus 10 analyser-relevant extensions: Contract, Sub Item, Clearing Posting Date, Clearing Amount, Statistical Key Flag, Tax Code / Tax Code Description, G/L Account / G/L Description, Deferral Date). |
+| **SAP Back-billing Events** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | One summary row per **Clearing Document cluster** of ≥4 underlying SAP rows, sorted by Clearing Date ascending. Each summary row carries # rows, net amount, has-credit-for-consum-billing flag, largest single posting, posting-date range, an evidence trail narrative, and a hyperlink to its first underlying row on `SAP Financial Transactions`. Underlying rows are written as collapsible outline-group sub-rows beneath each summary (default collapsed); click `+` in the left margin to expand. Debt-management rows (`Statistical Key Flag == 'Installment Plan Item'`) are filtered out of clustering. See the design spec at `scratch/Docs/Superpowers/Specs/2026-07-21-sap-back-billing-analysis-design.md`. |
+| **SAP ↔ EDF Matched Events** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | One row per SAP back-billing event × EDF invoice candidate pair whose fuzzy match confidence is Low or better. Confidence is computed by the §3.3 algorithm in the spec: date score (in-span = 50, within 3 days = 25, within 14 days = 5) + amount score (within 5% = 40, within 25% = 20, within 50% = 5); net-zero clusters match any EDF invoice whose gross equals some cluster row's gross within the same bands → bands High (≥75) / Medium (≥40) / Low (≥10) / unmatched (omitted). Bidirectional hyperlinks: SAP Clearing Doc cell links to the event on the previous sheet, EDF Invoice # cell links to the row on `EDF Evidence Report`. |
+| **Reconciliation** | `scan_sap_dumps` and `generate_reconciliation_sheet` (independent toggle, default on) | Cross-source reconciliation between SAP-ledger signals (clearing clusters, credit-for-consum-billing postings) and EDF-invoice signals (back-billing / rebilling / meter-rollover detections). Toggled separately so a reviewer can keep just the SAP-ledger sheets without the cross-source view. |
 
 ## Back-billing & rebilling detection
 
@@ -253,6 +262,30 @@ analyses = run_analysers(deduped_df)
 ```
 
 Multi-invoice (merged) PDF inputs — e.g. a bundle of 30+ pages containing 8 T-series invoices or 40 pages containing 10 KI-series invoices — are sliced at invoice boundaries before parsing, so each invoice gets its own row instead of being lost in the whole-file concat. The slicer looks for either an `Invoice number:` line or a `Page 1 of N` boundary marker (variants `1 of 4`, `one of four`, `1/4`).
+
+## SAP ledger integration
+
+EDF's SAP ledger PDFs are the *behind-the-scenes* truth of every billing event; the EDF-branded invoice PDFs only show what EDF chose to send the customer. The three SAP source PDFs the engine looks for (under the `Scan SAP dumps` GUI toggle, default on, or `config["scan_sap_dumps"]` programmatic key) are:
+
+- **SAP Contract History** (`*_Contract-History.pdf`) → `SAP Contract History` sheet
+- **SAP Meter Readings** (`*_Meter-Readings.pdf`) → `SAP Meter Readings` sheet
+- **SAP Financial Transactions** (`*_Financial-Transactions.pdf`) → `SAP Financial Transactions` sheet
+
+The Financial-Transactions parser surfaces **26 columns** per row (16 historical + 10 analyser extensions).
+
+Two analyser sheets sit adjacent to `SAP Financial Transactions`, deriving their data from it:
+
+- **SAP Back-billing Events** — one summary row per Clearing Document cluster of ≥4 underlying rows. Each cluster's net amount, evidence trail narrative, and link back to its underlying rows on `SAP Financial Transactions`. Sub-rows are hidden under collapsible outline groups (default collapsed) so the sheet opens at a readable ~62 rows. Debt-management rows whose `Statistical Key Flag == 'Installment Plan Item'` are excluded from clustering up-front.
+- **SAP ↔ EDF Matched Events** — fuzzy-join Sheet 1 events to EDF invoice records. Each matched pair lists the date delta vs EDF `Period To`, the SAP event's net amount and the EDF invoice's amount, a confidence band, and bidirectional hyperlinks to Sheet 1 and `EDF Evidence Report` rows. Per spec §3.3 the algorithm scores on two axes:
+  - **date** — Clearing Date inside EDF `[Period From, Period To]` = 50, within 3 days = 25, within 14 days = 5
+  - **amount** — for net-£0 clusters, the closest cluster row's gross within 5% of EDF amount = 40 / within 25% = 20 / within 50% = 5; for non-zero net clusters, the same bands applied to `event.net / edf.amount`
+
+  Bands: **High** ≥ 75, **Medium** ≥ 40, **Low** ≥ 10. SAP events that produce no candidate at Low-or-above are omitted from Sheet 2 (but remain on Sheet 1).
+
+Both new sheets honour the same `scan_sap_dumps` toggle as the existing three SAP sheets — there is no separate "Show SAP back-billing" checkbox (YAGNI).
+
+The full design spec is preserved at
+`scratch/Docs/Superpowers/Specs/2026-07-21-sap-back-billing-analysis-design.md`.
 
 ## Supported EDF Formats
 
@@ -352,6 +385,8 @@ Key options:
 - `analysis_min`: threshold for analysis tabs
 - `use_dedup`: enable cross-source deduplication
 - `use_domain_filter`: filter PST emails by sender domain
+- `scan_sap_dumps`: (default `True`) emit the three SAP source sheets + the two new SAP analyser sheets when a SAP-dump PDF is supplied. See *SAP ledger integration*.
+- `generate_reconciliation_sheet`: (default `True`) emit the cross-source Reconciliation sheet. Independent of `scan_sap_dumps` for cases where the SAP sheets alone are wanted.
 - `report_sections`: list of registry keys to include in PDF/DOCX reports — if absent or empty, every section is included
 
 ## License

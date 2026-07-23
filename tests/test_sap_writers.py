@@ -176,6 +176,17 @@ FIN_ROWS = [
         "Document Type": "IN",
         "Document Type Description": "Energy Invoicing",
         "Source File": "fin.pdf",
+        # Spec §3.1: 10 added analyser-relevant columns.
+        "Contract": "2011040650",
+        "Sub Item": "0",
+        "Clearing Posting Date": "2020-03-26",
+        "Clearing Amount": "436",
+        "Statistical Key Flag": "",
+        "Tax Code": "A4",
+        "Tax Code Description": "Donations or payment for equity funds",
+        "G/L Account": "0000210251",
+        "G/L Description": "Billed Debtor SME Elec",
+        "Deferral Date": "",
     },
 ]
 
@@ -202,3 +213,22 @@ def test_fin_writer_first_body_row_amount_present() -> None:
     row = 4
     assert ws.cell(row=row, column=1).value == "551000421040"
     assert ws.cell(row=row, column=9).value == "436"
+
+
+def test_fin_writer_has_new_extended_columns() -> None:
+    """Spec §3.1: parser feeds a 26-column row (16 + 10 analyser cols)."""
+    wb = Workbook()
+    ws = wb.active
+    write_sap_financial_transactions_sheet(ws, FIN_ROWS)
+    headers = [ws.cell(row=3, column=c).value for c in range(1, ws.max_column + 1)]
+    assert "Contract" in headers
+    assert "Clearing Posting Date" in headers
+    assert "Clearing Amount" in headers
+    assert "Statistical Key Flag" in headers
+    assert "Tax Code" in headers
+    assert "Tax Code Description" in headers
+    assert "G/L Account" in headers
+    assert "G/L Description" in headers
+    assert "Deferral Date" in headers
+    assert "Sub Item" in headers
+    assert ws.max_column == 26, f"expected 26 cols, got {ws.max_column}"
