@@ -1,5 +1,6 @@
 """Tests for EvidenceEngine PDF/PST/HTM processing methods."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, mock_open, patch
 
 import pytest
@@ -282,6 +283,86 @@ class TestEvidenceEngineLocalPDFs:
         assert engine.pdf_count == 2, (
             f"recursive walk discovered only {engine.pdf_count} of 2 expected PDFs"
         )
+
+
+# ---------------------------------------------------------------------------
+# Stream P5 — engine.source_paths population (spec §3.9, issue 8b root cause)
+# ---------------------------------------------------------------------------
+
+# Minimal valid 1-page PDF (built via reportlab; reproduces the live
+# evidence_files/ backdrop the user's bug report referenced). Kept inline
+# so the test is fully self-contained.
+_MINIMAL_PDF_B64 = (
+    b"JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgKG9wZW5zb3VyY2Up"
+    b"CjEgMCBvYmoKPDwKL0YxIDIgMCBSCj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9CYXNlRm9udCAvSGVsdmV0aWNh"
+    b"IC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nIC9OYW1lIC9GMSAvU3VidHlwZSAvVHlwZTEgL1R5cGUg"
+    b"L0ZvbnQKPj4KZW5kb2JqCjMgMCBvYmoKPDwKL0NvbnRlbnRzIDcgMCBSIC9NZWRpYUJveCBbIDAgMCA1"
+    b"OTUuMjc1NiA4NDEuODg5OCBdIC9QYXJlbnQgNiAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAv"
+    b"UHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAg"
+    b"IC9UcmFucyA8PAo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKNCAwIG9iago8PAovUGFnZU1vZGUg"
+    b"L1VzZU5vbmUgL1BhZ2VzIDYgMCBSIC9UeXBlIC9DYXRhbG9nCj4+CmVuZG9iago1IDAgb2JqCjw8Ci9B"
+    b"dXRob3IgKGFub255bW91cykgL0NyZWF0aW9uRGF0ZSAoRDoyMDI2MDcyNTEzMTIyNSswMScwMCcpIC9D"
+    b"cmVhdG9yIChhbm9ueW1vdXMpIC9LZXl3b3JkcyAoKSAvTW9kRGF0ZSAoRDoyMDI2MDcyNTEzMTIyNSsw"
+    b"MScwMCcpIC9Qcm9kdWNlciAoUmVwb3J0TGFiIFBERiBMaWJyYXJ5IC0gXChvcGVuc291cmNlXCkpIAog"
+    b"IC9TdWJqZWN0ICh1bnNwZWNpZmllZCkgL1RpdGxlICh1bnRpdGxlZCkgL1RyYXBwZWQgL0ZhbHNlCj4+"
+    b"CmVuZG9iago2IDAgb2JqCjw8Ci9Db3VudCAxIC9LaWRzIFsgMyAwIFIgXSAvVHlwZSAvUGFnZXMKPj4K"
+    b"ZW5kb2JqCjcgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9M"
+    b"ZW5ndGggMTQ3Cj4+CnN0cmVhbQpHYXBARVltUz8lJ0xoYkZgPlIybG8wVC5fQlE4IlRuNCcqPTlx"
+    b"W1o0UCFuZzIpYXVDUiUlImpIOVRBczAvVD1gY11jXCpgODosMSM0Jy06YS9xNmxbVHJaXnRoOUNXYiku"
+    b"biZfQ0hNSWwuSVo/ZTBzUlQ4XFheXzVrc21yQzdyYyojNG8uSlVoYjBDSS5oM10pfj5lbmRzdHJlYW0K"
+    b"ZW5kb2JqCnhyZWYKMCA4CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDA2MSAwMDAwMCBuIAowMDAw"
+    b"MDAwMDkyIDAwMDAwIG4gCjAwMDAwMDAxOTkgMDAwMDAgbiAKMDAwMDAwMDQwMiAwMDAwMCBuIAowMDAw"
+    b"MDAwMDQ3MCAwMDAwMCBuIAowMDAwMDAwMDczMSAwMDAwMCBuIAowMDAwMDAwMDc5MCAwMDAwMCBuIAp0"
+    b"cmFpbGVyCjw8Ci9JRCAKWzw2YTM1NTI2MjYxZTZlODlmN2UyZGI0ZmVlZjY3OWYwMj48NmEzNTUyNjI2"
+    b"MWU2ZTg5ZjdlMmRiNGZlZWY2NzlmMDI+XQolIFJlcG9ydExhYiBnZW5lcmF0ZWQgUERGIGRvY3VtZW50"
+    b"IC0tIGRpZ2VzdCAob3BlbnNvdXJjZSkKCi9JbmZvIDUgMCBSCi9Sb290IDQgMCBSCi9TaXplIDgKPj4K"
+    b"c3RhcnR4cmVmCjEwMjcKJSVFT0YK"
+)
+
+
+def _write_minimal_pdf(tmp_path: Path, name: str = "test-invoice.pdf") -> str:
+    import base64
+
+    p = tmp_path / name
+    p.write_bytes(base64.b64decode(_MINIMAL_PDF_B64))
+    return str(p)
+
+
+def test_evidence_engine_init_has_source_paths_dict() -> None:
+    """EvidenceEngine.__init__ must initialise self.source_paths to an
+    empty dict so save_evidence_files can find files via
+    getattr(engine, "source_paths", {}). Spec §3.9 (issue 8b root cause)."""
+    eng = EvidenceEngine(config={}, update_ui_cb=lambda *a, **k: None)
+    assert hasattr(eng, "source_paths"), "EvidenceEngine.source_paths missing"
+    assert isinstance(eng.source_paths, dict), "source_paths must be a dict"
+    assert eng.source_paths == {}, "source_paths must start empty"
+
+
+def test_process_pdf_file_populates_source_paths(tmp_path: Path) -> None:
+    """process_pdf_file must record the path under
+    self.source_paths[attachment_name] so save_evidence_files can find it.
+    Spec §3.9 (issue 8b root cause)."""
+    pdf = _write_minimal_pdf(tmp_path, "test-invoice.pdf")
+    eng = EvidenceEngine(config={"acc_num": ""}, update_ui_cb=lambda *a, **k: None)
+    eng.process_pdf_file(pdf, "Local PDF Folder", "test-invoice.pdf", "01/01/2024")
+    assert "test-invoice.pdf" in eng.source_paths, eng.source_paths
+    assert eng.source_paths["test-invoice.pdf"] == pdf
+
+
+def test_process_pdf_file_explicit_attachment_name_recorded(tmp_path: Path) -> None:
+    """When the caller passes attachment_name explicitly (PST emails),
+    source_paths must use that name, not detail_label. Spec §3.9."""
+    pdf = _write_minimal_pdf(tmp_path, "stub.pdf")
+    eng = EvidenceEngine(config={}, update_ui_cb=lambda *a, **k: None)
+    eng.process_pdf_file(
+        pdf,
+        "PST PDF Attachment",
+        "stub.pdf",
+        "01/01/2024",
+        attachment_name="edf-invoice-KI-1234-0001-3.pdf",
+    )
+    assert "edf-invoice-KI-1234-0001-3.pdf" in eng.source_paths
+    assert "stub.pdf" not in eng.source_paths
 
 
 if __name__ == "__main__":
