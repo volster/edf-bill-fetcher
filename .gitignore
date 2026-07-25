@@ -51,6 +51,7 @@ coverage.xml
 *.pst
 *.ost
 data/
+.omo/
 
 # Scratch / debug scripts moved out of the source tree during
 # cleanup.  These are one-off investigation scripts that the
