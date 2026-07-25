@@ -8165,10 +8165,25 @@ def _write_sap_bb_events_sheet(
     ]
     ncol = len(summary_cols)
 
-    # ---------- rows 1-6: banner + legal context + intro ----------
-    title = "EDF SAP BACK-BILLING EVENTS"
-    if account:
-        title = f"{title}  |  Account {account}"
+    # Spec §3.3 — title summary counts (replaces the deleted legal block).
+    net_zero_count = sum(1 for ev in events if abs(ev.net_amount) < 1.0)
+    with_credit_count = sum(1 for ev in events if ev.has_credit_for_consum_billing)
+    event_count = len(events)
+
+    # ---------- rows 1-3: banner + spacer + header ----------
+    # Spec §3.3 — the legal-context block (was row 3) and the italic
+    # intro paragraph (was row 5) are entirely REMOVED. The title row
+    # now carries the event-count summary; header moves from row 7 to
+    # row 3; data from row 8 to row 4; freeze panes from A8 to A4.
+    title = (
+        "EDF SAP BACK-BILLING EVENTS  |  Account {acc}  |  "
+        "{n} events ({nz} net-zero, {wc} with credit)"
+    ).format(
+        acc=account or "(no account)",
+        n=event_count,
+        nz=net_zero_count,
+        wc=with_credit_count,
+    )
     t1 = ws.cell(row=1, column=1, value=title)
     t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
     t1.fill = PatternFill("solid", start_color=ORANGE)
@@ -8182,47 +8197,10 @@ def _write_sap_bb_events_sheet(
 
     ws.row_dimensions[2].height = 4
 
-    legal = (
-        "LEGAL CONTEXT\n\n"
-        "Back-billing protections (Ofgem / Electricity Act 1989 s.84B):\n"
-        "suppliers may not charge a domestic customer for energy supplied\n"
-        "more than 12 months before the date of the bill that first raised\n"
-        "the charge, unless one of the statutory exceptions applies\n"
-        "(customer has been obstructive, has unreasonably refused access,\n"
-        "or has not cooperated with the supplier's reasonable requests).\n\n"
-        "The events below are visible in EDF's own SAP financial ledger —\n"
-        "the *behind-the-scenes* truth of every billing event. Where the\n"
-        "cluster nets to ~£0.00, one or more underlying charges have been\n"
-        "reversed; where a 'Cr- Credit for Consum Billing' appears, the\n"
-        "supplier has explicitly credited a previously-raised consumption\n"
-        "billing. The absence of a matching EDF-side invoice for some\n"
-        "rows is itself evidence — EDF's ledger admits to a correction\n"
-        "without the customer being sent a corrective bill."
-    )
-    legal_cell = ws.cell(row=3, column=1, value=legal)
-    legal_cell.font = Font(name="Calibri", size=10)
-    legal_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncol)
-    ws.row_dimensions[3].height = 175
+    # Row 3: header (was row 7 per spec §3.3)
+    _write_sap_header_row(ws, row=3, columns=summary_cols)
 
-    intro = (
-        "Each row below identifies one SAP clearing event (a Clearing\n"
-        "Document cluster). Boxed outline groups are expandable —\n"
-        "click the '+' in the left margin to see the underlying SAP\n"
-        "rows that make up each event. Unmatched events are the most\n"
-        "evidentially valuable (an EDF self-correction with no\n"
-        "companion invoice)."
-    )
-    intro_cell = ws.cell(row=5, column=1, value=intro)
-    intro_cell.font = Font(name="Calibri", size=10, italic=True)
-    intro_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=ncol)
-    ws.row_dimensions[5].height = 60
-
-    # ---------- row 7: header ----------
-    _write_sap_header_row(ws, row=7, columns=summary_cols)
-
-    r = 8
+    r = 4  # was 8 — header moved from row 7 to row 3 (spec §3.3)
     # Need to look up the index of each underlying row inside the
     # global sap_financial_rows list to point at the SAP Financial
     # Transactions sheet. The caller passes sap_financial_first_row
@@ -8351,7 +8329,7 @@ def _write_sap_bb_events_sheet(
         ws.column_dimensions[col_letter].width = w
 
     # Freeze top header
-    ws.freeze_panes = "A8"
+    ws.freeze_panes = "A4"  # was A8 — header moved to row 3 (spec §3.3)
 
 
 def _write_sap_bb_matches_sheet(
@@ -8430,10 +8408,11 @@ def _write_sap_bb_matches_sheet(
     sorted_matches = sorted(matches, key=sort_key)
 
     # Map Clearing Doc -> summary row on Sheet 1 so we can link back.
-    # Summary row index = 8 + sum_{j<i}(1 + len(events[j].rows))
-    # (summary row + N underlying rows per event).
+    # Summary row index = 4 + sum_{j<i}(1 + len(events[j].rows))
+    # (summary row + N underlying rows per event). Header row is row 3
+    # and the first summary row is row 4 per spec §3.3.
     summary_row_for_doc: dict[str, int] = {}
-    sheet1_summary_row = 8
+    sheet1_summary_row = 4
     for ev in events:
         summary_row_for_doc[ev.clearing_doc] = sheet1_summary_row
         sheet1_summary_row += 1 + len(ev.rows)

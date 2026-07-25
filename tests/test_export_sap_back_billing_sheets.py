@@ -253,10 +253,10 @@ def test_sheet1_summary_rows_have_outline_level_zero(tmp_path: object) -> None:
         sap_row_index_map={id(events[0].rows[0]): 4},
     )
     ws1 = wb["SAP Back-billing Events"]
-    # row 8 is the first summary row (after 7 rows of header/intro)
-    assert ws1.row_dimensions[8].outline_level == 0
-    # rows 9-12 are the 4 underlying rows for the single event
-    for r in range(9, 13):
+    # Spec §3.3 — header moved to row 3, so the first summary row is row 4
+    assert ws1.row_dimensions[4].outline_level == 0
+    # rows 5-8 are the 4 underlying rows for the single event
+    for r in range(5, 9):
         assert ws1.row_dimensions[r].outline_level == 1, f"row {r}"
 
 
@@ -274,7 +274,7 @@ def test_sheet1_underlying_rows_are_hidden_by_default(tmp_path: object) -> None:
         sap_row_index_map={id(events[0].rows[0]): 4},
     )
     ws1 = wb["SAP Back-billing Events"]
-    for r in range(9, 13):
+    for r in range(5, 9):
         assert ws1.row_dimensions[r].hidden is True, f"row {r} should be hidden"
 
 
@@ -316,11 +316,11 @@ def test_sheet1_summary_rows_match_event_count(tmp_path: object) -> None:
         sap_row_index_map={},  # links left blank; we're only counting summary rows
     )
     ws1 = wb["SAP Back-billing Events"]
-    # Body summary rows live at outline_level 0; the row 7 is the header
-    # (also outline_level 0) so exclude row 7 by also requiring col A to be
-    # a clearing-doc number (not the header label "Clearing Doc #").
+    # Body summary rows live at outline_level 0; row 3 is the header (also
+    # outline_level 0) so exclude it by also requiring col A to be a
+    # clearing-doc number (not the header label "Clearing Doc #").
     summary_count = 0
-    for r in range(8, ws1.max_row + 1):
+    for r in range(4, ws1.max_row + 1):
         if ws1.row_dimensions[r].outline_level == 0:
             v = ws1.cell(row=r, column=1).value
             if v and str(v).strip() not in ("", "Clearing Doc #"):
@@ -344,10 +344,93 @@ def test_sheet1_summary_row_hyperlink_to_specific_sap_row(tmp_path: object) -> N
         sap_row_index_map=mp,
     )
     ws1 = wb["SAP Back-billing Events"]
-    c12 = ws1.cell(row=8, column=12)
+    c12 = ws1.cell(row=4, column=12)
     assert c12.hyperlink is not None
     loc = c12.hyperlink.location
     assert loc == "'SAP Financial Transactions'!A4", loc
+
+
+# ---------------------------------------------------------------------------
+# PR #3 — Spec §3.3 (issue 3): SAP BB Events legal block deletion
+# ---------------------------------------------------------------------------
+
+
+def test_sap_bb_events_no_legal_context_row_present() -> None:
+    wb = Workbook()
+    events = detect_sap_back_billing_events(
+        parse_sap_financial_transactions(_sap_csv_with_cluster(), source_file="test.pdf")
+    )
+    write_sap_back_billing_sheets(
+        wb,
+        events,
+        [],
+        sap_financial_first_row=4,
+        edf_rows=[],
+        sap_row_index_map={},
+    )
+    ws1 = wb["SAP Back-billing Events"]
+    for r in range(1, ws1.max_row + 1):
+        v = ws1.cell(row=r, column=1).value
+        if v is None:
+            continue
+        s = str(v).upper()
+        assert "LEGAL CONTEXT" not in s, f"row {r} still contains LEGAL CONTEXT"
+        assert "Back-billing protections" not in s, f"row {r} has the legal blurb"
+
+
+def test_sap_bb_events_no_intro_paragraph_on_row_5() -> None:
+    wb = Workbook()
+    events = detect_sap_back_billing_events(
+        parse_sap_financial_transactions(_sap_csv_with_cluster(), source_file="test.pdf")
+    )
+    write_sap_back_billing_sheets(
+        wb,
+        events,
+        [],
+        sap_financial_first_row=4,
+        edf_rows=[],
+        sap_row_index_map={},
+    )
+    ws1 = wb["SAP Back-billing Events"]
+    v = ws1.cell(row=5, column=1).value
+    assert v is None or not str(v).startswith("Each row below identifies"), (
+        f"row 5 still has the intro paragraph starting with 'Each row below': {v!r}"
+    )
+
+
+def test_sap_bb_events_title_row_contains_event_count_summary() -> None:
+    import re
+
+    wb = Workbook()
+    events = detect_sap_back_billing_events(
+        parse_sap_financial_transactions(_sap_csv_with_cluster(), source_file="test.pdf")
+    )
+    # Reach the writer directly so the test is hermetic — the public
+    # write_sap_back_billing_sheets wrapper doesn't yet forward account.
+    from edf_collector import _write_sap_bb_events_sheet
+
+    ws = wb.create_sheet("SAP Back-billing Events")
+    _write_sap_bb_events_sheet(ws, events, sap_financial_first_row=4, account="A-31105244")
+    title = str(ws.cell(row=1, column=1).value)
+    assert re.search(r"\d+ events \(\d+ net-zero, \d+ with credit\)", title), title
+
+
+def test_sap_bb_events_header_row_moved_to_row_3() -> None:
+    wb = Workbook()
+    events = detect_sap_back_billing_events(
+        parse_sap_financial_transactions(_sap_csv_with_cluster(), source_file="test.pdf")
+    )
+    write_sap_back_billing_sheets(
+        wb,
+        events,
+        [],
+        sap_financial_first_row=4,
+        edf_rows=[],
+        sap_row_index_map={},
+    )
+    ws1 = wb["SAP Back-billing Events"]
+    assert ws1.cell(row=3, column=1).value == "Clearing Doc #"
+    assert ws1.cell(row=4, column=1).value == "CL1"  # single-cluster fixture summary row
 
 
 # ---------------------------------------------------------------------------
