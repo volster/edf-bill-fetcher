@@ -1348,24 +1348,12 @@ def match_sap_events_to_edf(
             else:
                 continue
 
-            # Date score — Clearing Date within EDF Period span is the
-            # canonical back-billing signature
-            date_score = 0
-            date_in_span = False
-            if (
-                not pd.isna(pf)
-                and not pd.isna(pt)
-                and pd.Timestamp(pf) <= ev_cd <= pd.Timestamp(pt)
-            ):
-                date_in_span = True
-                date_score = 50
-            else:
-                for band_days, band_score in _SAP_MATCH_DAY_BANDS:
-                    if date_delta_days <= band_days:
-                        date_score = band_score
-                        break
-
-            # Amount score
+            # Amount score — computed before the date-score branch
+            # (spec §3.1 — Option C: the in-span date bonus is now
+            # conditional on amount correspondence; previously a
+            # SAP clearing date happening to fall inside a wide EDF
+            # invoice period scored Medium with zero amount match,
+            # flooding the matched-events sheet with 129 fake rows).
             amount_score = 0
             if abs(ev.net_amount) < 1.0 and edf_amt > 0:
                 # Net-zero cluster: try matching any underlying row's
@@ -1393,8 +1381,43 @@ def match_sap_events_to_edf(
                 elif 0.50 <= ratio <= 1.50:
                     amount_score = 5
 
+            # Date score — Clearing Date within EDF Period span gets
+            # the 50-point bonus ONLY when amount also matched (spec
+            # §3.1 — Option C).  Without amount correspondence the
+            # in-span case falls through to the day-band ladder
+            # measured against the nearer boundary, so a pure
+            # coincidental date-in-span can no longer reach Medium.
+            date_score = 0
+            date_in_span = False
+            if (
+                not pd.isna(pf)
+                and not pd.isna(pt)
+                and pd.Timestamp(pf) <= ev_cd <= pd.Timestamp(pt)
+            ):
+                date_in_span = True
+                if amount_score > 0:
+                    date_score = 50
+                else:
+                    delta_to_pf = abs((ev_cd - pd.Timestamp(pf)).days)
+                    delta_to_pt = abs((ev_cd - pd.Timestamp(pt)).days)
+                    nearest_delta = min(delta_to_pf, delta_to_pt)
+                    for band_days, band_score in _SAP_MATCH_DAY_BANDS:
+                        if nearest_delta <= band_days:
+                            date_score = band_score
+                            break
+            else:
+                for band_days, band_score in _SAP_MATCH_DAY_BANDS:
+                    if date_delta_days <= band_days:
+                        date_score = band_score
+                        break
+
             total_score = date_score + amount_score
             band = _confidence_band(total_score)
+            # Gate Medium+ on amount correspondence (spec §3.1 —
+            # Option C).  Pure-date matches (in-span or near-boundary)
+            # cap at Low; below-Low total drops to None.
+            if band in ("High", "Medium") and amount_score == 0:
+                band = "Low" if total_score >= 10 else None
             if band is None:
                 continue
 
@@ -1406,16 +1429,19 @@ def match_sap_events_to_edf(
                     else f"Within {date_delta_days}d of period-end + amount within 5%"
                 )
             elif band == "Medium":
-                if date_in_span and amount_score > 0:
+                # amount_score > 0 is guaranteed by the Medium+ gate above.
+                if date_in_span:
                     notes = "Clearing date inside EDF period + amount within 25%"
-                elif date_in_span:
-                    notes = "Clearing date inside EDF period (no amount band hit)"
-                elif amount_score > 0:
-                    notes = f"Within {date_delta_days}d of period-end + amount within 25%"
                 else:
-                    notes = f"Within {date_delta_days}d of period-end (no amount band hit)"
-            else:
-                notes = f"Within {date_delta_days}d of period-end; may be coincidental"
+                    notes = f"Within {date_delta_days}d of period-end + amount within 25%"
+            else:  # band == "Low"
+                if date_in_span and amount_score == 0:
+                    notes = (
+                        "Clearing date inside EDF period but amounts do not "
+                        "correspond — likely coincidental"
+                    )
+                else:
+                    notes = f"Within {date_delta_days}d of period-end; may be coincidental"
 
             matches.append(
                 SapEdfMatch(

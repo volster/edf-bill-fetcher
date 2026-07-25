@@ -502,3 +502,100 @@ def test_match_sap_events_to_edf_net_zero_gross_amount_match_high() -> None:
         f"net-zero cluster with exact gross match should be High, "
         f"got {matches[0].confidence_band} (score={matches[0].confidence_score})"
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #2 — Option C: require amount match for Medium+, gate in-span on amount
+# Spec §3.1 (issue 1): matches that scored "Medium" purely because a
+# SAP clearing date happened to fall inside a wide EDF invoice period
+# (with zero amount correspondence) must be demoted to Low or dropped.
+# ---------------------------------------------------------------------------
+
+
+def test_matcher_demotes_in_span_no_amount_to_low() -> None:
+    """Clearing date inside EDF period but amount wildly off → Low (not Medium).
+
+    Spec §3.1 — Option C: previously this row would have scored Medium
+    purely from the in-span 50-point bonus with zero amount correspondence;
+    the new gate caps it at Low.
+    """
+    ev = _mk_ev(clearing_date="2019-09-03", net_amount=-831.45)
+    edf = [
+        _mk_edf(
+            invoice="T-001",
+            period_from="14/06/2018",
+            period_to="04/09/2019",
+            amount=20828.82,
+        )
+    ]
+    matches = match_sap_events_to_edf([ev], edf)
+    band = matches[0].confidence_band if matches else None
+    assert band in ("Low", None), (
+        f"in-span no-amount must be Low or dropped, got {band}"
+    )
+
+
+def test_matcher_in_span_with_amount_within_5pct_stays_high() -> None:
+    """Date in-span + amount within 5% keeps the High band."""
+    ev = _mk_ev(clearing_date="2024-01-15", net_amount=100.00)
+    edf = [
+        _mk_edf(
+            invoice="T-002",
+            period_from="01/01/2024",
+            period_to="31/01/2024",
+            amount=100.00,
+        )
+    ]
+    matches = match_sap_events_to_edf([ev], edf)
+    assert matches, "expected a match"
+    assert matches[0].confidence_band == "High", matches[0].confidence_band
+
+
+def test_matcher_in_span_with_amount_within_25pct_caps_at_medium() -> None:
+    """Date in-span + amount within 25% but not 5% → Medium (amount_score>0)."""
+    ev = _mk_ev(clearing_date="2024-01-15", net_amount=120.00)
+    edf = [
+        _mk_edf(
+            invoice="T-003",
+            period_from="01/01/2024",
+            period_to="31/01/2024",
+            amount=100.00,
+        )
+    ]
+    matches = match_sap_events_to_edf([ev], edf)
+    assert matches
+    assert matches[0].confidence_band == "Medium", matches[0].confidence_band
+
+
+def test_matcher_near_boundary_no_amount_caps_at_low() -> None:
+    """Clearing within 3d of period end (25 pts) but no amount → Low not Medium."""
+    ev = _mk_ev(clearing_date="2024-01-28", net_amount=50.00)
+    edf = [
+        _mk_edf(
+            invoice="T-004",
+            period_from="01/01/2024",
+            period_to="31/01/2024",
+            amount=10000.00,  # wildly off — no amount band hit
+        )
+    ]
+    matches = match_sap_events_to_edf([ev], edf)
+    # 28 vs 31 = 3d → date_score=25; amount_score=0 → total=25 → capped Low
+    assert matches, "expected a match (Low)"
+    assert matches[0].confidence_band == "Low", matches[0].confidence_band
+
+
+def test_matcher_notes_string_says_coincidental_when_no_amount() -> None:
+    """The in-span-no-amount notes string must say 'coincidental' so the
+    surviving Low rows are self-explaining (spec §3.1)."""
+    ev = _mk_ev(clearing_date="2024-01-15", net_amount=10.00)
+    edf = [
+        _mk_edf(
+            invoice="T-005",
+            period_from="01/01/2024",
+            period_to="31/01/2024",
+            amount=10000.00,
+        )
+    ]
+    matches = match_sap_events_to_edf([ev], edf)
+    assert matches, "expected a match (Low)"
+    assert "coincidental" in matches[0].notes.lower(), matches[0].notes
