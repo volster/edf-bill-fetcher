@@ -530,9 +530,7 @@ def test_matcher_demotes_in_span_no_amount_to_low() -> None:
     ]
     matches = match_sap_events_to_edf([ev], edf)
     band = matches[0].confidence_band if matches else None
-    assert band in ("Low", None), (
-        f"in-span no-amount must be Low or dropped, got {band}"
-    )
+    assert band in ("Low", None), f"in-span no-amount must be Low or dropped, got {band}"
 
 
 def test_matcher_in_span_with_amount_within_5pct_stays_high() -> None:
@@ -586,8 +584,14 @@ def test_matcher_near_boundary_no_amount_caps_at_low() -> None:
 
 def test_matcher_notes_string_says_coincidental_when_no_amount() -> None:
     """The in-span-no-amount notes string must say 'coincidental' so the
-    surviving Low rows are self-explaining (spec §3.1)."""
-    ev = _mk_ev(clearing_date="2024-01-15", net_amount=10.00)
+    surviving Low rows are self-explaining (spec §3.1).
+
+    Uses a clearing date within 3d of the period-end so the in-span
+    no-amount branch yields ``date_score=25`` (nearest-boundary day
+    band), enough total to clear the Low threshold after the
+    Medium+ clamp.
+    """
+    ev = _mk_ev(clearing_date="2024-01-28", net_amount=10.00)
     edf = [
         _mk_edf(
             invoice="T-005",
@@ -597,5 +601,6 @@ def test_matcher_notes_string_says_coincidental_when_no_amount() -> None:
         )
     ]
     matches = match_sap_events_to_edf([ev], edf)
-    assert matches, "expected a match (Low)"
+    assert matches, "expected a Low match"
+    assert matches[0].confidence_band == "Low", matches[0].confidence_band
     assert "coincidental" in matches[0].notes.lower(), matches[0].notes
