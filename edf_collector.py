@@ -3447,13 +3447,13 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
     # dedup hyperlink pass all read the same index.  Verified by
     # ``tests/test_evidence_sheet_columns.py``.
     headers = [
+        "Invoice #",
         "Source",
         "Sender",
         "Date",
+        "Amount (£)",
         "Period From",
         "Period To",
-        "Invoice #",
-        "Amount (£)",
         "Period Charge (£)",
         "Unit Rate (p/kWh)",
         "% Change",
@@ -3509,11 +3509,11 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
 
         for c_idx, val in enumerate(row, 1):
             if c_idx == COL_PCT_CHANGE and not is_duplicate:
-                # % Change as live formula — Amount is col G
+                # % Change as live formula — Amount is col E
                 c = ws.cell(
                     row=r_idx,
                     column=COL_PCT_CHANGE,
-                    value=f'=IFERROR((G{r_idx}-G{r_idx - 1})/G{r_idx - 1},"")',
+                    value=f'=IFERROR((E{r_idx}-E{r_idx - 1})/E{r_idx - 1},"")',
                 )
                 c.number_format = "0.0%"
                 c.alignment = Alignment(horizontal="right", vertical="top")
@@ -3569,7 +3569,7 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             ):
                 c.fill = PatternFill("solid", start_color=EST_YELLOW)
 
-        # Anomaly flag col S (19) — Amount is col G
+        # Anomaly flag col S (19) — Amount is col E — Amount is col G
         # (Anomaly Flag shifted right by one when the Tariff column
         # was inserted at column O; see the column-letter map at the
         # top of this function.)
@@ -3577,7 +3577,7 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             ca = ws.cell(
                 row=r_idx,
                 column=COL_ANOMALY,
-                value=f'=IF(AND(G{r_idx - 1}>0,G{r_idx}>G{r_idx - 1}*2),"⚠ >100% INCREASE","")',
+                value=f'=IF(AND(E{r_idx - 1}>0,E{r_idx}>E{r_idx - 1}*2),"⚠ >100% INCREASE","")',
             )
             ca.font = Font(name="Calibri", size=10, bold=True)
             ca.border = CELL_BORDER
@@ -3689,6 +3689,7 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
         "Avg Balance (£)",
         "Peak Balance (£)",
         "Lowest Balance (£)",
+        "Drill down",
     ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 1, col, h, bg="10367A")
@@ -3698,7 +3699,7 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
     esn = evidence_sheet_name
 
     date_col = f"'{esn}'!$C$2:$C${last_data_row}"
-    amt_col = f"'{esn}'!$G$2:$G${last_data_row}"
+    amt_col = f"'{esn}'!$E$2:$E${last_data_row}"
 
     for r_idx, year_val in enumerate(years, 2):
         row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()
@@ -3717,6 +3718,7 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
             f'=IFERROR(AVERAGEIFS({amt_col},{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")',
             peak_f,
             low_f,
+            "→ Drill down",
         ]
         for c_idx, val in enumerate(row_values, 1):
             c = ws.cell(row=r_idx, column=c_idx, value=val)
@@ -3733,6 +3735,13 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
                 c.number_format = "#,##0"
             elif c_idx > 3:
                 c.number_format = "£#,##0.00"
+            if c_idx == 7:
+                c.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                    ref=c.coordinate,
+                    location="'Reconciliation Drill-down'!A2",
+                    display="→ Drill down",
+                    tooltip="Jump to Reconciliation Drill-down sheet",
+                )
 
     # Grand total row — SUM/MAX/MIN over the year rows only, no dynamic-array functions
     n = len(years) + 2
