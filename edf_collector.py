@@ -4348,7 +4348,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     dfc["month"] = dfc["_dt"].dt.month
 
     if len(dfc) < 2:
-        wb.save(output_path)
         return
 
     amounts = dfc["Amount (£)"].values.astype(float)
@@ -5255,6 +5254,37 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
                 dfc,
                 account=account_label,
             )
+
+    _SEVERITY_LED_ORDER = [
+        "Annual Summary",
+        "EDF Evidence Report",
+        "SAP ↔ EDF Matched Events",
+        "SAP Back-billing Events",
+        "SAP Financial Transactions",
+        "SAP Meter Readings",
+        "SAP Contract History",
+        "Back-billing Analysis",
+        "Rebilling & Corrections",
+        "Meter Readings",
+        "Contract History",
+        "Reconciliation",
+        "Reconciliation Drill-down",
+        "Dispute Flags",
+        "Dispute Timeline",
+        "Period Charges",
+        "Payment Analysis",
+        "Balance Trend",
+        "Year-on-Year",
+        "Key Statistics",
+        "Statistical Analysis",
+        "Forecast & Projection",
+        "Tariff Analysis",
+        "Data Quality Report",
+        "Duplicate Entries",
+        "Filtered (Below Min)",
+        "Parse Errors",
+    ]
+    wb._sheets = [wb[name] for name in _SEVERITY_LED_ORDER if name in wb.sheetnames]
 
     wb.save(output_path)
 
