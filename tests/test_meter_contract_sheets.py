@@ -74,7 +74,7 @@ def _open_ws(title: str = "Meter Readings") -> Worksheet:
 
 
 # ---------------------------------------------------------------------------
-# Meter Readings sheet (8 cols: 6 originals + Source Excerpt + View on ER)
+# Meter Readings sheet (8 cols: 6 originals + Open PDF + View on ER)
 # ---------------------------------------------------------------------------
 
 
@@ -104,7 +104,7 @@ def test_write_meter_readings_sheet_renders_legend_subheader() -> None:
 def test_write_meter_readings_sheet_writes_eight_table_headers_including_excerpt_and_hotlink() -> (
     None
 ):
-    """Spec \u00a75.2 wants Source Excerpt on the four analyser tabs.
+    """Spec \u00a75.2 wants Open PDF on the four analyser tabs.
     Spec \u00a710.2 wants hotlinks from each analyser-tab row back to
     the Evidence Report."""
     ws = _open_ws()
@@ -120,7 +120,7 @@ def test_write_meter_readings_sheet_writes_eight_table_headers_including_excerpt
         "Estimated Source",
         "Invoice #",
         "Notes",
-        "Source Excerpt",
+        "Open PDF",
         "View on Evidence Report",
     ]
     assert headers == expected
@@ -177,7 +177,7 @@ def test_write_meter_readings_sheet_estimated_source_from_details() -> None:
 
 
 def test_write_meter_readings_sheet_source_excerpt_column_populated() -> None:
-    """When ``evidence_df`` is provided, the Source Excerpt column
+    """When ``evidence_df`` is provided, the Open PDF column
     (col 7) carries the truncated source PDF text + regex trace for
     the row's Invoice # so reviewers can diagnose N/A entries."""
     ws = _open_ws()
@@ -227,7 +227,7 @@ def test_write_meter_readings_sheet_empty_evidence_renders_headers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Contract History sheet (7 cols: 5 originals + Source Excerpt + View on ER)
+# Contract History sheet (7 cols: 5 originals + Open PDF + View on ER)
 # ---------------------------------------------------------------------------
 
 
@@ -250,7 +250,7 @@ def test_write_contract_history_sheet_renders_title_and_headers() -> None:
     assert "CONTRACT" in a1.upper()
     assert "ACC1" in a1
     # Headers at row 7 for layout consistency. Spec \u00a75.2 + \u00a710.2
-    # require Source Excerpt + View on Evidence Report columns.
+    # require Open PDF + View on Evidence Report columns.
     headers = [ws.cell(row=7, column=c).value for c in range(1, 8)]
     expected = [
         "Contract From",
@@ -258,7 +258,7 @@ def test_write_contract_history_sheet_renders_title_and_headers() -> None:
         "Tariff",
         "Days",
         "# Invoices",
-        "Source Excerpt",
+        "Open PDF",
         "View on Evidence Report",
     ]
     assert headers == expected
@@ -303,8 +303,8 @@ def test_write_contract_history_sheet_empty_renders_headers() -> None:
     # 7 cols
     headers = [ws.cell(row=7, column=c).value for c in range(1, 8)]
     assert headers[0] == "Contract From"
-    # Source Excerpt + hotlink headers present even when no rows
-    assert "Source Excerpt" in headers
+    # Open PDF + hotlink headers present even when no rows
+    assert "Open PDF" in headers
     assert "View on Evidence Report" in headers
     assert ws.cell(row=8, column=1).value in (None, "")
 

@@ -6578,110 +6578,38 @@ def _assess_reason(
     return head
 
 
-# ---------------------------------------------------------------------------
-# Source Excerpt helper (Stream P3 / Task 6)
-# ---------------------------------------------------------------------------
-# A diagnostic column on the four analyser tabs that joins the per-row
-# ``Source PDF Text`` captured during ``_process_new_invoice`` /
-# ``_process_new_credit`` with the parse trace recorded by the
-# multi-regex fallback chain. The format is:
-#
-#   inv_num via _INV_NUMBER_RE; period_from via _BILLING_PERIOD_RE
-#   FAILED: amount
-#   <page 1 body up to ~400 chars>
-
-
-_SOURCE_EXCERPT_TEXT_CAP = 400
-
-
-def _format_source_excerpt(
-    source_text: object,
-    regex_trace: object,
-    failed_fields: list[str],
-) -> str:
-    """Compose the Source Excerpt cell value.
-
-    - Sends the technical regex trace first (one line).
-    - Then the FAILED: <field> markers when fallbacks also missed.
-    - Then the first ~400 chars of the source PDF text for the auditer.
-    """
-    parts: list[str] = []
-    if isinstance(regex_trace, str) and regex_trace:
-        parts.append(regex_trace)
-    if failed_fields:
-        parts.append("FAILED: " + ", ".join(failed_fields))
-    if isinstance(source_text, str) and source_text:
-        body = source_text[:_SOURCE_EXCERPT_TEXT_CAP]
-        if len(source_text) > _SOURCE_EXCERPT_TEXT_CAP:
-            body += " ..."
-        parts.append(body)
-    elif failed_fields or (isinstance(regex_trace, str) and regex_trace):
-        # Trace present but no source text -- still useful diagnostic.
-        pass
-    else:
-        # Defensive fallback: reached only when the upstream record
-        # builder did NOT capture either ``Source PDF Text`` or
-        # ``_regex_trace`` for the matched row -- which should no
-        # longer occur given the post-fix invariant that every
-        # record builder populates both (see ``_process_new_invoice``,
-        # ``_process_new_credit``, ``process_text``,
-        # ``parse_htm_account_history``,
-        # ``extract_reconciliation_statement_rows``).  Kept as a
-        # placeholder so a regression in any of those builders
-        # produces a visible diagnostic in the reviewer-facing
-        # Source Excerpt cell rather than a literal ``None``.
-        return "Source text unavailable"
-    return "\n".join(parts)
-
-
-def _source_excerpt_for_invoice(
+def _open_pdf_hyperlink_cell(
+    ws: openpyxl.worksheet.worksheet.Worksheet,
+    row: int,
+    col: int,
     evidence_df: pd.DataFrame | None,
     invoice_number: str,
-) -> str | None:
-    """Look up the source-text excerpt for a record by Invoice #.
+) -> None:
+    """Emit a ``→`` hyperlink cell in ``ws`` at (``row``, ``col``) that
+    jumps to the matching invoice's row on the EDF Evidence Report sheet.
 
-    Returns ``None`` when no useful lookup can be performed -- the caller
-    (``write_back_billing_sheet`` etc.) then leaves the Source Excerpt
-    cell empty.  Returns a diagnostic excerpt string otherwise.
-
-    ``"N/A"``/empty Invoice # values short-circuit to ``None``: those
-    rows cannot be uniquely identified by Invoice # alone (every HTM
-    record carries Invoice # = "N/A") so a by-Invoice-# lookup would
-    just return whichever HTM row happened to sort first, which is
-    misleading.  The analyser writers fall back to their
-    ``amt_days:``/``date_units:`` signature lookups via
-    ``evidence_index`` for those rows.
+    ``None``/empty invoice numbers are skipped (no meaningful lookup target).
+    The hyperlink display is a right-arrow glyph; the tooltip carries the
+    invoice number for accessibility.
     """
-    if evidence_df is None or evidence_df.empty or not invoice_number:
-        return None
-    if not isinstance(invoice_number, str):
-        invoice_number = str(invoice_number)
-    if invoice_number.strip() in ("", "N/A", "n/a", "na"):
-        return None
-    if "Invoice #" not in evidence_df.columns:
-        return None
-    matches = evidence_df[evidence_df["Invoice #"].astype(str) == invoice_number]
-    if matches.empty:
-        return None
-    row = matches.iloc[0]
-    trace = row.get("_regex_trace", "")
-    text = row.get("Source PDF Text", "")
-    failed: list[str] = []
-    # If any key fields are N/A, treat them as failed-extraction fields.
-    for field_name, _regex_label in (
-        ("Invoice #", "inv_num"),
-        ("Period From", "period_from"),
-        ("Period To", "period_to"),
-        ("Amount (£)", "amount"),
-    ):
-        if field_name in matches.columns:
-            v = row.get(field_name)
-            if v is None or (isinstance(v, str) and (v == "N/A" or v == "")):
-                failed.append(_regex_label)
-    return _format_source_excerpt(text, trace, failed)
+    if not invoice_number:
+        return
+    target_row = None
+    if evidence_df is not None and not evidence_df.empty and "Invoice #" in evidence_df.columns:
+        matches = evidence_df[evidence_df["Invoice #"].astype(str) == str(invoice_number)]
+        if not matches.empty:
+            target_row = matches.iloc[0].name + 2  # +2 for header rows (row 1 = col headers)
+    if target_row is not None:
+        cell = ws.cell(row=row, column=col, value="\u2192")
+        cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+            ref=cell.coordinate,
+            location=f"'EDF Evidence Report'!A{target_row}",
+            display="\u2192",
+            tooltip=f"Jump to EDF Evidence Report!A{target_row}",
+        )
+        cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
 
 
-# ---------------------------------------------------------------------------
 # Evidence Report row index (Stream P4 / Task 7)
 # ---------------------------------------------------------------------------
 # A ``dict[str, int]`` mapping per-row signatures to the 1-indexed Excel row
@@ -6865,7 +6793,7 @@ def write_back_billing_sheet(
       row 4: empty
       row 5: short instruction
       row 6: empty
-      row 7: column headers (11 cols incl. Source Excerpt)
+      row 7: column headers (11 cols incl. Open PDF)
       rows 8+: data rows (sorted by Bill Date as produced by
               :func:`detect_back_billing`)
       trailing: 'TOTAL RETROSPECTIVE CHARGES IN BACK-BILLED INVOICES'
@@ -6876,7 +6804,7 @@ def write_back_billing_sheet(
     appears in ``overlapping_invoices`` (a set populated by the
     rebilling detector; defaults to empty).
 
-    The Source Excerpt column (col 11) carries the regex-trace plus
+    Open PDF column (col 11) carries hyperlink
     the first ~400 chars of the source PDF text so a reviewer can
     see why N/A entries were N/A and which regex produced which value.
     """
@@ -6945,7 +6873,7 @@ def write_back_billing_sheet(
         "Excess Days",
         "Cancel/Rebill Disclosed",
         "Reason Assessment",
-        "Source Excerpt",
+        "Open PDF",
         "View on Evidence Report",
     ]
     for col, h in enumerate(headers, 1):
@@ -6986,15 +6914,7 @@ def write_back_billing_sheet(
             ws.cell(row=r, column=8).font = Font(name="Calibri", size=10, bold=True, color="C00000")
         _text(ws, r, 9, disclosed, fill_hex=bg)
         _text(ws, r, 10, row.get("Reason Assessment", ""), wrap=True, fill_hex=bg)
-        # Source Excerpt (col 11): look up the captured source-text + trace
-        # from the evidence dataframe so a reviewer can see why N/A entries
-        # are N/A on this row.
-        excerpt = ""
-        if evidence_df is not None:
-            looked = _source_excerpt_for_invoice(evidence_df, inv)
-            if looked is not None:
-                excerpt = looked
-        _text(ws, r, 11, excerpt, wrap=True, fill_hex=bg)
+        _open_pdf_hyperlink_cell(ws, r, 11, evidence_df, inv)
         # View on Evidence Report (col 12): bidirectional hotlink back to the
         # row on the EDF Evidence Report sheet. Match by Invoice # first,
         # falling back to the amt|days signature.
@@ -7060,7 +6980,7 @@ def write_back_billing_sheet(
         "H": 12,
         "I": 22,
         "J": 60,
-        "K": 60,  # Source Excerpt
+        "K": 60,  # Open PDF
         "L": 22,  # View on Evidence Report
     }
     for col_letter, width in widths.items():
@@ -7463,7 +7383,7 @@ def write_rebilling_sheet(
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=9)
     ws.row_dimensions[2].height = 45
 
-    # Row 7: table headers (9 cols incl. Source Excerpt + View on Evidence Report).
+    # Row 7: table headers (9 cols incl. Open PDF + View on Evidence Report).
     headers = [
         "Killer Invoice",
         "Killed Invoice",
@@ -7472,7 +7392,7 @@ def write_rebilling_sheet(
         "Period Overlap (days)",
         "Jump-back (days)",
         "Trigger Reason",
-        "Source Excerpt",
+        "Open PDF",
         "View on Evidence Report",
     ]
     for col, h in enumerate(headers, 1):
@@ -7514,23 +7434,13 @@ def write_rebilling_sheet(
         )
         if bool(row.get("Cancel/Rebill Admitted (Killer)", False)):
             ws.cell(row=r, column=7).font = Font(name="Calibri", size=10, bold=True, color="C00000")
-        # Source Excerpt (col 8): emit per-row trace + source text. Prefer
-        # the killer invoice's evidence (that's the document that revealed
-        # the rebilling), fall back to the killed invoice.
-        excerpt = ""
-        if evidence_df is not None:
-            looked = _source_excerpt_for_invoice(
-                evidence_df, killer
-            ) or _source_excerpt_for_invoice(evidence_df, killed)
-            if looked is not None:
-                excerpt = looked
-        _text(ws, r, 8, excerpt, wrap=True, fill_hex=bg)
+        _open_pdf_hyperlink_cell(ws, r, 8, evidence_df, killer)
         # View on Evidence Report (col 9): hotlink on the killer invoice row.
         target_row = None
         if evidence_index is not None:
             target_row = evidence_index.get(f"inv:{killer}") or evidence_index.get(f"inv:{killed}")
         if target_row is not None:
-            cell = ws.cell(row=r, column=9, value="→")
+            cell = ws.cell(row=r, column=9, value="\u2192")
             cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
                 ref=cell.coordinate,
                 location=f"'EDF Evidence Report'!A{target_row}",
@@ -7552,7 +7462,7 @@ def write_rebilling_sheet(
         "E": 18,
         "F": 16,
         "G": 50,
-        "H": 60,  # Source Excerpt
+        "H": 60,  # Open PDF
         "I": 22,  # View on Evidence Report
     }
     for col_letter, width in widths.items():
@@ -7621,9 +7531,9 @@ def write_meter_readings_sheet(
     Details verbatim (e.g. 'Automatic estimate' or 'SAP estimate')
     for Estimated rows, else blank.
 
-    Spec §5.2 adds a "Source Excerpt" column (col 7): the truncated
+    Open PDF column (col 7): hyperlink
     source-PDF-text + regex trace for that invoice, fetched from
-    ``evidence_df`` via :func:`_source_excerpt_for_invoice` when
+    ``evidence_df`` via :func:`_open_pdf_hyperlink_cell` for hyperlink
     available.
 
     Spec §10.2 adds a "View on Evidence Report" column (col 8): a
@@ -7672,7 +7582,7 @@ def write_meter_readings_sheet(
         "Estimated Source",
         "Invoice #",
         "Notes",
-        "Source Excerpt",
+        "Open PDF",
         "View on Evidence Report",
     ]
     for col, h in enumerate(headers, 1):
@@ -7718,15 +7628,7 @@ def write_meter_readings_sheet(
             type_cell.font = Font(name="Calibri", size=10, bold=True, color="003F87")
         elif type_code == "E":
             type_cell.font = Font(name="Calibri", size=10, color="C08000")
-        # Source Excerpt (col 7): truncated source-PDF text + regex
-        # trace so a reviewer can see why N/A entries are N/A on
-        # this row.
-        excerpt = ""
-        if evidence_df is not None:
-            looked = _source_excerpt_for_invoice(evidence_df, inv)
-            if looked is not None:
-                excerpt = looked
-        _text(ws, r, 7, excerpt, wrap=True, fill_hex=bg)
+        _open_pdf_hyperlink_cell(ws, r, 7, evidence_df, inv)
         # View on Evidence Report (col 8): hyperlinked right-arrow
         # that jumps to the matched invoice's row on the Evidence
         # Report sheet.
@@ -7764,7 +7666,7 @@ def write_meter_readings_sheet(
         "D": 26,
         "E": 20,
         "F": 50,
-        "G": 60,  # Source Excerpt
+        "G": 60,  # Open PDF
         "H": 22,  # View on Evidence Report
     }
     for col_letter, width in widths.items():
@@ -7831,7 +7733,7 @@ def write_contract_history_sheet(
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=7)
     ws.row_dimensions[2].height = 30
 
-    # Row 7: table headers (5 data + Source Excerpt + View on ER = 7
+    # Row 7: table headers (5 data + Open PDF + View on ER = 7
     # cols per spec \u00a74.4 + \u00a75.2 + \u00a710.2).
     headers = [
         "Contract From",
@@ -7839,7 +7741,7 @@ def write_contract_history_sheet(
         "Tariff",
         "Days",
         "# Invoices",
-        "Source Excerpt",
+        "Open PDF",
         "View on Evidence Report",
     ]
     for col, h in enumerate(headers, 1):
@@ -7872,12 +7774,7 @@ def write_contract_history_sheet(
             )
             else ""
         )
-        excerpt = ""
-        if evidence_df is not None and matched_inv:
-            looked = _source_excerpt_for_invoice(evidence_df, matched_inv)
-            if looked is not None:
-                excerpt = looked
-        _text(ws, r, 6, excerpt, wrap=True, fill_hex=bg)
+        _open_pdf_hyperlink_cell(ws, r, 6, evidence_df, matched_inv)
         target_row = None
         if evidence_index is not None and matched_inv:
             target_row = evidence_index.get(f"inv:{matched_inv}")
@@ -7902,7 +7799,7 @@ def write_contract_history_sheet(
         "C": 24,
         "D": 10,
         "E": 12,
-        "F": 60,  # Source Excerpt
+        "F": 60,  # Open PDF
         "G": 22,  # View on Evidence Report
     }
     for col_letter, width in widths.items():
