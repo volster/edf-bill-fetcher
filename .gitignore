@@ -33,6 +33,9 @@ output/
 .claude/
 .hermes/
 .coverage*
+.omo
+.omo/
+omo/
 
 # OS
 .DS_Store

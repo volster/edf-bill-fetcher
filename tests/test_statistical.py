@@ -95,7 +95,7 @@ class TestStatisticalFunctions:
     def test_linear_forecast_basic(self, sample_series):
         result = _linear_forecast(sample_series, steps=3)
         assert len(result) == 3
-        assert all(isinstance(x, (int, float)) for x in result)
+        assert all(isinstance(x, int | float) for x in result)
 
     def test_linear_forecast_more_steps(self, sample_series):
         result = _linear_forecast(sample_series, steps=6)

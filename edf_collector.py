@@ -539,7 +539,7 @@ def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp |
     interpretation: anything that did not parse as day-first-month
     becomes ``NaT``.
     """
-    if isinstance(value, (pd.Series, pd.Index)):
+    if isinstance(value, pd.Series | pd.Index):
         try:
             # Suppress the UserWarning pandas emits on mixed-format
             # Series ("Could not infer format, ..."). The behaviour is
@@ -1909,7 +1909,7 @@ def _pst_attachment_filename(att: object) -> str | None:
                 raw_data = entry.get_data()  # type: ignore[attr-defined]
             except Exception:
                 continue
-            if isinstance(raw_data, (bytes, bytearray)) and raw_data:
+            if isinstance(raw_data, bytes | bytearray) and raw_data:
                 try:
                     decoded = bytes(raw_data).decode("utf-16-le", errors="replace")
                 except Exception:
@@ -3546,11 +3546,11 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                         safe_val = "'" + safe_val
                     c.value = safe_val
                     c.data_type = "s"
-                if c_idx == COL_AMOUNT and isinstance(val, (int, float)):
+                if c_idx == COL_AMOUNT and isinstance(val, int | float):
                     c.number_format = "£#,##0.00"
-                if c_idx == COL_PERIOD_CHG and isinstance(val, (int, float)):
+                if c_idx == COL_PERIOD_CHG and isinstance(val, int | float):
                     c.number_format = "£#,##0.00"
-                if c_idx == COL_UNIT_RATE and isinstance(val, (int, float)):
+                if c_idx == COL_UNIT_RATE and isinstance(val, int | float):
                     c.number_format = "0.00"
                 if c_idx in (3, 4, 5) and hasattr(excel_val, "year"):
                     c.number_format = "dd/mm/yyyy"
@@ -5544,7 +5544,7 @@ def _data_quality_report(df):
     # unreachable for an already-typed numeric — pinned here so a
     # future careless refactor cannot silently change this branch
     # back into a no-op-or-true tautology that overcounts.
-    ur_computable = df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, (int, float))).sum()
+    ur_computable = df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, int | float)).sum()
 
     # Duplicates (same date + amount)
     dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
@@ -6932,13 +6932,13 @@ def write_back_billing_sheet(
         net = float(row.get("Net Charge (£)", 0.0) or 0.0)
         total += net
         bill_date_val = row.get("Bill Date", "")
-        if isinstance(bill_date_val, (pd.Timestamp, datetime)):
+        if isinstance(bill_date_val, pd.Timestamp | datetime):
             bill_date_val = bill_date_val.strftime("%d %b %Y")
         pf = row.get("Period From")
-        if isinstance(pf, (pd.Timestamp, datetime)):
+        if isinstance(pf, pd.Timestamp | datetime):
             pf = pf.strftime("%d %b %Y")
         pt = row.get("Period To")
-        if isinstance(pt, (pd.Timestamp, datetime)):
+        if isinstance(pt, pd.Timestamp | datetime):
             pt = pt.strftime("%d %b %Y")
         _text(ws, r, 1, inv, fill_hex=bg)
         _text(ws, r, 2, bill_date_val, fill_hex=bg)
@@ -7671,7 +7671,7 @@ def write_meter_readings_sheet(
             "Meter rollover candidate -- see rollover table." if inv in rollover_invoices else ""
         )
         _text(ws, r, 1, row.get("Date", ""), fill_hex=bg)
-        if isinstance(units, (int, float)):
+        if isinstance(units, int | float):
             _num(ws, r, 2, units, fmt="#,##0.0", fill_hex=bg)
         else:
             _text(ws, r, 2, str(units), fill_hex=bg)
@@ -8566,7 +8566,7 @@ def _recon_parse_iso_date(s: str) -> pd.Timestamp | pd._libs.tslibs.nattype.NaTT
 def _recon_amount_to_float(v: object) -> float:
     if v is None:
         return 0.0
-    if isinstance(v, (int, float)):
+    if isinstance(v, int | float):
         return float(v)
     try:
         return float(str(v).replace(",", "").strip().lstrip("£"))

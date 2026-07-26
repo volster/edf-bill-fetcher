@@ -185,7 +185,7 @@ class TestWriteForecastSheet:
         # column header.
         hist_mask = df["Date"].astype(str).str.match(r"^\d{2}/\d{2}/\d{4}$") & df[
             "Actual (£)"
-        ].apply(lambda v: isinstance(v, (int, float)))
+        ].apply(lambda v: isinstance(v, int | float))
         hist_rows = df[hist_mask]
         assert len(hist_rows) == len(records), (
             f"Historical block holds {len(hist_rows)} rows but the "
@@ -235,8 +235,8 @@ class TestWriteForecastSheet:
         # only on actual data rows).
         hist_mask = (
             (df["Date"].astype(str).str.match(r"^\d{2}/\d{2}/\d{4}$"))
-            & df["Actual (£)"].apply(lambda v: isinstance(v, (int, float)))
-            & df["Forecast Δ (Actual − Linear)"].apply(lambda v: isinstance(v, (int, float)))
+            & df["Actual (£)"].apply(lambda v: isinstance(v, int | float))
+            & df["Forecast Δ (Actual − Linear)"].apply(lambda v: isinstance(v, int | float))
         )
         hist_rows = df[hist_mask]
         assert len(hist_rows) == len(_synthetic_records()), (
@@ -250,7 +250,7 @@ class TestWriteForecastSheet:
             # the old ``"—"`` placeholder.  Splitting the two
             # assertions (type vs. non-NaN) keeps both diagnostic
             # messages readable without losing precision.
-            assert isinstance(v, (int, float)), (
+            assert isinstance(v, int | float), (
                 f"Forecast Δ for {row['Date']!r} is {v!r} (type "
                 f"{type(v).__name__}); Phase 2 back-paint did not "
                 f"run — the cell still carries the old '—' literal."

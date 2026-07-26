@@ -139,7 +139,6 @@ class TestCompletenessScore:
         row["Logic Used"] = "Period"
         # Logic Used has a space in the column name; pandas
         # requires bracket access for that.
-        row["Logic Used":] = "Period"
         row["Anomaly Flag"] = ""
         row["Duplicate Of"] = ""
         assert _completeness_score(row) == 0
