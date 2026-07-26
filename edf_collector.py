@@ -18,6 +18,7 @@ import tempfile
 import threading
 import traceback
 import warnings
+import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -3174,6 +3175,74 @@ def _hcell(ws, row, col, value, bg="FE5716"):
     c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     c.border = CELL_BORDER
     return c
+
+
+_TEXT_SUPPRESSION_QUEUE: dict[str, list[tuple[str, int, int]]] = {}
+
+
+def _set_column_widths_from_spec(
+    ws: openpyxl.worksheet.worksheet.Worksheet, widths: dict[str, float]
+) -> None:
+    """Apply column-width pins from a ``{col_letter: width}`` dict."""
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = width
+
+
+def _apply_currency_format(cell: openpyxl.cell.Cell) -> None:
+    """Coerce cell value to float and apply a currency number format."""
+    if isinstance(cell.value, str):
+        cell.value = float(cell.value)
+    cell.number_format = "\u00a3#,##0.00"
+
+
+def _apply_int_format(cell: openpyxl.cell.Cell) -> None:
+    """Coerce cell value to int and apply an integer number format."""
+    if isinstance(cell.value, str):
+        cell.value = int(float(cell.value))
+    cell.number_format = "#,##0"
+
+
+def _suppress_text_warning(
+    ws: openpyxl.worksheet.worksheet.Worksheet,
+    col_letter: str,
+    start_row: int,
+    end_row: int,
+) -> None:
+    """Queue a text-ID suppression for column ``col_letter`` rows
+    ``start_row`` through ``end_row`` to be injected after save."""
+    key = ws.title
+    _TEXT_SUPPRESSION_QUEUE.setdefault(key, []).append(
+        (col_letter, start_row, end_row)
+    )
+
+
+def _suppress_text_warnings_post_save(output_path: str) -> None:
+    """Post-save zip injection for ``<ignoredErrors>`` blocks.
+    """
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=".xlsx", delete=False, dir=os.path.dirname(output_path) or "."
+    )
+    tmp.close()
+    os.replace(output_path, tmp.name)
+
+    with zipfile.ZipFile(tmp.name, "r") as zin:
+        with zipfile.ZipFile(output_path, "w") as zout:
+            for item in zin.namelist():
+                data = zin.read(item)
+                if item.startswith("xl/worksheets/sheet") and item.endswith(".xml"):
+                    xml = data.decode("utf-8", errors="replace")
+                    for _sheet_title, suppressions in _TEXT_SUPPRESSION_QUEUE.items():
+                        for col_letter, start_row, end_row in suppressions:
+                            sqref = f"{col_letter}{start_row}:{col_letter}{end_row}"
+                            block = (
+                                f"<ignoredErrors><ignoredError sqref=\"{sqref}\" "
+                                f'numberStoredAsText="1"/></ignoredErrors>'
+                            )
+                            xml = xml.replace("</worksheet>", f"{block}</worksheet>")
+                    data = xml.encode("utf-8")
+                zout.writestr(item, data)
+
+    os.unlink(tmp.name)
 
 
 def _money(ws, r, c, val, bold=False, fill_hex=None):
