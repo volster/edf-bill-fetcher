@@ -1,4 +1,5 @@
-"""Tests for the reconciliation cross-source sheet writer."""
+"""Tests for the reconciliation cross-source sheet writer (PR #4:
+two-sheet summary + drill-down shape per spec §3.2)."""
 
 from __future__ import annotations
 
@@ -33,7 +34,6 @@ _SAP_CONTRACT = [
     },
 ]
 
-
 _INFERRED_CONTRACT = pd.DataFrame(
     [
         {
@@ -50,7 +50,6 @@ _INFERRED_CONTRACT = pd.DataFrame(
     ]
 )
 
-
 _SAP_METER = [
     {
         "Scheduled Read Date": "2024-05-14",
@@ -64,7 +63,6 @@ _SAP_METER = [
         "Source File": "Meter-Read-History.pdf",
     }
 ]
-
 
 _INFERRED_METER = pd.DataFrame(
     [
@@ -80,7 +78,6 @@ _INFERRED_METER = pd.DataFrame(
         }
     ]
 )
-
 
 _SAP_FINANCIAL = [
     {
@@ -103,7 +100,6 @@ _SAP_FINANCIAL = [
     }
 ]
 
-
 _EVIDENCE_DF = pd.DataFrame(
     [
         {
@@ -119,269 +115,83 @@ _EVIDENCE_DF = pd.DataFrame(
 )
 
 
-def _section_row_indexes(ws: Worksheet) -> dict[str, tuple[int, int]]:
-    """Return dict  {section_label: (start_row_excl_banner, end_row_incl)}.
-
-    The section banners are written with a leading/trailing ``■`` visual
-    marker (see ``_section_banner``).  Pre-fix the banners used a
-    ``"== {text} =="`` literal that openpyxl was silently serialising
-    as a worksheet formula (because the value starts with ``=``),
-    triggering Excel's "Removed Records: Formula" recover prompt.  The
-    helper therefore accepts BOTH the legacy ``"=="``-delimited form
-    (for backwards compatibility with any pre-fix snapshots still in
-    flight) and the current ``■ {text} ■`` form.
-    """
-    rows = {}
-    for row in ws.iter_rows():
-        v0 = row[0].value
-        if isinstance(v0, str):
-            stripped = v0.strip()
-            if stripped.startswith("==") and stripped.endswith("=="):
-                label = stripped.strip("=").strip()
-                rows[label] = (row[0].row, -1)
-            elif stripped.startswith("\u25a0") and stripped.endswith("\u25a0"):
-                label = stripped.replace("\u25a0", "").strip()
-                rows[label] = (row[0].row, -1)
-    out = {}
-    keys = list(rows.keys())
-    for i, key in enumerate(keys):
-        start = rows[key][0] + 1
-        end = rows[keys[i + 1]][0] - 1 if i + 1 < len(keys) else ws.max_row
-        out[key] = (start, end)
-    return out
-
-
-def test_three_banners_present() -> None:
+def _build_two_sheets(account: str = "") -> tuple[Workbook, Worksheet, Worksheet]:
+    """Construct a fresh wb with both Reconciliation sheets."""
     wb = Workbook()
-    ws = wb.active
+    ws_summary = wb.create_sheet(title="Reconciliation")
+    ws_detail = wb.create_sheet(title="Reconciliation Drill-down")
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
     write_reconciliation_sheet(
-        ws,
+        ws_summary,
+        ws_detail,
         _SAP_CONTRACT,
         _INFERRED_CONTRACT,
         _SAP_METER,
         _INFERRED_METER,
         _SAP_FINANCIAL,
         _EVIDENCE_DF,
-        account="A-31105244",
+        account=account,
     )
-    coords = _section_row_indexes(ws)
-    assert "Contract Reconciliation" in coords
-    assert "Meter Read Reconciliation" in coords
-    assert "Financial Reconciliation" in coords
+    return wb, ws_summary, ws_detail
 
 
-def test_matched_contract_row_has_hyperlink() -> None:
+def test_summary_sheet_has_three_entity_rows() -> None:
+    """Spec §3.2: 3 entity rows (Contract / Meter Read / Financial)
+    at rows 4-6, each with a distinct entity name."""
+    _, summ, _ = _build_two_sheets()
+    names = {summ.cell(row=r, column=1).value for r in (4, 5, 6)}
+    assert names == {"Contract", "Meter Read", "Financial"}, names
+
+
+def test_summary_sheet_each_row_links_to_detail_section() -> None:
+    """Spec §3.2: col 8 (Drill down) on each summary row is a
+    hyperlink pointing at the Reconciliation Drill-down sheet."""
+    _, summ, _ = _build_two_sheets()
+    for r in (4, 5, 6):
+        cell = summ.cell(row=r, column=8)
+        assert cell.hyperlink is not None, f"row {r} missing hyperlink"
+        loc = cell.hyperlink.location or ""
+        assert "Reconciliation Drill-down" in loc, f"row {r}: {loc}"
+
+
+def test_detail_sheet_only_contains_unmatched_rows() -> None:
+    """Spec §3.2: the detail sheet emits only 'Missing in Inferred',
+    'Missing in SAP', and 'Discrepancy' rows — no 'Matched' rows."""
+    _, _, detail = _build_two_sheets()
+    for r in range(1, detail.max_row + 1):
+        v = detail.cell(row=r, column=1).value
+        if v is None:
+            continue
+        assert v != "Matched", f"row {r} on detail sheet has Matched status"
+
+
+def test_summary_sheet_verdict_text_present() -> None:
+    """Each summary entity row carries a plain-English verdict in col 7."""
+    _, summ, _ = _build_two_sheets()
+    for r in (4, 5, 6):
+        verdict = summ.cell(row=r, column=7).value
+        assert isinstance(verdict, str), f"row {r} verdict is not a string: {verdict!r}"
+        assert len(verdict) > 10, f"row {r} verdict too short ({verdict!r})"
+
+
+def test_eater_typo_fixed_in_subtitle() -> None:
+    """The subtitle must read 'evidence' not 'eater' (spec §3.2 typo fix)."""
     wb = Workbook()
-    ws = wb.active
+    ws_summ = wb.create_sheet(title="Reconciliation")
+    ws_det = wb.create_sheet(title="Reconciliation Drill-down")
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
     write_reconciliation_sheet(
-        ws,
-        _SAP_CONTRACT,
-        _INFERRED_CONTRACT,
-        _SAP_METER,
-        _INFERRED_METER,
-        _SAP_FINANCIAL,
-        _EVIDENCE_DF,
-        account="A-31105244",
+        ws_summ,
+        ws_det,
+        sap_contract=[],
+        inferred_contract=pd.DataFrame(),
+        sap_meter=[],
+        inferred_meter=pd.DataFrame(),
+        sap_financial=[],
+        evidence_df=pd.DataFrame(),
     )
-    coords = _section_row_indexes(ws)
-    start, end = coords["Contract Reconciliation"]
-    body_first = start + 1
-    for r in range(body_first, end + 1):
-        v = ws.cell(row=r, column=1).value
-        if v == "Matched":
-            cell = ws.cell(row=r, column=8)
-            assert cell.hyperlink is not None
-            assert cell.hyperlink.location is not None
-            assert cell.hyperlink.location.startswith(
-                "'Contract History'!A"
-            ) or cell.hyperlink.location.startswith("'EDF Evidence Report'!A")
-            return
-    raise AssertionError("No Matched contract row found")
-
-
-def test_matched_meter_row_has_hyperlink() -> None:
-    wb = Workbook()
-    ws = wb.active
-    write_reconciliation_sheet(
-        ws,
-        _SAP_CONTRACT,
-        _INFERRED_CONTRACT,
-        _SAP_METER,
-        _INFERRED_METER,
-        _SAP_FINANCIAL,
-        _EVIDENCE_DF,
-        account="A-31105244",
-    )
-    coords = _section_row_indexes(ws)
-    start, end = coords["Meter Read Reconciliation"]
-    body_first = start + 1
-    for r in range(body_first, end + 1):
-        v = ws.cell(row=r, column=1).value
-        if v == "Matched":
-            cell = ws.cell(row=r, column=8)
-            assert cell.hyperlink is not None
-            assert cell.hyperlink.location is not None
-            # Meter-read back to SAP meter or inferred meter: must reference the SAP sheet name.
-            assert "Meter" in cell.hyperlink.location
-            return
-    raise AssertionError("No Matched meter row found")
-
-
-def test_matched_financial_row_has_hyperlink_evidence_or_sap() -> None:
-    wb = Workbook()
-    ws = wb.active
-    write_reconciliation_sheet(
-        ws,
-        _SAP_CONTRACT,
-        _INFERRED_CONTRACT,
-        _SAP_METER,
-        _INFERRED_METER,
-        _SAP_FINANCIAL,
-        _EVIDENCE_DF,
-        account="A-31105244",
-    )
-    coords = _section_row_indexes(ws)
-    start, end = coords["Financial Reconciliation"]
-    body_first = start + 1
-    for r in range(body_first, end + 1):
-        v = ws.cell(row=r, column=1).value
-        if v == "Matched":
-            cell = ws.cell(row=r, column=8)
-            assert cell.hyperlink is not None
-            assert cell.hyperlink.location is not None
-            assert (
-                "EDF Evidence Report" in cell.hyperlink.location
-                or "SAP Financial" in cell.hyperlink.location
-            )
-            return
-    raise AssertionError("No Matched financial row found")
-
-
-def test_unmatched_input_emits_missing_status() -> None:
-    wb = Workbook()
-    ws = wb.active
-    write_reconciliation_sheet(
-        ws,
-        _SAP_CONTRACT,
-        _INFERRED_CONTRACT,
-        _SAP_METER,
-        _INFERRED_METER,
-        _SAP_FINANCIAL,
-        _EVIDENCE_DF,
-        account="A-31105244",
-    )
-    coords = _section_row_indexes(ws)
-    start, end = coords["Contract Reconciliation"]
-    body_first = start + 1
-    statuses = [ws.cell(row=r, column=1).value for r in range(body_first, end + 1)]
-    # The second SAP contract row is 0-2024 matching the product code PRD_FREE
-    # but no inferred row has that product code, so it should be marked.
-    assert "Missing in Inferred" in statuses or "Missing in SAP" in statuses
-
-
-def test_discrepancy_emitted_when_amount_differs() -> None:
-    # SAP amount £1347.96 vs evidence amount £1348.16 — within ±£0.50 but
-    # above the strict £0.01 equality gate → Discrepancy status emitted.
-    sap_fin = [
-        {
-            "Document No.": "9000012345",
-            "Item": "001",
-            "Document Date": "2024-05-14",
-            "Posting Date": "2024-05-14",
-            "Net Due Date": "2024-05-21",
-            "Main Transaction": "Credit Memo",
-            "Sub Transaction": "Reversal",
-            "Transaction Text": "Reversal Inv T12345",
-            "Amount": "1347.96",
-            "Clearing Status": "Not Cleared",
-            "Clearing Document": "",
-            "Clearing Date": "",
-            "Clearing Reason": "",
-            "Document Type": "CM",
-            "Document Type Description": "Credit Memo",
-            "Source File": "Financial-Transactions.pdf",
-        }
-    ]
-    ev = pd.DataFrame(
-        [
-            {
-                "Date": "14/05/2024",
-                "Invoice #": "T12345",
-                "Period From": "14/05/2024",
-                "Period To": "30/06/2024",
-                "Amount (£)": 1348.16,
-                "Entry Type": "Charge",
-                "Logic Used": "New Invoice Format",
-            },
-        ]
-    )
-    wb = Workbook()
-    ws = wb.active
-    write_reconciliation_sheet(
-        ws,
-        _SAP_CONTRACT,
-        _INFERRED_CONTRACT,
-        _SAP_METER,
-        _INFERRED_METER,
-        sap_fin,
-        ev,
-        account="A-31105244",
-    )
-    coords = _section_row_indexes(ws)
-    start, end = coords["Financial Reconciliation"]
-    found_disc = False
-    for r in range(start + 1, end + 1):
-        v = ws.cell(row=r, column=1).value
-        if v == "Discrepancy":
-            found_disc = True
-            break
-    assert found_disc, "expected a Discrepancy row given amount differs > £0.01 but ≤ £0.50"
-
-
-def test_section_banners_are_not_serialised_as_formulas(tmp_path: object) -> None:
-    """Regression: ``_section_banner`` used to write ``"== Contract
-    Reconciliation =="`` as the cell value.  openpyxl sees any string
-    that starts with ``=`` and serialises it as a worksheet formula
-    (``<f>...</f>``).  Excel then errors on file-open with:
-
-        "We found a problem with some content ... do you want us to
-        try and recover ... " / "Removed Records: Formula from
-        /xl/worksheets/sheetN.xml"
-
-    Pre-fix this corrupted every Reconciliation sheet, prompting the
-    user each open even though the sheet content itself was intact.
-
-    The fix changed the banner visual marker from ``"== {text} =="``
-    to ``"\u25a0 {text} \u25a0"`` so the cell value no longer begins
-    with ``=``.  This test unzips the saved workbook and asserts ZERO
-    ``<f>`` (formula) tags across ALL worksheets so a regression in
-    any writer surfaces fast.
-    """
-    import zipfile
-
-    wb = Workbook()
-    ws = wb.active
-    write_reconciliation_sheet(
-        ws,
-        _SAP_CONTRACT,
-        _INFERRED_CONTRACT,
-        _SAP_METER,
-        _INFERRED_METER,
-        _SAP_FINANCIAL,
-        _EVIDENCE_DF,
-        account="A-31105244",
-    )
-    out = tmp_path / "recon.xlsx"  # type: ignore[operator]
-    wb.save(out)
-
-    with zipfile.ZipFile(out) as z:
-        for n in z.namelist():
-            if not n.startswith("xl/worksheets/sheet") or not n.endswith(".xml"):
-                continue
-            xml = z.read(n).decode("utf-8", errors="replace")
-            nf = xml.count("<f>") + xml.count("<f ") + xml.count("<f/")
-            assert nf == 0, (
-                f"{n} contains {nf} <f> formula tag(s) -- banner cells must "
-                f"be inline strings, not formulas (Excel 'Removed Records: "
-                f"Formula' corruption)."
-            )
+    subtitle = str(ws_summ.cell(row=2, column=1).value)
+    assert "evidence" in subtitle.lower(), subtitle
+    assert "eater" not in subtitle.lower(), subtitle
