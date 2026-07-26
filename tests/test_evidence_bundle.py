@@ -189,3 +189,67 @@ def test_build_bundle_index_themed_sections(tmp_path: Path) -> None:
     assert "Invoice" in text or "D —" in text
     # Meter-Read-History filename fingerprinted into E - Meter Readings.
     assert "Meter" in text or "E —" in text
+
+
+# End-to-end: engine.source_paths → save_evidence_files (spec §3.9, issue 8b).
+# We append an import-free function-only block here; all module-imports live
+# at the top of the file.
+
+_PDF_B64 = (
+    b"JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgKG9wZW5zb3VyY2Up"
+    b"CjEgMCBvYmoKPDwKL0YxIDIgMCBSCj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9CYXNlRm9udCAvSGVsdmV0aWNh"
+    b"IC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nIC9OYW1lIC9GMSAvU3VidHlwZSAvVHlwZTEgL1R5cGUg"
+    b"L0ZvbnQKPj4KZW5kb2JqCjMgMCBvYmoKPDwKL0NvbnRlbnRzIDcgMCBSIC9NZWRpYUJveCBbIDAgMCA1"
+    b"OTUuMjc1NiA4NDEuODg5OCBdIC9QYXJlbnQgNiAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAv"
+    b"UHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAg"
+    b"IC9UcmFucyA8PAo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKNCAwIG9iago8PAovUGFnZU1vZGUg"
+    b"L1VzZU5vbmUgL1BhZ2VzIDYgMCBSIC9UeXBlIC9DYXRhbG9nCj4+CmVuZG9iago1IDAgb2JqCjw8Ci9B"
+    b"dXRob3IgKGFub255bW91cykgL0NyZWF0aW9uRGF0ZSAoRDoyMDI2MDcyNTEzMTIyNSswMScwMCcpIC9D"
+    b"cmVhdG9yIChhbm9ueW1vdXMpIC9LZXl3b3JkcyAoKSAvTW9kRGF0ZSAoRDoyMDI2MDcyNTEzMTIyNSsw"
+    b"MScwMCcpIC9Qcm9kdWNlciAoUmVwb3J0TGFiIFBERiBMaWJyYXJ5IC0gXChvcGVuc291cmNlXCkpIAog"
+    b"IC9TdWJqZWN0ICh1bnNwZWNpZmllZCkgL1RpdGxlICh1bnRpdGxlZCkgL1RyYXBwZWQgL0ZhbHNlCj4+"
+    b"CmVuZG9iago2IDAgb2JqCjw8Ci9Db3VudCAxIC9LaWRzIFsgMyAwIFIgXSAvVHlwZSAvUGFnZXMKPj4K"
+    b"ZW5kb2JqCjcgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9M"
+    b"ZW5ndGggMTQ3Cj4+CnN0cmVhbQpHYXBARVltUz8lJ0xoYkZgPlIybG8wVC5fQlE4IlRuNCcqPTlx"
+    b"W1o0UCFuZzIpYXVDUiUlImpIOVRBczAvVD1gY11jXCpgODosMSM0Jy06YS9xNmxbVHJaXnRoOUNXYiku"
+    b"biZfQ0hNSWwuSVo/ZTBzUlQ4XFheXzVrc21yQzdyYyojNG8uSlVoYjBDSS5oM10pfj5lbmRzdHJlYW0K"
+    b"ZW5kb2JqCnhyZWYKMCA4CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDA2MSAwMDAwMCBuIAowMDAw"
+    b"MDAwMDkyIDAwMDAwIG4gCjAwMDAwMDAxOTkgMDAwMDAgbiAKMDAwMDAwMDQwMiAwMDAwMCBuIAowMDAw"
+    b"MDAwMDQ3MCAwMDAwMCBuIAowMDAwMDAwMDczMSAwMDAwMCBuIAowMDAwMDAwMDc5MCAwMDAwMCBuIAp0"
+    b"cmFpbGVyCjw8Ci9JRCAKWzw2YTM1NTI2MjYxZTZlODlmN2UyZGI0ZmVlZjY3OWYwMj48NmEzNTUyNjI2"
+    b"MWU2ZTg5ZjdlMmRiNGZlZWY2NzlmMDI+XQolIFJlcG9ydExhYiBnZW5lcmF0ZWQgUERGIGRvY3VtZW50"
+    b"IC0tIGRpZ2VzdCAob3BlbnNvdXJjZSkKCi9JbmZvIDUgMCBSCi9Sb290IDQgMCBSCi9TaXplIDgKPj4K"
+    b"c3RhcnR4cmVmCjEwMjcKJSVFT0YK"
+)
+
+
+def test_save_evidence_files_copies_when_engine_populated_source_paths(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: drive EvidenceEngine through one PDF, then call
+    save_evidence_files(engine-records_df, engine.source_paths, dest) and
+    confirm the file lands in dest. Spec §3.9 — this is the before-the-fix
+    failure mode the user reported (evidence_files/ stayed empty)."""
+    import base64
+
+    from edf_collector import EvidenceEngine
+
+    pdf_path = tmp_path / "edf-invoice-KI-1234-0001-3.pdf"
+    pdf_path.write_bytes(base64.b64decode(_PDF_B64))
+
+    eng = EvidenceEngine(config={"acc_num": ""}, update_ui_cb=lambda *a, **k: None)
+    eng.process_pdf_file(
+        str(pdf_path),
+        "Local PDF Folder",
+        pdf_path.name,
+        "01/01/2024",
+    )
+
+    assert eng.source_paths, "engine.source_paths empty post-process — fix regressed"
+
+    df = pd.DataFrame([{"Attachment Name": pdf_path.name}])
+    dest = tmp_path / "output"
+    saved = save_evidence_files(df, eng.source_paths, str(dest))
+
+    assert pdf_path.name in saved, f"save_evidence_files did not copy: {saved}"
+    assert (dest / pdf_path.name).exists()

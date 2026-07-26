@@ -2291,6 +2291,12 @@ class EvidenceEngine:
         self.sap_contract_rows: list[dict] = []
         self.sap_meter_rows: list[dict] = []
         self.sap_financial_rows: list[dict] = []
+        # Stream P5: reverse-lookup from attachment name to absolute source
+        # path, populated by process_pdf_file so save_evidence_files can copy
+        # the originals into evidence_files/. Pre-fix this attribute was never
+        # set — getattr(engine, "source_paths", {}) always returned {} and
+        # every attachment was skipped with "missing source for X". Spec §3.9.
+        self.source_paths: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Pickle support — Phase 1.4
@@ -2803,6 +2809,13 @@ class EvidenceEngine:
             # Use original filename as attachment_name if not already set
             if not attachment_name:
                 attachment_name = detail_label or ""
+
+            # Stream P5: record the absolute source path so save_evidence_files
+            # can copy the original into evidence_files/. Multi-slice merged
+            # PDFs all point at the same path under per-slice attachment names
+            # — the contract is "open the parent PDF", true regardless of
+            # which slice a reviewer clicked. Spec §3.9 (issue 8b root cause).
+            self.source_paths[attachment_name] = path
 
             # Multi-invoice PDF slicer. Merged PDFs (e.g. evidence-2026
             # ``D2 - T-series invoices (Sep 2023 - May 2024, merged).pdf``)
