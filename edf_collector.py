@@ -20,7 +20,6 @@ import threading
 import traceback
 import warnings
 from collections import Counter
-from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, cast
 
@@ -74,12 +73,17 @@ from edf_bill_fetcher.helpers.formatting import (  # noqa: E402,F401,I001
     account_number_matches as _account_number_matches,
     apply_currency_format as _apply_currency_format,
     apply_int_format as _apply_int_format,
+    _amalgamate_cluster,
+    _apply_amalgamate_to_kept_frame,
+    _is_populated,
 )
+from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch  # noqa: I001
 
 # Re-export the evidence-bundle helpers so callers who already import
 # everything from ``edf_collector`` transparently gain access to the new
 # module (per the spec / plan: Stream P5).
 from evidence_bundle import build_bundle_index, save_evidence_files  # noqa: E402,F401
+
 
 # Optional imports — gracefully degrade if missing
 try:
@@ -161,118 +165,6 @@ _SOURCE_PRECEDENCE: dict[str, int] = {
     "Email Body (RTF)": 3,
 }
 
-
-def _is_populated(value: object) -> bool:
-    """Return True iff ``value`` counts as a populated field for
-    completeness scoring.
-
-    Treats the EinDF "N/A" sentinel, empty string, ``None``, and NaN
-    as missing.  Everything else — including non-zero numerics like
-    0.0 when the producer explicitly stamped it — counts as present
-    because the producer's ``record.setdefault(col, "N/A")`` path
-    converts missing to "N/A" upstream.
-
-    The one edge case worth calling out: ``Period Charge (£) = 0.0``
-    is *populated* in the sense that the producer explicitly stamped
-    it as 0.0 rather than leaving "N/A".  We count it as present.
-    """
-    if value is None:
-        return False
-    try:
-        if isinstance(value, float) and pd.isna(value):
-            return False
-    except (TypeError, ValueError):
-        pass
-    if isinstance(value, str):
-        s = value.strip()
-        return s != "" and s != "N/A"
-    return True
-
-
-def _amalgamate_cluster(cluster: pd.DataFrame) -> pd.DataFrame:
-    """Merge a duplicate cluster into a single hybrid row.
-
-    For each column, walks the cluster rows in completeness-descending
-    order and picks the *first* non-empty / non-"N/A" value.  The
-    ``Source`` column is pinned to the completeness-winner's source
-    (identity, not data).  ``_sort`` and all ``_``-prefixed helpers
-    are dropped before returning so the caller can concat.
-
-    Returns a zero-row DataFrame if ``cluster`` is already a single
-    row (nothing to merge — the caller just keeps the singleton).
-    """
-    if len(cluster) <= 1:
-        return cluster.iloc[0:0]
-    # Sort so the most-complete row is first — ties fall to _src_pri
-    # then _sort (the same contract the dedup walker uses).
-    cluster = cluster.sort_values(
-        ["_completeness", "_src_pri", "_sort"],
-        ascending=[False, True, True],
-    )
-    hybrid: dict[str, object] = {}
-    for col in cluster.columns:
-        if col.startswith("_"):
-            continue
-        # Walk completeness-descending to find the first populated value.
-        picked = None
-        for _ri, row in cluster.iterrows():
-            val = row.get(col)
-            if col == "Source":
-                # Identity pinned to the top-row (completeness winner).
-                picked = val
-                break
-            if _is_populated(val):
-                picked = val
-                break
-        hybrid[col] = picked if picked is not None else row.get(col)
-    return pd.DataFrame([hybrid], index=[cluster.index[0]])
-
-
-def _apply_amalgamate_to_kept_frame(
-    df: pd.DataFrame,
-    dup_df: pd.DataFrame,
-    kept_pass1_index: dict[tuple, int],
-    kept_for_dup: dict[int, int],
-    is_dup: pd.Series,
-) -> pd.DataFrame:
-    """Reflow ``df`` so each duplicate cluster collapses to a single
-    hybrid kept row; non-duplicate rows stay verbatim.
-
-    Cluster resolution merges the two dedup-pass anchor maps:
-
-    * ``kept_pass1_index`` (Period+Amount) — Pass 1.
-    * ``kept_for_dup`` (bucket-anchor index) — Pass 2.
-
-    Every deduplicated cluster is reachable from one of these maps.
-    The amalgamation path was extracted from ``export_to_excel`` so
-    it can be unit-tested without booting the full pipeline (see
-    ``tests/test_dedup_most_complete.py`` and
-    ``tests/test_amalgamate_*.py``).
-
-    Returns a fresh DataFrame with the duplicates cleaned and
-    ``dup_df`` left untouched.
-    """
-    anchor_to_dup_indices: dict[int, list[int]] = {}
-    for (_dd, _amt), kept_idx in kept_pass1_index.items():
-        anchor_to_dup_indices.setdefault(kept_idx, [])
-    for dup_idx, kept_idx in kept_for_dup.items():
-        anchor_to_dup_indices.setdefault(kept_idx, []).append(dup_idx)
-
-    hybrid_rows: list[pd.DataFrame] = []
-    for anchor_idx, dup_indices in anchor_to_dup_indices.items():
-        if not dup_indices:
-            continue
-        one_cluster = dup_df.loc[dup_indices]
-        cluster_df = pd.concat([df.loc[[anchor_idx]], one_cluster])
-        hybrid = _amalgamate_cluster(cluster_df)
-        if not hybrid.empty:
-            hybrid.index = [anchor_idx]
-            hybrid_rows.append(hybrid)
-    if not hybrid_rows:
-        return df
-    hybrid_idx_set = {h.index[0] for h in hybrid_rows}
-    non_hybrid_kept = df.loc[df[~is_dup].index.difference(hybrid_idx_set)]
-    return pd.concat([non_hybrid_kept] + hybrid_rows).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -995,46 +887,6 @@ _SAP_MATCH_AMOUNT_BANDS = ((0.05, 40), (0.25, 20), (0.50, 5))
 _SAP_CONFIDENCE_BANDS = (("High", 75), ("Medium", 40), ("Low", 10))
 
 
-@dataclass
-class SapBackBillingEvent:
-    """One SAP clearing event containing one or more underlying SAP rows.
-
-    Populated by ``detect_sap_back_billing_events``.  The underlying SAP
-    rows are retained so the writer can render them as a collapsible
-    sub-block beneath each event summary on sheet 'SAP Back-billing
-    Events'.
-    """
-
-    clearing_doc: str
-    clearing_date: pd.Timestamp | pd._libs.tslibs.nattype.NaTType
-    clearing_reason: str
-    rows: list[dict] = field(default_factory=list)
-    net_amount: float = 0.0
-    has_credit_for_consum_billing: bool = False
-    has_account_maintenance: bool = False
-    largest_single_posting: float = 0.0
-    posting_date_range: tuple[str, str] = ("", "")
-    evidence_trail: str = ""
-    matched_edf_invoice: str | None = None
-
-
-@dataclass
-class SapEdfMatch:
-    """One (SAP event × matched EDF candidate) pair.
-
-    Populated by ``match_sap_events_to_edf``.  Only SAP events that
-    produced at least one EDF candidate at Low confidence or above
-    appear in the returned list — unmatched events remain on Sheet 1
-    only.
-    """
-
-    event: SapBackBillingEvent
-    edf_record: dict
-    confidence_band: str
-    confidence_score: int
-    amount_delta: float
-    date_delta_days: int
-    notes: str
 
 
 def _parse_amount_for_event(v: object) -> float:

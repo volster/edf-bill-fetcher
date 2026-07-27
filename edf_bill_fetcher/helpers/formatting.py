@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 import openpyxl.cell
+import pandas as pd
 
 
 def apply_currency_format(cell: openpyxl.cell.Cell) -> None:
@@ -91,4 +92,78 @@ __all__ = [
     "apply_currency_format",
     "apply_int_format",
     "account_number_matches",
+    "_is_populated",
+    "_amalgamate_cluster",
+    "_apply_amalgamate_to_kept_frame",
 ]
+
+
+def _is_populated(value: object) -> bool:
+    """Return True iff ``value`` counts as a populated field for completeness scoring."""
+    if value is None:
+        return False
+    try:
+        if isinstance(value, float) and pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        s = value.strip()
+        return s != "" and s != "N/A"
+    return True
+
+
+def _amalgamate_cluster(cluster: pd.DataFrame) -> pd.DataFrame:
+    """Merge a duplicate cluster into a single hybrid row."""
+    if len(cluster) <= 1:
+        return cluster.iloc[0:0]
+    cluster = cluster.sort_values(
+        ["_completeness", "_src_pri", "_sort"],
+        ascending=[False, True, True],
+    )
+    hybrid: dict[str, object] = {}
+    for col in cluster.columns:
+        if col.startswith("_"):
+            continue
+        picked = None
+        for _ri, row in cluster.iterrows():
+            val = row.get(col)
+            if col == "Source":
+                picked = val
+                break
+            if _is_populated(val):
+                picked = val
+                break
+        hybrid[col] = picked if picked is not None else row.get(col)
+    return pd.DataFrame([hybrid], index=[cluster.index[0]])
+
+
+def _apply_amalgamate_to_kept_frame(
+    df: pd.DataFrame,
+    dup_df: pd.DataFrame,
+    kept_pass1_index: dict[tuple, int],
+    kept_for_dup: dict[int, int],
+    is_dup: pd.Series,
+) -> pd.DataFrame:
+    """Reflow ``df`` so each duplicate cluster collapses to a single hybrid kept row."""
+    anchor_to_dup_indices: dict[int, list[int]] = {}
+    for (_dd, _amt), kept_idx in kept_pass1_index.items():
+        anchor_to_dup_indices.setdefault(kept_idx, [])
+    for dup_idx, kept_idx in kept_for_dup.items():
+        anchor_to_dup_indices.setdefault(kept_idx, []).append(dup_idx)
+
+    hybrid_rows: list[pd.DataFrame] = []
+    for anchor_idx, dup_indices in anchor_to_dup_indices.items():
+        if not dup_indices:
+            continue
+        one_cluster = dup_df.loc[dup_indices]
+        cluster_df = pd.concat([df.loc[[anchor_idx]], one_cluster])
+        hybrid = _amalgamate_cluster(cluster_df)
+        if not hybrid.empty:
+            hybrid.index = [anchor_idx]
+            hybrid_rows.append(hybrid)
+    if not hybrid_rows:
+        return df
+    hybrid_idx_set = {h.index[0] for h in hybrid_rows}
+    non_hybrid_kept = df.loc[df[~is_dup].index.difference(hybrid_idx_set)]
+    return pd.concat([non_hybrid_kept] + hybrid_rows).reset_index(drop=True)
