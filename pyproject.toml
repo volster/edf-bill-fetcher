@@ -75,7 +75,7 @@ Repository = "https://github.com/volster/edf-bill-fetcher"
 Issues = "https://github.com/volster/edf-bill-fetcher/issues"
 
 [project.scripts]
-edf-collector = "edf_collector:main"
+edf-collector = "main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
