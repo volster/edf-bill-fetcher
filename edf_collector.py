@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: I001
 """
 EDF Master Evidence Collector
 Collects billing data from PST/OST files, local PDF folders, and HTM account exports.
@@ -18,7 +19,6 @@ import tempfile
 import threading
 import traceback
 import warnings
-import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -44,6 +44,37 @@ from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
+
+# Re-export helpers from edf_bill_fetcher.helpers so existing call sites
+# that import these as ``from edf_collector import _hcell`` etc. continue
+# to work during the modularization refactor (Task 3).  These re-exports
+# are removed by Task 7's compat shim cleanup.
+from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,F401,I001
+    build_evidence_trail as _build_evidence_trail,
+    completeness_score as _completeness_score,
+    compute_ema as _compute_ema,
+    compute_momentum as _compute_momentum,
+    compute_rolling_stats as _compute_rolling_stats,
+)
+from edf_bill_fetcher.helpers.excel_utils import (  # noqa: E402,F401,I001
+    _TEXT_SUPPRESSION_QUEUE,
+    CELL_BORDER,
+    build_sap_row_index_map as _build_sap_row_index_map,
+    hcell as _hcell,
+    money as _money,
+    num as _num,
+    open_pdf_hyperlink_cell as _open_pdf_hyperlink_cell,
+    section_hdr as _section_hdr,
+    set_column_widths_from_spec as _set_column_widths_from_spec,
+    suppress_text_warning as _suppress_text_warning,
+    suppress_text_warnings_post_save as _suppress_text_warnings_post_save,
+    text as _text,
+)
+from edf_bill_fetcher.helpers.formatting import (  # noqa: E402,F401,I001
+    account_number_matches as _account_number_matches,
+    apply_currency_format as _apply_currency_format,
+    apply_int_format as _apply_int_format,
+)
 
 # Re-export the evidence-bundle helpers so callers who already import
 # everything from ``edf_collector`` transparently gain access to the new
@@ -130,37 +161,6 @@ _SOURCE_PRECEDENCE: dict[str, int] = {
     "Email Body (RTF)": 3,
 }
 
-# ---------------------------------------------------------------------------
-# Duplicate-cluster completeness scoring
-# ---------------------------------------------------------------------------
-# Spec: "duplicates should be assessed and the most complete version of
-# the information presented".  The dedup walker uses these columns to
-# compute a per-row completeness score; the score is the primary sort
-# key so the *richest* sibling of a duplicate cluster survives, with
-# source precedence (``_SOURCE_PRECEDENCE``) as the tie-breaker and the
-# parsed date as the final tie.
-#
-# Cosmetic columns (``Source``, ``Sender``), runtime-derived columns
-# (``% Change``, ``Anomaly Flag``, ``Duplicate Of``), and the debug
-# column ``Logic Used`` are intentionally excluded — they don't reflect
-# the *data* the user is reviewing.  ``Amount (£)`` is excluded because
-# it's the dedup *key* — every sibling has it by definition.
-_COMPLETENESS_FIELDS: tuple[str, ...] = (
-    "Date",
-    "Period From",
-    "Period To",
-    "Invoice #",
-    "Period Charge (£)",
-    "Unit Rate (p/kWh)",
-    "Entry Type",
-    "Reading",
-    "Units (kWh)",
-    "Standing Chg (p/day)",
-    "Tariff",
-    "Attachment Name",
-    "Details",
-)
-
 
 def _is_populated(value: object) -> bool:
     """Return True iff ``value`` counts as a populated field for
@@ -187,17 +187,6 @@ def _is_populated(value: object) -> bool:
         s = value.strip()
         return s != "" and s != "N/A"
     return True
-
-
-def _completeness_score(row: pd.Series) -> int:
-    """Count populated substantive fields on a record row.
-
-    Used as the primary sort key in the dedup pass so the row with the
-    most populated ``_COMPLETENESS_FIELDS`` ends up first (and thus
-    survives ``keep="first"``).  Lower score = sparser row; ties
-    fall through to source precedence and then date.
-    """
-    return sum(1 for f in _COMPLETENESS_FIELDS if f in row.index and _is_populated(row[f]))
 
 
 def _amalgamate_cluster(cluster: pd.DataFrame) -> pd.DataFrame:
@@ -576,61 +565,6 @@ def to_excel_date(date_input):
     if pd.isna(dt):
         return None
     return dt.to_pydatetime()
-
-
-def _account_number_matches(acc_filter: str, text: str) -> bool:
-    """Return True when ``acc_filter`` appears as a standalone digit run in ``text``.
-
-    Phase 1.3: replaces the old "is the digits substring contained anywhere"
-    check, which false-matched an unrelated longer string (invoice number,
-    meter serial, phone number) when the configured account number happened
-    to be a subset of those digits.
-
-    Strategy
-    --------
-    Split ``text`` into "tokens" — sequences of alphanumeric characters and
-    hyphens (e.g., "A-12345678", "31", "555", "4444").  For each token,
-    strip non-digit characters to get its digit-only form.  Look up the
-    normalized ``acc_filter in the resulting list.
-
-    This preserves the natural word boundaries of ``"Account number:
-    31 555 4444"`` — the tokens are ``["Account", "number", "31", "555",
-    "4444", "Current", "balance", "240", "50", "debit"]`` and their
-    digit-only forms are ``["", "", "31", "555", "4444", "", "", "240",
-    "50", ""]``.  The filter ``"31"`` only matches the "31" token —
-    whereas the naive ``digits_only in text_no_sep`` would have produced
-    ``"315554444"`` from the same input and dropped the right answer.
-
-    Crucially, hyphens *inside* a token are preserved during tokenization
-    so ``"A-12345678"`` is one token whose digit-only form is
-    ``"12345678"`` — fixing the false-negative where the original
-    ``re.findall(r"\\d+", ...)`` split it into ``["123", "45678"]``.
-
-    Invariant
-    ---------
-    Pure-substring match (digits in collapse-stripped text) being True
-    does NOT imply this helper returns True (we tighten the
-        predicate).  The reverse direction holds: a real standalone digit
-        run from the original text, after the token-based split, still
-        matches.  No legitimate standalone occurrence is dropped.
-    """
-    if not acc_filter:
-        return True  # empty filter matches everything
-    digits_only = re.sub(r"\D", "", str(acc_filter))
-    if not digits_only:
-        return True  # unusable filter — pass rather than silently reject
-
-    # Tokenize: split on whitespace and punctuation EXCEPT hyphens that
-    # are inside alphanumeric sequences.  The pattern [A-Za-z0-9-]+
-    # captures words, numbers, and hyphenated codes like "A-12345678"
-    # or "A123-456" as single tokens.
-    tokens = re.findall(r"[A-Za-z0-9-]+", text or "")
-
-    # For each token, strip non-digits to get its digit-only form.
-    # Example: "A-12345678" → "12345678", "31" → "31", "555" → "555"
-    token_digits = [re.sub(r"\D", "", t) for t in tokens]
-
-    return digits_only in token_digits
 
 
 # ---------------------------------------------------------------------------
@@ -1116,58 +1050,6 @@ def _parse_amount_for_event(v: object) -> float:
         return 0.0
 
 
-def _build_evidence_trail(rows: list[dict]) -> str:
-    """Stitch a human-readable one-line narrative of the cluster.
-
-    Sorts the underlying rows by Posting Date.  When two rows on the
-    same day net to ~£0.00 (one positive, one negative), calls them
-    out as an explicit reversal-pair — that's the textbook
-    back-billing signature a reviewer is trained to look for.
-
-    Keeps the output to a single line (no ``\\n``) so it lands cleanly
-    in one Excel cell.
-    """
-    if not rows:
-        return ""
-
-    # Sort by Posting Date then Document No. for stability
-    def sort_key(r: dict) -> tuple[str, str]:
-        pd_str = str(r.get("Posting Date") or "")
-        dn_str = str(r.get("Document No.") or "")
-        return (pd_str, dn_str)
-
-    ordered = sorted(rows, key=sort_key)
-    parts: list[str] = []
-    # Walk pairs of (same-day, opposite-sign) rows and emit as reversals
-    used: set[int] = set()
-    for i, row in enumerate(ordered):
-        if i in used:
-            continue
-        amt_i = _parse_amount_for_event(row.get("Amount"))
-        pd_i = str(row.get("Posting Date") or "") or "—"
-        dn_i = str(row.get("Document No.") or "") or "—"
-        # Search forward for a same-day opposite counterpart
-        paired = False
-        for j in range(i + 1, len(ordered)):
-            if j in used:
-                continue
-            pd_j = str(ordered[j].get("Posting Date") or "")
-            if pd_j != pd_i:
-                continue
-            amt_j = _parse_amount_for_event(ordered[j].get("Amount"))
-            if abs(amt_i + amt_j) <= 0.01 and abs(amt_i) > 0.01:
-                dn_j = str(ordered[j].get("Document No.") or "") or "—"
-                parts.append(
-                    f"DOC {dn_i} {pd_i} £{amt_i:.2f} → reversed by "
-                    f"DOC {dn_j} £{amt_j:.2f} (net £0.00)"
-                )
-                used.add(i)
-                used.add(j)
-                paired = True
-                break
-        if not paired:
-            parts.append(f"DOC {dn_i} {pd_i} £{amt_i:.2f}")
-    return "; ".join(parts)
 
 
 def detect_sap_back_billing_events(
@@ -3165,146 +3047,6 @@ class EvidenceEngine:
 # ---------------------------------------------------------------------------
 
 THIN = Side(style="thin", color="DDDDDD")
-CELL_BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-
-
-def _hcell(ws, row, col, value, bg="FE5716"):
-    c = ws.cell(row=row, column=col, value=value)
-    c.font = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
-    c.fill = PatternFill("solid", start_color=bg)
-    c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    c.border = CELL_BORDER
-    return c
-
-
-_TEXT_SUPPRESSION_QUEUE: dict[str, list[tuple[str, int, int]]] = {}
-
-
-def _set_column_widths_from_spec(
-    ws: openpyxl.worksheet.worksheet.Worksheet, widths: dict[str, float]
-) -> None:
-    """Apply column-width pins from a ``{col_letter: width}`` dict."""
-    for col_letter, width in widths.items():
-        ws.column_dimensions[col_letter].width = width
-
-
-def _apply_currency_format(cell: openpyxl.cell.Cell) -> None:
-    """Coerce cell value to float and apply a currency number format."""
-    if isinstance(cell.value, str):
-        cell.value = float(cell.value)
-    cell.number_format = "\u00a3#,##0.00"
-
-
-def _apply_int_format(cell: openpyxl.cell.Cell) -> None:
-    """Coerce cell value to int and apply an integer number format."""
-    if isinstance(cell.value, str):
-        cell.value = int(float(cell.value))
-    cell.number_format = "#,##0"
-
-
-def _suppress_text_warning(
-    ws: openpyxl.worksheet.worksheet.Worksheet,
-    col_letter: str,
-    start_row: int,
-    end_row: int,
-) -> None:
-    """Queue a text-ID suppression for column ``col_letter`` rows
-    ``start_row`` through ``end_row`` to be injected after save."""
-    key = ws.title
-    _TEXT_SUPPRESSION_QUEUE.setdefault(key, []).append(
-        (col_letter, start_row, end_row)
-    )
-
-
-def _suppress_text_warnings_post_save(output_path: str) -> None:
-    """Post-save zip injection for ``<ignoredErrors>`` blocks.
-    """
-    tmp = tempfile.NamedTemporaryFile(
-        suffix=".xlsx", delete=False, dir=os.path.dirname(output_path) or "."
-    )
-    tmp.close()
-    os.replace(output_path, tmp.name)
-
-    with zipfile.ZipFile(tmp.name, "r") as zin:
-        with zipfile.ZipFile(output_path, "w") as zout:
-            for item in zin.namelist():
-                data = zin.read(item)
-                if item.startswith("xl/worksheets/sheet") and item.endswith(".xml"):
-                    xml = data.decode("utf-8", errors="replace")
-                    for _sheet_title, suppressions in _TEXT_SUPPRESSION_QUEUE.items():
-                        for col_letter, start_row, end_row in suppressions:
-                            sqref = f"{col_letter}{start_row}:{col_letter}{end_row}"
-                            block = (
-                                f"<ignoredErrors><ignoredError sqref=\"{sqref}\" "
-                                f'numberStoredAsText="1"/></ignoredErrors>'
-                            )
-                            xml = xml.replace("</worksheet>", f"{block}</worksheet>")
-                    data = xml.encode("utf-8")
-                zout.writestr(item, data)
-
-    os.unlink(tmp.name)
-
-
-def _money(ws, r, c, val, bold=False, fill_hex=None):
-    cell = ws.cell(row=r, column=c, value=val)
-    cell.font = Font(name="Calibri", size=10, bold=bold)
-    cell.border = CELL_BORDER
-    cell.number_format = "£#,##0.00"
-    cell.alignment = Alignment(horizontal="right", vertical="center")
-    if fill_hex:
-        cell.fill = PatternFill("solid", start_color=fill_hex)
-    return cell
-
-
-def _text(ws, r, c, val, bold=False, fill_hex=None, wrap=False, align="left", color="000000"):
-    # Phase 2.x — formula-injection guard.  External text
-    # (PDF/PST/email) can start with ``=``, ``+``, ``-`` or
-    # ``@`` and Excel will silently evaluate the cell as a
-    # formula when the workbook is opened.  The classic
-    # mitigation is to coerce the cell's ``data_type`` to
-    # ``'s'`` (text).  We coerce non-strings via ``str()`` first
-    # so the cell value is always a Python string before the
-    # data_type pin; otherwise cell types follow Python type
-    # inference.
-    safe_val: str
-    if val is None:
-        safe_val = ""
-    else:
-        safe_val = str(val)
-        # Belt-and-braces: prefix a leading ``=``, ``+``, ``-``
-        # or ``@`` with an apostrophe.  This nails the contract
-        # even on Excel versions that still try to evaluate
-        # auto-formats despite the ``data_type = 's'`` flag.
-        if safe_val and safe_val[0] in "+-=@":
-            safe_val = "'" + safe_val
-    cell = ws.cell(row=r, column=c, value=safe_val)
-    cell.data_type = "s"
-    cell.font = Font(name="Calibri", size=10, bold=bold, color=color)
-    cell.border = CELL_BORDER
-    cell.alignment = Alignment(horizontal=align, vertical="center", wrap_text=wrap)
-    if fill_hex:
-        cell.fill = PatternFill("solid", start_color=fill_hex)
-    return cell
-
-
-def _num(ws, r, c, val, fmt="#,##0", bold=False, fill_hex=None):
-    cell = ws.cell(row=r, column=c, value=val)
-    cell.font = Font(name="Calibri", size=10, bold=bold)
-    cell.border = CELL_BORDER
-    cell.number_format = fmt
-    cell.alignment = Alignment(horizontal="right", vertical="center")
-    if fill_hex:
-        cell.fill = PatternFill("solid", start_color=fill_hex)
-    return cell
-
-
-def _section_hdr(ws, r, label, ncols=3, bg="10367A"):
-    for c in range(1, ncols + 1):
-        cell = ws.cell(row=r, column=c, value=label if c == 1 else "")
-        cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", start_color=bg)
-        cell.border = CELL_BORDER
-        cell.alignment = Alignment(horizontal="left", vertical="center")
 
 
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
@@ -5372,27 +5114,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
 # =====================================================================
 
 
-def _compute_rolling_stats(series, window=6):
-    """Compute rolling statistics for a time series."""
-    return {
-        "mean": series.rolling(window=window, min_periods=1).mean(),
-        "std": series.rolling(window=window, min_periods=1).std(),
-        "min": series.rolling(window=window, min_periods=1).min(),
-        "max": series.rolling(window=window, min_periods=1).max(),
-        "median": series.rolling(window=window, min_periods=1).median(),
-    }
-
-
-def _compute_ema(series, span=6):
-    """Compute Exponential Moving Average."""
-    return series.ewm(span=span, adjust=False).mean()
-
-
-def _compute_momentum(series, period=3):
-    """Compute momentum (rate of change) of a series."""
-    return series.diff(period)
-
-
 def _compute_volatility(series, window=6):
     """Compute rolling volatility (std of returns)."""
     returns = series.pct_change()
@@ -6656,39 +6377,6 @@ def _assess_reason(
     return head
 
 
-def _open_pdf_hyperlink_cell(
-    ws: openpyxl.worksheet.worksheet.Worksheet,
-    row: int,
-    col: int,
-    evidence_df: pd.DataFrame | None,
-    invoice_number: str,
-) -> None:
-    """Emit a ``→`` hyperlink cell in ``ws`` at (``row``, ``col``) that
-    jumps to the matching invoice's row on the EDF Evidence Report sheet.
-
-    ``None``/empty invoice numbers are skipped (no meaningful lookup target).
-    The hyperlink display is a right-arrow glyph; the tooltip carries the
-    invoice number for accessibility.
-    """
-    if not invoice_number:
-        return
-    target_row = None
-    if evidence_df is not None and not evidence_df.empty and "Invoice #" in evidence_df.columns:
-        matches = evidence_df[evidence_df["Invoice #"].astype(str) == str(invoice_number)]
-        if not matches.empty:
-            target_row = matches.iloc[0].name + 2  # +2 for header rows (row 1 = col headers)
-    if target_row is not None:
-        cell = ws.cell(row=row, column=col, value="\u2192")
-        cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
-            ref=cell.coordinate,
-            location=f"'EDF Evidence Report'!A{target_row}",
-            display="\u2192",
-            tooltip=f"Jump to EDF Evidence Report!A{target_row}",
-        )
-        cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
-
-
-# Evidence Report row index (Stream P4 / Task 7)
 # ---------------------------------------------------------------------------
 # A ``dict[str, int]`` mapping per-row signatures to the 1-indexed Excel row
 # on the ``EDF Evidence Report`` sheet so the 4 analyser writers can emit a
@@ -8128,21 +7816,6 @@ def write_sap_back_billing_sheets(
         account=account,
     )
     return ws1, ws2
-
-
-def _build_sap_row_index_map(
-    sap_financial: list[dict],
-) -> dict[int, int]:
-    """Return a map from ``id(sap_row)`` -> Excel row on SAP Financial Transactions.
-
-    The SAP Financial Transactions sheet writes the header at row 3
-    and the first data row at row 4.  Returns a dict keyed by
-    ``id(row)`` with value = Excel row index of that row on the sheet.
-    """
-    out: dict[int, int] = {}
-    for i, r in enumerate(sap_financial):
-        out[id(r)] = 4 + i
-    return out
 
 
 def _write_sap_bb_events_sheet(

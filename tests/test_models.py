@@ -1,8 +1,6 @@
 """Tests for edf_bill_fetcher.models.events dataclasses."""
 from __future__ import annotations
 
-import pytest
-
 from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
 
 
