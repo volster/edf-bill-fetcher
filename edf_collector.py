@@ -7,21 +7,16 @@ Fixed version: correct Excel date serials, dynamic range references, new PDF for
 """
 
 import csv as _stdcsv
-import gc
-import glob
 import hashlib
 import io as _io
-import json
 import os
-import pickle
 import re
 import tempfile
 import threading
-import traceback
 import warnings
 from collections import Counter
-from datetime import date, datetime
-from typing import Any, cast
+from datetime import datetime
+from typing import Any
 
 import numpy as np
 import openpyxl
@@ -31,8 +26,8 @@ import pandas as pd
 # level would crash on headless / CI machines that lack a display, so
 # we guard it and set a flag that downstream GUI code checks.
 try:
-    import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
+    import tkinter as tk  # noqa: F401
+    from tkinter import filedialog, messagebox, ttk  # noqa: F401
 
     HAS_TK = True
 except ImportError:
@@ -370,7 +365,6 @@ PERIOD_RE = re.compile(
     re.IGNORECASE,
 )
 
-_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # Used by the "large amount" fallback in `extract_amount`.  Pre-compiled
 # once at module load; this hot-path is hit once per analysed chunk.

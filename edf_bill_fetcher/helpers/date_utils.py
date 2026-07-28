@@ -1,15 +1,16 @@
+from __future__ import annotations  # noqa: I001
 from __future__ import annotations
 
 import re as _re
 import warnings as _w
 
 import pandas as pd
+from typing import Any
 
 """Date helpers extracted from edf_collector.py for the modularization refactor.
 """
 
 
-from typing import Any
 
 COMPLETENESS_FIELDS: tuple[str, ...] = (
     "Date", "Period From", "Period To", "Invoice #",
@@ -36,7 +37,7 @@ def build_evidence_trail(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "No rows"
     f = rows[0]
-    return f"{len(rows)} rows from {f.get("Source", "")} totalling {f.get("Amount (£)", "")}"
+    return f'{len(rows)} rows from {f.get("Source", "")} totalling {f.get("Amount (£)", "")}'
 
 _ISO_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -54,8 +55,8 @@ def parse_to_sort_date(date_input):
     except Exception:
         return pd.NaT
 
-def _safe_to_datetime(value: object, *, dayfirst: bool = True):
-    if isinstance(value, (pd.Series, pd.Index)):
+def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp | pd.Series:
+    if isinstance(value, pd.Series | pd.Index):
         with _w.catch_warnings():
             _w.simplefilter("ignore", UserWarning)
             return pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")

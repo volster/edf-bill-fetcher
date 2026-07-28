@@ -118,6 +118,7 @@ ignore = [
 "tests/*" = ["T20", "PT011", "PT012"]
 "edf_collector.py" = ["T201"]
 "edf_bill_fetcher/io/cli.py" = ["T201"]
+"edf_bill_fetcher/writers/__init__.py" = ["T201"]
 
 [tool.ruff.format]
 quote-style = "double"

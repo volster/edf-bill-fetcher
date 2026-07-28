@@ -2787,7 +2787,8 @@ def write_data_quality_sheet(ws, df):
             x.border = CELL_BORDER
         ws.row_dimensions[r].height = 20
 
-    dq = _data_quality_report(df)
+    from typing import Any as _Any
+    dq: dict[str, _Any] = _data_quality_report(df)
 
     if not dq:
         _hcell(ws, 1, 1, "No data to analyze", bg=NAVY)
