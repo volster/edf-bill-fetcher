@@ -12,9 +12,10 @@ import pandas as pd
 from typing import Any
 
 COMPLETENESS_FIELDS: tuple[str, ...] = (
-    "Source", "Details", "Logic Used", "Amount (£)",
-    "Units (kWh)", "Standing Chg (p/day)", "Tariff",
-    "Start date", "End date", "Period from", "Period to", "Charge type",
+    "Date", "Period From", "Period To", "Invoice #",
+    "Period Charge (£)", "Unit Rate (p/kWh)", "Entry Type",
+    "Reading", "Units (kWh)", "Standing Chg (p/day)", "Tariff",
+    "Attachment Name", "Details",
 )
 
 def completeness_score(row: Any) -> int:
