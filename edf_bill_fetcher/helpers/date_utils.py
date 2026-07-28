@@ -20,7 +20,19 @@ COMPLETENESS_FIELDS: tuple[str, ...] = (
 )
 
 def completeness_score(row: Any) -> int:
-    return sum(1 for f in COMPLETENESS_FIELDS if row.get(f, ""))
+    def _is_populated(v: object) -> bool:
+        if v is None:
+            return False
+        try:
+            if isinstance(v, float) and pd.isna(v):
+                return False
+        except (TypeError, ValueError):
+            pass
+        if isinstance(v, str):
+            s = v.strip()
+            return s != "" and s != "N/A"
+        return True
+    return sum(1 for f in COMPLETENESS_FIELDS if _is_populated(row.get(f)))
 
 def compute_rolling_stats(series: Any, window: int = 6) -> dict[str, Any]:
     if len(series) < window:
