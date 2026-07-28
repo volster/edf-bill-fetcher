@@ -115,3 +115,4 @@ def legal_context() -> str:
     call-sites.
     """
     return _LEGAL_CONTEXT
+LEGAL_CONTEXT = _LEGAL_CONTEXT

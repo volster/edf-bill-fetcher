@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import pandas as pd
+
 """Date and statistics helpers for the evidence workbook.
 
 Extracted from ``edf_collector.py`` as part of the modularization refactor
@@ -10,7 +14,7 @@ Extracted from ``edf_collector.py`` as part of the modularization refactor
 - ``build_evidence_trail`` — human-readable one-line cluster narrative.
 """
 
-from __future__ import annotations
+
 
 from typing import Any
 
@@ -110,3 +114,58 @@ __all__ = [
     "compute_momentum",
     "build_evidence_trail",
 ]
+
+import re as _re
+import warnings as _w
+
+_ISO_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def parse_to_sort_date(date_input):
+    """Parse a date string (YYYY-MM-DD, DD/MM/YYYY, etc.) to pd.Timestamp."""
+    s = str(date_input).strip() if date_input else ""
+    if not s or s in ("Unknown", "N/A", ""):
+        return pd.NaT
+    try:
+        if _ISO_DATE_RE.match(s):
+            return pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
+        dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
+        if pd.isna(dt):
+            dt = pd.to_datetime(s, dayfirst=False, errors="coerce")
+        return dt
+    except Exception:
+        return pd.NaT
+
+
+def _safe_to_datetime(value: object, *, dayfirst: bool = True):
+    """Parse ``value`` as a date without triggering Pandas UserWarning noise."""
+    if isinstance(value, (pd.Series, pd.Index)):
+        with _w.catch_warnings():
+            _w.simplefilter("ignore", UserWarning)
+            s = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+        return s
+    try:
+        dt = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+    except (TypeError, ValueError):
+        return pd.NaT
+    if pd.isna(dt) and dayfirst:
+        try:
+            dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
+        except (TypeError, ValueError):
+            return pd.NaT
+    return dt
+
+
+def parse_to_display_date(date_input):
+    """Format a date for display as DD/MM/YYYY."""
+    dt = parse_to_sort_date(date_input)
+    return dt.strftime("%d/%m/%Y") if not pd.isna(dt) else str(date_input)
+
+
+def to_excel_date(date_input):
+    """Return a Python datetime for openpyxl to write as a true Excel date serial."""
+    dt = parse_to_sort_date(date_input)
+    if pd.isna(dt):
+        return None
+    return dt.to_pydatetime()
+

@@ -84,6 +84,57 @@ from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch  # n
 # module (per the spec / plan: Stream P5).
 from evidence_bundle import build_bundle_index, save_evidence_files  # noqa: E402,F401
 
+# Re-export date-helper functions so callers who import from edf_collector
+# gain access to parse_to_sort_date, parse_to_display_date, to_excel_date, etc.
+from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,F401,I001
+    _ISO_DATE_RE,
+    _safe_to_datetime,
+    parse_to_display_date,
+    parse_to_sort_date,
+    to_excel_date,
+)
+
+
+__all__ = []
+
+# Re-export adapters from edf_bill_fetcher.io.adapters so existing call sites
+# that import PDF/PST/HTM read functions from edf_collector continue to work.
+from edf_bill_fetcher.io.adapters.pdf import (  # noqa: E402,F401,I001
+    ADMIT_RE,
+    INV_BOUNDARY_RE,
+    LEGAL_CONTEXT,
+    PAGE1_BOUNDARY_RE,
+    extract_admit_phrase,
+    legal_context,
+    slice_pdf_pages,
+)
+# Private alias for legacy _ADMIT_RE import
+_ADMIT_RE = ADMIT_RE
+_INV_BOUNDARY_RE = INV_BOUNDARY_RE
+from edf_bill_fetcher.io.adapters.html import (  # noqa: E402,F401,I001
+    htm_excerpt,
+    parse_htm_account_history,
+)
+from edf_bill_fetcher.io.adapters.pst import (  # noqa: E402,F401,I001
+    EMAIL_ADDR_RE,
+    FROM_HEADER_RE,
+    PST_PR_ATTACH_FILENAME,
+    PST_PR_ATTACH_LONG_FILENAME,
+    extract_sender_email,
+    matches_domain_filter,
+    pst_attachment_filename,
+)
+
+__all__ += [
+    # adapters
+    "ADMIT_RE", "INV_BOUNDARY_RE", "LEGAL_CONTEXT", "PAGE1_BOUNDARY_RE",
+    "extract_admit_phrase", "legal_context", "slice_pdf_pages",
+    "htm_excerpt", "parse_htm_account_history",
+    "EMAIL_ADDR_RE", "FROM_HEADER_RE", "PST_PR_ATTACH_FILENAME",
+    "PST_PR_ATTACH_LONG_FILENAME", "extract_sender_email",
+    "matches_domain_filter", "pst_attachment_filename",
+]
+
 
 # Optional imports — gracefully degrade if missing
 try:
@@ -380,83 +431,6 @@ _OLD_PDF_PERIOD_CHARGE_RE = re.compile(
 # Date helpers
 # ---------------------------------------------------------------------------
 
-
-def parse_to_sort_date(date_input):
-    s = str(date_input).strip() if date_input else ""
-    if not s or s in ("Unknown", "N/A", ""):
-        return pd.NaT
-    try:
-        if _ISO_DATE_RE.match(s):
-            return pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
-        dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
-        if pd.isna(dt):
-            dt = pd.to_datetime(s, dayfirst=False, errors="coerce")
-        return dt
-    except Exception:
-        return pd.NaT
-
-
-def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp | pd.Series:
-    """Parse ``value`` as a date without triggering Pandas UserWarning noise.
-
-    The codebase's date strings come from UK-format EDF documents
-    (``DD/MM/YYYY`` -- e.g. ``01/02/2025`` = 1 Feb 2025).  Calling
-    ``pd.to_datetime`` with no ``dayfirst`` argument triggers a
-    ``UserWarning: Parsing dates in %d/%m/%Y format when dayfirst=False``
-    on every call.  Hot loops in the analyser detectors hit it dozens
-    of times per analyser row, generating hundreds of UserWarnings
-    that obscure real problems in the run logs.
-
-    Use ``dayfirst=True`` first (UK convention); for scalar input,
-    if that produces ``NaT`` (e.g. an ISO date sneaks through), fall
-    back to ``dayfirst=False``.  This mirrors
-    :func:`parse_to_sort_date`'s tolerance so all hot-loop callers
-    converge on the same parsing contract without each one having
-    to repeat the fallback dance.
-
-    Passing a ``pd.Series`` calls underlying ``pd.to_datetime`` with
-    ``dayfirst=True`` and a single vectorised call -- no scalar
-    fallback loop.  Per-element day-first retry on a Series would
-    require O(n) Python overhead so we accept the vectorised
-    interpretation: anything that did not parse as day-first-month
-    becomes ``NaT``.
-    """
-    if isinstance(value, pd.Series | pd.Index):
-        try:
-            # Suppress the UserWarning pandas emits on mixed-format
-            # Series ("Could not infer format, ..."). The behaviour is
-            # intentional (the caller accepts NaT for non-parseable rows).
-            import warnings as _w
-
-            with _w.catch_warnings():
-                _w.simplefilter("ignore", UserWarning)
-                s = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
-            return s
-        except (TypeError, ValueError):
-            return value if isinstance(value, pd.Index) else pd.Series([], dtype="datetime64[ns]")
-    try:
-        dt = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
-    except (TypeError, ValueError):
-        return pd.NaT
-    if pd.isna(dt) and dayfirst:
-        try:
-            dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
-        except (TypeError, ValueError):
-            return pd.NaT
-    return dt
-
-
-def parse_to_display_date(date_input):
-    dt = parse_to_sort_date(date_input)
-    return dt.strftime("%d/%m/%Y") if not pd.isna(dt) else str(date_input)
-
-
-def to_excel_date(date_input):
-    """Return a Python datetime for openpyxl to write as a true Excel date serial."""
-    dt = parse_to_sort_date(date_input)
-    if pd.isna(dt):
-        return None
-    return dt.to_pydatetime()
 
 
 # ---------------------------------------------------------------------------
@@ -1214,47 +1188,6 @@ def match_sap_events_to_edf(
 # non-grouping alternation so existing group numbers are preserved.
 
 
-# ---------------------------------------------------------------------
-# Multi-invoice PDF slicer
-# ---------------------------------------------------------------------
-#
-# Merged PDFs (e.g. ``D2 - T-series invoices (Sep 2023 - May 2024, merged).pdf``)
-# contain multiple invoices concatenated end-to-end. The previous parser ran
-# format detection on the whole-document text concat, so only the first
-# invoice's data was extracted. This slicer partitions the page list into
-# one chunk per invoice using two independent boundary signals:
-#
-# 1. ``Invoice number: <REF>``  -- canonical EDF marker, present on page 1
-# 2. ``Page 1 of N`` (variants: ``1 of 4``, ``one of four``, ``1/4``)
-#
-# The ``Page N of N`` final page is *inclusive* -- it stays with its current
-# invoice. The next slice starts at the next page-1 OR invoice-number
-# marker. A single-invoice PDF (zero or one boundary markers) returns a
-# single chunk containing every page -- identical to the legacy
-# whole-document concat.
-
-_INV_BOUNDARY_RE = re.compile(r"Invoice number:\s*[A-Z0-9-]+", re.I)
-_PAGE1_BOUNDARY_RE = re.compile(
-    r"(?ix)\b"
-    r"(?:page\s+)?"
-    r"(?:1|one)"
-    r"\s*(?:of|/)\s+"
-    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
-    r"\b"
-)
-_ADMIT_RE = re.compile(
-    r"(?ix)\b"
-    r"(?:we['\u2019]?ve|we\ have|we\ are|we['\u2019]?re)?\s*"
-    r"(?:recently\s+|previously\s+)?"
-    r"(?:cancel(?:l?ed|ing)|cancell?ed|cancel(?:l?ing)"
-    r"|revers(?:ed|ing)"
-    r"|credit(?:ed|ing))"
-    r".{0,40}?"
-    r"(?:charges?|some\ charges|charges\ for\ you|your\ account)"
-    r"\b"
-)
-
-
 # ---------------------------------------------------------------------------
 # Reconciliation statement detector + multi-row extractor
 # ---------------------------------------------------------------------------
@@ -1652,304 +1585,6 @@ def _pst_attachment_filename(att: object) -> str | None:
                 if decoded.strip("\x00"):
                     return decoded.strip("\x00")
     return None
-
-
-def slice_pdf_pages(page_texts: list[str]) -> list[list[str]]:
-    """Slice a PDF's per-page text into one chunk per invoice.
-
-    A page is a slice-start if it contains ``Invoice number:`` OR a
-    ``Page 1 of N`` marker (variants ``1 of 4``, ``one of four``,
-    ``1/4`` all match). The final page of an invoice is inclusive --
-    it stays with its slice. Single-invoice PDFs return
-    ``[list(page_texts)]`` (no behaviour change vs. the legacy
-    whole-document concat).
-    """
-    boundaries: list[int] = []
-    for i, text in enumerate(page_texts):
-        if not text:
-            continue
-        if _INV_BOUNDARY_RE.search(text) or _PAGE1_BOUNDARY_RE.search(text):
-            boundaries.append(i)
-
-    if len(boundaries) <= 1:
-        return [list(page_texts)]
-
-    slices: list[list[str]] = []
-    for j, start in enumerate(boundaries):
-        end = boundaries[j + 1] if j + 1 < len(boundaries) else len(page_texts)
-        slices.append(page_texts[start:end])
-    return slices
-
-
-def extract_admit_phrase(text: str) -> str | None:
-    """Return the first admit-phrase match in *text*, or ``None``.
-
-    An admit phrase is EDF's cover-page wording acknowledging that they
-    have cancelled / reversed / credited charges (the "we've recently
-    cancelled some charges for you" family). The returned string is the
-    matched substring (trimmed) -- callers can store it verbatim as
-    evidence.
-    """
-    if not text:
-        return None
-    m = _ADMIT_RE.search(text)
-    if m is None:
-        return None
-    return m.group(0).strip()
-
-
-_LEGAL_CONTEXT: str = (
-    "Back-billing protections (Ofgem / Electricity Act 1989 s.84B):\n"
-    "Suppliers may not charge a domestic customer for energy supplied\n"
-    "more than 12 months before the date of the bill that first raised\n"
-    "the charge, unless one of the statutory exceptions applies\n"
-    "(customer has been obstructive, has unreasonably refused access,\n"
-    "or has not cooperated with the supplier's reasonable requests). A\n"
-    "supervisor's admission of an earlier billing error -- typically\n"
-    "worded as 'we've recently cancelled some charges for you' on the\n"
-    "cover page of a corrective bill -- is direct evidence that the\n"
-    "cancellation is a back-billing remedy rather than a goodwill\n"
-    "adjustment, and so preserves the 12-month back-billing bar for any\n"
-    "superseded invoices on the same period. This workbook flags any\n"
-    "invoice admitting such a cancellation as evidence of back-billing."
-)
-
-
-def legal_context() -> str:
-    """Return the static legal-context blurb placed on the Back-billing
-    sheet. Kept as a function (not a bare module constant) so the text
-    can be regenerated / internationalised later without changing
-    call-sites.
-    """
-    return _LEGAL_CONTEXT
-
-
-def _htm_excerpt(text: str, m: re.Match, window: int = 400) -> str:
-    """Return a small window of the HTM source around a regex match.
-
-    Used by :func:`parse_htm_account_history` to populate the
-    ``Source PDF Text`` column captured for the analyser tabs' Source
-    Excerpt lookup.  Capturing the entire HTM document per-record
-    would balloon memory (every record would carry the same ~5-50 KB
-    body); a 400-char window around each match is enough for a
-    reviewer to see the verb phrase + balance clause that produced
-    the row.
-    """
-    start = max(0, m.start(0) - 20)
-    end = min(len(text), m.end(0) + window)
-    return text[start:end]
-
-
-def parse_htm_account_history(text):
-    """
-    Parse the EDF MyAccount 'Payments and Invoices' HTM export.
-    Returns a list of record dicts ready for process_text bypass.
-    """
-    records = []
-
-    # We look for the recurring pattern:
-    # "DD Mon YYYY We charged your account £X.XX For Y kWh … between D Mon YYYY and D Mon YYYY Balance £X.XX in debit"
-    # "DD Mon YYYY You paid us £X.XX … Balance £X.XX in debit"
-
-    # Normalise whitespace
-    text = re.sub(r"\s+", " ", text)
-
-    # Find all "charged" entries
-    charge_re = re.compile(
-        r"(\d{1,2}\s+\w+\s+\d{4})\s+We charged your account\s+£([\d,]+\.\d{2})"
-        r"(?:\s+For\s+([\d,]+)\s+kWh\s+of\s+electricity\s+used\s+between\s+"
-        r"(\d{1,2}\s+\w+\s+\d{4})\s+and\s+(\d{1,2}\s+\w+\s+\d{4}))?"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
-        re.IGNORECASE,
-    )
-    # Track the byte ranges ([start, end)) already covered by the
-    # three verb-aware regexes below so #15's standalone-balance
-    # step does not double-count the trailing balance clause of a
-    # charge/payment/reversal line.
-    covered: list[tuple[int, int]] = []
-    for m in charge_re.finditer(text):
-        covered.append((m.start(0), m.end(0)))
-        date_str = parse_to_display_date(m.group(1))
-        period_from = parse_to_display_date(m.group(4)) if m.group(4) else "N/A"
-        period_to = parse_to_display_date(m.group(5)) if m.group(5) else "N/A"
-        units = m.group(3) if m.group(3) else "N/A"
-        charge_amt = float(m.group(2).replace(",", ""))
-        balance = float(m.group(6).replace(",", ""))
-        excerpt = _htm_excerpt(text, m)
-        records.append(
-            {
-                "Source": "HTM Account History",
-                "Sender": "",
-                "Date": date_str,
-                "Period From": period_from,
-                "Period To": period_to,
-                "Invoice #": "N/A",
-                "Amount (£)": balance,
-                "Period Charge (£)": charge_amt,
-                "Entry Type": "Ongoing Balance",
-                "Reading": "N/A",
-                "Units (kWh)": units,
-                "Standing Chg (p/day)": "N/A",
-                # HTM exports don't carry a tariff name in the
-                # account-history view; "N/A" is the schema sentinel
-                # matching the rest of the record-building paths
-                # that include the Tariff column.
-                "Tariff": "N/A",
-                "Attachment Name": "N/A",
-                "Details": "HTM: charged account",
-                "Logic Used": "HTM Charge",
-                # Stream P3 (Source Excerpt): a small window around the
-                # regex match so the analyser tabs can show the
-                # HTM-charged clause that produced this row.
-                "Source PDF Text": excerpt,
-                "_regex_trace": "HTM charge_re",
-            }
-        )
-
-    # Find all "You paid us" entries
-    pay_re = re.compile(
-        r"(\d{1,2}\s+\w+\s+\d{4})\s+You paid us\s+£([\d,]+\.\d{2})"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
-        re.IGNORECASE,
-    )
-    for m in pay_re.finditer(text):
-        covered.append((m.start(0), m.end(0)))
-        date_str = parse_to_display_date(m.group(1))
-        payment_amt = float(m.group(2).replace(",", ""))
-        balance = float(m.group(3).replace(",", ""))
-        excerpt = _htm_excerpt(text, m)
-        records.append(
-            {
-                "Source": "HTM Account History",
-                "Sender": "",
-                "Date": date_str,
-                "Period From": "N/A",
-                "Period To": "N/A",
-                "Invoice #": "N/A",
-                "Amount (£)": balance,
-                # Period Charge (£) holds the actual payment amount for
-                # Payment/Credit rows -- yes, it's a misnomer (there is no
-                # period) but the column is where downstream code -- the
-                # Payment Analysis sheet, ``_detect_payment_patterns``,
-                # and the line-detail painter -- looks for "this row's
-                # transaction amount". The running balance lives in
-                # ``Amount (£)`` so cross-source dedup (which keys on
-                # ``Amount (£)`` for bill rows) still de-duplicates the
-                # credit-account row against the matching bill.
-                "Period Charge (£)": payment_amt,
-                "Entry Type": "Payment",
-                "Reading": "N/A",
-                "Units (kWh)": "N/A",
-                "Standing Chg (p/day)": "N/A",
-                "Tariff": "N/A",
-                "Attachment Name": "N/A",
-                "Details": "HTM: payment received",
-                "Logic Used": "HTM Payment",
-                "Source PDF Text": excerpt,
-                "_regex_trace": "HTM pay_re",
-            }
-        )
-
-    # Find all "reversed account charge" entries (credits applied)
-    rev_re = re.compile(
-        r"(\d{1,2}\s+\w+\s+\d{4})\s+Reversed account charge\s+£([\d,]+\.\d{2})"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
-        re.IGNORECASE,
-    )
-    for m in rev_re.finditer(text):
-        covered.append((m.start(0), m.end(0)))
-        date_str = parse_to_display_date(m.group(1))
-        credit_amt = float(m.group(2).replace(",", ""))
-        balance = float(m.group(3).replace(",", ""))
-        excerpt = _htm_excerpt(text, m)
-        records.append(
-            {
-                "Source": "HTM Account History",
-                "Sender": "",
-                "Date": date_str,
-                "Period From": "N/A",
-                "Period To": "N/A",
-                "Invoice #": "N/A",
-                "Amount (£)": balance,
-                # See note on the Payment regex above: the actual
-                # credit (the "Reversed account charge £X.XX" amount)
-                # goes into Period Charge (£) so downstream
-                # Payment/Credit analyses see the real transaction
-                # value rather than the running balance.
-                "Period Charge (£)": credit_amt,
-                "Entry Type": "Credit",
-                "Reading": "N/A",
-                "Units (kWh)": "N/A",
-                "Standing Chg (p/day)": "N/A",
-                "Tariff": "N/A",
-                "Attachment Name": "N/A",
-                "Details": "HTM: reversed account charge",
-                "Logic Used": "HTM Reversal",
-                "Source PDF Text": excerpt,
-                "_regex_trace": "HTM rev_re",
-            }
-        )
-
-    # Find standalone "Balance £X in credit" lines.
-    #
-    # These appear at the top of an HTM export when the customer's
-    # overall balance is in credit and there is no transaction recorded
-    # for the period (e.g. a credit accumulated from the previous
-    # statement still on the books). Pre-#15 there was no regex to
-    # catch them, so the credit on this kind of opening line never
-    # reached downstream classification.
-    #
-    # We walk the regex and reject any match whose date-token is
-    # *inside* a span already covered by the verb-aware regexes
-    # above. The regex itself is intentionally tolerant of optional
-    # postcard text between the date and the Balance clause — the
-    # covered-range check is what keeps standalone from double-counting
-    # the trailing balance of a real charge/payment/reversal line.
-    def _inside_covered(start: int, end: int) -> bool:
-        for cs, ce in covered:
-            if start >= cs and end <= ce:
-                return True
-        return False
-
-    bal_re = re.compile(
-        r"(\d{1,2}\s+\w+\s+\d{4})[^A-Za-z0-9]*?Balance\s+£([\d,]+\.\d{2})\s+in\s+credit\b",
-        re.IGNORECASE,
-    )
-    for m in bal_re.finditer(text):
-        if _inside_covered(m.start(0), m.end(0)):
-            continue
-        covered.append((m.start(0), m.end(0)))
-        date_str = parse_to_display_date(m.group(1))
-        balance = float(m.group(2).replace(",", ""))
-        records.append(
-            {
-                "Source": "HTM Account History",
-                "Sender": "",
-                "Date": date_str,
-                "Period From": "N/A",
-                "Period To": "N/A",
-                "Invoice #": "N/A",
-                "Amount (£)": balance,
-                "Period Charge (£)": "N/A",
-                "Entry Type": "Credit",
-                "Reading": "N/A",
-                "Units (kWh)": "N/A",
-                "Standing Chg (p/day)": "N/A",
-                "Tariff": "N/A",
-                "Attachment Name": "N/A",
-                "Details": "HTM: standalone credit balance",
-                "Logic Used": "HTM StandaloneBalance",
-                "Source PDF Text": _htm_excerpt(text, m),
-                "_regex_trace": "HTM bal_re (standalone)",
-            }
-        )
-
-    return records
-
-
-# ---------------------------------------------------------------------------
-# Evidence Engine
-# ---------------------------------------------------------------------------
 
 
 def _extract_sender_email(msg):
