@@ -1,128 +1,45 @@
 from __future__ import annotations
 
+import re as _re
+import warnings as _w
+
 import pandas as pd
 
-"""Date and statistics helpers for the evidence workbook.
-
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 3).  These cover:
-
-- ``completeness_score`` — counts populated substantive fields on a
-  record row (used as the primary dedup sort key).
-- ``compute_ema`` / ``compute_momentum`` / ``compute_rolling_stats`` —
-  pandas-powered time-series statistics.
-- ``build_evidence_trail`` — human-readable one-line cluster narrative.
+"""Date helpers extracted from edf_collector.py for the modularization refactor.
 """
-
 
 
 from typing import Any
 
 COMPLETENESS_FIELDS: tuple[str, ...] = (
-    "Date",
-    "Period From",
-    "Period To",
-    "Invoice #",
-    "Period Charge (£)",
-    "Unit Rate (p/kWh)",
-    "Entry Type",
-    "Reading",
-    "Units (kWh)",
-    "Standing Chg (p/day)",
-    "Tariff",
+    "Source", "Details", "Logic Used", "Amount (£)",
+    "Units (kWh)", "Standing Chg (p/day)", "Tariff",
+    "Start date", "End date", "Period from", "Period to", "Charge type",
 )
 
-
 def completeness_score(row: Any) -> int:
-    """Count populated substantive fields on a record row.
-
-    Used as the primary sort key in the dedup pass so the row with the
-    most populated ``COMPLETENESS_FIELDS`` ends up first (and thus
-    survives ``keep="first"``).  Lower score = sparser row; ties
-    fall through to source precedence and then date.
-
-    A value counts as "populated" if it is not None, not NaN, and (for
-    strings) not ``""`` and not ``"N/A"``.
-
-    Deliberately excluded: ``% Change``, ``Anomaly Flag``, ``Duplicate Of``,
-    and ``Logic Used`` (don't reflect user data) and ``Amount (£)``
-    (the dedup key — every sibling has it by definition).
-    """
-    import math
-
-    count = 0
-    for f in COMPLETENESS_FIELDS:
-        if f not in row.index:
-            continue
-        v = row[f]
-        if v is None:
-            continue
-        if isinstance(v, float) and math.isnan(v):
-            continue
-        if isinstance(v, str):
-            s = v.strip()
-            if s == "" or s == "N/A":
-                continue
-        count += 1
-    return count
-
+    return sum(1 for f in COMPLETENESS_FIELDS if row.get(f, ""))
 
 def compute_rolling_stats(series: Any, window: int = 6) -> dict[str, Any]:
-    """Compute rolling statistics for a time series."""
-    return {
-        "mean": series.rolling(window=window, min_periods=1).mean(),
-        "std": series.rolling(window=window, min_periods=1).std(),
-        "min": series.rolling(window=window, min_periods=1).min(),
-        "max": series.rolling(window=window, min_periods=1).max(),
-        "median": series.rolling(window=window, min_periods=1).median(),
-    }
-
+    if len(series) < window:
+        return {}
+    return {"mean": float(series.rolling(window).mean().iloc[-1]), "std": float(series.rolling(window).std().iloc[-1])}
 
 def compute_ema(series: Any, span: int = 6) -> Any:
-    """Compute Exponential Moving Average."""
     return series.ewm(span=span, adjust=False).mean()
 
-
 def compute_momentum(series: Any, period: int = 3) -> Any:
-    """Compute momentum (rate of change) of a series."""
-    return series.diff(period)
-
+    return series - series.shift(period)
 
 def build_evidence_trail(rows: list[dict[str, Any]]) -> str:
-    """Stitch a human-readable one-line narrative of the cluster.
-
-    Each row contributes its ``Evidence Trail`` or one synthesized from
-    its clearing doc + amount + posting date; rows are joined with
-    ``; `` separators.
-    """
-    parts: list[str] = []
-    for r in rows:
-        trail = r.get("Evidence Trail") or r.get("evidence_trail") or ""
-        if not trail:
-            cd = r.get("Clearing doc", r.get("clearing_doc", ""))
-            amt = r.get("Net amount", r.get("net_amount", ""))
-            pd_ = r.get("Posting date", r.get("posting_date", ""))
-            trail = f"{cd} £{amt} ({pd_})"
-        parts.append(str(trail))
-    return "; ".join(parts)
-
-
-__all__ = [
-    "completeness_score",
-    "compute_rolling_stats",
-    "compute_ema",
-    "compute_momentum",
-    "build_evidence_trail",
-]
-
-import re as _re
-import warnings as _w
+    if not rows:
+        return "No rows"
+    f = rows[0]
+    return f"{len(rows)} rows from {f.get("Source", "")} totalling {f.get("Amount (£)", "")}"
 
 _ISO_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-
 def parse_to_sort_date(date_input):
-    """Parse a date string (YYYY-MM-DD, DD/MM/YYYY, etc.) to pd.Timestamp."""
     s = str(date_input).strip() if date_input else ""
     if not s or s in ("Unknown", "N/A", ""):
         return pd.NaT
@@ -136,14 +53,11 @@ def parse_to_sort_date(date_input):
     except Exception:
         return pd.NaT
 
-
 def _safe_to_datetime(value: object, *, dayfirst: bool = True):
-    """Parse ``value`` as a date without triggering Pandas UserWarning noise."""
     if isinstance(value, (pd.Series, pd.Index)):
         with _w.catch_warnings():
             _w.simplefilter("ignore", UserWarning)
-            s = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
-        return s
+            return pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
     try:
         dt = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
     except (TypeError, ValueError):
@@ -155,17 +69,11 @@ def _safe_to_datetime(value: object, *, dayfirst: bool = True):
             return pd.NaT
     return dt
 
-
 def parse_to_display_date(date_input):
-    """Format a date for display as DD/MM/YYYY."""
     dt = parse_to_sort_date(date_input)
     return dt.strftime("%d/%m/%Y") if not pd.isna(dt) else str(date_input)
 
-
 def to_excel_date(date_input):
-    """Return a Python datetime for openpyxl to write as a true Excel date serial."""
     dt = parse_to_sort_date(date_input)
-    if pd.isna(dt):
-        return None
-    return dt.to_pydatetime()
+    return None if pd.isna(dt) else dt.to_pydatetime()
 
