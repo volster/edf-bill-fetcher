@@ -18,6 +18,8 @@ import re
 import tempfile
 import threading
 import traceback
+import warnings
+from collections import Counter
 from datetime import date, datetime
 from typing import Any, cast
 
@@ -52,13 +54,6 @@ from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,F401,I001
     compute_ema as _compute_ema,
     compute_momentum as _compute_momentum,
     compute_rolling_stats as _compute_rolling_stats,
-    parse_to_sort_date as _parse_to_sort_date,
-    _safe_to_datetime as _safe_to_datetime,
-    parse_to_display_date as _parse_to_display_date,
-    to_excel_date as _to_excel_date,
-    parse_to_sort_date,
-    parse_to_display_date,
-    to_excel_date,
 )
 from edf_bill_fetcher.helpers.excel_utils import (  # noqa: E402,F401,I001
     _TEXT_SUPPRESSION_QUEUE,
@@ -89,47 +84,6 @@ from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch  # n
 # module (per the spec / plan: Stream P5).
 from evidence_bundle import build_bundle_index, save_evidence_files  # noqa: E402,F401
 
-
-# Re-export processors from edf_bill_fetter.processors so existing call
-# sites that import processing functions from edf_collector continue to
-# work during the modularization refactor.
-from edf_bill_fetter.processors.matching import (  # noqa: E402,F401,I001
-    _parse_amount_for_event,
-    detect_sap_back_billing_events,
-    _confidence_band,
-    match_sap_events_to_edf,
-    _bb_invoice_value,
-)
-from edf_bill_fetter.processors.detection import (  # noqa: E402,F401,I001
-    compute_dispute_flags,
-    detect_back_billing,
-    detect_rebilling,
-    detect_meter_rollover,
-    infer_contracts,
-    _reversal_match,
-    _assess_reason,
-    _disclosed_label,
-    _reading_type_to_aem,
-)
-from edf_bill_fetter.processors.analysis import (  # noqa: E402,F401,I001
-    run_analysers,
-    _compute_volatility,
-    _zscore_anomalies,
-    _iqr_anomalies,
-    _linear_forecast_pair,
-    _holt_winters_forecast_pair,
-    _linear_forecast,
-    _holt_winters_forecast,
-    _detect_payment_patterns,
-    _analyze_tariff_impact,
-    _data_quality_report,
-)
-from edf_bill_fetter.processors.reconciliation import (  # noqa: E402,F401,I001
-    detect_reconciliation_statement,
-    extract_reconciliation_statement_rows,
-    _recon_parse_iso_date,
-    _recon_amount_to_float,
-)
 
 # Optional imports — gracefully degrade if missing
 try:
@@ -424,6 +378,89 @@ _OLD_PDF_PERIOD_CHARGE_RE = re.compile(
 
 # ---------------------------------------------------------------------------
 # Date helpers
+# ---------------------------------------------------------------------------
+
+
+def parse_to_sort_date(date_input):
+    s = str(date_input).strip() if date_input else ""
+    if not s or s in ("Unknown", "N/A", ""):
+        return pd.NaT
+    try:
+        if _ISO_DATE_RE.match(s):
+            return pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
+        dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
+        if pd.isna(dt):
+            dt = pd.to_datetime(s, dayfirst=False, errors="coerce")
+        return dt
+    except Exception:
+        return pd.NaT
+
+
+def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp | pd.Series:
+    """Parse ``value`` as a date without triggering Pandas UserWarning noise.
+
+    The codebase's date strings come from UK-format EDF documents
+    (``DD/MM/YYYY`` -- e.g. ``01/02/2025`` = 1 Feb 2025).  Calling
+    ``pd.to_datetime`` with no ``dayfirst`` argument triggers a
+    ``UserWarning: Parsing dates in %d/%m/%Y format when dayfirst=False``
+    on every call.  Hot loops in the analyser detectors hit it dozens
+    of times per analyser row, generating hundreds of UserWarnings
+    that obscure real problems in the run logs.
+
+    Use ``dayfirst=True`` first (UK convention); for scalar input,
+    if that produces ``NaT`` (e.g. an ISO date sneaks through), fall
+    back to ``dayfirst=False``.  This mirrors
+    :func:`parse_to_sort_date`'s tolerance so all hot-loop callers
+    converge on the same parsing contract without each one having
+    to repeat the fallback dance.
+
+    Passing a ``pd.Series`` calls underlying ``pd.to_datetime`` with
+    ``dayfirst=True`` and a single vectorised call -- no scalar
+    fallback loop.  Per-element day-first retry on a Series would
+    require O(n) Python overhead so we accept the vectorised
+    interpretation: anything that did not parse as day-first-month
+    becomes ``NaT``.
+    """
+    if isinstance(value, pd.Series | pd.Index):
+        try:
+            # Suppress the UserWarning pandas emits on mixed-format
+            # Series ("Could not infer format, ..."). The behaviour is
+            # intentional (the caller accepts NaT for non-parseable rows).
+            import warnings as _w
+
+            with _w.catch_warnings():
+                _w.simplefilter("ignore", UserWarning)
+                s = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+            return s
+        except (TypeError, ValueError):
+            return value if isinstance(value, pd.Index) else pd.Series([], dtype="datetime64[ns]")
+    try:
+        dt = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+    except (TypeError, ValueError):
+        return pd.NaT
+    if pd.isna(dt) and dayfirst:
+        try:
+            dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
+        except (TypeError, ValueError):
+            return pd.NaT
+    return dt
+
+
+def parse_to_display_date(date_input):
+    dt = parse_to_sort_date(date_input)
+    return dt.strftime("%d/%m/%Y") if not pd.isna(dt) else str(date_input)
+
+
+def to_excel_date(date_input):
+    """Return a Python datetime for openpyxl to write as a true Excel date serial."""
+    dt = parse_to_sort_date(date_input)
+    if pd.isna(dt):
+        return None
+    return dt.to_pydatetime()
+
+
+# ---------------------------------------------------------------------------
+# Detect which EDF bill format we're looking at
 # ---------------------------------------------------------------------------
 
 
@@ -852,6 +889,309 @@ _SAP_CONFIDENCE_BANDS = (("High", 75), ("Medium", 40), ("Low", 10))
 
 
 
+def _parse_amount_for_event(v: object) -> float:
+    """Parse the SAP ``Amount`` field (often a string with commas)."""
+    if v is None:
+        return 0.0
+    try:
+        s = str(v).strip().lstrip("£").replace(",", "")
+        if not s:
+            return 0.0
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+
+
+def detect_sap_back_billing_events(
+    sap_rows: list[dict],
+    *,
+    min_cluster_size: int = _SAP_MIN_CLUSTER_SIZE,
+) -> list[SapBackBillingEvent]:
+    """Cluster SAP Financial Transaction rows into back-billing events.
+
+    Spec §3.2 pipeline.  Returns events sorted by Clearing Date
+    ascending; events whose Clearing Date is NaT sort last.
+
+    Each event carries its underlying row list so the writer can render
+    both summary and drill-down.  No SAP-to-EDF matching is performed
+    here — see ``match_sap_events_to_edf``.
+    """
+    if not sap_rows:
+        return []
+
+    # -------------- stage 1: filter debt-management noise --------------
+    filtered = [
+        r
+        for r in sap_rows
+        if str(r.get("Statistical Key Flag", "")).strip() != _SAP_DEBT_MGMT_FLAG_VALUE
+    ]
+
+    # -------------- stage 2: group by Clearing Document --------------
+    clusters: dict[str, list[dict]] = {}
+    skipped_no_cd = 0
+    for r in filtered:
+        cd = str(r.get("Clearing Document", "")).strip()
+        if not cd or cd in ("NA", "None", "*"):
+            # Rows without a Clearing Document don't belong to any
+            # cluster (and weren't part of a SAP bookkeeping event).
+            skipped_no_cd += 1
+            continue
+        clusters.setdefault(cd, []).append(r)
+
+    # -------------- stage 3: apply minimum cluster size --------------
+    clusters_kept = {cd: rows for cd, rows in clusters.items() if len(rows) >= min_cluster_size}
+
+    # -------------- stage 4: compute per-cluster aggregates --------------
+    events: list[SapBackBillingEvent] = []
+    for cd, rows in clusters_kept.items():
+        # Clearing Date = min non-empty Clearing Date in cluster
+        clear_dates = [
+            pd.to_datetime(str(r.get("Clearing Date", "")).strip(), errors="coerce")
+            for r in rows
+            if str(r.get("Clearing Date", "")).strip()
+            and str(r.get("Clearing Date", "")).strip() not in ("NA", "None")
+        ]
+        clear_dates = [d for d in clear_dates if not pd.isna(d)]
+        if clear_dates:
+            clearing_date = min(clear_dates)
+        else:
+            clearing_date = pd.NaT
+
+        # Clearing Reason = most common non-empty value
+        reasons = [
+            str(r.get("Clearing Reason", "")).strip()
+            for r in rows
+            if str(r.get("Clearing Reason", "")).strip()
+        ]
+        if reasons:
+            clearing_reason = Counter(reasons).most_common(1)[0][0]
+        else:
+            clearing_reason = ""
+
+        net_amount = sum(_parse_amount_for_event(r.get("Amount")) for r in rows)
+        has_credit = any(
+            "Credit for Consum Billing" in str(r.get("Transaction Text", "")) for r in rows
+        )
+        has_acct_maint = any(
+            str(r.get("Transaction Text", "")).strip() == "Account maintenance" for r in rows
+        )
+        amounts = [_parse_amount_for_event(r.get("Amount")) for r in rows]
+        non_zero = [a for a in amounts if abs(a) > 0.001]
+        largest = max(non_zero, key=lambda x: abs(x)) if non_zero else 0.0
+        # Posting Date Range (iso strings, min..max)
+        post_dates = [
+            str(r.get("Posting Date", "")).strip()
+            for r in rows
+            if str(r.get("Posting Date", "")).strip()
+            and str(r.get("Posting Date", "")).strip() not in ("NA", "None")
+        ]
+        if post_dates:
+            posting_date_range = (min(post_dates), max(post_dates))
+        else:
+            posting_date_range = ("", "")
+        evidence_trail = _build_evidence_trail(rows)
+
+        events.append(
+            SapBackBillingEvent(
+                clearing_doc=cd,
+                clearing_date=clearing_date,
+                clearing_reason=clearing_reason,
+                rows=rows,
+                net_amount=round(net_amount, 2),
+                has_credit_for_consum_billing=has_credit,
+                has_account_maintenance=has_acct_maint,
+                largest_single_posting=round(largest, 2),
+                posting_date_range=posting_date_range,
+                evidence_trail=evidence_trail,
+            )
+        )
+
+    # -------------- stage 5: sort by Clearing Date ascending --------------
+    # NaT sorts last (use Timestamp.max as the sort key); ties broken by
+    # Clearing Doc string for stable output.
+    events_sorted = sorted(
+        events,
+        key=lambda ev: (
+            ev.clearing_date if not pd.isna(ev.clearing_date) else pd.Timestamp.max,
+            ev.clearing_doc,
+        ),
+    )
+    return events_sorted
+
+
+def _confidence_band(score: int) -> str | None:
+    """Map a numeric match score to High/Medium/Low/None (Unmatched)."""
+    for band, threshold in _SAP_CONFIDENCE_BANDS:
+        if score >= threshold:
+            return band
+    return None
+
+
+def match_sap_events_to_edf(
+    events: list[SapBackBillingEvent],
+    edf_records: list[dict],
+) -> list[SapEdfMatch]:
+    """Fuzzy-match SAP events to EDF Evidence Report rows.
+
+    Spec §3.3.  Returns one SapEdfMatch per (event × matched EDF
+    candidate).  SAP events with no candidate at Low confidence or
+    above are omitted from the returned list (but remain on Sheet 1).
+    """
+    if not events or not edf_records:
+        return []
+
+    # Parse the EDF records into a list of (idx, period_from, period_to, amount, invoice).
+    # Reuse the module-level _safe_to_datetime so EDF UK-format dates
+    # (DD/MM/YYYY) are parsed day-first; the earlier inline ``_to_ts``
+    # helper called ``pd.to_datetime`` with the default MM/DD, which
+    # mis-split the smoking-gun cluster-vs-EDF pairing by ~30 days.
+    parsed_edf: list[
+        tuple[
+            int,
+            pd.Timestamp | pd._libs.tslibs.nattype.NaTType,
+            pd.Timestamp | pd._libs.tslibs.nattype.NaTType,
+            float,
+            str,
+        ]
+    ] = []
+    for i, rec in enumerate(edf_records):
+        invoice = str(rec.get("Invoice #", "")).strip()
+        if not invoice or invoice in ("N/A", "None"):
+            continue
+        pf = _safe_to_datetime(rec.get("Period From"))
+        pt = _safe_to_datetime(rec.get("Period To"))
+        amt_raw = rec.get("Amount (£)")
+        try:
+            amt = float(str(amt_raw).replace(",", "").lstrip("£").strip())
+        except (TypeError, ValueError):
+            amt = 0.0
+        parsed_edf.append((i, pf, pt, amt, invoice))
+
+    matches: list[SapEdfMatch] = []
+    for ev in events:
+        if pd.isna(ev.clearing_date):
+            continue
+        ev_cd = pd.Timestamp(ev.clearing_date)
+        for idx, pf, pt, edf_amt, _invoice in parsed_edf:
+            # Compute the date delta in days vs Period To (or From fallback)
+            if not pd.isna(pt):
+                date_delta_days = int(abs((ev_cd - pd.Timestamp(pt)).days))
+            elif not pd.isna(pf):
+                date_delta_days = int(abs((ev_cd - pd.Timestamp(pf)).days))
+            else:
+                continue
+
+            # Amount score — computed before the date-score branch
+            # (spec §3.1 — Option C: the in-span date bonus is now
+            # conditional on amount correspondence; previously a
+            # SAP clearing date happening to fall inside a wide EDF
+            # invoice period scored Medium with zero amount match,
+            # flooding the matched-events sheet with 129 fake rows).
+            amount_score = 0
+            if abs(ev.net_amount) < 1.0 and edf_amt > 0:
+                # Net-zero cluster: try matching any underlying row's
+                # gross amount against the EDF invoice.  Find the best
+                # (lowest) band that the closest row fits.
+                best_rel_delta = float("inf")
+                for r in ev.rows:
+                    row_amt = _parse_amount_for_event(r.get("Amount"))
+                    if abs(row_amt) < 1 or abs(edf_amt) < 1:
+                        continue
+                    rel_delta = abs(abs(row_amt) - edf_amt) / max(abs(edf_amt), 0.01)
+                    if rel_delta < best_rel_delta:
+                        best_rel_delta = rel_delta
+                if best_rel_delta != float("inf"):
+                    for band_amt, band_score in _SAP_MATCH_AMOUNT_BANDS:
+                        if best_rel_delta <= band_amt:
+                            amount_score = band_score
+                            break
+            elif ev.net_amount != 0 and edf_amt > 0:
+                ratio = ev.net_amount / edf_amt
+                if 0.95 <= ratio <= 1.05:
+                    amount_score = 40
+                elif 0.75 <= ratio <= 1.25:
+                    amount_score = 20
+                elif 0.50 <= ratio <= 1.50:
+                    amount_score = 5
+
+            # Date score — Clearing Date within EDF Period span gets
+            # the 50-point bonus ONLY when amount also matched (spec
+            # §3.1 — Option C).  Without amount correspondence the
+            # in-span case falls through to the day-band ladder
+            # measured against the nearer boundary, so a pure
+            # coincidental date-in-span can no longer reach Medium.
+            date_score = 0
+            date_in_span = False
+            if (
+                not pd.isna(pf)
+                and not pd.isna(pt)
+                and pd.Timestamp(pf) <= ev_cd <= pd.Timestamp(pt)
+            ):
+                date_in_span = True
+                if amount_score > 0:
+                    date_score = 50
+                else:
+                    delta_to_pf = abs((ev_cd - pd.Timestamp(pf)).days)
+                    delta_to_pt = abs((ev_cd - pd.Timestamp(pt)).days)
+                    nearest_delta = min(delta_to_pf, delta_to_pt)
+                    for band_days, band_score in _SAP_MATCH_DAY_BANDS:
+                        if nearest_delta <= band_days:
+                            date_score = band_score
+                            break
+            else:
+                for band_days, band_score in _SAP_MATCH_DAY_BANDS:
+                    if date_delta_days <= band_days:
+                        date_score = band_score
+                        break
+
+            total_score = date_score + amount_score
+            band = _confidence_band(total_score)
+            # Gate Medium+ on amount correspondence (spec §3.1 —
+            # Option C).  Pure-date matches (in-span or near-boundary)
+            # cap at Low; below-Low total drops to None.
+            if band in ("High", "Medium") and amount_score == 0:
+                band = "Low" if total_score >= 10 else None
+            if band is None:
+                continue
+
+            amt_delta = round(ev.net_amount - edf_amt, 2)
+            if band == "High":
+                notes = (
+                    "Clearing date inside EDF period + amount within 5%"
+                    if date_in_span
+                    else f"Within {date_delta_days}d of period-end + amount within 5%"
+                )
+            elif band == "Medium":
+                # amount_score > 0 is guaranteed by the Medium+ gate above.
+                if date_in_span:
+                    notes = "Clearing date inside EDF period + amount within 25%"
+                else:
+                    notes = f"Within {date_delta_days}d of period-end + amount within 25%"
+            else:  # band == "Low"
+                if date_in_span and amount_score == 0:
+                    notes = (
+                        "Clearing date inside EDF period but amounts do not "
+                        "correspond — likely coincidental"
+                    )
+                else:
+                    notes = f"Within {date_delta_days}d of period-end; may be coincidental"
+
+            matches.append(
+                SapEdfMatch(
+                    event=ev,
+                    edf_record=edf_records[idx],
+                    confidence_band=band,
+                    confidence_score=total_score,
+                    amount_delta=amt_delta,
+                    date_delta_days=date_delta_days,
+                    notes=notes,
+                )
+            )
+    return matches
+
+
 # ---------------------------------------------------------------------------
 # HTM account-history parser
 # ---------------------------------------------------------------------------
@@ -1029,6 +1369,197 @@ def _recon_to_iso(s: str) -> str:
 
 def _recon_money(s: str) -> float:
     return float(s.replace(",", ""))
+
+
+def detect_reconciliation_statement(text: str) -> bool:
+    return bool(_RECON_STATEMENT_RE.search(text[:2000]))
+
+
+def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> list[dict]:
+    """Extract every charge, reversal, late-payment, payment + one meta row
+    from a consolidation reconciliation statement PDF."""
+    rows: list[dict] = []
+    src = "Statement Reconciliation"
+
+    def _excerpt_around(m: "re.Match", window: int = 400) -> str:
+        """Return up to ``window`` chars around the regex match."""
+        start = max(0, m.start(0) - 20)
+        end = min(len(text), m.end(0) + window)
+        return text[start:end]
+
+    bill_ref = ""
+    bill_date_display = "N/A"
+    bill_ref_match = _RECON_STATEMENT_RE.search(text)
+    if bill_ref_match:
+        bill_ref = bill_ref_match.group(1)
+        bill_date_display = _recon_to_iso(bill_ref_match.group(2))
+
+    bal_last: object = "N/A"
+    bal_last_match = _RECON_BALANCE_LAST_RE.search(text)
+    if bal_last_match:
+        bal_last = _recon_money(bal_last_match.group(1))
+
+    new_bal: object = "N/A"
+    new_bal_match = _RECON_NEW_BALANCE_RE.search(text)
+    if new_bal_match:
+        new_bal = _recon_money(new_bal_match.group(1))
+
+    # Charge rows
+    for m in _RECON_CHARGE_RE.finditer(text):
+        rows.append(
+            {
+                "Source": src,
+                "Sender": "",
+                "Date": bill_date_display,
+                "Period From": _recon_to_iso(m.group(1)),
+                "Period To": _recon_to_iso(m.group(2)),
+                "Invoice #": bill_ref or "N/A",
+                "Amount (£)": _recon_money(m.group(3)),
+                "Period Charge (£)": _recon_money(m.group(3)),
+                "Entry Type": "Charge",
+                "Reading": "N/A",
+                "Units (kWh)": "N/A",
+                "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
+                "Attachment Name": attachment_name,
+                "Details": "Electricity charge (reconciliation statement)",
+                "Logic Used": "Reconciliation Statement Charge",
+                "Balance Last Bill (£)": bal_last,
+                "Source PDF Text": _excerpt_around(m),
+                "_regex_trace": "recon _RECON_CHARGE_RE",
+            }
+        )
+
+    # Reversed-electricity-charge rows
+    for m in _RECON_REVERSAL_RE.finditer(text):
+        date_iso = _recon_to_iso(m.group(1))
+        amount = _recon_money(m.group(2))
+        # Look for a parenthetical period on the next non-empty line.
+        details = "Reversed electricity charge"
+        tail = text[m.end() : m.end() + 400]
+        period_match = _RECON_REVERSAL_PERIOD_RE.search(tail)
+        if period_match:
+            details = (
+                f"Reversed electricity charge ({period_match.group(1)} - {period_match.group(2)})"
+            )
+        rows.append(
+            {
+                "Source": src,
+                "Sender": "",
+                "Date": date_iso,
+                "Period From": "N/A",
+                "Period To": "N/A",
+                "Invoice #": bill_ref or "N/A",
+                "Amount (£)": -abs(amount),
+                "Period Charge (£)": -abs(amount),
+                "Entry Type": "Credit",
+                "Reading": "N/A",
+                "Units (kWh)": "N/A",
+                "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
+                "Attachment Name": attachment_name,
+                "Details": details,
+                "Logic Used": "Reconciliation Statement Reversal",
+                "Balance Last Bill (£)": bal_last,
+                "Source PDF Text": _excerpt_around(m),
+                "_regex_trace": "recon _RECON_REVERSAL_RE",
+            }
+        )
+
+    # Late payment rows
+    for m in _RECON_LATE_PAYMENT_RE.finditer(text):
+        amount = _recon_money(m.group(1))
+        rows.append(
+            {
+                "Source": src,
+                "Sender": "",
+                "Date": bill_date_display,
+                "Period From": "N/A",
+                "Period To": "N/A",
+                "Invoice #": bill_ref or "N/A",
+                "Amount (£)": amount,
+                "Period Charge (£)": amount,
+                "Entry Type": "Late Payment",
+                "Reading": "N/A",
+                "Units (kWh)": "N/A",
+                "Standing Chg (p/day)": "N/A",
+                "Tariff": "N/A",
+                "Attachment Name": attachment_name,
+                "Details": "Late Payment Charge (reconciliation statement)",
+                "Logic Used": "Reconciliation Statement Late Payment",
+                "Balance Last Bill (£)": bal_last,
+                "Source PDF Text": _excerpt_around(m),
+                "_regex_trace": "recon _RECON_LATE_PAYMENT_RE",
+            }
+        )
+
+    # Payment rows -- scoped to the section starting "Payments" through either
+    # "Your new balance" or end-of-text. EDF lists payments with a date column
+    # then a £ column.
+    payments_block = ""
+    pay_section_match = re.search(r"Payments\s*\n", text, re.IGNORECASE)
+    if pay_section_match:
+        block_start = pay_section_match.end()
+        # End payment block at "Your new balance" or end-of-text.
+        end_match = re.search(r"Your\s+new\s+balance", text[block_start:], re.IGNORECASE)
+        block_end = block_start + end_match.start() if end_match else len(text)
+        payments_block = text[block_start:block_end]
+
+    if payments_block:
+        for m in _RECON_PAYMENT_RE.finditer(payments_block):
+            rows.append(
+                {
+                    "Source": src,
+                    "Sender": "",
+                    "Date": _recon_to_iso(m.group(1)),
+                    "Period From": "N/A",
+                    "Period To": "N/A",
+                    "Invoice #": bill_ref or "N/A",
+                    "Amount (£)": _recon_money(m.group(2)),
+                    "Period Charge (£)": "N/A",
+                    "Entry Type": "Payment",
+                    "Reading": "N/A",
+                    "Units (kWh)": "N/A",
+                    "Standing Chg (p/day)": "N/A",
+                    "Tariff": "N/A",
+                    "Attachment Name": attachment_name,
+                    "Details": "Payment received (reconciliation statement)",
+                    "Logic Used": "Reconciliation Statement Payment",
+                    "Balance Last Bill (£)": bal_last,
+                    "Source PDF Text": _excerpt_around(m),
+                    "_regex_trace": "recon _RECON_PAYMENT_RE",
+                }
+            )
+
+    # Always emit one meta row carrying the statement-level context.
+    rows.append(
+        {
+            "Source": src,
+            "Sender": "",
+            "Date": bill_date_display,
+            "Period From": "N/A",
+            "Period To": "N/A",
+            "Invoice #": bill_ref or "N/A",
+            "Amount (£)": new_bal,
+            "Period Charge (£)": "N/A",
+            "Entry Type": "Statement Reconciliation",
+            "Reading": "N/A",
+            "Units (kWh)": "N/A",
+            "Standing Chg (p/day)": "N/A",
+            "Tariff": "N/A",
+            "Attachment Name": attachment_name,
+            "Balance Last Bill (£)": bal_last,
+            "Details": f"Statement reconciliation: bill ref {bill_ref}",
+            "Logic Used": "Reconciliation Statement Meta",
+            # The meta row carries the statement-level context
+            # (bill ref + balances); there is no single regex match
+            # to excerpt. Provide the first 600 chars of the statement
+            # so a reviewer sees the statement header context.
+            "Source PDF Text": text[:600],
+            "_regex_trace": "recon meta",
+        }
+    )
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -2368,6 +2899,193 @@ class EvidenceEngine:
 # ---------------------------------------------------------------------------
 
 THIN = Side(style="thin", color="DDDDDD")
+
+
+def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
+    """Compute dispute flags from a sorted DataFrame.
+
+    Returns:
+        tuple: (flags_list, flag_counts_dict)
+        - flags_list: list of (type, date, amount, detail, severity) tuples
+        - flag_counts_dict: dict with HIGH, MEDIUM, INFO counts
+
+    Issues a :func:`warnings.warn` for any row that fails to evaluate
+    under each heuristic (parse error, missing key, etc.).  Previously
+    those rows were silently swallowed and the report lost the
+    surrounding evidence — turning them into warnings surfaces a
+    developer-visible signal without breaking the run.
+    """
+
+    def _flag_or_warn(
+        row_idx: int,
+        flag_name: str,
+        exc: BaseException,
+    ) -> None:
+        warnings.warn(
+            (
+                f"compute_dispute_flags[{flag_name}] could not evaluate "
+                f"row index {row_idx}: {exc!r}; row silently skipped."
+            ),
+            stacklevel=3,
+        )
+
+    flags: list[tuple[str, str | float | None, float | None, str, str]] = []
+    n = len(dfc)
+    if n < 2:
+        return flags, {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
+
+    # 1. LARGE JUMP: >25% increase within 90 days
+    for i in range(1, n):
+        p = dfc.iloc[i - 1]
+        c_ = dfc.iloc[i]
+        try:
+            chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+            pct = chg / float(p["Amount (£)"]) if float(p["Amount (£)"]) > 0 else 0
+            days = (c_["_dt"] - p["_dt"]).days
+            if pct > 0.25 and 0 < days <= 90:
+                flags.append(
+                    (
+                        "LARGE JUMP",
+                        c_["Date"],
+                        c_["Amount (£)"],
+                        f"+£{chg:,.2f} (+{pct * 100:.1f}%) in {days} days (from {p['Date']}: £{p['Amount (£)']:,.2f})",
+                        "HIGH" if pct > 0.5 else "MEDIUM",
+                    )
+                )
+        except (ValueError, TypeError, KeyError) as exc:
+            _flag_or_warn(i, "LARGE_JUMP", exc)
+
+    # 2. BILLING GAP: >60 days without a bill
+    for i in range(1, n):
+        p = dfc.iloc[i - 1]
+        c_ = dfc.iloc[i]
+        try:
+            days = (c_["_dt"] - p["_dt"]).days
+            if days > 60:
+                flags.append(
+                    (
+                        "BILLING GAP",
+                        c_["Date"],
+                        c_["Amount (£)"],
+                        f"{days} days without a bill (previous: {p['Date']}). Balance accumulated unchecked.",
+                        "HIGH" if days > 120 else "MEDIUM",
+                    )
+                )
+        except (ValueError, TypeError, KeyError) as exc:
+            _flag_or_warn(i, "BILLING_GAP", exc)
+
+    # 3. ESTIMATED RUN: 3+ consecutive estimated readings
+    if "Reading" in dfc.columns:
+        run = 0
+        run_start = None
+        for i, rv in enumerate(dfc["Reading"].tolist()):
+            if str(rv).lower() in ("estimated", "est."):
+                run += 1
+                if run == 1:
+                    run_start = dfc.iloc[i]["Date"]
+            else:
+                if run >= 3:
+                    flags.append(
+                        (
+                            "ESTIMATED RUN",
+                            run_start,
+                            None,
+                            f"{run} consecutive estimated readings from {run_start}.",
+                            "HIGH",
+                        )
+                    )
+                run = 0
+                run_start = None
+        if run >= 3:
+            flags.append(
+                (
+                    "ESTIMATED RUN",
+                    run_start,
+                    None,
+                    f"{run} consecutive estimated readings from {run_start} (ongoing).",
+                    "HIGH",
+                )
+            )
+
+    # 4. HIGH DAILY RATE: daily rate significantly above average
+    if mean_daily > 0:
+        for i in range(1, n):
+            p = dfc.iloc[i - 1]
+            c_ = dfc.iloc[i]
+            try:
+                days = (c_["_dt"] - p["_dt"]).days
+                charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+                if days > 0 and charge > 0:
+                    daily = charge / days
+                    ratio = daily / mean_daily
+                    if ratio > 2.5:
+                        flags.append(
+                            (
+                                "HIGH DAILY RATE",
+                                c_["Date"],
+                                c_["Amount (£)"],
+                                f"£{daily:,.2f}/day ({ratio:.1f}× avg £{mean_daily:,.2f}/day) over {days} days",
+                                "HIGH" if ratio > 4 else "MEDIUM",
+                            )
+                        )
+            except (ValueError, TypeError, KeyError, ZeroDivisionError) as exc:
+                _flag_or_warn(i, "HIGH_DAILY_RATE", exc)
+
+    # 5. BALANCE REDUCTION: payment/credit > £500
+    for i in range(1, n):
+        p = dfc.iloc[i - 1]
+        c_ = dfc.iloc[i]
+        try:
+            chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+            if chg < -500:
+                flags.append(
+                    (
+                        "BALANCE REDUCTION",
+                        c_["Date"],
+                        c_["Amount (£)"],
+                        f"Balance fell £{abs(chg):,.2f} (from £{p['Amount (£)']:,.2f} to £{c_['Amount (£)']:,.2f}).",
+                        "INFO",
+                    )
+                )
+        except (ValueError, TypeError, KeyError) as exc:
+            _flag_or_warn(i, "BALANCE_REDUCTION", exc)
+
+    # 6. RECONCILIATION MISMATCH: balance delta vs period charge
+    if "Period Charge (£)" in dfc.columns:
+        for i in range(1, n):
+            p = dfc.iloc[i - 1]
+            c_ = dfc.iloc[i]
+            try:
+                if str(c_.get("Entry Type", "")) == "New Bill" and str(p.get("Entry Type", "")) in (
+                    "New Bill",
+                    "Ongoing Balance",
+                ):
+                    pc = c_.get("Period Charge (£)")
+                    try:
+                        pc_val = float(pc)
+                    except (ValueError, TypeError):
+                        continue
+                    balance_delta = float(c_["Amount (£)"]) - float(p["Amount (£)"])
+                    diff = abs(balance_delta - pc_val)
+                    threshold = max(pc_val * 0.10, 50.0) if pc_val > 0 else 50.0
+                    if diff > threshold:
+                        flags.append(
+                            (
+                                "RECONCILIATION MISMATCH",
+                                c_["Date"],
+                                c_["Amount (£)"],
+                                f"Balance delta £{balance_delta:,.2f} vs period charge £{pc_val:,.2f} "
+                                f"(difference: £{diff:,.2f}). Possible payment, credit, or billing error "
+                                f"between {p['Date']} and {c_['Date']}.",
+                                "HIGH" if diff > pc_val * 0.5 else "MEDIUM",
+                            )
+                        )
+            except (ValueError, TypeError, KeyError) as exc:
+                _flag_or_warn(i, "RECONCILIATION_MISMATCH", exc)
+
+    # Count by severity
+    counts = {s: sum(1 for f in flags if f[4] == s) for s in ("HIGH", "MEDIUM", "INFO")}
+    return flags, counts
 
 
 # ---------------------------------------------------------------------------
@@ -4248,6 +4966,299 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
 # =====================================================================
 
 
+def _compute_volatility(series, window=6):
+    """Compute rolling volatility (std of returns)."""
+    returns = series.pct_change()
+    return returns.rolling(window=window, min_periods=1).std()
+
+
+def _zscore_anomalies(series, threshold=2.5):
+    """Detect anomalies using z-score method."""
+    if len(series) < 3:
+        return pd.Series(False, index=series.index)
+    mean = series.mean()
+    std = series.std()
+    if std == 0:
+        return pd.Series(False, index=series.index)
+    z_scores = np.abs((series - mean) / std)
+    return z_scores > threshold
+
+
+def _iqr_anomalies(series, multiplier=1.5):
+    """Detect anomalies using IQR method."""
+    if len(series) < 4:
+        return pd.Series(False, index=series.index)
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    if iqr == 0:
+        return pd.Series(False, index=series.index)
+    lower = q1 - multiplier * iqr
+    upper = q3 + multiplier * iqr
+    return (series < lower) | (series > upper)
+
+
+def _linear_forecast_pair(series, steps=6):
+    """Simple linear regression: returns (fitted, future) values.
+
+    The fitted series is the model's prediction at each historical
+    point — this lets the Forecast tab back-paint predictions onto
+    historical rows so the reader sees actual-vs-predicted for the
+    whole data range, not only at a 6-step future horizon.
+
+    Linear regression in this codebase uses ``np.polyfit``.  The
+    fitted value at index ``i`` is simply ``np.polyval(coeffs, i)``
+    computed against the same coefficients used for the future
+    forecast, so the in-sample and out-of-sample predictions share
+    a single model — meaning the historical vs forward columns
+    reflect exactly the same fit.
+
+    Returns ``(None, None)`` for insufficient data.
+    """
+    if len(series) < 3:
+        return None, None
+    x = np.arange(len(series))
+    y = series.values
+    # Handle NaN values
+    mask = ~np.isnan(y)
+    if mask.sum() < 3:
+        return None, None
+    x_clean = x[mask]
+    y_clean = y[mask]
+    try:
+        coeffs = np.polyfit(x_clean, y_clean, 1)
+        # Fitted values for every historical index — back-pained
+        # by the same straight line that drives the future window.
+        fitted = np.polyval(coeffs, x)
+        future_x = np.arange(len(series), len(series) + steps)
+        forecast = np.polyval(coeffs, future_x)
+        return fitted, forecast
+    except Exception:
+        return None, None
+
+
+def _holt_winters_forecast_pair(series, steps=6, seasonal_periods=None):
+    """Holt-Winters: returns (fitted, future) values (if statsmodels available).
+
+    Mirrors ``_linear_forecast_pair`` for the ExponentialSmoothing
+    path.  Statsmodels's ``fit()`` returns a fitted-ness model whose
+    ``.fittedvalues`` attribute carries the one-step-ahead in-sample
+    prediction at every historical index — exactly what we need to
+    back-paint the forecast tab so the reader sees actual vs
+    predicted divergence for the whole data range.
+
+    Returns ``(None, None)`` when statsmodels is unavailable, the
+    series is too short, or fitting fails.
+    """
+    if not HAS_STATSMODELS or len(series) < 4:
+        return None, None
+    try:
+        clean_series = series.dropna()
+        if len(clean_series) < 4:
+            return None, None
+
+        if seasonal_periods is None:
+            seasonal_periods = min(12, len(clean_series) // 2) if len(clean_series) >= 8 else None
+
+        model = ExponentialSmoothing(
+            clean_series,
+            trend="add",
+            seasonal="add" if seasonal_periods else None,
+            seasonal_periods=seasonal_periods,
+            initialization_method="estimated",
+        )
+        fitted_model = model.fit(optimized=True)
+        # In-sample fitted: statsmodels returns the one-step-ahead
+        # prediction for each historical point the model was fit
+        # against.  We reindex onto the original series (which may
+        # include NaN gaps) so row N in the call sites lines up
+        # with row N in the user's data.
+        fitted_vals = fitted_model.fittedvalues.reindex(series.index)
+        forecast = fitted_model.forecast(steps).values
+        return fitted_vals.values, forecast
+    except Exception:
+        return None, None
+
+
+def _linear_forecast(series, steps=6):
+    """Simple linear regression forecast (forward-only legacy entry point).
+
+    See ``_linear_forecast_pair`` for the (fitted, future) form that
+    the Forecast tab now uses.  This single-value shim is kept for
+    any callers that imported the previous-shape return value (we
+    don't have any in-tree callers anymore, but a user
+    may have downstream code that does).
+    """
+    _, forecast = _linear_forecast_pair(series, steps)
+    return forecast
+
+
+def _holt_winters_forecast(series, steps=6, seasonal_periods=None):
+    """Holt-Winters forward-only legacy entry point.  See ``_holt_winters_forecast_pair``."""
+    _, forecast = _holt_winters_forecast_pair(series, steps, seasonal_periods)
+    return forecast
+
+
+def _detect_payment_patterns(df):
+    """Analyze payment/credit patterns in the data.
+
+    The per-row transaction amount (the customer's actual payment or
+    EDF's actual credit) lives in ``Period Charge (£)`` for HTM
+    Payment/Credit rows. ``Amount (£)`` on those rows carries the
+    *running balance after the transaction* -- using it as the
+    "payment amount" used to flood the Payment Analysis sheet with
+    huge balance figures masquerading as payments. Prefer
+    ``Period Charge (£)`` when the row has a numeric value there,
+    falling back to ``Amount (£)`` for legacy / PST-only rows that
+    never populated ``Period Charge (£)``.
+    """
+    payments = df[df["Entry Type"].isin(["Payment", "Credit"])].copy()
+    if payments.empty:
+        return {}
+
+    payments["_dt"] = payments["Date"].apply(parse_to_sort_date)
+    payments = payments.sort_values("_dt")
+
+    # Calculate days between payments
+    pay_dates = payments["_dt"].dropna()
+    intervals = pay_dates.diff().dt.days.dropna()
+
+    # Per-row transaction amount: prefer Period Charge (£) (the actual
+    # payment / credit), fall back to Amount (£) when Period Charge is
+    # missing or non-numeric (legacy rows that never populated it, or
+    # older callers passing a DataFrame without the column).
+    if "Period Charge (£)" in payments.columns:
+        pc_numeric = pd.to_numeric(payments["Period Charge (£)"], errors="coerce")
+    else:
+        pc_numeric = pd.Series([float("nan")] * len(payments), index=payments.index)
+    amt_numeric = pd.to_numeric(payments["Amount (£)"], errors="coerce")
+    pay_amounts = pc_numeric.where(pc_numeric.notna() & (pc_numeric > 0), amt_numeric)
+
+    return {
+        "count": len(payments),
+        "total_paid": abs(pay_amounts.sum()),
+        "avg_payment": abs(pay_amounts.mean()),
+        "median_payment": abs(pay_amounts.median()),
+        "max_payment": abs(pay_amounts.max()),
+        "min_payment": abs(pay_amounts.min()),
+        "avg_interval_days": float(intervals.mean()) if len(intervals) > 0 else None,
+        "median_interval_days": float(intervals.median()) if len(intervals) > 0 else None,
+        "last_payment_date": payments.iloc[-1]["Date"] if len(payments) > 0 else None,
+        "last_payment_amount": abs(pay_amounts.iloc[-1]) if len(pay_amounts) > 0 else None,
+    }
+
+
+def _analyze_tariff_impact(df):
+    """Analyze the impact of tariff changes on unit rates and charges."""
+    if "Tariff" not in df.columns or "Unit Rate (p/kWh)" not in df.columns:
+        return {}
+
+    tariff_data = df[df["Tariff"].notna() & (df["Tariff"] != "N/A")].copy()
+    if tariff_data.empty:
+        return {}
+
+    # Convert unit rate to numeric
+    tariff_data["unit_rate_num"] = pd.to_numeric(tariff_data["Unit Rate (p/kWh)"], errors="coerce")
+    tariff_data = tariff_data.dropna(subset=["unit_rate_num"])
+
+    if tariff_data.empty:
+        return {}
+
+    # Group by tariff
+    tariff_stats = (
+        tariff_data.groupby("Tariff")
+        .agg(
+            count=("unit_rate_num", "count"),
+            avg_unit_rate=("unit_rate_num", "mean"),
+            median_unit_rate=("unit_rate_num", "median"),
+            min_unit_rate=("unit_rate_num", "min"),
+            max_unit_rate=("unit_rate_num", "max"),
+            avg_charge=("Period Charge (£)", lambda x: pd.to_numeric(x, errors="coerce").mean()),
+        )
+        .reset_index()
+    )
+
+    # Find tariff changes
+    tariff_data = tariff_data.sort_values("_dt" if "_dt" in tariff_data.columns else "Date")
+    tariff_changes = tariff_data["Tariff"].ne(tariff_data["Tariff"].shift()).cumsum()
+
+    return {
+        "tariff_stats": tariff_stats,
+        "num_tariffs": tariff_data["Tariff"].nunique(),
+        "tariff_changes": int(tariff_changes.max()) if not tariff_changes.empty else 0,
+    }
+
+
+def _data_quality_report(df):
+    """Generate a comprehensive data quality report.
+
+    Works on a *copy* of the input DataFrame so the caller's data is
+    never mutated (previously this added ``_dt_parsed`` as a side-effect
+    on the caller's df, which broke downstream code that re-used the
+    same DataFrame for other purposes).
+    """
+    # Work on a copy to avoid mutating the caller's DataFrame
+    df = df.copy()
+    total_records = len(df)
+    if total_records == 0:
+        return {}
+
+    # Date parsing success
+    df["_dt_parsed"] = df["Date"].apply(parse_to_sort_date)
+    date_parsed = df["_dt_parsed"].notna().sum()
+    date_failed = total_records - date_parsed
+
+    # Amount completeness
+    amt_complete = df["Amount (£)"].notna().sum()
+    amt_missing = total_records - amt_complete
+
+    # Period info completeness
+    period_from_complete = (df["Period From"] != "N/A").sum()
+    _ = (df["Period To"] != "N/A").sum()  # Not used, but computed for completeness
+    period_complete = period_from_complete  # At least from date
+
+    # Reading classification
+    # Reading classification — "N/A" is the sentinel for unclassified readings
+    reading_classified = (df["Reading"] != "N/A").sum() if "Reading" in df.columns else 0
+
+    # Unit rate computable — count numeric values only. The unit
+    # rate column can hold `int | float | "N/A"`; only numerics can be
+    # used downstream by tariff charts, so other values are excluded.
+    # The older draft guarded this with `and x != "N/A"`, which is
+    # unreachable for an already-typed numeric — pinned here so a
+    # future careless refactor cannot silently change this branch
+    # back into a no-op-or-true tautology that overcounts.
+    ur_computable = df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, int | float)).sum()
+
+    # Duplicates (same date + amount)
+    dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
+
+    # Source distribution
+    source_dist = df["Source"].value_counts().to_dict()
+
+    # Entry type distribution
+    entry_dist = df["Entry Type"].value_counts().to_dict() if "Entry Type" in df.columns else {}
+
+    return {
+        "total_records": total_records,
+        "date_parsed": date_parsed,
+        "date_failed": date_failed,
+        "date_parse_rate": date_parsed / total_records if total_records > 0 else 0,
+        "amt_complete": amt_complete,
+        "amt_missing": amt_missing,
+        "period_complete": period_complete,
+        "period_completeness_rate": period_complete / total_records if total_records > 0 else 0,
+        "reading_classified": reading_classified,
+        "reading_classify_rate": reading_classified / total_records if total_records > 0 else 0,
+        "ur_computable": ur_computable,
+        "ur_computable_rate": ur_computable / total_records if total_records > 0 else 0,
+        "duplicate_count": int(dup_count),
+        "duplicate_rate": dup_count / total_records if total_records > 0 else 0,
+        "source_distribution": source_dist,
+        "entry_type_distribution": entry_dist,
+    }
+
+
 # ---------------------------------------------------------------------------
 # NEW ANALYSIS TAB WRITERS
 # ---------------------------------------------------------------------------
@@ -5189,6 +6200,35 @@ def write_tariff_analysis_sheet(ws, dfc):
 # ---------------------------------------------------------------------------
 
 
+def _assess_reason(
+    invoice: str,
+    days: int,
+    admitted: bool,
+    period_from: pd.Timestamp,
+    period_to: pd.Timestamp,
+) -> str:
+    """Return a short, deterministic narrative for the Reason Assessment
+    column of the Back-billing sheet. Template-driven (no LLM).
+    """
+    pf = period_from.strftime("%d %b %Y")
+    pt = period_to.strftime("%d %b %Y")
+    excess = days - 365
+    if admitted:
+        head = (
+            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
+            f"{excess} days past the 12-month back-billing limit. "
+            "EDF's cover page admits a cancellation/reversal, which is "
+            "direct evidence the bill is a back-billing remedy."
+        )
+    else:
+        head = (
+            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
+            f"{excess} days past the 12-month back-billing limit. No "
+            "admit-phrase was found on the cover page."
+        )
+    return head
+
+
 # ---------------------------------------------------------------------------
 # A ``dict[str, int]`` mapping per-row signatures to the 1-indexed Excel row
 # on the ``EDF Evidence Report`` sheet so the 4 analyser writers can emit a
@@ -5225,6 +6265,133 @@ def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[s
         days = str((pt - pf).days)
         index.setdefault(f"amt_days:{amt_f:.2f}|{days}", row_no)
     return index
+
+
+def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
+    """Return invoices whose billing period exceeds 12 months.
+
+    Back-billing (Ofgem / Electricity Act 1989 s.84B) bars suppliers
+    from charging a domestic customer for energy supplied more than
+    12 months before the bill that first raised the charge. This
+    detector surfaces any single invoice whose ``Period From`` ->>
+    ``Period To`` window exceeds 365 days, alongside whether the
+    cover page admits a cancellation/reversal (the
+    ``Cancel/Rebill Admitted`` column populated earlier in the
+    pipeline by :func:`extract_admit_phrase`).
+
+    The function tolerates a missing ``Cancel/Rebill Admitted``
+    column (treated as ``False``).
+
+    Output columns:
+        Invoice #, Bill Date, Period From, Period To, Days Billed,
+        Net Charge (£), 12-Month Limit (days), Excess Days,
+        Cancel/Rebill Admitted, Reason Assessment.
+
+    Rows with unparseable ``Period From``/``Period To`` are skipped
+    silently. Output is sorted by ``Bill Date`` and re-indexed.
+
+    Architectural note (SAP cross-feeding):
+    This detector takes only the inferred-evidence dataframe. SAP
+    data-dump rows (Contract-and-Product-Change-History,
+    Meter-Read-History, Financial-Transactions) are surfaced in
+    their own tabs (SAP Contract History / SAP Meter Readings /
+    SAP Financial Transactions) plus the cross-source
+    Reconciliation tab; they are NOT joined back into
+    ``detect_back_billing`` because:
+
+      * SAP financial transactions carry a Document No. (e.g.
+        ``531000424090``) not an Invoice #, and their Transaction
+        Text is the generic ledger description
+        (``Dr- Consum Billing Receivable`` etc.) -- they cannot
+        be unambiguously matched to an inferred invoice.
+      * SAP records have no ``Period From`` / ``Period To`` span
+        (only Posting Date / Document Date) so they cannot
+        independently drive a back-billing judgement.
+      * The Reconciliation sheet is the proper place to surface
+        agreements and disagreements between the inferred and
+        SAP samples; naively joining SAP amounts into the
+        backbilling tab would mislead the reviewer.
+    If a future resource joins the two sources by a higher-fidelity
+    key (e.g. PDF receipt number + SAP Document No. mapping
+    table), wire the intersection through ``run_analysers`` here.
+    """
+    columns = [
+        "Invoice #",
+        "Bill Date",
+        "Period From",
+        "Period To",
+        "Days Billed",
+        "Net Charge (£)",
+        "12-Month Limit (days)",
+        "Excess Days",
+        "Cancel/Rebill Admitted",
+        "Reason Assessment",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    has_admit = "Cancel/Rebill Admitted" in df.columns
+    rows = []
+    for _, r in df.iterrows():
+        pf = _safe_to_datetime(r.get("Period From"))
+        pt = _safe_to_datetime(r.get("Period To"))
+        if pd.isna(pf) or pd.isna(pt):
+            continue
+        days = int((pt - pf).days)
+        if days <= 365:
+            continue
+        net_raw = r.get("Amount (£)", 0)
+        try:
+            net = float(net_raw)
+        except (TypeError, ValueError):
+            net = 0.0
+        admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
+        bill_date_raw = r.get("Date", "")
+        bill_date_dt = _safe_to_datetime(bill_date_raw)
+        rows.append(
+            {
+                "Invoice #": r.get("Invoice #", ""),
+                "Bill Date": bill_date_raw,
+                "_bill_date_sort": bill_date_dt if not pd.isna(bill_date_dt) else pd.Timestamp.max,
+                "Period From": pf,
+                "Period To": pt,
+                "Days Billed": days,
+                "Net Charge (£)": net,
+                "12-Month Limit (days)": 365,
+                "Excess Days": days - 365,
+                "Cancel/Rebill Admitted": admitted,
+                "Reason Assessment": _assess_reason(r.get("Invoice #", ""), days, admitted, pf, pt),
+            }
+        )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(columns=columns)
+    sort_key = out["_bill_date_sort"]
+    out = out.drop(columns=["_bill_date_sort"])
+    # Reorder rows by the sort key (parsed Bill Date, ascending).
+    out = out.loc[sort_key.sort_values().index].reset_index(drop=True)
+    return out[columns]
+
+
+def _disclosed_label(
+    admitted: bool,
+    overlaps: bool,
+) -> str:
+    """Return the human-readable value of the 'Cancel/Rebill Disclosed'
+    cell used on the Back-billing and Rebilling tabs.
+
+    The disclosed column joins two independent signals:
+      * admit-phrase (the cover-page wording 'we've recently
+        cancelled some charges for you'), captured as a bool on the
+        record; and
+      * period overlap, flagged by :func:`detect_rebilling`.
+    """
+    if admitted and overlaps:
+        return "Admitted + overlap"
+    if admitted:
+        return "Admitted phrase"
+    if overlaps:
+        return "Period overlap"
+    return ""
 
 
 def write_back_billing_sheet(
@@ -5439,6 +6606,360 @@ def write_back_billing_sheet(
     ws.freeze_panes = "A8"
 
 
+def _reversal_match(
+    evidence_df: pd.DataFrame | None,
+    killed_inv: str,
+    killed_amount: float | None,
+    killed_pf: "pd.Timestamp",
+    killed_pt: "pd.Timestamp",
+) -> bool:
+    """Return whether a reversal-credit row in *evidence_df* matches the
+    killed invoice well enough to count as rebilling evidence.
+
+    Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
+    invoice when its amount is within ±£0.50 AND either its period
+    overlaps the killed period by ≥ 30 days OR its period is
+    unparseable (so we accept on amount alone, Entry Type == Credit).
+    """
+    if evidence_df is None or evidence_df.empty:
+        return False
+    if "Entry Type" not in evidence_df.columns:
+        return False
+    try:
+        amount = abs(float(killed_amount or 0.0))
+    except (TypeError, ValueError):
+        return False
+    matching = evidence_df[evidence_df["Entry Type"].isin(["Credit", "Payment"])]
+    for _, row in matching.iterrows():
+        try:
+            row_amt = abs(float(row.get("Amount (£)", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        if abs(row_amt - amount) > 0.50:
+            continue
+        rpf = _safe_to_datetime(row.get("Period From"))
+        rpt = _safe_to_datetime(row.get("Period To"))
+        if pd.isna(rpf) or pd.isna(rpt):
+            return True
+        overlap = (min(killed_pt, rpt) - max(killed_pf, rpf)).days
+        if overlap >= 30:
+            return True
+    return False
+
+
+def detect_rebilling(
+    df: pd.DataFrame,
+    *,
+    evidence_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Return cancel-and-repost pairs identified by the rebilling
+    heuristic (spec §11, tightened gate).
+
+    For each ordered pair ``(Killer, Killed)`` where ``Killer.Date``
+    is strictly later than ``Killed.Date``, emit a row IFF ALL hold:
+
+    1. ``Killer.Period From ≤ Killed.Period From AND Killer.Period To ≥
+       Killed.Period To`` -- the killer's billing window fully contains
+       the killed's billing window.
+    2. ANY of these signals also fires:
+       - ``Killer.Days Billed ≥ 365`` (wholesale cancel-and-repost of a
+         long period),
+       - the killer invoice has ``Cancel/Rebill Admitted = True``
+         (an admission phrase like ``corrected`` / ``amended`` was
+         detected on the source PDF), OR
+       - a reversal credit row in ``evidence_df`` matches the killed
+         invoice's amount within ±£0.50 and period overlap ≥ 30 days
+         (or its period is unparseable, in which case amount alone
+         suffices).
+
+    Output columns:
+        Killer Invoice, Killed Invoice, Killer Date, Killed Date,
+        Period Overlap (days), Jump-back (days), Trigger Reason,
+        Cancel/Rebill Admitted (Killer).
+
+    ``Cancel/Rebill Admitted (Killer)`` is the admit-phrase flag
+    lifted from the killer invoice.
+
+    ``evidence_df`` is optional -- when omitted, the reversal-credit
+    check is skipped and only the long-period / admit-phrase signals
+    fire. ``run_analysers`` passes the evidence DataFrame so the
+    reversal signal participates in normal pipeline use.
+    """
+    columns = [
+        "Killer Invoice",
+        "Killed Invoice",
+        "Killer Date",
+        "Killed Date",
+        "Period Overlap (days)",
+        "Jump-back (days)",
+        "Trigger Reason",
+        "Cancel/Rebill Admitted (Killer)",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    has_admit = "Cancel/Rebill Admitted" in df.columns
+    rows = []
+    parsed = []
+    for _, r in df.iterrows():
+        pf = _safe_to_datetime(r.get("Period From"))
+        pt = _safe_to_datetime(r.get("Period To"))
+        bd = _safe_to_datetime(r.get("Date"))
+        if pd.isna(pf) or pd.isna(pt) or pd.isna(bd):
+            continue
+        try:
+            amount = float(r.get("Amount (£)", 0) or 0)
+        except (TypeError, ValueError):
+            amount = None
+        admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
+        parsed.append(
+            {
+                "Invoice #": r.get("Invoice #", ""),
+                "Date_raw": r.get("Date", ""),
+                "Date": bd,
+                "Period From": pf,
+                "Period To": pt,
+                "Days Billed": int((pt - pf).days),
+                "Amount": amount,
+                "Admitted": admitted,
+            }
+        )
+    if len(parsed) < 2:
+        return pd.DataFrame(columns=columns)
+    parsed.sort(key=lambda x: x["Date"])
+    for i, killer in enumerate(parsed):
+        for killed in parsed[:i]:
+            # Containment -- the only structural requirement.
+            if not (
+                killer["Period From"] <= killed["Period From"]
+                and killer["Period To"] >= killed["Period To"]
+            ):
+                continue
+            triggers: list[str] = []
+            if killer["Days Billed"] >= 365:
+                triggers.append("killer period \u2265 365d")
+            admitted = killer["Admitted"]
+            if admitted:
+                triggers.append("admit-phrase on killer")
+            reversal_match = _reversal_match(
+                evidence_df,
+                killed["Invoice #"],
+                killed["Amount"],
+                killed["Period From"],
+                killed["Period To"],
+            )
+            if reversal_match:
+                triggers.append("reversal credit row matches killed")
+            if not triggers:
+                continue
+            trigger_reason = "; ".join(triggers)
+            overlap_d = max(
+                0,
+                (
+                    min(killer["Period To"], killed["Period To"])
+                    - max(killer["Period From"], killed["Period From"])
+                ).days,
+            )
+            jumpback_d = (killed["Period From"] - killer["Period From"]).days
+            rows.append(
+                {
+                    "Killer Invoice": killer["Invoice #"],
+                    "Killed Invoice": killed["Invoice #"],
+                    "Killer Date": killer["Date_raw"],
+                    "Killed Date": killed["Date_raw"],
+                    "Period Overlap (days)": overlap_d,
+                    "Jump-back (days)": max(0, jumpback_d),
+                    "Trigger Reason": trigger_reason,
+                    "Cancel/Rebill Admitted (Killer)": admitted,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows, columns=columns)
+    out["_k_sort"] = _safe_to_datetime(out["Killer Date"])
+    out["_d_sort"] = _safe_to_datetime(out["Killed Date"])
+    sort_idx = out.sort_values(["_k_sort", "_d_sort"]).index
+    out = out.loc[sort_idx].drop(columns=["_k_sort", "_d_sort"]).reset_index(drop=True)
+    return out[columns]
+
+
+# Default 99,999 - 5,000 rollover threshold per spec \u00a73.3.
+_DEFAULT_ROLLOVER_THRESHOLD = 99999 - 5000
+
+
+def detect_meter_rollover(
+    df: pd.DataFrame, rollover_threshold: int = _DEFAULT_ROLLOVER_THRESHOLD
+) -> pd.DataFrame:
+    """Return meter-rollover candidate events (spec \u00a73.3).
+
+    Walks the rows of *df* keeping only ones tagged ``Actual'' or
+    ``Smart'' in the ``Reading`` column (supplier-confirmed readings
+    only -- ``Estimated``/``Unknown`` rows don't count). For each
+    consecutive (actual-or-smart, actual-or-smart) pair, computes
+    delta = (curr Units (kWh)) - (prev Units (kWh)) -- i.e. the
+    change in per-period kWh consumption -- and emits a row when the
+    delta is negative AND its magnitude exceeds
+    ``rollover_threshold`` (default 99,999 - 5,000 = 94,999).
+
+    Output columns:
+        Date, Invoice #, Prev Units (kWh), Curr Units (kWh),
+        Delta, Reading Type, Notes.
+
+    Rows with unparseable ``Units (kWh)`` or ``Date`` are skipped
+    silently.
+    """
+    columns = [
+        "Date",
+        "Invoice #",
+        "Prev Units (kWh)",
+        "Curr Units (kWh)",
+        "Delta",
+        "Reading Type",
+        "Notes",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    # Restrict to Actual/Smart only.
+    mask = df.get("Reading", pd.Series(dtype=str)).isin(["Actual", "Smart"])
+    candidates = df[mask].copy()
+    if candidates.empty:
+        return pd.DataFrame(columns=columns)
+    # Parse dates so we can sort.
+    candidates["_date_dt"] = _safe_to_datetime(candidates["Date"])
+    candidates = candidates.dropna(subset=["_date_dt"])
+    candidates = candidates.sort_values("_date_dt")
+    rows = []
+    prev_units: float | None = None
+    prev_invoice = ""
+    prev_date_raw = ""
+    for _, r in candidates.iterrows():
+        u_raw = r.get("Units (kWh)", "N/A")
+        try:
+            u = float(u_raw)
+        except (TypeError, ValueError):
+            prev_units = None
+            continue
+        if prev_units is not None:
+            delta = u - prev_units
+            if delta < 0 and abs(delta) > rollover_threshold:
+                rows.append(
+                    {
+                        "Date": r.get("Date", ""),
+                        "Invoice #": r.get("Invoice #", ""),
+                        "Prev Units (kWh)": prev_units,
+                        "Curr Units (kWh)": u,
+                        "Delta": int(delta),
+                        "Reading Type": r.get("Reading", ""),
+                        "Notes": (
+                            f"Negative jump of {abs(int(delta))} kWh between "
+                            f"{prev_invoice} ({prev_date_raw}) and "
+                            f"{r.get('Invoice #', '')} ({r.get('Date', '')}) -- "
+                            "consistent with a meter rollover near the "
+                            f"{rollover_threshold + 5000}-rollover cap."
+                        ),
+                    }
+                )
+        prev_units = u
+        prev_invoice = r.get("Invoice #", "")
+        prev_date_raw = r.get("Date", "")
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows, columns=columns)
+    sort_idx = _safe_to_datetime(out["Date"]).sort_values().index
+    out = out.loc[sort_idx].reset_index(drop=True)
+    return out[columns]
+
+
+def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
+    """Infer contract periods from tariff transitions (spec \u00a73.4).
+
+    Walks the rows of *df* sorted by ``Date``, skips ``N/A`` tariffs,
+    groups consecutive rows sharing the same ``Tariff`` into one
+    contract, and merges adjacent same-tariff groups whose gap is
+    shorter than ``merge_gap_days`` (default 30). Returns one row per
+    contract with the start/end dates, total days, and invoice count.
+
+    Output columns:
+        Contract From, Contract To, Tariff, Days, # Invoices.
+    """
+    columns = ["Contract From", "Contract To", "Tariff", "Days", "# Invoices"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    work = df.copy()
+    work["_dt"] = _safe_to_datetime(work.get("Date"))
+    work = work.dropna(subset=["_dt", "Tariff"])
+    work = work[work["Tariff"] != "N/A"]
+    if work.empty:
+        return pd.DataFrame(columns=columns)
+    work = work.sort_values("_dt").reset_index(drop=True)
+    # Build raw runs: consecutive rows with the same tariff value.
+    runs: list[dict] = []
+    cur_start_idx = 0
+    cur_tariff = work.iloc[0]["Tariff"]
+    for i in range(1, len(work)):
+        if work.iloc[i]["Tariff"] != cur_tariff:
+            runs.append(
+                {
+                    "start_idx": cur_start_idx,
+                    "end_idx": i - 1,
+                    "tariff": cur_tariff,
+                }
+            )
+            cur_start_idx = i
+            cur_tariff = work.iloc[i]["Tariff"]
+    runs.append(
+        {
+            "start_idx": cur_start_idx,
+            "end_idx": len(work) - 1,
+            "tariff": cur_tariff,
+        }
+    )
+    # Merge adjacent runs of the same tariff if gap < merge_gap_days.
+    merged: list[dict] = []
+    for run in runs:
+        # Calculate this run's dates.
+        start_dt = work.iloc[run["start_idx"]]["_dt"]
+        end_dt = work.iloc[run["end_idx"]]["_dt"]
+        start_raw = work.iloc[run["start_idx"]]["Date"]
+        end_raw = work.iloc[run["end_idx"]]["Date"]
+        n = run["end_idx"] - run["start_idx"] + 1
+        candidate = {
+            "Contract From": start_raw,
+            "Contract To": end_raw,
+            "_from_dt": start_dt,
+            "_to_dt": end_dt,
+            "Tariff": run["tariff"],
+            "# Invoices": n,
+        }
+        if merged and merged[-1]["Tariff"] == candidate["Tariff"]:
+            prev_end = merged[-1]["_to_dt"]
+            gap_days = (candidate["_from_dt"] - prev_end).days
+            if 0 <= gap_days < merge_gap_days:
+                # Merge: extend previous contract's end and invoice count.
+                merged[-1]["Contract To"] = candidate["Contract To"]
+                merged[-1]["_to_dt"] = candidate["_to_dt"]
+                merged[-1]["# Invoices"] += candidate["# Invoices"]
+                continue
+        merged.append(candidate)
+    rows = []
+    for c in merged:
+        days = int((c["_to_dt"] - c["_from_dt"]).days)
+        rows.append(
+            {
+                "Contract From": c["Contract From"],
+                "Contract To": c["Contract To"],
+                "Tariff": c["Tariff"],
+                "Days": days,
+                "# Invoices": int(c["# Invoices"]),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows, columns=columns)
+    sort_idx = _safe_to_datetime(out["Contract From"]).sort_values().index
+    out = out.loc[sort_idx].reset_index(drop=True)
+    return out[columns]
+
+
 def write_rebilling_sheet(
     ws: Worksheet,
     rb: pd.DataFrame,
@@ -5565,6 +7086,44 @@ def write_rebilling_sheet(
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
     ws.freeze_panes = "A8"
+
+
+def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
+    """Run all Phase-2 detection analyses on the deduplicated
+    DataFrame and return their outputs in a dict.
+
+    The orchestrator is a thin wrapper so :func:`export_to_excel` can
+    call four detectors with one line and downstream tests can
+    inspect the full set without re-running each individually.
+
+    Returns:
+        dict with keys ``back_billing``, ``rebilling``,
+        ``meter_rollover``, ``contracts``, ``evidence_index``. The
+        first four are tidy DataFrames; ``evidence_index`` is a
+        ``dict[str, int]`` mapping per-row signatures to the Excel row
+        on the ``EDF Evidence Report`` sheet so the analyser tabs can
+        emit a ``View on Evidence Report`` hotlink.
+    """
+    return {
+        "back_billing": detect_back_billing(df),
+        "rebilling": detect_rebilling(df, evidence_df=df),
+        "meter_rollover": detect_meter_rollover(df),
+        "contracts": infer_contracts(df),
+        "evidence_index": build_evidence_index(df, header_row_offset=1),
+    }
+
+
+def _reading_type_to_aem(reading_value: str) -> str:
+    """Map the Reading column's value (Actual/Estimated/Smart/Unknown)
+    to the single-letter A/E/M code used on the Meter Readings tab.
+    """
+    if reading_value == "Actual":
+        return "A"
+    if reading_value == "Estimated":
+        return "E"
+    if reading_value == "Smart":
+        return "A"
+    return "E"
 
 
 def write_meter_readings_sheet(
@@ -6065,6 +7624,14 @@ SAP_BB_DETAIL_FILL_PAIR = ("F8FAFC", "ffffff")
 SAP_BB_MEDIUM_BORDER = Side(style="medium", color="10367A")
 
 
+def _bb_invoice_value(rec: dict, key: str) -> object:
+    """Look up an invoice field, tolerating 'N/A' / None."""
+    v = rec.get(key)
+    if v in (None, "", "N/A", "None"):
+        return ""
+    return v
+
+
 def write_sap_back_billing_sheets(
     wb: "openpyxl.Workbook",
     events: list[SapBackBillingEvent],
@@ -6494,6 +8061,29 @@ def _write_sap_bb_matches_sheet(
 # matched row carries an openpyxl Hyperlink whose ``location`` points at the
 # row on the source sheet that owns the matched side, so a reviewer can jump
 # straight from a Discrepancy on the Reconciliation tab to the underlying row.
+
+
+def _recon_parse_iso_date(s: str) -> pd.Timestamp | pd._libs.tslibs.nattype.NaTType:
+    if not s:
+        return pd.NaT
+    s = str(s).strip()
+    if not s:
+        return pd.NaT
+    # ISO first (YYYY-MM-DD), then day-first for DD/MM/YYYY.
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return pd.to_datetime(s, errors="coerce")
+    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+
+
+def _recon_amount_to_float(v: object) -> float:
+    if v is None:
+        return 0.0
+    if isinstance(v, int | float):
+        return float(v)
+    try:
+        return float(str(v).replace(",", "").strip().lstrip("£"))
+    except ValueError:
+        return 0.0
 
 
 def _recon_hyperlink(ws: Worksheet, row: int, col: int, sheet: str, target_row: int) -> None:

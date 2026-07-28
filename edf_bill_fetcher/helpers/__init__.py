@@ -1,74 +1,22 @@
-"""Utility helpers for the EDF evidence workbook."""
+"""Shared utility helpers extracted from edf_collector.py.
 
-from __future__ import annotations
+Submodules:
+- ``formatting`` — number/text formatting helpers (currency, integer, account matching).
+- ``date_utils`` — pandas time-series statistics and evidence-trail builder.
+- ``excel_utils`` — openpyxl cell primitives, SAP row index map, text-warning suppression.
+- ``pdf_utils`` — placeholder for future PDF-specific helpers.
+"""
 
-from edf_bill_fetcher.helpers.date_utils import (
-    _safe_to_datetime,
-    build_evidence_trail,
-    completeness_score,
-    compute_ema,
-    compute_momentum,
-    compute_rolling_stats,
-    parse_to_display_date,
-    parse_to_sort_date,
-    to_excel_date,
-)
-from edf_bill_fetcher.helpers.excel_utils import (
-    _TEXT_SUPPRESSION_QUEUE,
-    CELL_BORDER,
-    build_sap_row_index_map,
-    hcell,
-    money,
-    num,
-    open_pdf_hyperlink_cell,
-    section_hdr,
-    set_column_widths_from_spec,
-    suppress_text_warning,
-    suppress_text_warnings_post_save,
-    text,
-)
-from edf_bill_fetcher.helpers.formatting import (
-    _amalgamate_cluster,
-    _apply_amalgamate_to_kept_frame,
-    _is_populated,
-    account_number_matches,
-    apply_currency_format,
-    apply_int_format,
-)
-from edf_bill_fetcher.helpers.pdf_utils import (
-    _htm_excerpt,
-    extract_admit_phrase,
-    legal_context,
-    parse_htm_account_history,
-    slice_pdf_pages,
+from edf_bill_fetcher.helpers import (
+    date_utils,
+    excel_utils,
+    formatting,
+    pdf_utils,
 )
 
 __all__ = [
-    "_is_populated",
-    "_amalgamate_cluster",
-    "_apply_amalgamate_to_kept_frame",
-    "account_number_matches",
-    "apply_currency_format",
-    "apply_int_format",
-    "build_evidence_trail",
-    "completeness_score",
-    "compute_ema",
-    "compute_momentum",
-    "compute_rolling_stats",
-    "parse_to_sort_date",
-    "_safe_to_datetime",
-    "parse_to_display_date",
-    "to_excel_date",
-    "_TEXT_SUPPRESSION_QUEUE",
-    "CELL_BORDER",
-    "build_sap_row_index_map",
-    "hcell",
-    "money",
-    "num",
-    "open_pdf_hyperlink_cell",
-    "section_hdr",
-    "set_column_widths_from_spec",
-    "suppress_text_warning",
-    "suppress_text_warnings_post_save",
-    "text",
+    "date_utils",
+    "excel_utils",
+    "formatting",
+    "pdf_utils",
 ]
