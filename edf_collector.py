@@ -85,6 +85,7 @@ from evidence_bundle import build_bundle_index, save_evidence_files  # noqa: E40
 # ``from edf_collector import parse_sap_contract_history`` etc.; the
 # names are stripped by Task 7 (compat shim cleanup).
 from edf_bill_fetcher.processors.sap_parsers import (  # noqa: E402,F401,I001
+    _parse_amount_for_event,
     detect_sap_dump,
     detect_reconciliation_statement,
     extract_new_credit_fields,
