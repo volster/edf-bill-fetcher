@@ -503,35 +503,59 @@ _SAP_DDMMYYYY_RE = re.compile(r"\b(\d{2})-(\d{2})-(\d{4})\b")
 # and ``extract_reconciliation_statement_rows``.
 # ---------------------------------------------------------------------------
 _RECON_STATEMENT_RE = re.compile(
-    r"Statement\s+reference:?\s*([A-Z0-9-]+).*?Statement\s+date:?\s*(\d{1,2}\s+\w+\s+\d{4})",
-    re.IGNORECASE | re.DOTALL,
+    r"Bill\s+reference:\s*(\d+)\s*\(([^)]+)\)\s*\n?\s*"
+    r"Account\s+number:\s*A-\d+",
+    re.IGNORECASE,
 )
+
+# Electricity <from> - <to> £<amt>
+# Months appear abbreviated or full (e.g. "Sept." vs "September"); the day
+# suffix is sometimes wrapped in a thousands-separator comma for amounts.
 _RECON_CHARGE_RE = re.compile(
-    r"Electricity\s+charge[^\n]*?(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4})[^\n]*?£([\d,]+\.\d{2})",
+    r"Electricity\s+"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s*-\s*"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s+"
+    r"£([\d,]+\.\d{2})",
     re.IGNORECASE,
 )
+
+# Reversed electricity charge <date> £<amt>
+# The next non-empty line typically carries the reversed period in parens,
+# e.g. "(14 May 2024 - 30 Sept. 2024)" -- captured by a follow-up search.
 _RECON_REVERSAL_RE = re.compile(
-    r"Reversed\s+electricity\s+charge[^\n]*?(\d{1,2}\s+\w+\s+\d{4})[^\n]*?£([\d,]+\.\d{2})",
+    r"Reversed\s+electricity\s+charge\s+"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s+"
+    r"£([\d,]+\.\d{2})",
     re.IGNORECASE,
 )
+
+# Parenthetical period sometimes follows a reversal row.
 _RECON_REVERSAL_PERIOD_RE = re.compile(
-    r"for\s+the\s+period\s+(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4})",
+    r"\(\s*(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s*-\s*"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s*\)",
     re.IGNORECASE,
 )
+
 _RECON_LATE_PAYMENT_RE = re.compile(
-    r"Late\s+payment[^\n]*?£([\d,]+\.\d{2})",
+    r"Late\s+Payment\s+Charge\s+£([\d,]+\.\d{2})",
     re.IGNORECASE,
 )
+
+# Payment rows: a date followed by £<amount>. Only matches inside the
+# Payments section -- see ``extract_reconciliation_statement_rows`` which
+# scopes the search to the post-"Payments" text block.
 _RECON_PAYMENT_RE = re.compile(
-    r"(\d{1,2}\s+\w+\s+\d{4})[^\n]*?£([\d,]+\.\d{2})",
+    r"\b(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s+£([\d,]+\.\d{2})",
     re.IGNORECASE,
 )
+
 _RECON_BALANCE_LAST_RE = re.compile(
-    r"Balance\s+(?:brought\s+forward|last\s+bill)\s*£([\d,]+\.\d{2})",
+    r"Balance\s+on\s+your\s+last\s+bill\s+£([\d,]+\.\d{2})\s*(debit|credit)?",
     re.IGNORECASE,
 )
+
 _RECON_NEW_BALANCE_RE = re.compile(
-    r"Your\s+new\s+balance\s*£([\d,]+\.\d{2})",
+    r"Your\s+new\s+balance\s+£([\d,]+\.\d{2})\s*(debit|credit)?",
     re.IGNORECASE,
 )
 
