@@ -103,6 +103,7 @@ from edf_bill_fetcher.io.adapters.pdf import (  # noqa: E402,F401,I001
     legal_context,
     slice_pdf_pages,
 )
+
 # Private alias for legacy _ADMIT_RE import
 _ADMIT_RE = ADMIT_RE
 _INV_BOUNDARY_RE = INV_BOUNDARY_RE
@@ -122,12 +123,22 @@ from edf_bill_fetcher.io.adapters.pst import (  # noqa: E402,F401,I001
 
 __all__ += [
     # adapters
-    "ADMIT_RE", "INV_BOUNDARY_RE", "LEGAL_CONTEXT", "PAGE1_BOUNDARY_RE",
-    "extract_admit_phrase", "legal_context", "slice_pdf_pages",
-    "htm_excerpt", "parse_htm_account_history",
-    "EMAIL_ADDR_RE", "FROM_HEADER_RE", "PST_PR_ATTACH_FILENAME",
-    "PST_PR_ATTACH_LONG_FILENAME", "extract_sender_email",
-    "matches_domain_filter", "pst_attachment_filename",
+    "ADMIT_RE",
+    "INV_BOUNDARY_RE",
+    "LEGAL_CONTEXT",
+    "PAGE1_BOUNDARY_RE",
+    "extract_admit_phrase",
+    "legal_context",
+    "slice_pdf_pages",
+    "htm_excerpt",
+    "parse_htm_account_history",
+    "EMAIL_ADDR_RE",
+    "FROM_HEADER_RE",
+    "PST_PR_ATTACH_FILENAME",
+    "PST_PR_ATTACH_LONG_FILENAME",
+    "extract_sender_email",
+    "matches_domain_filter",
+    "pst_attachment_filename",
 ]
 
 # ---------------------------------------------------------------------------
@@ -197,13 +208,19 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Branding
 # ---------------------------------------------------------------------------
-EDF_ORANGE = "#FE5716"
-EDF_NAVY = "#10367A"
-EDF_OFFWHITE = "#F5F5F5"
+# EDF brand colours and greyscale helpers moved to edf_bill_fetcher.helpers.theme
+# (Task 2).  Re-exported here so existing call sites that import them from
+# edf_collector continue to work until Phase 7 deletes the compat shim.
+from edf_bill_fetcher.helpers.theme import (  # noqa: E402,F401,I001
+    DUP_GREY,
+    EDF_NAVY,
+    EDF_OFFWHITE,
+    EDF_ORANGE,
+    MEDIUM_GREY,
+)
+
 EST_YELLOW = "FFFF99"
 JUMP_RED = "FF9999"
-DUP_GREY = "E0E0E0"
-MEDIUM_GREY = "#666666"
 
 # ---------------------------------------------------------------------------
 # Dedup source precedence
@@ -240,7 +257,6 @@ _SOURCE_PRECEDENCE: dict[str, int] = {
     "Email Body": 3,
     "Email Body (RTF)": 3,
 }
-
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +470,6 @@ _OLD_PDF_PERIOD_CHARGE_RE = re.compile(
 # ---------------------------------------------------------------------------
 # Date helpers
 # ---------------------------------------------------------------------------
-
 
 
 # ---------------------------------------------------------------------------
@@ -885,8 +900,6 @@ _SAP_MATCH_AMOUNT_BANDS = ((0.05, 40), (0.25, 20), (0.50, 5))
 _SAP_CONFIDENCE_BANDS = (("High", 75), ("Medium", 40), ("Low", 10))
 
 
-
-
 def _parse_amount_for_event(v: object) -> float:
     """Parse the SAP ``Amount`` field (often a string with commas)."""
     if v is None:
@@ -898,8 +911,6 @@ def _parse_amount_for_event(v: object) -> float:
         return float(s)
     except ValueError:
         return 0.0
-
-
 
 
 def detect_sap_back_billing_events(
@@ -7276,11 +7287,16 @@ def _write_sap_header_row(ws: Worksheet, row: int, columns: list) -> None:
 # and the matched EDF Evidence Report row (using the pre-dedup index
 # into ``evidence_rows`` passed by the caller).
 
-ORANGE = "FE5716"
-NAVY_BLUE = "10367A"
-SAP_BB_SUMMARY_FILL_PAIR = ("EFF4FB", "ffffff")
-SAP_BB_DETAIL_FILL_PAIR = ("F8FAFC", "ffffff")
-SAP_BB_MEDIUM_BORDER = Side(style="medium", color="10367A")
+# SAP back-billing analyser constants moved to edf_bill_fetcher.helpers.theme
+# (Task 2).  Re-exported here so existing call sites that import them from
+# edf_collector continue to work until Phase 7 deletes the compat shim.
+from edf_bill_fetcher.helpers.theme import (  # noqa: E402,F401,I001
+    NAVY_BLUE,
+    ORANGE,
+    SAP_BB_DETAIL_FILL_PAIR,
+    SAP_BB_MEDIUM_BORDER,
+    SAP_BB_SUMMARY_FILL_PAIR,
+)
 
 
 def _bb_invoice_value(rec: dict, key: str) -> object:
@@ -7880,11 +7896,7 @@ def write_reconciliation_sheet(
         unmatched_inferred = list(range(len(inferred_rows)))
         for sap in sap_items:
             sap_date = _recon_parse_iso_date(sap.get(sap_date_key, ""))
-            sap_read = (
-                _recon_amount_to_float(sap.get(sap_read_key, ""))
-                if sap_read_key
-                else None
-            )
+            sap_read = _recon_amount_to_float(sap.get(sap_read_key, "")) if sap_read_key else None
             matched = False
             for i in unmatched_inferred[:]:
                 inf = inferred_rows[i]
@@ -7911,13 +7923,15 @@ def write_reconciliation_sheet(
                 ws.cell(row=detail_row, column=1, value="Missing in Inferred")
                 ws.cell(row=detail_row, column=2, value=sap.get(sap_date_key, ""))
                 ws.cell(
-                    row=detail_row, column=3,
+                    row=detail_row,
+                    column=3,
                     value=sap.get(sap_read_key or sap_ref_key, ""),
                 )
                 for col in (4, 5):
                     ws.cell(row=detail_row, column=col, value="—")
                 ws.cell(
-                    row=detail_row, column=6,
+                    row=detail_row,
+                    column=6,
                     value=f"SAP {title.lower()} row not present in {inferred_label}",
                 )
                 ws.cell(row=detail_row, column=7, value=source_label)
@@ -7931,15 +7945,18 @@ def write_reconciliation_sheet(
             for col in (2, 3):
                 ws.cell(row=detail_row, column=col, value="—")
             ws.cell(
-                row=detail_row, column=4,
+                row=detail_row,
+                column=4,
                 value=inf.get(inferred_date_key, ""),
             )
             ws.cell(
-                row=detail_row, column=5,
+                row=detail_row,
+                column=5,
                 value=inf.get(inferred_read_key, ""),
             )
             ws.cell(
-                row=detail_row, column=6,
+                row=detail_row,
+                column=6,
                 value=f"{inferred_label} row not present in SAP dump",
             )
             ws.cell(row=detail_row, column=7, value=inferred_label)
@@ -7989,7 +8006,8 @@ def write_reconciliation_sheet(
     _section_banner(ws_detail, detail_row, "Financial Reconciliation")
     detail_row += 1
     _header(
-        ws_detail, detail_row,
+        ws_detail,
+        detail_row,
         [
             "Status",
             "SAP Document No.",
@@ -8054,7 +8072,8 @@ def write_reconciliation_sheet(
             for col in (5, 6):
                 ws_detail.cell(row=detail_row, column=col, value="—")
             ws_detail.cell(
-                row=detail_row, column=7,
+                row=detail_row,
+                column=7,
                 value="SAP financial row not on Evidence Report",
             )
             _recon_hyperlink(ws_detail, detail_row, 8, "SAP Financial Transactions", sap_idx)
@@ -8069,7 +8088,8 @@ def write_reconciliation_sheet(
         ws_detail.cell(row=detail_row, column=5, value=ev.get("Date", ""))
         ws_detail.cell(row=detail_row, column=6, value=ev.get("Amount (£)", ""))
         ws_detail.cell(
-            row=detail_row, column=7,
+            row=detail_row,
+            column=7,
             value="Evidence row not present in SAP Financial dump",
         )
         _recon_hyperlink(ws_detail, detail_row, 8, "EDF Evidence Report", ev_target)
@@ -8124,5 +8144,3 @@ def write_reconciliation_sheet(
         cell.font = Font(color="0563C1", underline="single")
 
     ws_summary.freeze_panes = "A4"
-
-

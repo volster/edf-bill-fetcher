@@ -27,12 +27,10 @@ import openpyxl.worksheet.worksheet
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 
-CELL_BORDER = openpyxl.styles.borders.Border(
-    left=openpyxl.styles.borders.Side(style="thin", color="BFBFBF"),
-    right=openpyxl.styles.borders.Side(style="thin", color="BFBFBF"),
-    top=openpyxl.styles.borders.Side(style="thin", color="BFBFBF"),
-    bottom=openpyxl.styles.borders.Side(style="thin", color="BFBFBF"),
-)
+# CELL_BORDER moved to edf_bill_fetcher.helpers.theme (Task 2).  Re-export
+# here so existing call sites that import it from excel_utils keep working
+# until Phase 7 deletes the compat shim.
+from edf_bill_fetcher.helpers.theme import CELL_BORDER  # noqa: E402,F401
 
 _TEXT_SUPPRESSION_QUEUE: dict[str, list[tuple[str, int, int]]] = {}
 
