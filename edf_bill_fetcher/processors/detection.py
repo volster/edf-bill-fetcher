@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any
 
 import openpyxl
 import pandas as pd
@@ -39,6 +38,7 @@ from edf_bill_fetcher.helpers.excel_utils import (
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
+from edf_bill_fetcher.io.adapters.pdf import legal_context as legal_context_fn  # noqa: E402,F401
 
 # KI / KCR invoice-format presence regexes (still defined in edf_collector.py
 # for backward compat).  Re-declare locally so detection.py is self-contained.
@@ -98,16 +98,40 @@ def _recon_money(s: str) -> float:
 
 
 # Helper used by detect_back_billing.  Stays local to keep module self-contained.
-def _assess_reason(row: Any, *_args: Any) -> str:
-    """Return a deterministic Reason Assessment narrative for the back-billing row."""
-    return ""
+def _assess_reason(
+    invoice: str,
+    days: int,
+    admitted: bool,
+    period_from: pd.Timestamp,
+    period_to: pd.Timestamp,
+) -> str:
+    """Return a short, deterministic narrative for the Reason Assessment
+    column of the Back-billing sheet. Template-driven (no LLM).
+    """
+    pf = period_from.strftime("%d %b %Y")
+    pt = period_to.strftime("%d %b %Y")
+    excess = days - 365
+    if admitted:
+        head = (
+            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
+            f"{excess} days past the 12-month back-billing limit. "
+            "EDF's cover page admits a cancellation/reversal, which is "
+            "direct evidence the bill is a back-billing remedy."
+        )
+    else:
+        head = (
+            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
+            f"{excess} days past the 12-month back-billing limit. No "
+            "admit-phrase was found on the cover page."
+        )
+    return head
 
 
-# Legal-context block for back-billing tab (constant; no external deps).
-legal_context = (
-    "SLC 7A limits back-billing to 12 months.  Electricity Act 1989 s.84B and "
-    "Ofgem's back-billing rule apply."
-)
+# Legal-context block for back-billing tab. Delegates to the canonical
+# helper in ``io.adapters.pdf`` so any wording updates (and the test
+# ``tests/test_legal_context.py`` that pins the first line) reach
+# the back-billing sheet without further wiring.
+legal_context = legal_context_fn
 
 
 def detect_pdf_format(text):
@@ -337,7 +361,7 @@ def write_back_billing_sheet(
 
     # Row 3: legal_context body (merged across the whole width so the
     # paragraph is readable in one cell).
-    lc_text = legal_context
+    lc_text = legal_context()
     lc_cell = ws.cell(row=3, column=1, value=lc_text)
     lc_cell.font = Font(name="Calibri", size=10)
     lc_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)

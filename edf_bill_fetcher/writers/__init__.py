@@ -196,13 +196,13 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
     # dedup hyperlink pass all read the same index.  Verified by
     # ``tests/test_evidence_sheet_columns.py``.
     headers = [
-        "Invoice #",
         "Source",
         "Sender",
         "Date",
-        "Amount (£)",
         "Period From",
         "Period To",
+        "Invoice #",
+        "Amount (£)",
         "Period Charge (£)",
         "Unit Rate (p/kWh)",
         "% Change",
@@ -2019,9 +2019,9 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     _SEVERITY_LED_ORDER = [
         "Annual Summary",
         "EDF Evidence Report",
-        "SAP ↔ EDF Matched Events",
-        "SAP Back-billing Events",
         "SAP Financial Transactions",
+        "SAP Back-billing Events",
+        "SAP ↔ EDF Matched Events",
         "SAP Meter Readings",
         "SAP Contract History",
         "Back-billing Analysis",
@@ -2053,16 +2053,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
 # =====================================================================
 # NEW ANALYSIS FUNCTIONS (pandas-powered enhancements)
 # =====================================================================
-
-
-
-
-
-
-
-
-
-
 
 
 def write_statistical_analysis_sheet(ws, dfc, config):
@@ -2791,6 +2781,7 @@ def write_data_quality_sheet(ws, df):
         ws.row_dimensions[r].height = 20
 
     from typing import Any as _Any
+
     dq: dict[str, _Any] = _data_quality_report(df)
 
     if not dq:
@@ -2965,6 +2956,7 @@ def write_tariff_analysis_sheet(ws, dfc):
     tariff_stats = tariff_info.get("tariff_stats")
     if tariff_stats is not None:
         import pandas as pd
+
         assert isinstance(tariff_stats, pd.DataFrame)
         if not tariff_stats.empty:
             r = 2
@@ -3861,11 +3853,13 @@ def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
         on the ``EDF Evidence Report`` sheet so the analyser tabs can
         emit a ``View on Evidence Report`` hotlink.
     """
+    import edf_collector as _edc
+
     return {
-        "back_billing": detect_back_billing(df),
-        "rebilling": detect_rebilling(df, evidence_df=df),
-        "meter_rollover": detect_meter_rollover(df),
-        "contracts": infer_contracts(df),
+        "back_billing": _edc.detect_back_billing(df),
+        "rebilling": _edc.detect_rebilling(df, evidence_df=df),
+        "meter_rollover": _edc.detect_meter_rollover(df),
+        "contracts": _edc.infer_contracts(df),
         "evidence_index": build_evidence_index(df, header_row_offset=1),
     }
 
@@ -3990,7 +3984,19 @@ def write_meter_readings_sheet(
             type_cell.font = Font(name="Calibri", size=10, bold=True, color="003F87")
         elif type_code == "E":
             type_cell.font = Font(name="Calibri", size=10, color="C08000")
-        _open_pdf_hyperlink_cell(ws, r, 7, evidence_df, inv)
+        excerpt = ""
+        if evidence_df is not None and not evidence_df.empty and "Invoice #" in evidence_df.columns:
+            matches = evidence_df[evidence_df["Invoice #"].astype(str) == str(inv)]
+            if not matches.empty:
+                source_text = matches.iloc[0].get("Source PDF Text", "")
+                if isinstance(source_text, str) and source_text:
+                    excerpt = source_text[:400]
+                    if len(source_text) > 400:
+                        excerpt += " ..."
+        if excerpt:
+            _text(ws, r, 7, excerpt, wrap=True, fill_hex=bg)
+        else:
+            _open_pdf_hyperlink_cell(ws, r, 7, evidence_df, inv)
         # View on Evidence Report (col 8): hyperlinked right-arrow
         # that jumps to the matched invoice's row on the Evidence
         # Report sheet.

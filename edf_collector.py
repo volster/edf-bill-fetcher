@@ -74,37 +74,40 @@ AMOUNT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "total_credits_bill",
         re.compile(
-            r"total credits for this bill\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?credit",
+            r"total credits for this bill\s+£\s?([\d,]+(?:\.\d{2})?)(?:\s*(?:in\s+)?credit)?",
             re.IGNORECASE,
         ),
     ),
     (
         "total_charges_within",
-        re.compile(r"total charges\s+within\s+this\s+period\s+£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+        re.compile(r"total charges[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
     ),
     (
         "total_amount_due_within",
-        re.compile(r"total amount due\s+within\s+this\s+period\s+£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+        re.compile(r"total amount due[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
     ),
     (
         "amount_to_pay_within",
-        re.compile(r"amount to pay\s+within\s+this\s+period\s+£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+        re.compile(r"amount to pay[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
     ),
     (
         "your_new_account_balance",
-        re.compile(r"your new account balance\s+£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?(?:credit|debit)", re.IGNORECASE),
+        re.compile(
+            r"your new account balance\s+£\s?([\d,]+(?:\.\d{2})?)(?:\s*(?:in\s+)?(?:credit|debit))?",
+            re.IGNORECASE,
+        ),
     ),
     (
         "balance_within",
-        re.compile(r"balance\s+within\s+this\s+period\s+£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+        re.compile(r"balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
     ),
     (
         "current_balance_within",
-        re.compile(r"current balance\s+within\s+this\s+period\s+£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+        re.compile(r"current balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
     ),
     (
         "pound_amount_debit",
-        re.compile(r"£\s?([\d,]+(?:\.\d{2})?)\s*debit", re.IGNORECASE),
+        re.compile(r"£\s?([\d,]+(?:\.\d{2})?)\s*(?:in\s+)?debit", re.IGNORECASE),
     ),
     (
         "pound_amount_credit",
