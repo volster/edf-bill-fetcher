@@ -71,6 +71,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
         "pandas.core.indexes.base": {"_new_Index", "Index"},
         "pandas.core.indexes.range": {"RangeIndex"},
         "edf_collector": {"EvidenceEngine"},
+        "edf_bill_fetcher.collectors.engine": {"EvidenceEngine"},
     }
 
     def find_class(self, module: str, name: str) -> type:
@@ -90,6 +91,16 @@ class _RestrictedUnpickler(pickle.Unpickler):
                 if not isinstance(cls, type):
                     raise pickle.UnpicklingError(
                         f"Resolved edf_collector attribute {name!r} is not a class"
+                    )
+                return cls
+            if module == "edf_bill_fetcher.collectors.engine":
+                import importlib
+
+                mod = importlib.import_module("edf_bill_fetcher.collectors.engine")
+                cls = getattr(mod, name)
+                if not isinstance(cls, type):
+                    raise pickle.UnpicklingError(
+                        f"Resolved edf_bill_fetcher.collectors.engine attribute {name!r} is not a class"
                     )
                 return cls
             return cast(type, super().find_class(module, name))

@@ -126,14 +126,24 @@ def detect_sap_dump(text: str) -> str | None:
 
 
 def _sap_to_iso_date(s: str) -> str:
-    """Convert SAP date string ("DD.MM.YYYY" or "YYYY-MM-DD") to ISO date."""
+    """Convert SAP date string ("DD.MM.YYYY", "DD-MM-YYYY", or "YYYY-MM-DD") to ISO date."""
     s = s.strip()
     # SAP format: "31.12.2023"
     if "." in s and len(s) == 10:
         d, m, y = s.split(".")
         return f"{y}-{m}-{d}"
-    # ISO format: "2023-12-31"
+    # DD-MM-YYYY format: "26-03-2020" — dashes in non-ISO order.
+    # The first 2 chars are digits forming a valid day (01-31).
     if "-" in s and len(s) == 10:
+        try:
+            day = int(s[0:2])
+            month = int(s[3:5])
+            year = int(s[6:10])
+            if 1 <= day <= 31 and 1 <= month <= 12 and year > 1900:
+                return f"{year:04d}-{month:02d}-{day:02d}"
+        except ValueError:
+            pass
+        # ISO format: "2023-12-31"
         return s
     # Fallback: try parsing
     return s

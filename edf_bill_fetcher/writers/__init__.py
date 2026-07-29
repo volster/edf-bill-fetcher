@@ -1106,6 +1106,9 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     dfc["month"] = dfc["_dt"].dt.month
 
     if len(dfc) < 2:
+        # Not enough data for analysis sheets; save the workbook with what
+        # we have (evidence, summary, duplicates, etc. are already written).
+        wb.save(output_path)
         return
 
     amounts = dfc["Amount (£)"].values.astype(float)

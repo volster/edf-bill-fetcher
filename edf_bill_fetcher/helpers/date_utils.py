@@ -37,7 +37,13 @@ def completeness_score(row: Any) -> int:
 def compute_rolling_stats(series: Any, window: int = 6) -> dict[str, Any]:
     if len(series) < window:
         return {}
-    return {"mean": float(series.rolling(window).mean().iloc[-1]), "std": float(series.rolling(window).std().iloc[-1])}
+    return {
+        "mean": series.rolling(window=window, min_periods=1).mean(),
+        "std": series.rolling(window=window, min_periods=1).std(),
+        "min": series.rolling(window=window, min_periods=1).min(),
+        "max": series.rolling(window=window, min_periods=1).max(),
+        "median": series.rolling(window=window, min_periods=1).median(),
+    }
 
 def compute_ema(series: Any, span: int = 6) -> Any:
     return series.ewm(span=span, adjust=False).mean()
