@@ -16,16 +16,14 @@ locations during the migration.
 
 from __future__ import annotations
 
-import re
-from datetime import date, datetime
-from typing import Any
+from datetime import date
 
 import openpyxl
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
-from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime, parse_to_display_date
+from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
 from edf_bill_fetcher.processors.detection import (
     detect_reconciliation_statement,
     extract_reconciliation_statement_rows,
@@ -178,7 +176,8 @@ def write_reconciliation_sheet(
         # Build matched stacks.
         unmatched_inferred = list(range(len(inferred_rows)))
         for sap in sap_items:
-            sap_date = _recon_parse_iso_date(sap.get(sap_date_key, ""))
+            _sap_date_str = _recon_parse_iso_date(sap.get(sap_date_key, ""))
+            sap_date = date.fromisoformat(_sap_date_str) if _sap_date_str and _sap_date_str != "N/A" else pd.NaT
             sap_read = _recon_amount_to_float(sap.get(sap_read_key, "")) if sap_read_key else None
             matched = False
             for i in unmatched_inferred[:]:
