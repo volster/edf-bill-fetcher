@@ -62,3 +62,7 @@ data/
 # version control but should stay on disk in case the user wants
 # to recover a probe.
 scratch/
+
+# Subagent scratch directory — must be outside repo and
+# should NOT be tracked. See .omo/ as the approved scratch path.
+.superpowers/
