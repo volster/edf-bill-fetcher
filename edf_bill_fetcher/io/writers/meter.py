@@ -1,47 +1,537 @@
-"""Compat re-export - meter writer (with adapter).
+"""Meter readings and contract history sheet writers — extracted from writers/__init__.py.
 
-Implementation lives in ``edf_bill_fetcher.writers`` (the legacy monolith
-at ``writers/__init__.py``). Real extraction happens in later phases
-when the monolith is deleted.
+Phase 5C of the modularization refactor. Contains the meter-rollover
+detector, the contract-inference detector, and the sheet writers for
+the meter readings and contract history tabs.
 
 The public API exposed here matches the test contract at
 ``tests/test_io_writers_extraction.py``: ``write_meter_readings_sheet``
 takes ``(ws, df)`` only. The underlying implementation accepts additional
 optional arguments; sensible defaults (empty rollovers DataFrame) are
 supplied by the adapter wrapper below.
-
-The import from ``edf_bill_fetcher.writers`` is deferred into the
-adapter function bodies to break a circular import:
-``writers/__init__.py`` imports from ``io.writers.evidence`` (real
-extraction) which loads ``io/writers/__init__.py`` which in turn
-imports every shim in this package. Direct ``from
-edf_bill_fetcher.writers import write_contract_history_sheet`` at
-module-init time would re-enter ``writers/__init__.py`` mid-init and
-raise ``ImportError: partially initialized module``. Deferring into
-the function bodies lets Python finish loading the package before the
-back-reference is resolved on first invocation.
-``write_contract_history_sheet`` itself is exposed as a PEP 562
-``__getattr__`` since it has no adapter wrapping.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+import openpyxl
 import pandas as pd
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.worksheet.worksheet import Worksheet
 
-if TYPE_CHECKING:
-    from openpyxl.worksheet.worksheet import Worksheet
+from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime
+from edf_bill_fetcher.helpers.excel_utils import (
+    hcell as _hcell,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
+    num as _num,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
+    open_pdf_hyperlink_cell as _open_pdf_hyperlink_cell,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
+    text as _text,
+)
+from edf_bill_fetcher.helpers.theme import CELL_BORDER
+from edf_bill_fetcher.writers._helpers import _reading_type_to_aem
+
+# Default 99,999 - 5,000 rollover threshold per spec §3.3.
+_DEFAULT_ROLLOVER_THRESHOLD = 99999 - 5000
+
+# ---- detect_meter_rollover (was writers/__init__.py L2278-2358) ----
+
+def detect_meter_rollover(
+    df: pd.DataFrame, rollover_threshold: int = _DEFAULT_ROLLOVER_THRESHOLD
+) -> pd.DataFrame:
+    """Return meter-rollover candidate events (spec \u00a73.3).
+
+    Walks the rows of *df* keeping only ones tagged ``Actual'' or
+    ``Smart'' in the ``Reading`` column (supplier-confirmed readings
+    only -- ``Estimated``/``Unknown`` rows don't count). For each
+    consecutive (actual-or-smart, actual-or-smart) pair, computes
+    delta = (curr Units (kWh)) - (prev Units (kWh)) -- i.e. the
+    change in per-period kWh consumption -- and emits a row when the
+    delta is negative AND its magnitude exceeds
+    ``rollover_threshold`` (default 99,999 - 5,000 = 94,999).
+
+    Output columns:
+        Date, Invoice #, Prev Units (kWh), Curr Units (kWh),
+        Delta, Reading Type, Notes.
+
+    Rows with unparseable ``Units (kWh)`` or ``Date`` are skipped
+    silently.
+    """
+    columns = [
+        "Date",
+        "Invoice #",
+        "Prev Units (kWh)",
+        "Curr Units (kWh)",
+        "Delta",
+        "Reading Type",
+        "Notes",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    # Restrict to Actual/Smart only.
+    mask = df.get("Reading", pd.Series(dtype=str)).isin(["Actual", "Smart"])
+    candidates = df[mask].copy()
+    if candidates.empty:
+        return pd.DataFrame(columns=columns)
+    # Parse dates so we can sort.
+    candidates["_date_dt"] = _safe_to_datetime(candidates["Date"])
+    candidates = candidates.dropna(subset=["_date_dt"])
+    candidates = candidates.sort_values("_date_dt")
+    rows = []
+    prev_units: float | None = None
+    prev_invoice = ""
+    prev_date_raw = ""
+    for _, r in candidates.iterrows():
+        u_raw = r.get("Units (kWh)", "N/A")
+        try:
+            u = float(u_raw)
+        except (TypeError, ValueError):
+            prev_units = None
+            continue
+        if prev_units is not None:
+            delta = u - prev_units
+            if delta < 0 and abs(delta) > rollover_threshold:
+                rows.append(
+                    {
+                        "Date": r.get("Date", ""),
+                        "Invoice #": r.get("Invoice #", ""),
+                        "Prev Units (kWh)": prev_units,
+                        "Curr Units (kWh)": u,
+                        "Delta": int(delta),
+                        "Reading Type": r.get("Reading", ""),
+                        "Notes": (
+                            f"Negative jump of {abs(int(delta))} kWh between "
+                            f"{prev_invoice} ({prev_date_raw}) and "
+                            f"{r.get('Invoice #', '')} ({r.get('Date', '')}) -- "
+                            "consistent with a meter rollover near the "
+                            f"{rollover_threshold + 5000}-rollover cap."
+                        ),
+                    }
+                )
+        prev_units = u
+        prev_invoice = r.get("Invoice #", "")
+        prev_date_raw = r.get("Date", "")
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows, columns=columns)
+    sort_idx = _safe_to_datetime(out["Date"]).sort_values().index
+    out = out.loc[sort_idx].reset_index(drop=True)
+    return out[columns]
 
 
-__all__ = [
-    "write_contract_history_sheet",
-    "write_meter_readings_sheet",
-]
+# ---- infer_contracts (was L2361-2449) ----
+
+def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
+    """Infer contract periods from tariff transitions (spec \u00a73.4).
+
+    Walks the rows of *df* sorted by ``Date``, skips ``N/A`` tariffs,
+    groups consecutive rows sharing the same ``Tariff`` into one
+    contract, and merges adjacent same-tariff groups whose gap is
+    shorter than ``merge_gap_days`` (default 30). Returns one row per
+    contract with the start/end dates, total days, and invoice count.
+
+    Output columns:
+        Contract From, Contract To, Tariff, Days, # Invoices.
+    """
+    columns = ["Contract From", "Contract To", "Tariff", "Days", "# Invoices"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    work = df.copy()
+    work["_dt"] = _safe_to_datetime(work.get("Date"))
+    work = work.dropna(subset=["_dt", "Tariff"])
+    work = work[work["Tariff"] != "N/A"]
+    if work.empty:
+        return pd.DataFrame(columns=columns)
+    work = work.sort_values("_dt").reset_index(drop=True)
+    # Build raw runs: consecutive rows with the same tariff value.
+    runs: list[dict] = []
+    cur_start_idx = 0
+    cur_tariff = work.iloc[0]["Tariff"]
+    for i in range(1, len(work)):
+        if work.iloc[i]["Tariff"] != cur_tariff:
+            runs.append(
+                {
+                    "start_idx": cur_start_idx,
+                    "end_idx": i - 1,
+                    "tariff": cur_tariff,
+                }
+            )
+            cur_start_idx = i
+            cur_tariff = work.iloc[i]["Tariff"]
+    runs.append(
+        {
+            "start_idx": cur_start_idx,
+            "end_idx": len(work) - 1,
+            "tariff": cur_tariff,
+        }
+    )
+    # Merge adjacent runs of the same tariff if gap < merge_gap_days.
+    merged: list[dict] = []
+    for run in runs:
+        # Calculate this run's dates.
+        start_dt = work.iloc[run["start_idx"]]["_dt"]
+        end_dt = work.iloc[run["end_idx"]]["_dt"]
+        start_raw = work.iloc[run["start_idx"]]["Date"]
+        end_raw = work.iloc[run["end_idx"]]["Date"]
+        n = run["end_idx"] - run["start_idx"] + 1
+        candidate = {
+            "Contract From": start_raw,
+            "Contract To": end_raw,
+            "_from_dt": start_dt,
+            "_to_dt": end_dt,
+            "Tariff": run["tariff"],
+            "# Invoices": n,
+        }
+        if merged and merged[-1]["Tariff"] == candidate["Tariff"]:
+            prev_end = merged[-1]["_to_dt"]
+            gap_days = (candidate["_from_dt"] - prev_end).days
+            if 0 <= gap_days < merge_gap_days:
+                # Merge: extend previous contract's end and invoice count.
+                merged[-1]["Contract To"] = candidate["Contract To"]
+                merged[-1]["_to_dt"] = candidate["_to_dt"]
+                merged[-1]["# Invoices"] += candidate["# Invoices"]
+                continue
+        merged.append(candidate)
+    rows = []
+    for c in merged:
+        days = int((c["_to_dt"] - c["_from_dt"]).days)
+        rows.append(
+            {
+                "Contract From": c["Contract From"],
+                "Contract To": c["Contract To"],
+                "Tariff": c["Tariff"],
+                "Days": days,
+                "# Invoices": int(c["# Invoices"]),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows, columns=columns)
+    sort_idx = _safe_to_datetime(out["Contract From"]).sort_values().index
+    out = out.loc[sort_idx].reset_index(drop=True)
+    return out[columns]
+
+
+# ---- write_meter_readings_sheet (was L2607-2782) ----
+
+def _write_meter_readings_sheet_impl(
+    ws: Worksheet,
+    df: pd.DataFrame,
+    rollovers: pd.DataFrame,
+    account: str = "",
+    *,
+    evidence_df: pd.DataFrame | None = None,
+    evidence_index: dict[str, int] | None = None,
+) -> None:
+    """Render the Meter Readings tab (spec §4.3).
+
+    Layout:
+      row 1: title banner with account
+      row 2: legend 'A = Actual, E = Estimated, M = Meter rollover'
+      row 7: table header (8 cols)
+      rows 8+: one row per evidence record, ordered by Date
+
+    The 'Type (A/E/M)' column maps each evidence row's Reading
+    column to A / E, with M overriding when this invoice appears in
+    the ``rollovers`` table. The Estimated Source column carries
+    Details verbatim (e.g. 'Automatic estimate' or 'SAP estimate')
+    for Estimated rows, else blank.
+
+    Open PDF column (col 7): hyperlink
+    source-PDF-text + regex trace for that invoice, fetched from
+    ``evidence_df`` via :func:`_open_pdf_hyperlink_cell` for hyperlink
+    available.
+
+    Spec §10.2 adds a "View on Evidence Report" column (col 8): a
+    hyperlinked right-arrow that jumps to the matched row on the
+    EDF Evidence Report sheet, looked up from ``evidence_index``.
+    """
+    ws.title = "Meter Readings"
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+
+    rollover_invoices: set[str] = set()
+    if rollovers is not None and not rollovers.empty and "Invoice #" in rollovers.columns:
+        rollover_invoices = {str(x) for x in rollovers["Invoice #"].tolist() if x}
+
+    # Row 1: title banner with account
+    title = "METER READING HISTORY \u2014 Actual vs Estimated"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    t1.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, 7):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+
+    # Row 2: legend subheader
+    sub = (
+        "A = Actual (supplier-confirmed reading)  |  E = Estimated  |  "
+        "M = Meter rollover candidate (negative delta near rollover threshold)"
+    )
+    sub_cell = ws.cell(row=2, column=1, value=sub)
+    sub_cell.font = Font(name="Calibri", size=10, italic=True)
+    sub_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=6)
+    ws.row_dimensions[2].height = 28
+
+    # Row 7: table header (8 cols per spec \u00a74.3 + \u00a75.2 + \u00a710.2).
+    headers = [
+        "Date",
+        "Reading (kWh)",
+        "Type (A/E/M)",
+        "Estimated Source",
+        "Invoice #",
+        "Notes",
+        "Open PDF",
+        "View on Evidence Report",
+    ]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 7, col, h, bg=NAVY)
+    ws.row_dimensions[7].height = 28
+
+    # Sort rows by Date before writing.
+    work = df.copy() if df is not None and not df.empty else pd.DataFrame()
+    if not work.empty:
+        work["_dt"] = _safe_to_datetime(work.get("Date"))
+        work = work.sort_values("_dt").drop(columns=["_dt"])
+
+    r = 8
+    for _, row in work.iterrows():
+        bg = "EEF2FF" if r % 2 == 0 else None
+        inv = str(row.get("Invoice #", ""))
+        reading = row.get("Reading", "")
+        units_raw = row.get("Units (kWh)", "N/A")
+        try:
+            units = float(units_raw)
+        except (TypeError, ValueError):
+            units = units_raw  # keep as-is in cell
+        # Type code: M overrides if invoice flagged in rollovers.
+        type_code = "M" if inv in rollover_invoices else _reading_type_to_aem(str(reading))
+        est_src = ""
+        if str(reading) == "Estimated":
+            est_src = str(row.get("Details", "") or "")
+        notes = (
+            "Meter rollover candidate -- see rollover table." if inv in rollover_invoices else ""
+        )
+        _text(ws, r, 1, row.get("Date", ""), fill_hex=bg)
+        if isinstance(units, int | float):
+            _num(ws, r, 2, units, fmt="#,##0.0", fill_hex=bg)
+        else:
+            _text(ws, r, 2, str(units), fill_hex=bg)
+        _text(ws, r, 3, type_code, fill_hex=bg)
+        _text(ws, r, 4, est_src, fill_hex=bg)
+        _text(ws, r, 5, inv, fill_hex=bg)
+        _text(ws, r, 6, notes, wrap=True, fill_hex=bg)
+        # Colour the type cell for clarity: amber for E, blue for M.
+        type_cell = ws.cell(row=r, column=3)
+        if type_code == "M":
+            type_cell.font = Font(name="Calibri", size=10, bold=True, color="003F87")
+        elif type_code == "E":
+            type_cell.font = Font(name="Calibri", size=10, color="C08000")
+        excerpt = ""
+        if evidence_df is not None and not evidence_df.empty and "Invoice #" in evidence_df.columns:
+            matches = evidence_df[evidence_df["Invoice #"].astype(str) == str(inv)]
+            if not matches.empty:
+                source_text = matches.iloc[0].get("Source PDF Text", "")
+                if isinstance(source_text, str) and source_text:
+                    excerpt = source_text[:400]
+                    if len(source_text) > 400:
+                        excerpt += " ..."
+        if excerpt:
+            _text(ws, r, 7, excerpt, wrap=True, fill_hex=bg)
+        else:
+            _open_pdf_hyperlink_cell(ws, r, 7, evidence_df, inv)
+        # View on Evidence Report (col 8): hyperlinked right-arrow
+        # that jumps to the matched invoice's row on the Evidence
+        # Report sheet.
+        target_row = None
+        if evidence_index is not None:
+            target_row = evidence_index.get(f"inv:{inv}")
+            if target_row is None:
+                # Fall back to date+units signature.
+                try:
+                    amt = float(units)
+                    units_sig = int(round(amt))
+                    key = f"date_units:{row.get('Date', '')}|{units_sig}"
+                    target_row = evidence_index.get(key)
+                except (TypeError, ValueError):
+                    pass
+        if target_row is not None:
+            cell = ws.cell(row=r, column=8, value="\u2192")
+            cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                ref=cell.coordinate,
+                location=f"'EDF Evidence Report'!A{target_row}",
+                display="\u2192",
+                tooltip=f"Jump to EDF Evidence Report!A{target_row}",
+            )
+            cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        else:
+            cell = ws.cell(row=r, column=8, value="No match")
+            cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
+        r += 1
+
+    # Column widths tailored for the table cells.
+    widths = {
+        "A": 14,
+        "B": 16,
+        "C": 16,
+        "D": 26,
+        "E": 20,
+        "F": 50,
+        "G": 60,  # Open PDF
+        "H": 22,  # View on Evidence Report
+    }
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A8"
+
+
+# ---- write_contract_history_sheet (was L2785-2915) ----
+
+def write_contract_history_sheet(
+    ws: Worksheet,
+    contracts: pd.DataFrame,
+    account: str = "",
+    *,
+    evidence_df: pd.DataFrame | None = None,
+    evidence_index: dict[str, int] | None = None,
+) -> None:
+    """Render the Contract History tab (spec \u00a74.4).
+
+    Spec \u00a75.2 adds a "Source Excerpt" column populated from any
+    invoice in ``evidence_df`` whose Period falls inside each
+    inferred contract's [Contract From, Contract To] window.
+    Spec \u00a710.2 adds a "View on Evidence Report" hotlink to
+    that matching invoice's row.
+    """
+    ws.title = "Contract History"
+    NAVY = "10367A"
+    ORANGE = "FE5716"
+
+    def _first_matching_invoice(cf: pd.Timestamp, ct: pd.Timestamp) -> str:
+        if evidence_df is None or evidence_df.empty or "Invoice #" not in evidence_df.columns:
+            return ""
+        for _, er in evidence_df.iterrows():
+            ipf = _safe_to_datetime(er.get("Period From"))
+            ipt = _safe_to_datetime(er.get("Period To"))
+            if pd.isna(ipf) or pd.isna(ipt):
+                continue
+            if (ipf <= ct) and (ipt >= cf):
+                inv = str(er.get("Invoice #", ""))
+                if inv:
+                    return inv
+        return ""
+
+    # Row 1: title banner with account
+    title = "INFERRED CONTRACT HISTORY"
+    if account:
+        title = f"{title}  |  Account {account}"
+    t1 = ws.cell(row=1, column=1, value=title)
+    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    t1.fill = PatternFill("solid", start_color=ORANGE)
+    t1.border = CELL_BORDER
+    for c in range(2, 8):
+        x = ws.cell(row=1, column=c)
+        x.fill = PatternFill("solid", start_color=ORANGE)
+        x.border = CELL_BORDER
+    ws.row_dimensions[1].height = 22
+
+    # Row 2: subheader
+    sub = (
+        "Contract periods inferred from tariff transitions in the parsed "
+        "invoice stream. Boundaries are approximate (\u2264 30-day merges)."
+    )
+    sub_cell = ws.cell(row=2, column=1, value=sub)
+    sub_cell.font = Font(name="Calibri", size=10, italic=True)
+    sub_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=7)
+    ws.row_dimensions[2].height = 30
+
+    # Row 7: table headers (5 data + Open PDF + View on ER = 7
+    # cols per spec \u00a74.4 + \u00a75.2 + \u00a710.2).
+    headers = [
+        "Contract From",
+        "Contract To",
+        "Tariff",
+        "Days",
+        "# Invoices",
+        "Open PDF",
+        "View on Evidence Report",
+    ]
+    for col, h in enumerate(headers, 1):
+        _hcell(ws, 7, col, h, bg=NAVY)
+    ws.row_dimensions[7].height = 28
+
+    r = 8
+    for _, row in contracts.iterrows() if contracts is not None and not contracts.empty else []:
+        bg = "EEF2FF" if r % 2 == 0 else None
+        cf = _safe_to_datetime(row.get("Contract From"))
+        ct = _safe_to_datetime(row.get("Contract To"))
+        cf_text = row.get("Contract From", "")
+        if isinstance(cf, pd.Timestamp) and not pd.isna(cf):
+            cf_text = cf.strftime("%d %b %Y")
+        ct_text = row.get("Contract To", "")
+        if isinstance(ct, pd.Timestamp) and not pd.isna(ct):
+            ct_text = ct.strftime("%d %b %Y")
+        _text(ws, r, 1, cf_text, fill_hex=bg)
+        _text(ws, r, 2, ct_text, fill_hex=bg)
+        _text(ws, r, 3, row.get("Tariff", ""), fill_hex=bg)
+        _num(ws, r, 4, int(row.get("Days", 0)), fmt="#,##0", fill_hex=bg)
+        _num(ws, r, 5, int(row.get("# Invoices", 0)), fmt="#,##0", fill_hex=bg)
+        matched_inv = (
+            _first_matching_invoice(cf, ct)
+            if (
+                isinstance(cf, pd.Timestamp)
+                and not pd.isna(cf)
+                and isinstance(ct, pd.Timestamp)
+                and not pd.isna(ct)
+            )
+            else ""
+        )
+        _open_pdf_hyperlink_cell(ws, r, 6, evidence_df, matched_inv)
+        target_row = None
+        if evidence_index is not None and matched_inv:
+            target_row = evidence_index.get(f"inv:{matched_inv}")
+        if target_row is not None:
+            cell = ws.cell(row=r, column=7, value="\u2192")
+            cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                ref=cell.coordinate,
+                location=f"'EDF Evidence Report'!A{target_row}",
+                display="\u2192",
+                tooltip=f"Jump to EDF Evidence Report!A{target_row}",
+            )
+            cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        else:
+            cell = ws.cell(row=r, column=7, value="No match")
+            cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
+        r += 1
+
+    # Column widths.
+    widths = {
+        "A": 16,
+        "B": 16,
+        "C": 24,
+        "D": 10,
+        "E": 12,
+        "F": 60,  # Open PDF
+        "G": 22,  # View on Evidence Report
+    }
+    for col_letter, width in widths.items():
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A8"
 
 
 def write_meter_readings_sheet(
-    ws,
+    ws: Worksheet,
     df: pd.DataFrame,
     rollovers: pd.DataFrame | None = None,
     account: str = "",
@@ -50,9 +540,7 @@ def write_meter_readings_sheet(
     evidence_index: dict[str, int] | None = None,
 ) -> None:
     """Adapter: test contract uses ``(ws, df)``; supply defaults for the rest."""
-    from edf_bill_fetcher.writers import write_meter_readings_sheet as _impl
-
-    return _impl(
+    return _write_meter_readings_sheet_impl(
         ws,
         df,
         rollovers if rollovers is not None else pd.DataFrame(),
@@ -61,10 +549,10 @@ def write_meter_readings_sheet(
         evidence_index=evidence_index,
     )
 
-
-def __getattr__(name: str):
-    if name == "write_contract_history_sheet":
-        from edf_bill_fetcher.writers import write_contract_history_sheet
-
-        return write_contract_history_sheet
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+__all__ = [
+    "_write_meter_readings_sheet_impl",
+    "detect_meter_rollover",
+    "infer_contracts",
+    "write_contract_history_sheet",
+    "write_meter_readings_sheet",
+]
