@@ -1471,7 +1471,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     # is touched. Account label is pulled from config['acc_num'].
     # ------------------------------------------------------------------
     account_label = str(config.get("acc_num", "") or "")
-    from edf_bill_fetcher.writers import run_analysers
+    from edf_bill_fetcher.io.writers.analysis import run_analysers
 
     analyses = run_analysers(dfc)
     rb = analyses["rebilling"]
