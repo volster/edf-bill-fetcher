@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 from openpyxl import Workbook
 
-from edf_bill_fetcher.processors.detection import write_back_billing_sheet
+from edf_bill_fetcher.io.writers.back_billing import write_back_billing_sheet
 from edf_bill_fetcher.processors.matching import build_evidence_index
 from edf_bill_fetcher.writers import write_rebilling_sheet
 

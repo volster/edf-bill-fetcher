@@ -5,10 +5,8 @@ from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from edf_bill_fetcher.io.adapters.pdf import legal_context
-from edf_bill_fetcher.processors.detection import (
-    detect_back_billing,
-    write_back_billing_sheet,
-)
+from edf_bill_fetcher.io.writers.back_billing import write_back_billing_sheet
+from edf_bill_fetcher.processors.detection import detect_back_billing
 
 
 def _sample_df() -> pd.DataFrame:

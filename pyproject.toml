@@ -116,7 +116,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["T20", "PT011", "PT012"]
-"edf_collector.py" = ["T201"]
 "edf_bill_fetcher/io/cli.py" = ["T201"]
 "edf_bill_fetcher/writers/__init__.py" = ["T201"]
 
@@ -137,7 +136,7 @@ strict_optional = true
 ignore_missing_imports = true
 
 # ``build/`` is a transient PyInstaller output directory emitted by
-# ``pyinstaller --onefile ... edf_collector.py`` runs (locally and
+# ``pyinstaller --onefile ... main.py`` runs (locally and
 # on the *Build Executables* CI worker).  Without an explicit
 # exclude, mypy picks up ``build/lib/tests/__init__.py`` *and*
 # ``tests/__init__.py`` and errors out with ``Duplicate module

@@ -70,7 +70,6 @@ class _RestrictedUnpickler(pickle.Unpickler):
         "numpy._core.multiarray": {"_reconstruct"},
         "pandas.core.indexes.base": {"_new_Index", "Index"},
         "pandas.core.indexes.range": {"RangeIndex"},
-        "edf_collector": {"EvidenceEngine"},
         "edf_bill_fetcher.collectors.engine": {"EvidenceEngine"},
     }
 
@@ -83,16 +82,6 @@ class _RestrictedUnpickler(pickle.Unpickler):
             )
         allow_everything = allowed is None
         if allow_everything or (isinstance(allowed, set) and name in allowed):
-            if module == "edf_collector":
-                import importlib
-
-                mod = importlib.import_module("edf_collector")
-                cls = getattr(mod, name)
-                if not isinstance(cls, type):
-                    raise pickle.UnpicklingError(
-                        f"Resolved edf_collector attribute {name!r} is not a class"
-                    )
-                return cls
             if module == "edf_bill_fetcher.collectors.engine":
                 import importlib
 

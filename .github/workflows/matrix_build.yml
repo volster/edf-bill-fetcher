@@ -101,7 +101,7 @@ jobs:
             --hidden-import=pypff \
             --hidden-import=edf_report \
             --hidden-import=edf_report_docx \
-            edf_collector.py
+            main.py
 
       - name: Verify executable exists
         run: |
