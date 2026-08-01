@@ -22,6 +22,8 @@ finished initialising.
 
 from __future__ import annotations
 
+from typing import Any
+
 __all__ = [
     # Phase 5A real extractions:
     "write_evidence_sheet",
@@ -46,7 +48,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name in ("write_evidence_sheet", "write_summary_sheet"):
         from edf_bill_fetcher.io.writers.evidence import write_evidence_sheet, write_summary_sheet
 

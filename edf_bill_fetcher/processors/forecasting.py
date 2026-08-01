@@ -16,14 +16,6 @@ import importlib.util
 import numpy as np
 import pandas as pd
 
-try:
-    from statsmodels.tsa.holtwinters import ExponentialSmoothing  # noqa: F401
-
-    _PREV_HAS_STATSMODELS = True
-except ImportError:
-    ExponentialSmoothing = None  # type: ignore[assignment]
-    HAS_STATSMODELS = False
-
 HAS_STATSMODELS = importlib.util.find_spec("statsmodels.tsa.holtwinters") is not None
 
 try:
@@ -31,13 +23,13 @@ try:
 except ImportError:
     ExponentialSmoothing = None  # type: ignore[assignment,misc]
 
-from edf_bill_fetcher.helpers.date_utils import (
+from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,I001
     compute_ema as _compute_ema,
 )
-from edf_bill_fetcher.helpers.date_utils import (
+from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,I001
     compute_momentum as _compute_momentum,
 )
-from edf_bill_fetcher.helpers.date_utils import (
+from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,I001
     compute_rolling_stats as _compute_rolling_stats,
 )
 

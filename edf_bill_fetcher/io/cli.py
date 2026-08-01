@@ -225,7 +225,7 @@ def run_cli_extract(args: list[str]) -> None:
         # Export to Excel
         print(f"Writing Excel report: {parsed.output}")
 
-        from edf_bill_fetcher.writers import export_to_excel  # noqa: F402,E402
+        from edf_bill_fetcher.io.writers.export import export_to_excel
 
         export_to_excel(
             engine.records,
