@@ -29,7 +29,10 @@ DEFECTS PINNED
 
 from __future__ import annotations
 
-from edf_collector import extract_new_credit_fields, extract_new_invoice_fields
+from edf_bill_fetcher.processors.sap_parsers import (
+    extract_new_credit_fields,
+    extract_new_invoice_fields,
+)
 from edf_report import fmt_money
 
 
@@ -132,7 +135,7 @@ class TestAccountNumberFilter:
     forms.  An account-number config of ``"31"`` would false-match a
     meter-serial ``A-31000001`` because "31" is contained inside
     "31000001".  The post-fix helper
-    ``_account_number_matches(acc, text)`` rejects those substring
+    ``account_number_matches(acc, text)`` rejects those substring
     matches while still letting a real standalone account number
     through (the same shape EDF renders as ``A-NNNNNNNN`` or as a
     spaced digit run).
@@ -140,30 +143,30 @@ class TestAccountNumberFilter:
 
     def test_substring_of_longer_number_must_not_match(self):
         """The exact regression: short-account-vs-meter-serial."""
-        from edf_collector import _account_number_matches
+        from edf_bill_fetcher.collectors.engine import account_number_matches
 
         # Config: filtering for the account "31".
         # Suspicious text: meter serial A-31000001 — old logic
         # accepted because "31" was a substring of "31000001".
         text = "Your bill\nMeter serial: A-31000001\nCurrent balance £240.50 debit\n"
-        assert _account_number_matches("31", text) is False, (
+        assert account_number_matches("31", text) is False, (
             "AccountNumberFilter let '31' match 'A-31000001' — "
             "substring false-positive; pre-fix bug not actually fixed."
         )
 
     def test_legitimate_standalone_account_still_matches(self):
         """The same shorter config NEVER drops a real standalone hit."""
-        from edf_collector import _account_number_matches
+        from edf_bill_fetcher.collectors.engine import account_number_matches
 
         text = "Your bill\nAccount number: A-12345678\nCurrent balance £240.50 debit\n"
-        assert _account_number_matches("12345678", text) is True
+        assert account_number_matches("12345678", text) is True
 
     def test_legitimate_account_long_config_runs(self):
         """Filter configured as the full EDF ``A-NNNNNNNN`` form."""
-        from edf_collector import _account_number_matches
+        from edf_bill_fetcher.collectors.engine import account_number_matches
 
         text = "Your bill\nAccount number: A-12345678\nCurrent balance £240.50 debit\n"
-        assert _account_number_matches("A-12345678", text) is True
+        assert account_number_matches("A-12345678", text) is True
 
     def test_substring_match_with_digit_on_one_side_does_not_match(self):
         """``"12345678"`` must NOT match inside ``"A12345678B123``
@@ -176,10 +179,10 @@ class TestAccountNumberFilter:
         Concretely: text ``"A1234567890"`` with filter ``"12345678"``
         must NOT match — "12345678" is followed by "90" (more digits).
         """
-        from edf_collector import _account_number_matches
+        from edf_bill_fetcher.collectors.engine import account_number_matches
 
         text = "Meter serial: A1234567890"
-        assert _account_number_matches("12345678", text) is False, (
+        assert account_number_matches("12345678", text) is False, (
             "AccountNumberFilter let '12345678' match 'A1234567890' — "
             "the right side of the candidate run continues with digits."
         )
@@ -189,32 +192,32 @@ class TestAccountNumberFilter:
         the last digit of a phone/meter serial.  The longer run must
         not yield a match for the shorter prefix.
         """
-        from edf_collector import _account_number_matches
+        from edf_bill_fetcher.collectors.engine import account_number_matches
 
         text = "Phone: 07700 900123"
-        assert _account_number_matches("07700900", text) is False
+        assert account_number_matches("07700900", text) is False
 
     def test_genuine_standalone_run_matches_with_letter_bookend(self):
         """Bookend letters (not digits) DO NOT block a match."""
-        from edf_collector import _account_number_matches
+        from edf_bill_fetcher.collectors.engine import account_number_matches
 
         text = "Billed to: A12345678 "  # trailing space, no digit after
-        assert _account_number_matches("12345678", text) is True
+        assert account_number_matches("12345678", text) is True
 
     def test_empty_filter_matches_everything(self):
         """Empty-filter is the documented bypass — never silently reject."""
-        from edf_collector import _account_number_matches
+        from edf_bill_fetcher.collectors.engine import account_number_matches
 
-        assert _account_number_matches("", "anything goes here") is True
-        assert _account_number_matches("", "") is True
+        assert account_number_matches("", "anything goes here") is True
+        assert account_number_matches("", "") is True
 
     def test_unusable_filter_passes_through(self):
         """A filter of just whitespace/letters shouldn't reject everything."""
-        from edf_collector import _account_number_matches
+        from edf_bill_fetcher.collectors.engine import account_number_matches
 
         # Defensive: if a user types a non-digit-only filter
         # by accident, we should not silently drop every record.
-        assert _account_number_matches("ab-cd", "any text") is True
+        assert account_number_matches("ab-cd", "any text") is True
 
     def test_engine_filter_through_helper_end_to_end(self):
         """Drive the helper through EvidenceEngine.process_text so a
@@ -230,7 +233,7 @@ class TestAccountNumberFilter:
             (the meter-serial case generalised to the realistic
             EDF format)
         """
-        from edf_collector import EvidenceEngine
+        from edf_bill_fetcher.collectors.engine import EvidenceEngine
 
         def _build_engine(legacy_anchor=True):
             cfg = {

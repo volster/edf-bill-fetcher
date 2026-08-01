@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from edf_collector import extract_admit_phrase
+from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase
 
 
 @pytest.mark.parametrize(

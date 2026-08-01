@@ -16,7 +16,7 @@ def _fake_pdf(pages: list[str]) -> MagicMock:
 
 
 def _build_engine():
-    from edf_collector import EvidenceEngine
+    from edf_bill_fetcher.collectors.engine import EvidenceEngine
 
     eng = EvidenceEngine(config={}, update_ui_cb=lambda *a, **k: None)
     eng.config["use_acc_filter"] = False

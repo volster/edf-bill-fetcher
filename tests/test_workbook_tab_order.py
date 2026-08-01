@@ -4,7 +4,7 @@ from __future__ import annotations
 import pandas as pd
 from openpyxl import load_workbook
 
-from edf_collector import export_to_excel
+from edf_bill_fetcher.writers import export_to_excel
 
 
 def test_workbook_tab_order_is_severity_led(tmp_path: object) -> None:

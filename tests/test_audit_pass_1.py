@@ -34,16 +34,16 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from edf_collector import (
-    HAS_PYPFF,
-    READING_PATTERNS,
-    EvidenceEngine,
+from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.io.cli import HAS_PYPFF
+from edf_bill_fetcher.processors.analysis import (
     _analyze_tariff_impact,
     _data_quality_report,
     _detect_payment_patterns,
     compute_dispute_flags,
-    detect_pdf_format,
 )
+from edf_bill_fetcher.processors.detection import detect_pdf_format
+from edf_bill_fetcher.processors.patterns import READING_PATTERNS
 
 # --------------------------------------------------------------------------
 # READING_PATTERNS ordering and produce-side semantics

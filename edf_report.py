@@ -39,8 +39,13 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from edf_bill_fetcher.helpers.date_utils import (
+    parse_to_display_date,
+    parse_to_sort_date,
+)
+
 # Import from main module
-from edf_collector import HAS_SCIPY, parse_to_display_date, parse_to_sort_date
+from edf_bill_fetcher.writers import HAS_SCIPY
 
 # =============================================================================
 # COLOR PALETTE & CONSTANTS
@@ -2583,7 +2588,7 @@ def generate_ombudsman_pdf(
     opening_balance, closing_balance = _compute_balance_extremes(df)
 
     # Compute dispute flags from the data
-    from edf_collector import compute_dispute_flags
+    from edf_bill_fetcher.processors.analysis import compute_dispute_flags
 
     # Ensure _dt column exists for the analysis
     if "_dt" not in df.columns:

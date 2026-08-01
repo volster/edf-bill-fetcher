@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from edf_collector import legal_context
+from edf_bill_fetcher.io.adapters.pdf import legal_context
 
 
 def test_legal_context_returns_non_empty_string():

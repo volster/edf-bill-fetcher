@@ -5,7 +5,7 @@ import os
 import pytest
 from openpyxl import load_workbook
 
-from edf_collector import export_to_excel
+from edf_bill_fetcher.writers import export_to_excel
 
 
 def _sample_data() -> list[dict]:

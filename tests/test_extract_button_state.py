@@ -8,7 +8,12 @@ import tkinter as tk
 
 import pytest
 
-from edf_collector import EDF_NAVY, EDF_ORANGE, MEDIUM_GREY, App
+from edf_bill_fetcher.ui.app import App
+from edf_bill_fetcher.writers._helpers import (
+    EDF_NAVY,
+    EDF_ORANGE,
+    MEDIUM_GREY,
+)
 
 
 class _NoThread:

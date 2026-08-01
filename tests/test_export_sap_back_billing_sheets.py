@@ -17,12 +17,12 @@ from __future__ import annotations
 
 from openpyxl import Workbook, load_workbook
 
-from edf_collector import (
-    _build_sap_row_index_map,
+from edf_bill_fetcher.helpers.excel_utils import build_sap_row_index_map
+from edf_bill_fetcher.processors.matching import match_sap_events_to_edf
+from edf_bill_fetcher.processors.sap_parsers import parse_sap_financial_transactions
+from edf_bill_fetcher.writers import (
     detect_sap_back_billing_events,
     export_to_excel,
-    match_sap_events_to_edf,
-    parse_sap_financial_transactions,
     write_sap_back_billing_sheets,
 )
 
@@ -165,7 +165,7 @@ def _sample_data_one_record() -> list[dict]:
 def test_build_sap_row_index_map_returns_4_plus_i() -> None:
     rows = parse_sap_financial_transactions(_sap_csv_with_cluster(), source_file="x")
     assert len(rows) == 4
-    mp = _build_sap_row_index_map(rows)
+    mp = build_sap_row_index_map(rows)
     assert mp[id(rows[0])] == 4
     assert mp[id(rows[1])] == 5
     assert mp[id(rows[2])] == 6
@@ -334,7 +334,7 @@ def test_sheet1_summary_row_hyperlink_to_specific_sap_row(tmp_path: object) -> N
     wb = Workbook()
     sap_rows = parse_sap_financial_transactions(_sap_csv_with_cluster(), source_file="test.pdf")
     events = detect_sap_back_billing_events(sap_rows)
-    mp = _build_sap_row_index_map(sap_rows)
+    mp = build_sap_row_index_map(sap_rows)
     write_sap_back_billing_sheets(
         wb,
         events,
@@ -407,7 +407,7 @@ def test_sap_bb_events_title_row_contains_event_count_summary() -> None:
     )
     # Reach the writer directly so the test is hermetic — the public
     # write_sap_back_billing_sheets wrapper doesn't yet forward account.
-    from edf_collector import _write_sap_bb_events_sheet
+    from edf_bill_fetcher.writers import _write_sap_bb_events_sheet
 
     ws = wb.create_sheet("SAP Back-billing Events")
     _write_sap_bb_events_sheet(ws, events, sap_financial_first_row=4, account="A-31105244")
@@ -489,7 +489,7 @@ def test_sheet2_hyperlinks_to_sheet1_and_evidence_report(tmp_path: object) -> No
     events = detect_sap_back_billing_events(sap_rows)
     edf = _sample_data_one_record()
     matches = match_sap_events_to_edf(events, edf)
-    mp = _build_sap_row_index_map(sap_rows)
+    mp = build_sap_row_index_map(sap_rows)
     write_sap_back_billing_sheets(
         wb,
         events,

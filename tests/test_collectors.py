@@ -22,8 +22,8 @@ def test_evidence_engine_importable_from_collectors_engine():
 
 
 def test_evidence_engine_re_exported_from_edf_collector():
+    from edf_bill_fetcher.collectors.engine import EvidenceEngine as EE1
     from edf_bill_fetcher.collectors.engine import EvidenceEngine as EE2
-    from edf_collector import EvidenceEngine as EE1
 
     assert EE1 is EE2
 

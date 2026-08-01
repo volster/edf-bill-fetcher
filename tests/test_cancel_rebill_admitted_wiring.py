@@ -23,7 +23,7 @@ Each of these is now asserted to populate the column.
 
 from __future__ import annotations
 
-from edf_collector import EvidenceEngine
+from edf_bill_fetcher.collectors.engine import EvidenceEngine
 
 
 def _engine() -> EvidenceEngine:

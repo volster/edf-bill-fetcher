@@ -3,10 +3,12 @@
 import pandas as pd
 import pytest
 
-from edf_collector import (
-    _compute_ema,
-    _compute_momentum,
-    _compute_rolling_stats,
+from edf_bill_fetcher.helpers.date_utils import (
+    compute_ema,
+    compute_momentum,
+    compute_rolling_stats,
+)
+from edf_bill_fetcher.processors.forecasting import (
     _compute_volatility,
     _holt_winters_forecast,
     _iqr_anomalies,
@@ -32,7 +34,7 @@ class TestStatisticalFunctions:
         return pd.Series([100.0, 105.0, 95.0, 110.0, 1000.0, 90.0, 102.0, 98.0])
 
     def test_compute_rolling_stats_basic(self, sample_series):
-        result = _compute_rolling_stats(sample_series, window=3)
+        result = compute_rolling_stats(sample_series, window=3)
         assert "mean" in result
         assert "std" in result
         assert "min" in result
@@ -41,29 +43,29 @@ class TestStatisticalFunctions:
         assert len(result["mean"]) == len(sample_series)
 
     def test_compute_rolling_stats_short_window(self, sample_series):
-        result = _compute_rolling_stats(sample_series, window=2)
+        result = compute_rolling_stats(sample_series, window=2)
         assert len(result["mean"]) == len(sample_series)
 
     def test_compute_rolling_stats_flat_series(self, flat_series):
-        result = _compute_rolling_stats(flat_series, window=3)
+        result = compute_rolling_stats(flat_series, window=3)
         assert (result["std"].dropna() == 0).all()
 
     def test_compute_ema_basic(self, sample_series):
-        result = _compute_ema(sample_series, span=3)
+        result = compute_ema(sample_series, span=3)
         assert len(result) == len(sample_series)
         assert result.iloc[0] == sample_series.iloc[0]
 
     def test_compute_ema_flat_series(self, flat_series):
-        result = _compute_ema(flat_series, span=3)
+        result = compute_ema(flat_series, span=3)
         assert (result == 100.0).all()
 
     def test_compute_momentum_basic(self, sample_series):
-        result = _compute_momentum(sample_series, period=2)
+        result = compute_momentum(sample_series, period=2)
         assert len(result) == len(sample_series)
         assert pd.isna(result.iloc[0])
 
     def test_compute_momentum_flat_series(self, flat_series):
-        result = _compute_momentum(flat_series, period=2)
+        result = compute_momentum(flat_series, period=2)
         assert (result.dropna() == 0).all()
 
     def test_compute_volatility_basic(self, sample_series):

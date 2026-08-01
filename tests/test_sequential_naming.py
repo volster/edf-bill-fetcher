@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from edf_collector import App
+from edf_bill_fetcher.ui.app import App
 
 
 @pytest.fixture

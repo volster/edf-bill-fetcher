@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from edf_collector import slice_pdf_pages
+from edf_bill_fetcher.io.adapters.pdf import slice_pdf_pages
 
 
 def test_empty_input_returns_single_empty_chunk():

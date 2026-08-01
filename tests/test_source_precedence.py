@@ -21,7 +21,7 @@ match the user-stated order.
 
 from __future__ import annotations
 
-from edf_collector import _SOURCE_PRECEDENCE
+from edf_bill_fetcher.writers._helpers import _SOURCE_PRECEDENCE
 
 
 class TestSourcePrecedence:

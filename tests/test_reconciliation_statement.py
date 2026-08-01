@@ -1,6 +1,6 @@
 """Tests for the multi-row reconciliation-statement detector + extractor."""
 
-from edf_collector import (
+from edf_bill_fetcher.processors.sap_parsers import (
     detect_reconciliation_statement,
     extract_reconciliation_statement_rows,
 )

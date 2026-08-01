@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from edf_collector import _ADMIT_RE
+from edf_bill_fetcher.io.adapters.pdf import ADMIT_RE
 
 
 @pytest.mark.parametrize(
@@ -19,7 +19,7 @@ from edf_collector import _ADMIT_RE
     ],
 )
 def test_admit_regex_matches_real_phrases(text: str) -> None:
-    assert _ADMIT_RE.search(text) is not None
+    assert ADMIT_RE.search(text) is not None
 
 
 @pytest.mark.parametrize(
@@ -32,4 +32,4 @@ def test_admit_regex_matches_real_phrases(text: str) -> None:
     ],
 )
 def test_admit_regex_rejects_non_admission_phrases(text: str) -> None:
-    assert _ADMIT_RE.search(text) is None
+    assert ADMIT_RE.search(text) is None

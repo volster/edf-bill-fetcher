@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from edf_collector import _pst_attachment_filename
+from edf_bill_fetcher.collectors.engine import _pst_attachment_filename
 from tests.fixtures.pst_attachment_fixture import (
     PR_ATTACH_FILENAME,
     PR_ATTACH_LONG_FILENAME,

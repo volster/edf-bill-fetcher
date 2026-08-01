@@ -34,8 +34,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from edf_collector import (
-    EvidenceEngine,
+from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.io.cli import (
     _RestrictedUnpickler,
     _safe_pickle_load,
 )

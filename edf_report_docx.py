@@ -25,7 +25,7 @@ from docx.shared import (
 )
 
 # Import from main module
-from edf_collector import parse_to_sort_date
+from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_report import (
     REPORT_SECTIONS,
     RenderContext,
@@ -1509,7 +1509,7 @@ def generate_ombudsman_docx(
     opening_balance, closing_balance = _compute_balance_extremes(df)
 
     # Compute dispute flags from the data
-    from edf_collector import compute_dispute_flags
+    from edf_bill_fetcher.processors.analysis import compute_dispute_flags
 
     # Ensure _dt column exists for the analysis
     if "_dt" not in df.columns:

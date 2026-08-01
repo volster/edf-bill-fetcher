@@ -4,17 +4,21 @@ from datetime import datetime
 
 import pytest
 
-from edf_collector import (
+from edf_bill_fetcher.helpers.date_utils import (
     _ISO_DATE_RE,
-    AMOUNT_PATTERNS,
-    PERIOD_RE,
-    READING_PATTERNS,
-    detect_pdf_format,
-    extract_new_credit_fields,
-    extract_new_invoice_fields,
     parse_to_display_date,
     parse_to_sort_date,
     to_excel_date,
+)
+from edf_bill_fetcher.processors.detection import detect_pdf_format
+from edf_bill_fetcher.processors.patterns import (
+    AMOUNT_PATTERNS,
+    PERIOD_RE,
+    READING_PATTERNS,
+)
+from edf_bill_fetcher.processors.sap_parsers import (
+    extract_new_credit_fields,
+    extract_new_invoice_fields,
 )
 
 
@@ -188,7 +192,10 @@ class TestAmountPatterns:
         This locks both: (a) the pattern exists in the registry, and
         (b) it actually fires against its documented example.
         """
-        from edf_collector import _AMOUNT_PATTERN_NEW_BILL, _AMOUNT_PATTERN_ONGOING_BALANCE
+        from edf_bill_fetcher.processors.patterns import (
+            _AMOUNT_PATTERN_NEW_BILL,
+            _AMOUNT_PATTERN_ONGOING_BALANCE,
+        )
 
         for name, anchor, expected_amount, expected_classification in self.NAMED_PATTERN_CASES:
             matches = [(n, m) for n, p in AMOUNT_PATTERNS if (m := p.search(anchor))]
@@ -227,11 +234,14 @@ class TestAmountPatterns:
 
         A pattern with no bucket assignment would silently fall
         through to heuristic classification, defeating the registry
-        contract. The :py:func:`edf_collector:AMOUNT_PATTERNS`
+        contract. The :py:func:`edf_bill_fetcher.processors.patterns:AMOUNT_PATTERNS`
         definition already asserts this at import time, but a test
         here gives the developer's editor an immediate signal.
         """
-        from edf_collector import _AMOUNT_PATTERN_NEW_BILL, _AMOUNT_PATTERN_ONGOING_BALANCE
+        from edf_bill_fetcher.processors.patterns import (
+            _AMOUNT_PATTERN_NEW_BILL,
+            _AMOUNT_PATTERN_ONGOING_BALANCE,
+        )
 
         for name, _ in AMOUNT_PATTERNS:
             assert name in _AMOUNT_PATTERN_NEW_BILL or name in _AMOUNT_PATTERN_ONGOING_BALANCE, (

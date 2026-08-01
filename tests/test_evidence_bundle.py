@@ -232,7 +232,7 @@ def test_save_evidence_files_copies_when_engine_populated_source_paths(
     failure mode the user reported (evidence_files/ stayed empty)."""
     import base64
 
-    from edf_collector import EvidenceEngine
+    from edf_bill_fetcher.collectors.engine import EvidenceEngine
 
     pdf_path = tmp_path / "edf-invoice-KI-1234-0001-3.pdf"
     pdf_path.write_bytes(base64.b64decode(_PDF_B64))

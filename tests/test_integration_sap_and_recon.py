@@ -29,12 +29,14 @@ import pandas as pd
 import pytest
 from openpyxl import load_workbook
 
-from edf_collector import (
-    EvidenceEngine,
-    export_to_excel,
+from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.processors.sap_parsers import (
     parse_sap_contract_history,
     parse_sap_financial_transactions,
     parse_sap_meter_read_history,
+)
+from edf_bill_fetcher.writers import (
+    export_to_excel,
     run_analysers,
 )
 

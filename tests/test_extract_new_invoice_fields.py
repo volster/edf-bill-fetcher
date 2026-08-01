@@ -17,7 +17,7 @@ from the regex without thinking, two of these will fail.
 
 from __future__ import annotations
 
-from edf_collector import extract_new_invoice_fields
+from edf_bill_fetcher.processors.sap_parsers import extract_new_invoice_fields
 
 KI_HEADER = (
     "Your VAT invoice\n"

@@ -4,7 +4,11 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from edf_collector import detect_back_billing, legal_context, write_back_billing_sheet
+from edf_bill_fetcher.io.adapters.pdf import legal_context
+from edf_bill_fetcher.processors.detection import (
+    detect_back_billing,
+    write_back_billing_sheet,
+)
 
 
 def _sample_df() -> pd.DataFrame:

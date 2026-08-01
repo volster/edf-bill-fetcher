@@ -12,9 +12,9 @@ party who opens the workbook.
 
 The mitigation:
 
-    1. ``_text`` coerces the cell value to ``str`` first so
+    1. ``text`` coerces the cell value to ``str`` first so
        pandas-introduced types don't fall through.
-    2. ``_text`` pins ``cell.data_type = 's'`` (text) so Excel
+    2. ``text`` pins ``cell.data_type = 's'`` (text) so Excel
        never tries to auto-format the cell as a formula even
        when the workbook is opened with maximum-fidelity
        parsing.
@@ -35,7 +35,8 @@ from typing import Any
 import pytest
 from openpyxl import Workbook, load_workbook
 
-from edf_collector import _text, export_to_excel
+from edf_bill_fetcher.helpers.excel_utils import text
+from edf_bill_fetcher.writers import export_to_excel
 
 
 @pytest.fixture
@@ -67,7 +68,7 @@ class TestFormulaInjectionGuard:
     def test_data_type_is_text_pin(self) -> None:
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, "Anything here")
+        text(ws, 1, 1, "Anything here")
         cell = ws.cell(row=1, column=1)
         # The data_type pin is what flips Excel out of
         # auto-evaluate mode on most builds.
@@ -76,7 +77,7 @@ class TestFormulaInjectionGuard:
     def test_leading_equals_triggers_apostrophe_prefix(self) -> None:
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, "=cmd|'/c calc'!A1")
+        text(ws, 1, 1, "=cmd|'/c calc'!A1")
         cell = ws.cell(row=1, column=1)
         # Must not equal the raw ``=cmd...`` payload; we want
         # an apostrophe-prefix to defeat Excel's auto-format.
@@ -88,7 +89,7 @@ class TestFormulaInjectionGuard:
     def test_leading_plus_triggers_apostrophe_prefix(self) -> None:
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, "+MALICIOUS_FORMULA")
+        text(ws, 1, 1, "+MALICIOUS_FORMULA")
         cell = ws.cell(row=1, column=1)
         assert cell.value == "'+MALICIOUS_FORMULA"
         assert cell.data_type == "s"
@@ -96,7 +97,7 @@ class TestFormulaInjectionGuard:
     def test_leading_minus_triggers_apostrophe_prefix(self) -> None:
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, "-1+1")  # Excel would evaluate to 0
+        text(ws, 1, 1, "-1+1")  # Excel would evaluate to 0
         cell = ws.cell(row=1, column=1)
         assert cell.value == "'-1+1", f"Leading minus must be guarded; got {cell.value!r}"
         assert cell.data_type == "s"
@@ -104,7 +105,7 @@ class TestFormulaInjectionGuard:
     def test_leading_at_triggers_apostrophe_prefix(self) -> None:
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, "@SUM(1+1)")
+        text(ws, 1, 1, "@SUM(1+1)")
         cell = ws.cell(row=1, column=1)
         assert cell.value == "'@SUM(1+1)"
         assert cell.data_type == "s"
@@ -115,7 +116,7 @@ class TestFormulaInjectionGuard:
         # one isn't needed.
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, "Period To")
+        text(ws, 1, 1, "Period To")
         cell = ws.cell(row=1, column=1)
         assert cell.value == "Period To", (
             f"Leading non-special char triggered apostrophe?  got {cell.value!r}"
@@ -128,7 +129,7 @@ class TestFormulaInjectionGuard:
         # leading char isn't special.
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, "Config=foo")
+        text(ws, 1, 1, "Config=foo")
         cell = ws.cell(row=1, column=1)
         assert cell.value == "Config=foo"
         assert cell.data_type == "s"
@@ -141,7 +142,7 @@ class TestFormulaInjectionGuard:
         # than ``None``.
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, None)
+        text(ws, 1, 1, None)
         cell = ws.cell(row=1, column=1)
         assert cell.value == ""
         assert cell.data_type == "s"
@@ -153,7 +154,7 @@ class TestFormulaInjectionGuard:
         # textual cell, not a numeric cell.
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, 12345)
+        text(ws, 1, 1, 12345)
         cell = ws.cell(row=1, column=1)
         assert cell.value == "12345"
         assert cell.data_type == "s"
@@ -165,7 +166,7 @@ class TestFormulaInjectionGuard:
         # it further, just pin the data_type.
         wb = Workbook()
         ws = wb.active
-        _text(ws, 1, 1, "Bob's Mobile")
+        text(ws, 1, 1, "Bob's Mobile")
         cell = ws.cell(row=1, column=1)
         assert cell.value == "Bob's Mobile"
         assert cell.data_type == "s"
@@ -175,7 +176,7 @@ class TestFormulaInjectionGuardEvidenceSheet:
     """Phase 2.x — formula-injection guard extended to the
     ``write_evidence_sheet`` row-iteration pathway.
 
-    The headline ``_text`` fix only covered helper calls.  The
+    The headline ``text`` fix only covered helper calls.  The
     evidence-sheet's row-iteration path did ``ws.cell(...,
     value=val)`` directly, and openpyxl auto-set
     ``data_type='f'`` for any value starting with ``=``,

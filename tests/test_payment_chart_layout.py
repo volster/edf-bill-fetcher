@@ -26,7 +26,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from edf_collector import write_payment_analysis_sheet
+from edf_bill_fetcher.writers import write_payment_analysis_sheet
 
 
 @pytest.fixture

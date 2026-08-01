@@ -29,7 +29,7 @@ a crisp RED→GREEN target.
 # (the test runner adds the project root to sys.path;
 # see ``pyproject.toml`` ``[tool.pytest.ini_options] pythonpath``).
 
-from edf_collector import parse_htm_account_history
+from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
 
 
 class TestHTMParserCharge:

@@ -1,14 +1,16 @@
 """Tests for the multi-regex fallback chain (Task 5)."""
 
-from edf_collector import (
-    _COVER_BLOCK_INV_RE,
-    _COVER_BLOCK_PERIOD_RE,
-    _FALLBACK_AMOUNT_RE,
-    _FALLBACK_INV_RE,
+from edf_bill_fetcher.collectors.engine import (
     _fallback_amount,
     _fallback_inv_num,
     _fallback_period_from,
     _fallback_period_to,
+)
+from edf_bill_fetcher.processors.patterns import (
+    _COVER_BLOCK_INV_RE,
+    _COVER_BLOCK_PERIOD_RE,
+    _FALLBACK_AMOUNT_RE,
+    _FALLBACK_INV_RE,
 )
 
 _TEXT_NEW_INVOICE = """Solland Farm

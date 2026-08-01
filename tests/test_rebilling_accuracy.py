@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from edf_collector import detect_rebilling
+from edf_bill_fetcher.processors.detection import detect_rebilling
 
 
 def _row(

@@ -2,7 +2,7 @@
 
 import pytest
 
-from edf_collector import EvidenceEngine
+from edf_bill_fetcher.collectors.engine import EvidenceEngine
 
 
 class TestEvidenceEngineConfig:
@@ -144,32 +144,32 @@ class TestDomainFilter:
     """Tests for sender email domain filtering."""
 
     def test_domain_filter_exact_match(self):
-        from edf_collector import _matches_domain_filter
+        from edf_bill_fetcher.collectors.engine import _matches_domain_filter
 
         assert _matches_domain_filter("billing@edfenergy.com", "edfenergy.com")
 
     def test_domain_filter_subdomain(self):
-        from edf_collector import _matches_domain_filter
+        from edf_bill_fetcher.collectors.engine import _matches_domain_filter
 
         assert _matches_domain_filter("alerts@notifications.edfenergy.com", "edfenergy.com")
 
     def test_domain_filter_wildcard(self):
-        from edf_collector import _matches_domain_filter
+        from edf_bill_fetcher.collectors.engine import _matches_domain_filter
 
         assert _matches_domain_filter("billing@edfenergy.com", "*.edfenergy.com")
 
     def test_domain_filter_full_email(self):
-        from edf_collector import _matches_domain_filter
+        from edf_bill_fetcher.collectors.engine import _matches_domain_filter
 
         assert _matches_domain_filter("billing@edfenergy.com", "billing@edfenergy.com")
 
     def test_domain_filter_no_match(self):
-        from edf_collector import _matches_domain_filter
+        from edf_bill_fetcher.collectors.engine import _matches_domain_filter
 
         assert not _matches_domain_filter("spam@gmail.com", "edfenergy.com")
 
     def test_domain_filter_empty(self):
-        from edf_collector import _matches_domain_filter
+        from edf_bill_fetcher.collectors.engine import _matches_domain_filter
 
         assert not _matches_domain_filter("", "edfenergy.com")
         assert not _matches_domain_filter("billing@edfenergy.com", "")
@@ -179,7 +179,7 @@ class TestSenderEmailExtraction:
     """Tests for extracting sender email from PST messages."""
 
     def test_extract_from_headers(self):
-        from edf_collector import _extract_sender_email
+        from edf_bill_fetcher.collectors.engine import _extract_sender_email
 
         class MockMsg:
             def get_transport_headers(self):
@@ -192,7 +192,7 @@ class TestSenderEmailExtraction:
         assert _extract_sender_email(msg) == "billing@edfenergy.com"
 
     def test_extract_from_sender_name(self):
-        from edf_collector import _extract_sender_email
+        from edf_bill_fetcher.collectors.engine import _extract_sender_email
 
         class MockMsg:
             def get_transport_headers(self):
@@ -205,7 +205,7 @@ class TestSenderEmailExtraction:
         assert _extract_sender_email(msg) == "billing@edfenergy.com"
 
     def test_no_email_found(self):
-        from edf_collector import _extract_sender_email
+        from edf_bill_fetcher.collectors.engine import _extract_sender_email
 
         class MockMsg:
             def get_transport_headers(self):

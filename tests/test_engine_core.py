@@ -2,7 +2,7 @@
 
 import pytest
 
-from edf_collector import EvidenceEngine
+from edf_bill_fetcher.collectors.engine import EvidenceEngine
 
 
 class TestEvidenceEngineCore:

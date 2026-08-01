@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from edf_collector import (
+from edf_bill_fetcher.processors.analysis import (
     _analyze_tariff_impact,
     _data_quality_report,
     _detect_payment_patterns,

@@ -1089,7 +1089,7 @@ class App:
                     stem = stem[:-5]
                 xlsx_path = self._resolve_output_path(stem, "xlsx")
 
-                from edf_collector import export_to_excel  # noqa: F402,E402
+                from edf_bill_fetcher.writers import export_to_excel  # noqa: F402,E402
 
                 export_to_excel(
                     engine.records,

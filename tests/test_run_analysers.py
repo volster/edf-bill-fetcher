@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from edf_collector import run_analysers
+from edf_bill_fetcher.writers import run_analysers
 
 
 def _df() -> pd.DataFrame:

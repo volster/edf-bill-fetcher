@@ -2,7 +2,7 @@
 """EDF Evidence Collector — simple launch entry point."""
 from __future__ import annotations
 
-from edf_collector import main as _main
+from edf_bill_fetcher.io.cli import main as _main
 
 
 def main() -> None:

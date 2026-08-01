@@ -1,6 +1,6 @@
 """Direct unit tests on the dedup helpers.
 
-The helpers ``_completeness_score``, ``_is_populated``, and
+The helpers ``completeness_score``, ``_is_populated``, and
 ``_amalgamate_cluster`` are used by the dedup walker in
 ``edf_collector.export_to_excel``.  This file tests them at the
 helper level so regressions in their contracts are caught without
@@ -19,9 +19,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from edf_collector import (
+from edf_bill_fetcher.helpers.date_utils import completeness_score
+from edf_bill_fetcher.helpers.formatting import (
     _amalgamate_cluster,
-    _completeness_score,
     _is_populated,
 )
 
@@ -103,7 +103,7 @@ class TestCompletenessScore:
         row = self._row()
         row["Period Charge (£)"] = ""  # make it explicitly empty
         row["Amount (£)"] = ""  # ditto for the dedup-key amount
-        assert _completeness_score(row) == 0
+        assert completeness_score(row) == 0
 
     def test_full_row_scores_thirteen(self) -> None:
         # 13 substantive fields; populate all of them including
@@ -125,7 +125,7 @@ class TestCompletenessScore:
             "Attachment Name": "bill.pdf",
             "Details": "Standard bill",
         }
-        assert _completeness_score(self._row(**full_kwargs)) == 13
+        assert completeness_score(self._row(**full_kwargs)) == 13
 
     def test_excluded_columns_not_counted(self) -> None:
         """Source / Sender / Logic Used are populated but
@@ -141,7 +141,7 @@ class TestCompletenessScore:
         # requires bracket access for that.
         row["Anomaly Flag"] = ""
         row["Duplicate Of"] = ""
-        assert _completeness_score(row) == 0
+        assert completeness_score(row) == 0
 
     def test_n_a_is_not_counted(self) -> None:
         """EDF propagates "N/A" as an absent sentinel via
@@ -155,7 +155,7 @@ class TestCompletenessScore:
         # me re-check my fixture.
         # Actually I just wanted Date counted and Period To + Entry
         # Type not counted.
-        assert _completeness_score(row) == 2
+        assert completeness_score(row) == 2
 
 
 class TestAmalgamateCluster:

@@ -2,7 +2,7 @@
 
 import tkinter as tk
 
-from edf_collector import App
+from edf_bill_fetcher.ui.app import App
 
 
 class TestNewVarDeclarations:

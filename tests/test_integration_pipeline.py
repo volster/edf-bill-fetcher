@@ -34,7 +34,8 @@ from pathlib import Path
 
 import pytest
 
-from edf_collector import EvidenceEngine, export_to_excel
+from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.writers import export_to_excel
 from edf_report import generate_ombudsman_pdf
 
 FixturePath = Path(__file__).parent / "fixtures" / "sample_bill.pdf"

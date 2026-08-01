@@ -74,7 +74,7 @@ def test_export_to_excel_importable():
 
 
 def test_writers_re_exported_from_edf_collector():
+    from edf_bill_fetcher.writers import write_reconciliation_sheet as WRS_collector
     from edf_bill_fetcher.writers import write_reconciliation_sheet as WRS_writers
-    from edf_collector import write_reconciliation_sheet as WRS_collector
 
     assert WRS_collector is WRS_writers

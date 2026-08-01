@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from edf_collector import (
+from edf_bill_fetcher.processors.sap_parsers import (
     detect_sap_dump,
     parse_sap_contract_history,
     parse_sap_financial_transactions,

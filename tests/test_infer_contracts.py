@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from edf_collector import infer_contracts
+from edf_bill_fetcher.processors.matching import infer_contracts
 
 
 def _row(date: str, tariff: str = "Standard") -> dict:

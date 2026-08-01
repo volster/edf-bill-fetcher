@@ -5,7 +5,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from edf_collector import App
+from edf_bill_fetcher.ui.app import App
 
 
 def _walk_children(widget: tk.Misc) -> Iterator[tk.Misc]:

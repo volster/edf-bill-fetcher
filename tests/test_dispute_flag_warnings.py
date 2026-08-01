@@ -16,7 +16,7 @@ import warnings
 
 import pandas as pd
 
-from edf_collector import compute_dispute_flags
+from edf_bill_fetcher.processors.analysis import compute_dispute_flags
 
 
 def test_parse_failure_does_not_raise_but_warns() -> None:

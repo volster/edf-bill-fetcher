@@ -752,7 +752,7 @@ class TestCLI:
     def test_run_cli_pdf_report_missing_args(self):
         import sys
 
-        from edf_collector import run_cli_pdf_report
+        from edf_bill_fetcher.io.cli import run_cli_pdf_report
 
         # Should raise SystemExit with code 2 for missing required args
         with patch.object(sys, "argv", ["edf-collector", "--pdf-report"]):
@@ -763,7 +763,7 @@ class TestCLI:
     def test_run_cli_pdf_report_missing_records_file(self):
         import sys
 
-        from edf_collector import run_cli_pdf_report
+        from edf_bill_fetcher.io.cli import run_cli_pdf_report
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             output_path = tmp.name
@@ -792,7 +792,7 @@ class TestCLI:
         import json
         import sys
 
-        from edf_collector import run_cli_pdf_report
+        from edf_bill_fetcher.io.cli import run_cli_pdf_report
 
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
             records_path = tmp.name
@@ -836,7 +836,7 @@ class TestEDFCollectorFunctions:
     """Tests for functions in edf_collector module."""
 
     def test_export_to_excel_creates_file(self, sample_records, sample_config):
-        from edf_collector import export_to_excel
+        from edf_bill_fetcher.writers import export_to_excel
 
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
             tmp_path = tmp.name
@@ -859,7 +859,7 @@ class TestIntegration:
 
     def test_full_extract_generate_cycle(self, sample_records, sample_config, mock_engine):
         """Test extracting to Excel then generating PDF."""
-        from edf_collector import export_to_excel
+        from edf_bill_fetcher.writers import export_to_excel
 
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "test.xlsx"
@@ -872,7 +872,7 @@ class TestIntegration:
         """Test CLI with config file."""
         import json
 
-        from edf_collector import run_cli_pdf_report
+        from edf_bill_fetcher.io.cli import run_cli_pdf_report
 
         with tempfile.TemporaryDirectory() as tmpdir:
             records_path = Path(tmpdir) / "records.json"

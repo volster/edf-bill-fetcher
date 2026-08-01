@@ -25,7 +25,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from edf_collector import write_forecast_sheet
+from edf_bill_fetcher.writers import write_forecast_sheet
 
 
 @pytest.fixture
