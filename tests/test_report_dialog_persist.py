@@ -25,7 +25,7 @@ class TestReportDialogPersist:
         """_open_report_options should save to config on OK."""
         fake_dialog = MagicMock()
         fake_dialog.show.return_value = {"format": "pdf", "sections": ["exec_summary"]}
-        with patch("edf_collector.ReportOptionsDialog", return_value=fake_dialog):
+        with patch("edf_bill_fetcher.ui.app.ReportOptionsDialog", return_value=fake_dialog):
             with patch.object(app, "_save_config") as mock_save:
                 app._open_report_options()
                 assert app._report_options == {
@@ -39,7 +39,7 @@ class TestReportDialogPersist:
         fake_dialog = MagicMock()
         fake_dialog.show.return_value = None
         original = app._report_options.copy()
-        with patch("edf_collector.ReportOptionsDialog", return_value=fake_dialog):
+        with patch("edf_bill_fetcher.ui.app.ReportOptionsDialog", return_value=fake_dialog):
             with patch.object(app, "_save_config") as mock_save:
                 app._open_report_options()
                 assert app._report_options == original

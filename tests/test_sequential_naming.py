@@ -30,7 +30,7 @@ def app_with_tmp_folder(tmp_path):
 class TestResolveOutputPath:
     def test_empty_folder_returns_n1(self, app_with_tmp_folder):
         app, tmp = app_with_tmp_folder
-        with patch("edf_collector.date") as mock_date:
+        with patch("edf_bill_fetcher.ui.app.date") as mock_date:
             mock_date.today.return_value.isoformat.return_value = "2026-07-10"
             path = app._resolve_output_path("EDF_Dispute_Evidence", "xlsx")
         assert path == str(tmp / "EDF_Dispute_Evidence_2026-07-10_1.xlsx")
@@ -38,14 +38,14 @@ class TestResolveOutputPath:
     def test_occupied_folder_increments(self, app_with_tmp_folder):
         app, tmp = app_with_tmp_folder
         (tmp / "EDF_Dispute_Evidence_2026-07-10_1.xlsx").touch()
-        with patch("edf_collector.date") as mock_date:
+        with patch("edf_bill_fetcher.ui.app.date") as mock_date:
             mock_date.today.return_value.isoformat.return_value = "2026-07-10"
             path = app._resolve_output_path("EDF_Dispute_Evidence", "xlsx")
         assert path == str(tmp / "EDF_Dispute_Evidence_2026-07-10_2.xlsx")
 
     def test_shared_batch_counter(self, app_with_tmp_folder):
         app, tmp = app_with_tmp_folder
-        with patch("edf_collector.date") as mock_date:
+        with patch("edf_bill_fetcher.ui.app.date") as mock_date:
             mock_date.today.return_value.isoformat.return_value = "2026-07-10"
             xlsx = app._resolve_output_path("EDF_Dispute_Evidence", "xlsx")
             pdf = app._resolve_output_path("EDF_Dispute_Evidence", "pdf", batch_n=1, is_report=True)
@@ -58,7 +58,7 @@ class TestResolveOutputPath:
 
     def test_report_suffix_appended(self, app_with_tmp_folder):
         app, tmp = app_with_tmp_folder
-        with patch("edf_collector.date") as mock_date:
+        with patch("edf_bill_fetcher.ui.app.date") as mock_date:
             mock_date.today.return_value.isoformat.return_value = "2026-07-10"
             path = app._resolve_output_path("EDF_Dispute_Evidence", "pdf", is_report=True)
         assert "_Report.pdf" in path
@@ -66,7 +66,7 @@ class TestResolveOutputPath:
     def test_empty_output_folder_falls_back(self, app_with_tmp_folder):
         app, tmp = app_with_tmp_folder
         app.output_folder.set("")
-        with patch("edf_collector.date") as mock_date:
+        with patch("edf_bill_fetcher.ui.app.date") as mock_date:
             mock_date.today.return_value.isoformat.return_value = "2026-07-10"
             path = app._resolve_output_path("EDF_Dispute_Evidence", "xlsx")
         assert os.path.dirname(path) == os.getcwd()
@@ -74,7 +74,7 @@ class TestResolveOutputPath:
     def test_counter_resets_per_day(self, app_with_tmp_folder):
         app, tmp = app_with_tmp_folder
         (tmp / "EDF_Dispute_Evidence_2026-07-09_5.xlsx").touch()
-        with patch("edf_collector.date") as mock_date:
+        with patch("edf_bill_fetcher.ui.app.date") as mock_date:
             mock_date.today.return_value.isoformat.return_value = "2026-07-10"
             path = app._resolve_output_path("EDF_Dispute_Evidence", "xlsx")
         assert "_2026-07-10_1.xlsx" in path
@@ -82,7 +82,7 @@ class TestResolveOutputPath:
     def test_non_numeric_suffixes_ignored(self, app_with_tmp_folder):
         app, tmp = app_with_tmp_folder
         (tmp / "EDF_Dispute_Evidence_2026-07-10_abc.xlsx").touch()
-        with patch("edf_collector.date") as mock_date:
+        with patch("edf_bill_fetcher.ui.app.date") as mock_date:
             mock_date.today.return_value.isoformat.return_value = "2026-07-10"
             path = app._resolve_output_path("EDF_Dispute_Evidence", "xlsx")
         assert "_1.xlsx" in path

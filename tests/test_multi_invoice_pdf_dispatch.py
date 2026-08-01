@@ -44,7 +44,7 @@ def test_process_pdf_file_dispatches_once_for_single_invoice_pdf():
             ),
         ),
         patch(
-            "edf_collector.pdfplumber.open",
+            "edf_bill_fetcher.collectors.engine.pdfplumber.open",
             return_value=MagicMock(__enter__=lambda _s: fake, __exit__=lambda *a: None),
         ),
         patch.object(eng, "_process_new_invoice") as mock_dispatch,
@@ -90,7 +90,7 @@ def test_process_pdf_file_dispatches_once_per_slice_for_merged_pdf():
             ),
         ),
         patch(
-            "edf_collector.pdfplumber.open",
+            "edf_bill_fetcher.collectors.engine.pdfplumber.open",
             return_value=MagicMock(__enter__=lambda _s: fake, __exit__=lambda *a: None),
         ),
         patch.object(eng, "_process_new_invoice") as mock_dispatch,
@@ -157,7 +157,7 @@ def test_process_pdf_file_single_slice_failure_does_not_lose_other_slices():
             ),
         ),
         patch(
-            "edf_collector.pdfplumber.open",
+            "edf_bill_fetcher.collectors.engine.pdfplumber.open",
             return_value=MagicMock(__enter__=lambda _s: fake, __exit__=lambda *a: None),
         ),
         patch.object(eng, "_process_new_invoice", side_effect=fake_dispatch),

@@ -330,7 +330,7 @@ def test_run_analysers_passes_evidence_df_to_detect_rebilling() -> None:
     when ``run_analysers`` passes ``evidence_df=df`` to
     ``detect_rebilling``. Verify the wire-up with a patch."""
     df = pd.DataFrame(_sample_invoice_data())
-    with patch("edf_collector.detect_rebilling") as mock_rebill:
+    with patch("edf_bill_fetcher.processors.detection.detect_rebilling") as mock_rebill:
         # Make the mock return an empty frame with the expected columns
         mock_rebill.return_value = pd.DataFrame(
             columns=[

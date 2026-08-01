@@ -42,7 +42,7 @@ class TestEvidenceEnginePDF:
 
         return mock_pdf
 
-    @patch("edf_collector.pdfplumber.open")
+    @patch("edf_bill_fetcher.collectors.engine.pdfplumber.open")
     def test_process_new_invoice(self, mock_pdf_open):
         invoice_text = """
         Invoice number: KI-12345678
@@ -67,7 +67,7 @@ class TestEvidenceEnginePDF:
         assert engine.records[0]["Invoice #"] == "KI-12345678"
         assert engine.records[0]["Amount (£)"] == 1234.56
 
-    @patch("edf_collector.pdfplumber.open")
+    @patch("edf_bill_fetcher.collectors.engine.pdfplumber.open")
     def test_process_new_credit(self, mock_pdf_open):
         credit_text = """
         Credit note number: KCR-87654321
@@ -86,7 +86,7 @@ class TestEvidenceEnginePDF:
         assert engine.records[0]["Entry Type"] == "Credit"
         assert engine.records[0]["Amount (£)"] == 150.00
 
-    @patch("edf_collector.pdfplumber.open")
+    @patch("edf_bill_fetcher.collectors.engine.pdfplumber.open")
     def test_process_old_format_pdf(self, mock_pdf_open):
         old_text = "Some text without KI or KCR markers\nYour new account balance £500.00"
         mock_pdf_open.return_value = self._make_pdf_mock(old_text)
@@ -104,7 +104,7 @@ class TestEvidenceEnginePDF:
         engine = self._make_engine()
 
         with patch("builtins.open", mock_open(read_data=b"fake")):
-            with patch("edf_collector.pdfplumber.open", side_effect=Exception("PDF read error")):
+            with patch("edf_bill_fetcher.collectors.engine.pdfplumber.open", side_effect=Exception("PDF read error")):
                 engine.process_pdf_file("bad.pdf", "Test", "bad.pdf", "01/01/2024")
 
         assert len(engine.error_log) == 1
@@ -210,7 +210,7 @@ class TestEvidenceEngineLocalPDFs:
         }
         return EvidenceEngine(config, lambda x: None)
 
-    @patch("edf_collector.pdfplumber.open")
+    @patch("edf_bill_fetcher.collectors.engine.pdfplumber.open")
     def test_crawl_local_pdfs(self, mock_pdf_open):
         mock_pdf = MagicMock()
         mock_page = MagicMock()
@@ -239,7 +239,7 @@ class TestEvidenceEngineLocalPDFs:
 
         assert engine.pdf_count == 2
 
-    @patch("edf_collector.pdfplumber.open")
+    @patch("edf_bill_fetcher.collectors.engine.pdfplumber.open")
     def test_crawl_local_pdfs_recurses_into_subfolders(self, mock_pdf_open: MagicMock) -> None:
         """Phase 2.2 — recursive walk yields bills in nested
         folders.  Real EDF customers commonly organise their

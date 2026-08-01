@@ -34,9 +34,9 @@ def app(monkeypatch):
     root.withdraw()
     try:
         # Patch threading.Thread so start_thread doesn't actually spawn
-        import edf_collector
+        from edf_bill_fetcher.ui import app as _app_module
 
-        monkeypatch.setattr(edf_collector.threading, "Thread", _NoThread)
+        monkeypatch.setattr(_app_module.threading, "Thread", _NoThread)
         yield App(root)
     finally:
         root.destroy()
