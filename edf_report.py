@@ -1,5 +1,4 @@
-"""
-EDF Energy PDF Billing-Dispute Report Generator.
+"""EDF Energy PDF Billing-Dispute Report Generator.
 
 Generates a PDF report from extracted billing records.  Output
 sections are pulled from ``REPORT_SECTIONS`` so titles and
@@ -2522,6 +2521,7 @@ def generate_ombudsman_pdf(
 
     Returns:
         Path to generated PDF
+
     """
     if not records:
         raise ValueError("No records to report on")

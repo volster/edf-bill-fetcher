@@ -1,5 +1,4 @@
-"""
-DOCX Report Generator for EDF Energy Ombudsman Submissions.
+"""DOCX Report Generator for EDF Energy Ombudsman Submissions.
 
 Generates a Word document report mirroring the PDF report structure
 defined in ``edf_report.REPORT_SECTIONS``.  Section titles and
@@ -212,6 +211,7 @@ def _format_table(table, header_color="#10367A", font_size=8, header_row=True):
         font / alternating fill) is also skipped — call sites that
         opt out of header styling rely on their own per-cell styling
         having been applied earlier in the builder.
+
     """
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
@@ -1428,8 +1428,7 @@ def generate_ombudsman_docx(
     engine: Any,
     filtered: list | None = None,
 ) -> str:
-    """
-    Generate a DOCX report from the supplied records.
+    """Generate a DOCX report from the supplied records.
 
     The output sections are derived from ``edf_report.REPORT_SECTIONS``
     via the dispatcher wired up below; the section keys selected via
@@ -1444,6 +1443,7 @@ def generate_ombudsman_docx(
 
     Returns:
         Path to generated DOCX
+
     """
     if not records:
         raise ValueError("No records to report on")
