@@ -39,6 +39,7 @@ def _reversal_match(
     killed_pt: pd.Timestamp,
 ) -> bool:
     """Return whether a reversal-credit row in *evidence_df* matches the
+
     killed invoice well enough to count as rebilling evidence.
 
     Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
@@ -81,6 +82,7 @@ def detect_rebilling(
     evidence_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Return cancel-and-repost pairs identified by the rebilling
+
     heuristic (spec §11, tightened gate).
 
     For each ordered pair ``(Killer, Killed)`` where ``Killer.Date``

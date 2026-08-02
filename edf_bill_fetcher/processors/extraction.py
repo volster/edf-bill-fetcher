@@ -1,4 +1,5 @@
 """Fallback extractor functions and PST/OST helpers extracted from
+
 ``edf_collector.py``.
 
 This module is the single source of truth for:
@@ -44,7 +45,9 @@ from edf_bill_fetcher.processors.patterns import (
 
 def _fallback_inv_num(text: str) -> tuple[str | None, str]:
     """Try the canonical invoice-number regex, then the cover-body regex,
-    then a loose bare-token regex. Returns (value, regex_name) or (None, "")."""
+
+    then a loose bare-token regex. Returns (value, regex_name) or (None, "").
+    """
     for label, pat in (
         ("_INV_NUMBER_RE", _INV_NUMBER_RE),
         ("_CREDIT_NUMBER_RE", _CREDIT_NUMBER_RE),

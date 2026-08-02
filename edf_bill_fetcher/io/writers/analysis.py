@@ -14,6 +14,7 @@ import pandas as pd
 
 def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
     """Run all Phase-2 detection analyses on the deduplicated
+
     DataFrame and return their outputs in a dict.
 
     The orchestrator is a thin wrapper so :func:`export_to_excel` can
@@ -36,6 +37,7 @@ def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
         ``dict[str, int]`` mapping per-row signatures to the Excel row
         on the ``EDF Evidence Report`` sheet so the analyser tabs can
         emit a ``View on Evidence Report`` hotlink.
+
     """
     # Lazy import — preserves the test contract for mock.patch paths.
     # The canonical homes are the detection/matching submodules, so

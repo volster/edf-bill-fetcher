@@ -84,6 +84,7 @@ def _assess_reason(
     period_to: pd.Timestamp,
 ) -> str:
     """Return a short, deterministic narrative for the Reason Assessment
+
     column of the Back-billing sheet. Template-driven (no LLM).
     """
     pf = period_from.strftime("%d %b %Y")
@@ -258,6 +259,7 @@ def _disclosed_label(
     overlaps: bool,
 ) -> str:
     """Return the human-readable value of the 'Cancel/Rebill Disclosed'
+
     cell used on the Back-billing and Rebilling tabs.
 
     The disclosed column joins two independent signals:
@@ -283,6 +285,7 @@ def _reversal_match(
     killed_pt: pd.Timestamp,
 ) -> bool:
     """Return whether a reversal-credit row in *evidence_df* matches the
+
     killed invoice well enough to count as rebilling evidence.
 
     Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
@@ -322,6 +325,7 @@ def detect_rebilling(
     evidence_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Return cancel-and-repost pairs identified by the rebilling
+
     heuristic (spec §11, tightened gate).
 
     For each ordered pair ``(Killer, Killed)`` where ``Killer.Date``
@@ -544,7 +548,9 @@ def detect_reconciliation_statement(text: str) -> bool:
 
 def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> list[dict]:
     """Extract every charge, reversal, late-payment, payment + one meta row
-    from a consolidation reconciliation statement PDF."""
+
+    from a consolidation reconciliation statement PDF.
+    """
     rows: list[dict] = []
     src = "Statement Reconciliation"
 

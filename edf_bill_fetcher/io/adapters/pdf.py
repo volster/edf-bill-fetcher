@@ -1,4 +1,5 @@
 """PDF reading adapters — text extraction, page slicing, and the
+
 admit-phrase detector used by the Back-billing analysis sheet.
 
 The functions in this module are the *file-reading primitives* of
@@ -110,6 +111,7 @@ def extract_admit_phrase(text: str) -> str | None:
 
 def legal_context() -> str:
     """Return the static legal-context blurb placed on the Back-billing
+
     sheet. Kept as a function (not a bare module constant) so the text
     can be regenerated / internationalised later without changing
     call-sites.

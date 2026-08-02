@@ -151,6 +151,7 @@ def _sap_to_iso_date(s: str) -> str:
 
 def _parse_sap_csv(text: str) -> list[dict]:
     """Parse a SAP-data-dump CSV-in-PDF body into a list of dict rows keyed
+
     by the CSV header column names. Empty input -> empty list. Page-break
     artifacts in pdfplumber output are handled transparently by the
     standard ``csv`` quoting rule that says a quoted field may contain
@@ -585,7 +586,9 @@ def detect_reconciliation_statement(text: str) -> bool:
 
 def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> list[dict]:
     """Extract every charge, reversal, late-payment, payment + one meta row
-    from a consolidation reconciliation statement PDF."""
+
+    from a consolidation reconciliation statement PDF.
+    """
     rows: list[dict] = []
     src = "Statement Reconciliation"
 

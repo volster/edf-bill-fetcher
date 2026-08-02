@@ -45,6 +45,7 @@ def _assess_reason(
     period_to: pd.Timestamp,
 ) -> str:
     """Return a short, deterministic narrative for the Reason Assessment
+
     column of the Back-billing sheet. Template-driven (no LLM).
     """
     pf = period_from.strftime("%d %b %Y")

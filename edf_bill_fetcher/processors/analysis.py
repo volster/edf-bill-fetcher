@@ -34,6 +34,7 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
     those rows were silently swallowed and the report lost the
     surrounding evidence — turning them into warnings surfaces a
     developer-visible signal without breaking the run.
+
     """
 
     def _flag_or_warn(
@@ -383,6 +384,7 @@ def _disclosed_label(
     overlaps: bool,
 ) -> str:
     """Return the human-readable value of the 'Cancel/Rebill Disclosed'
+
     cell used on the Back-billing and Rebilling tabs.
 
     The disclosed column joins two independent signals:
@@ -408,6 +410,7 @@ def _reversal_match(
     killed_pt: pd.Timestamp,
 ) -> bool:
     """Return whether a reversal-credit row in *evidence_df* matches the
+
     killed invoice well enough to count as rebilling evidence.
 
     Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
@@ -443,6 +446,7 @@ def _reversal_match(
 
 def _reading_type_to_aem(reading_value: str) -> str:
     """Map the Reading column's value (Actual/Estimated/Smart/Unknown)
+
     to the single-letter A/E/M code used on the Meter Readings tab.
     """
     if reading_value == "Actual":

@@ -1,4 +1,5 @@
 """Pre-compiled regex patterns used by the amount/reading/period extractors
+
 and the multi-regex fallback chain.
 
 Extracted from ``edf_collector.py`` as part of the modularization refactor

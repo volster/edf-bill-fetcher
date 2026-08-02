@@ -125,6 +125,7 @@ def write_forecast_sheet(ws, dfc):
 
     def _model_value(fitted_array, fc_array, i, n_total):
         """Pick the in-sample fitted value at historical index i
+
         or ``N/A`` if the model didn't fit (not enough data).
         """
         if fitted_array is None:

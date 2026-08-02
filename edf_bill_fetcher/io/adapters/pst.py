@@ -1,4 +1,5 @@
 """PST / OST reading adapters — attachment-filename walker and
+
 sender-email extraction used by the PST / OST archive crawler.
 
 These helpers are the *file-reading primitives* the

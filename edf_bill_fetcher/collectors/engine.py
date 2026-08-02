@@ -67,7 +67,9 @@ from edf_bill_fetcher.processors.sap_parsers import (
 # --- _fallback_inv_num ---
 def _fallback_inv_num(text: str) -> tuple[str | None, str]:
     """Try the canonical invoice-number regex, then the cover-body regex,
-    then a loose bare-token regex. Returns (value, regex_name) or (None, "")."""
+
+    then a loose bare-token regex. Returns (value, regex_name) or (None, "").
+    """
     for label, pat in (
         ("_INV_NUMBER_RE", _INV_NUMBER_RE),
         ("_CREDIT_NUMBER_RE", _CREDIT_NUMBER_RE),
@@ -265,8 +267,8 @@ def _extract_sender_email(msg):
 
 # --- _matches_domain_filter ---
 def _matches_domain_filter(sender_email, filter_str):
-    """
-    Check if sender_email matches the domain filter string.
+    """Check if sender_email matches the domain filter string.
+
     filter_str is comma-separated, supporting:
       - domain names: "edf.com" matches *@edf.com and *@*.edf.com
       - full addresses: "billing@edf.com" matches exactly
@@ -744,6 +746,7 @@ class EvidenceEngine:
         :data:`_AMOUNT_PATTERN_NEW_BILL` /
         :data:`_AMOUNT_PATTERN_ONGOING_BALANCE`. Unknown / unset names
         fall through to heuristic checks against the bill body text.
+
         """
         text_lower = text.lower()
 
