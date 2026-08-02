@@ -20,6 +20,24 @@ A personal desktop application that collects and analyses EDF Energy billing dat
   - **Amalgamate toggle**: the `amalgamate_duplicates` checkbox surfaces as a nested child under Deduplication (enabled only when both *Drop duplicates* and *Record dropped duplicates* are on; default OFF).
 - **CLI mode**: Headless batch/report generation for automation.
 
+## Package layout (post-modularization)
+
+The codebase has been refactored from a single 10,645-line `edf_collector.py` monolith into a hexagonal `edf_bill_fetcher/` package. The full layout with layering rules is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the short version:
+
+| Subpackage             | Layer            | Responsibility                                                                 |
+| ---------------------- | ---------------- | ------------------------------------------------------------------------------ |
+| `edf_bill_fetcher.helpers`      | pure stdlib       | Date math, formatting, theme constants, excel helpers                          |
+| `edf_bill_fetcher.processors`   | stdlib + pandas   | Business logic: dedup, pattern detection, reconciliation, forecasting        |
+| `edf_bill_fetcher.collectors`   | framework boundary| `EvidenceEngine` orchestrator; ingests PDF / HTM / PST                          |
+| `edf_bill_fetcher.io.writers`   | openpyxl          | Excel sheet builders — one submodule per sheet (13 writers)                    |
+| `edf_bill_fetcher.io.reporters` | reportlab + docx  | PDF + DOCX report renderers                                                    |
+| `edf_bill_fetcher.io.adapters`  | libpff-python      | PST/OST archive adapter                                                        |
+| `edf_bill_fetcher.ui`            | tkinter           | GUI: `App`, `ReportOptionsDialog`                                              |
+| `edf_bill_fetcher.models`       | dataclasses       | Event / data models                                                            |
+| `edf_bill_fetcher.writers`      | compat re-export  | PEP 562 lazy shim — preserves the flat `from edf_bill_fetcher.writers import X` import path |
+
+Backward-compat note: the legacy `edf_collector.py` / `edf_report.py` / `edf_report_docx.py` modules at the repo root are thin re-export shims so existing scripts that do `from edf_collector import EvidenceEngine, export_to_excel` continue to work. New code should import from the canonical `edf_bill_fetcher.*` paths shown above.
+
 ## Installation
 
 ```bash
@@ -35,7 +53,8 @@ pip install -e .
 # packaging binaries — the default extras-as-runtime policy above
 # typical installs at one command):
 #
-#   [dev]    test + lint + typecheck toolchain (pytest, ruff, mypy)
+#   [dev]    test + lint + typecheck toolchain (pytest, pytest-xvfb,
+#            pytest-cov, ruff, mypy)
 #   [build]  PyInstaller for one-file Windows / macOS / Linux executables
 pip install -e ".[dev,build]"   # recommended for contributors
 ```
@@ -58,7 +77,7 @@ What `pip install -e .` actually pulls in (current version):
 Adding optional toolchains later does not require re-installing everything:
 
 ```bash
-pip install -e ".[dev]"     # bring in pytest / ruff / mypy only
+pip install -e ".[dev]"     # bring in pytest / pytest-xvfb / pytest-cov / ruff / mypy only
 pip install -e ".[build]"   # add PyInstaller
 ```
 
@@ -67,7 +86,11 @@ pip install -e ".[build]"   # add PyInstaller
 ### GUI Mode
 
 ```bash
-python edf_collector.py
+# Either via the installed console-script entry point:
+edf-collector
+
+# Or via the main.py launcher at the repo root:
+python main.py
 ```
 
 Or run the built executable `EDF_Evidence_Collector.exe`.
@@ -92,13 +115,13 @@ Or run the built executable `EDF_Evidence_Collector.exe`.
 
 ```bash
 # Generate a PDF report from already-extracted records
-python edf_collector.py --pdf-report -i records.json -o report.pdf
+python main.py --pdf-report -i records.json -o report.pdf
 
 # DOCX variant
-python edf_collector.py --docx-report -i records.json -o report.docx
+python main.py --docx-report -i records.json -o report.docx
 ```
 
-Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records state.
+Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records state. The CLI dispatch logic lives in `edf_bill_fetcher.io.cli`; the `main()` entry point at the repo root is a one-line re-export of `edf_bill_fetcher.io.cli.main`.
 
 ### Programmatic Usage
 
@@ -109,11 +132,16 @@ Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records s
 > since `0.1.0+`); if it's missing in some hand-built
 > environment, the wrapper logs the error and the rest of the
 > pipeline still runs.
+>
+> The canonical post-refactor import paths are shown below. The
+> legacy `from edf_collector import …` form is still supported
+> via a compat shim — see the *Package layout* section above.
 
 ```python
-from edf_collector import EvidenceEngine, export_to_excel
-from edf_report import generate_pdf_from_gui
-from edf_report_docx import generate_docx_from_gui
+from edf_bill_fetcher.collectors import EvidenceEngine
+from edf_bill_fetcher.io.writers.export import export_to_excel
+from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
+from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
 
 config = {
     "use_anchors": True,
@@ -131,7 +159,7 @@ config = {
     "use_domain_filter": True,
     "domain_filter": "edfenergy.com",
     # report_sections tells the report generator which sections to include.
-    # If absent, every section in `edf_report.REPORT_SECTIONS` is selected.
+    # If absent, every section in `edf_bill_fetcher.io.reporters.pdf_report.REPORT_SECTIONS` is selected.
     "report_sections": [
         "exec_summary", "key_findings", "evidence_index", "detailed_findings",
         "timeline", "ofgem", "statistical", "payment", "forecast",
@@ -174,7 +202,7 @@ generate_docx_from_gui(
 
 ## Report Section Layout
 
-The PDF and DOCX reports are both built from a single section-registry so the titles and numbering always line up. The registry lives in `edf_report.REPORT_SECTIONS`:
+The PDF and DOCX reports are both built from a single section-registry so the titles and numbering always line up. The registry lives in `edf_bill_fetcher.io.reporters.pdf_report.REPORT_SECTIONS`:
 
 | Class          | Sections                                                                                                                                                                                                              |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -187,9 +215,9 @@ A `tests/test_dispatch_parity.py` structural test pins the invariant that the PD
 
 ### Adding a new section
 
-1. Add an entry to `REPORT_SECTIONS` in `edf_report.py` with `key`, `title`, and optionally `is_appendix`.
-2. Add the matching key to `ReportOptionsDialog.SECTIONS` in `edf_collector.py` so it shows up in the GUI options dialog.
-3. Add a `def create_<name>(...)` builder function in `edf_report.py`.
+1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/io/reporters/pdf_report.py` with `key`, `title`, and optionally `is_appendix`.
+2. Add the matching key to `ReportOptionsDialog.SECTIONS` in `edf_bill_fetcher/ui/app.py` so it shows up in the GUI options dialog.
+3. Add a `def create_<name>(...)` builder function in `edf_bill_fetcher/io/reporters/pdf_report.py`.
 4. Wire the builder into the `section_builders` dispatch dict in **both** `generate_ombudsman_pdf` and `generate_ombudsman_docx`. Forgetting this raises a clear `RuntimeError` at report-render time — that's the loud-failure mode that keeps the dispatch in lockstep with the registry.
 
 Removing a section: same steps in reverse.
@@ -245,16 +273,16 @@ The four detectors are pure-pandas functions keyed off the deduplicated evidence
 | `detect_meter_rollover(df, rollover_threshold=94999)` | Date, Invoice #, Prev Units (kWh), Curr Units (kWh), Delta, Reading Type, Notes |
 | `infer_contracts(df, merge_gap_days=30)` | Contract From, Contract To, Tariff, Days, # Invoices |
 
-The detectors can be called directly from Python:
+The detectors live in `edf_bill_fetcher.processors.detection` and `edf_bill_fetcher.processors.matching`. They can be called directly from Python:
 
 ```python
-from edf_collector import (
+from edf_bill_fetcher.processors.detection import (
     detect_back_billing,
     detect_rebilling,
     detect_meter_rollover,
-    infer_contracts,
-    run_analysers,
 )
+from edf_bill_fetcher.processors.matching import infer_contracts
+from edf_bill_fetcher.io.writers.analysis import run_analysers
 
 # One-shot — returns a dict with keys back_billing, rebilling,
 # meter_rollover, contracts.
@@ -321,7 +349,7 @@ The full design spec is preserved at
   python-docx, scipy, **libpff-python**, **statsmodels**.
 - Toolchain (only for contributors / packagers, install via
   `pip install -e ".[dev,build]"`):
-  pytest, ruff, mypy, pyinstaller.
+  pytest, pytest-xvfb, pytest-cov, coverage, ruff, mypy, pyinstaller.
 
 ## Development
 
@@ -359,6 +387,8 @@ Tests are organised into three lake levels:
   missing — a fully-synthetic, deterministic dataset (FAFA policy,
   no real EDF data).
 
+The tkinter-dependent tests require a display server. On headless Linux CI / dev environments, the `pytest-xvfb` plugin (in the `dev` extras) auto-activates a virtual X server — install with `pip install -e ".[dev]"` and the GUI tests run green without any manual xvfb setup. The plugin is **opt-out** (use `--no-xvfb` to disable).
+
 ### Linting / formatting / type-checking
 
 ```bash
@@ -370,6 +400,10 @@ mypy .
 All three are enforced in CI on Python 3.10 / 3.11 / 3.12 ×
 ubuntu / windows / macos — see `.github/workflows/ci.yml`. A
 release is one CI green away from shippable.
+
+### Test coverage
+
+Coverage is measured with `coverage` (configured in `pyproject.toml [tool.coverage.run]`) over the `edf_bill_fetcher/` source tree. The CI gate is **`coverage report --fail-under=90`** — see [`docs/COVERAGE.md`](docs/COVERAGE.md) for the measurement protocol, the strict `# pragma: no cover` policy, and how to extend coverage.
 
 ## Configuration
 
