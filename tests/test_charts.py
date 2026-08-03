@@ -42,51 +42,55 @@ def _multi_period_df() -> pd.DataFrame:
     )
 
 
-def test_payment_bar_chart() -> None:
+def test_payment_bar_chart(tmp_path: object) -> None:
     from edf_bill_fetcher.writers import export_to_excel
 
+    out = tmp_path / "payment_bar_chart.xlsx"  # type: ignore[operator]
     df = _multi_period_df()
-    export_to_excel(df.to_dict(orient="records"), "/tmp/test_charts.xlsx", [], {})
+    export_to_excel(df.to_dict(orient="records"), str(out), [], {})
     # The payment chart is a BarChart on the Payment Analysis sheet.
     # After export_to_excel the workbook is written to disk; reload
     # to inspect the chart objects.
-    wb2 = openpyxl.load_workbook("/tmp/test_charts.xlsx")
+    wb2 = openpyxl.load_workbook(str(out))
     assert "Payment Analysis" in wb2.sheetnames, "Expected Payment Analysis sheet"
     ws = wb2["Payment Analysis"]
     charts = ws._charts
     assert any(isinstance(c, BarChart) for c in charts), "Expected BarChart on Payment Analysis"
 
 
-def test_balance_trend_line_chart() -> None:
+def test_balance_trend_line_chart(tmp_path: object) -> None:
     from edf_bill_fetcher.writers import export_to_excel
 
+    out = tmp_path / "balance_trend_line_chart.xlsx"  # type: ignore[operator]
     df = _multi_period_df()
-    export_to_excel(df.to_dict(orient="records"), "/tmp/test_charts2.xlsx", [], {})
-    wb2 = openpyxl.load_workbook("/tmp/test_charts2.xlsx")
+    export_to_excel(df.to_dict(orient="records"), str(out), [], {})
+    wb2 = openpyxl.load_workbook(str(out))
     assert "Balance Trend" in wb2.sheetnames, "Expected Balance Trend sheet"
     ws = wb2["Balance Trend"]
     charts = ws._charts
     assert any(isinstance(c, LineChart) for c in charts), "Expected LineChart on Balance Trend"
 
 
-def test_period_charges_bar_chart() -> None:
+def test_period_charges_bar_chart(tmp_path: object) -> None:
     from edf_bill_fetcher.writers import export_to_excel
 
+    out = tmp_path / "period_charges_bar_chart.xlsx"  # type: ignore[operator]
     df = _multi_period_df()
-    export_to_excel(df.to_dict(orient="records"), "/tmp/test_charts3.xlsx", [], {})
-    wb2 = openpyxl.load_workbook("/tmp/test_charts3.xlsx")
+    export_to_excel(df.to_dict(orient="records"), str(out), [], {})
+    wb2 = openpyxl.load_workbook(str(out))
     assert "Period Charges" in wb2.sheetnames, "Expected Period Charges sheet"
     ws = wb2["Period Charges"]
     charts = ws._charts
     assert any(isinstance(c, BarChart) for c in charts), "Expected BarChart on Period Charges"
 
 
-def test_year_on_year_bar_chart() -> None:
+def test_year_on_year_bar_chart(tmp_path: object) -> None:
     from edf_bill_fetcher.writers import export_to_excel
 
+    out = tmp_path / "year_on_year_bar_chart.xlsx"  # type: ignore[operator]
     df = _multi_period_df()
-    export_to_excel(df.to_dict(orient="records"), "/tmp/test_charts4.xlsx", [], {})
-    wb2 = openpyxl.load_workbook("/tmp/test_charts4.xlsx")
+    export_to_excel(df.to_dict(orient="records"), str(out), [], {})
+    wb2 = openpyxl.load_workbook(str(out))
     assert "Year-on-Year" in wb2.sheetnames, "Expected Year-on-Year sheet"
     ws = wb2["Year-on-Year"]
     charts = ws._charts

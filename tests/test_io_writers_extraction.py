@@ -125,9 +125,10 @@ def test_sap_writer_importable() -> None:
     assert ws["A1"].value is not None, "Expected header in A1"
 
 
-def test_export_writer_importable() -> None:
+def test_export_writer_importable(tmp_path: object) -> None:
     from edf_bill_fetcher.io.writers.export import export_to_excel
 
     df = _fixture_df()
-    export_to_excel(df.to_dict(orient="records"), "/tmp/test.xlsx", [], {})
-    assert True  # export_to_excel writes to disk; success = no exception
+    out = tmp_path / "export_writer.xlsx"  # type: ignore[operator]
+    export_to_excel(df.to_dict(orient="records"), str(out), [], {})
+    assert out.exists()  # export_to_excel writes to disk; success = file present
