@@ -105,18 +105,50 @@ jobs:
 
           # Windows Defender's real-time monitor holds .tcl files
           # open with exclusive read denial as it scans them,
-          # causing tkinter.Tk() to fail with
-          # 'couldn't read file "init.tcl": No error' partway
-          # through the test run.  Disable real-time monitoring for
-          # the rest of this ephemeral CI job.  The runner is
+          # causing tkinter.Tk() to intermittently fail with
+          # 'couldn't read file "init.tcl" / "ttk/sizegrip.tcl" /
+          # ttk/treeview.tcl / etc.: No error' partway through
+          # the test run.  Disable real-time monitoring for the
+          # rest of this ephemeral CI job.  The runner is
           # disposable and is reset between jobs.
-          Set-MpPreference -DisableRealtimeMonitoring $true
-          if ($?) { Write-Host "Defender real-time monitoring disabled" }
+          #
+          # Tamper Protection (Windows 11) can make Set-MpPreference
+          # silently no-op or revert.  Retry up to 3 times with a
+          # short sleep, then VERIFY the disable actually took.
+          # If verification fails, log loudly but don't fail the
+          # job — pre-warming the .tcl cache (below) is a
+          # belt-and-braces fallback.
+          $disableAttempts = 0
+          $maxAttempts = 3
+          $verified = $false
+          while ($disableAttempts -lt $maxAttempts -and -not $verified) {
+            $disableAttempts++
+            try {
+              Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+            } catch {
+              Write-Host "Set-MpPreference attempt $disableAttempts failed: $_"
+            }
+            Start-Sleep -Seconds 1
+            $status = Get-MpPreference | Select-Object -ExpandProperty DisableRealtimeMonitoring
+            if ($status -eq $true) {
+              $verified = $true
+              Write-Host "Defender real-time monitoring disabled (verified after $disableAttempts attempt(s))"
+            } else {
+              Write-Host "Defender real-time monitoring still enabled after attempt $disableAttempts"
+            }
+          }
+          if (-not $verified) {
+            Write-Host "WARNING: Could not verify Defender disable — relying on .tcl pre-warming only"
+          }
 
           # Belt-and-braces: pre-read every Tcl/Tk script so the
           # file-system cache is warm even if Defender re-engages
           # or another scanner (Search Indexer, SmartScreen) races
-          # the Tk init.
+          # the Tk init.  Read each file twice with a 200ms gap to
+          # defeat race-based read denial.
+          Get-ChildItem -Path $tclLib -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
+          Get-ChildItem -Path $tkLib  -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
+          Start-Sleep -Milliseconds 200
           Get-ChildItem -Path $tclLib -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
           Get-ChildItem -Path $tkLib  -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
 
