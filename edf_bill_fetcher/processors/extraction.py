@@ -44,9 +44,11 @@ from edf_bill_fetcher.processors.patterns import (
 
 
 def _fallback_inv_num(text: str) -> tuple[str | None, str]:
-    """Try the canonical invoice-number regex, then the cover-body regex,.
+    """Try invoice-number regexes in priority order and return the first hit.
 
-    then a loose bare-token regex. Returns (value, regex_name) or (None, "").
+    Iterates over the canonical invoice-number regex, then the cover-body
+    regex, then a loose bare-token regex. Returns ``(value, regex_name)``
+    or ``(None, "")`` when no pattern matches.
     """
     for label, pat in (
         ("_INV_NUMBER_RE", _INV_NUMBER_RE),
