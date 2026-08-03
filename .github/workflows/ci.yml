@@ -52,19 +52,29 @@ jobs:
         shell: pwsh
         run: |
           # C:\Miniconda is pre-installed on windows-latest but not
-          # on PATH.  Create a per-version env; conda-forge's `tk`
-          # package contains a complete Tcl/Tk runtime (including
-          # ttk/sizegrip.tcl, ttk/entry.tcl, ttk/cursors.tcl, etc.)
-          # that satisfies tkinter.Tk() deterministically.
+          # on PATH.  Create a per-version env from the 'defaults'
+          # channel only.  defaults ships Python 3.10.x / 3.11.x /
+          # 3.12.x builds that depend on tk 8.6.12 or 8.6.15, AND
+          # ships matching complete tk packages (including all
+          # ttk/*.tcl scripts — sizegrip.tcl, entry.tcl, etc.).
           #
-          # NOTE: the `defaults` channel tk package is INCOMPLETE on
-          # Windows — it ships tk.tcl but omits ttk/sizegrip.tcl and
-          # a handful of other ttk/*.tcl scripts, so any test that
-          # instantiates ttk widgets fails with
-          # "Can't find a usable tk.tcl ... couldn't read file
-          # .../ttk/sizegrip.tcl".  conda-forge's tk build does not
-          # have this gap.  Use -c conda-forge explicitly.
-          & "C:\Miniconda\Scripts\conda.exe" create -n edfci -c conda-forge -c defaults -y `
+          # Why NOT conda-forge: conda-forge's tk 8.6.12 build for
+          # win-64 is 3.7MB and is missing several ttk/*.tcl files
+          # (sizegrip.tcl at minimum).  Python 3.10/3.11 from
+          # conda-forge pin 'tk >=8.6.12,<8.7.0a0', so conda picks
+          # the broken conda-forge tk 8.6.12.  Test_idle_state then
+          # fails with "_tkinter.TclError: Can't find a usable
+          # tk.tcl ... couldn't read file .../ttk/sizegrip.tcl".
+          #
+          # Why Python 3.12 on Windows passed even with conda-forge
+          # in the channel list: conda-forge has no Python 3.12
+          # win-64 builds in the relevant range, so conda always
+          # fell back to defaults for python+tk anyway.
+          #
+          # Why no '-c conda-forge': the defaults packages are
+          # sufficient and the conda-forge packages actively break
+          # the tk install for Python 3.10/3.11 on Windows.
+          & "C:\Miniconda\Scripts\conda.exe" create -n edfci -y `
             python=${{ matrix.python-version }} tk
           & "C:\Miniconda\Scripts\conda.exe" run -n edfci `
             python -c "import tkinter; r=tkinter.Tk(); print('Tk', tkinter.TkVersion, 'OK'); r.destroy()"
