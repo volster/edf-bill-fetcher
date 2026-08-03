@@ -99,6 +99,18 @@ markers = [
 xvfb_width = 1280
 xvfb_height = 1024
 xvfb_colordepth = 24
+# Upstream library warnings that are not bugs in our code:
+# - statsmodels ValueWarning/FutureWarning: the chart + forecast tests feed
+#   DataFrames that lack a date-frequency index, which statsmodels warns
+#   about but continues to handle correctly (our forecast code passes the
+#   data through; we do not rely on the index frequency).
+# - statsmodels FutureWarning (No supported index is available): same
+#   root cause; the predicted index will fall back to an integer range.
+filterwarnings = [
+    "ignore::statsmodels.tools.sm_exceptions.ValueWarning",
+    "ignore::FutureWarning:statsmodels",
+    "ignore:No supported index is available:FutureWarning",
+]
 
 [tool.ruff]
 target-version = "py310"

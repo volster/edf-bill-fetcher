@@ -85,12 +85,19 @@ def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp |
             _w.simplefilter("ignore", UserWarning)
             return pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
     try:
-        dt = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
+        with _w.catch_warnings():
+            # Same dayfirst-ambiguity UserWarning can fire for scalar YYYY-MM-DD
+            # inputs when dayfirst=True (matching the Series path above). Suppress
+            # so the warning does not bubble up to the test suite.
+            _w.simplefilter("ignore", UserWarning)
+            dt = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
     except (TypeError, ValueError):
         return pd.NaT
     if pd.isna(dt) and dayfirst:
         try:
-            dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
+            with _w.catch_warnings():
+                _w.simplefilter("ignore", UserWarning)
+                dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
         except (TypeError, ValueError):
             return pd.NaT
     return dt

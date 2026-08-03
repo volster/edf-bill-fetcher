@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, refactor]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, refactor]
 
 permissions:
   actions: write
