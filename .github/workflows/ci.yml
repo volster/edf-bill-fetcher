@@ -52,12 +52,20 @@ jobs:
         shell: pwsh
         run: |
           # C:\Miniconda is pre-installed on windows-latest but not
-          # on PATH.  Create a per-version env; conda's `tk` package
-          # contains a complete Tcl/Tk runtime that satisfies
-          # tkinter.Tk() deterministically (unlike the broken
-          # python.org MSI snapshots shipped via setup-python).
-          & "C:\Miniconda\Scripts\conda.exe" create -n edfci `
-            python=${{ matrix.python-version }} tk -y
+          # on PATH.  Create a per-version env; conda-forge's `tk`
+          # package contains a complete Tcl/Tk runtime (including
+          # ttk/sizegrip.tcl, ttk/entry.tcl, ttk/cursors.tcl, etc.)
+          # that satisfies tkinter.Tk() deterministically.
+          #
+          # NOTE: the `defaults` channel tk package is INCOMPLETE on
+          # Windows — it ships tk.tcl but omits ttk/sizegrip.tcl and
+          # a handful of other ttk/*.tcl scripts, so any test that
+          # instantiates ttk widgets fails with
+          # "Can't find a usable tk.tcl ... couldn't read file
+          # .../ttk/sizegrip.tcl".  conda-forge's tk build does not
+          # have this gap.  Use -c conda-forge explicitly.
+          & "C:\Miniconda\Scripts\conda.exe" create -n edfci -c conda-forge -c defaults -y `
+            python=${{ matrix.python-version }} tk
           & "C:\Miniconda\Scripts\conda.exe" run -n edfci `
             python -c "import tkinter; r=tkinter.Tk(); print('Tk', tkinter.TkVersion, 'OK'); r.destroy()"
 
