@@ -7,6 +7,8 @@ using openpyxl.
 
 from __future__ import annotations
 
+from typing import Any
+
 try:
     import tkinter as tk  # noqa: F401
 
@@ -143,7 +145,7 @@ from edf_bill_fetcher.io.writers.sap import (  # noqa: E402,F401,I001
 )
 
 
-def __getattr__(name: str) -> object:
+def __getattr__(name: str) -> Any:
     if name == "run_analysers":
         from edf_bill_fetcher.io.writers.analysis import run_analysers
 
