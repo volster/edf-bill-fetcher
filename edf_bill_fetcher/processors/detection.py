@@ -83,10 +83,7 @@ def _assess_reason(
     period_from: pd.Timestamp,
     period_to: pd.Timestamp,
 ) -> str:
-    """Return a short, deterministic narrative for the Reason Assessment.
-
-    column of the Back-billing sheet. Template-driven (no LLM).
-    """
+    """Return a short, deterministic narrative for the Reason Assessment column of the Back-billing sheet. Template-driven (no LLM)."""
     pf = period_from.strftime("%d %b %Y")
     pt = period_to.strftime("%d %b %Y")
     excess = days - 365
@@ -258,9 +255,7 @@ def _disclosed_label(
     admitted: bool,
     overlaps: bool,
 ) -> str:
-    """Return the human-readable value of the 'Cancel/Rebill Disclosed'.
-
-    cell used on the Back-billing and Rebilling tabs.
+    """Return the human-readable value of the 'Cancel/Rebill Disclosed' cell used on the Back-billing and Rebilling tabs.
 
     The disclosed column joins two independent signals:
       * admit-phrase (the cover-page wording 'we've recently
@@ -284,9 +279,7 @@ def _reversal_match(
     killed_pf: pd.Timestamp,
     killed_pt: pd.Timestamp,
 ) -> bool:
-    """Return whether a reversal-credit row in *evidence_df* matches the.
-
-    killed invoice well enough to count as rebilling evidence.
+    """Return whether a reversal-credit row in *evidence_df* matches the killed invoice well enough to count as rebilling evidence.
 
     Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
     invoice when its amount is within ±£0.50 AND either its period
@@ -324,9 +317,7 @@ def detect_rebilling(
     *,
     evidence_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Return cancel-and-repost pairs identified by the rebilling.
-
-    heuristic (spec §11, tightened gate).
+    """Return cancel-and-repost pairs identified by the rebilling heuristic (spec §11, tightened gate).
 
     For each ordered pair ``(Killer, Killed)`` where ``Killer.Date``
     is strictly later than ``Killed.Date``, emit a row IFF ALL hold:
@@ -548,10 +539,7 @@ def detect_reconciliation_statement(text: str) -> bool:
 
 
 def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> list[dict]:
-    """Extract every charge, reversal, late-payment, payment + one meta row.
-
-    from a consolidation reconciliation statement PDF.
-    """
+    """Extract every charge, reversal, late-payment, payment + one meta row from a consolidation reconciliation statement PDF."""
     rows: list[dict] = []
     src = "Statement Reconciliation"
 

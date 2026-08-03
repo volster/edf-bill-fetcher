@@ -162,9 +162,7 @@ def _data_quality_report(df: pd.DataFrame) -> dict[str, object]:
 
 
 def _disclosed_label(admitted: bool, overlaps: bool) -> str:
-    """Return the human-readable value of the 'Cancel/Rebill Disclosed'.
-
-    cell used on the Back-billing and Rebilling tabs.
+    """Return the human-readable value of the 'Cancel/Rebill Disclosed' cell used on the Back-billing and Rebilling tabs.
 
     The disclosed column joins two independent signals:
       * admit-phrase (the cover-page wording 'we've recently
@@ -182,10 +180,7 @@ def _disclosed_label(admitted: bool, overlaps: bool) -> str:
 
 
 def _reading_type_to_aem(reading_value: str) -> str:
-    """Map the Reading column's value (Actual/Estimated/Smart/Unknown).
-
-    to the single-letter A/E/M code used on the Meter Readings tab.
-    """
+    """Map the Reading column's value (Actual/Estimated/Smart/Unknown) to the single-letter A/E/M code used on the Meter Readings tab."""
     if reading_value == "Actual":
         return "A"
     if reading_value == "Estimated":

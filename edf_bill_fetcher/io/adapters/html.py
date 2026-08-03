@@ -1,6 +1,4 @@
-"""HTML reading adapters — BeautifulSoup-backed HTM account-history.
-
-parser used by ``EvidenceEngine.process_htm_file``.
+"""HTML reading adapters — BeautifulSoup-backed HTM account-history parser used by ``EvidenceEngine.process_htm_file``.
 
 This module owns the *file-reading primitive* of the HTM path: the
 regex-driven parser that turns the EDF MyAccount ``Payments and

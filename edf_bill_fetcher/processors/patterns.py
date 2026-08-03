@@ -1,6 +1,4 @@
-"""Pre-compiled regex patterns used by the amount/reading/period extractors.
-
-and the multi-regex fallback chain.
+"""Pre-compiled regex patterns used by the amount/reading/period extractors and the multi-regex fallback chain.
 
 Extracted from ``edf_collector.py`` as part of the modularization refactor
 (Task 3).  This module is the single source of truth for:

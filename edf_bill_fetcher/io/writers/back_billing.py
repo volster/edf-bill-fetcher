@@ -44,10 +44,7 @@ def _assess_reason(
     period_from: pd.Timestamp,
     period_to: pd.Timestamp,
 ) -> str:
-    """Return a short, deterministic narrative for the Reason Assessment.
-
-    column of the Back-billing sheet. Template-driven (no LLM).
-    """
+    """Return a short, deterministic narrative for the Reason Assessment column of the Back-billing sheet. Template-driven (no LLM)."""
     pf = period_from.strftime("%d %b %Y")
     pt = period_to.strftime("%d %b %Y")
     excess = days - 365

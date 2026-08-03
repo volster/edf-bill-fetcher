@@ -124,10 +124,7 @@ def write_forecast_sheet(ws, dfc):
     hist_vol = returns.std() if len(returns) > 1 else 0.05
 
     def _model_value(fitted_array, fc_array, i, n_total):
-        """Pick the in-sample fitted value at historical index i.
-
-        or ``N/A`` if the model didn't fit (not enough data).
-        """
+        """Pick the in-sample fitted value at historical index i or ``N/A`` if the model didn't fit (not enough data)."""
         if fitted_array is None:
             return None
         # Defensive index guard — the fitted array has the same

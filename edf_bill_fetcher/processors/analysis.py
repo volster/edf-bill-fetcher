@@ -383,9 +383,7 @@ def _disclosed_label(
     admitted: bool,
     overlaps: bool,
 ) -> str:
-    """Return the human-readable value of the 'Cancel/Rebill Disclosed'.
-
-    cell used on the Back-billing and Rebilling tabs.
+    """Return the human-readable value of the 'Cancel/Rebill Disclosed' cell used on the Back-billing and Rebilling tabs.
 
     The disclosed column joins two independent signals:
       * admit-phrase (the cover-page wording 'we've recently
@@ -409,9 +407,7 @@ def _reversal_match(
     killed_pf: pd.Timestamp,
     killed_pt: pd.Timestamp,
 ) -> bool:
-    """Return whether a reversal-credit row in *evidence_df* matches the.
-
-    killed invoice well enough to count as rebilling evidence.
+    """Return whether a reversal-credit row in *evidence_df* matches the killed invoice well enough to count as rebilling evidence.
 
     Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
     invoice when its amount is within ±£0.50 AND either its period
@@ -445,10 +441,7 @@ def _reversal_match(
 
 
 def _reading_type_to_aem(reading_value: str) -> str:
-    """Map the Reading column's value (Actual/Estimated/Smart/Unknown).
-
-    to the single-letter A/E/M code used on the Meter Readings tab.
-    """
+    """Map the Reading column's value (Actual/Estimated/Smart/Unknown) to the single-letter A/E/M code used on the Meter Readings tab."""
     if reading_value == "Actual":
         return "A"
     if reading_value == "Estimated":
