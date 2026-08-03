@@ -52,10 +52,13 @@ from edf_bill_fetcher.helpers.formatting import (  # noqa: E402,F401,I001
     account_number_matches as _account_number_matches,
 )
 from edf_bill_fetcher.io.adapters.pdf import legal_context  # noqa: E402,F401,I001
-from edf_bill_fetcher.io.writers.evidence import (  # noqa: E402,F401
-    write_evidence_sheet,
-    write_summary_sheet,
-)
+# NB: the eager ``from edf_bill_fetcher.io.writers.evidence import (...)`` and
+# ``from edf_bill_fetcher.io.writers.sap import (...)`` blocks that used to
+# live here were REMOVED — they re-triggered ``writers/__init__.py`` mid-init
+# (memory #306 + #198/#220/#268) and created a circular import whenever
+# ``io.writers.evidence`` or ``io.writers.sap`` was cold-imported without
+# ``writers`` being fully loaded. The names are resolved lazily via the PEP
+# 562 ``__getattr__`` shim below (cases at L146-152 and L206-219).
 from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
     _SOURCE_PRECEDENCE,
     DUP_GREY,

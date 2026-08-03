@@ -55,7 +55,11 @@ def _find_button_by_label(root: tk.Misc, label_substr: str) -> tk.Button | None:
 
 
 @pytest.fixture
-def app():
+def app(monkeypatch):
+    # Mock ``App._load_config`` so tests observe the HARDCODED defaults in
+    # ``App.__init__`` rather than whatever the developer's local
+    # ``~/.edf_collector/config.json`` has been saved to by real GUI use.
+    monkeypatch.setattr(App, "_load_config", lambda self: None)
     root = tk.Tk()
     root.withdraw()
     try:

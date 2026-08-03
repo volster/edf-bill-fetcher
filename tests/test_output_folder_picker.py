@@ -1,4 +1,12 @@
-"""Section 1 output-folder picker -- spec Design Section 1."""
+"""Section 1 output-folder picker -- spec Design Section 1.
+
+The ``app`` fixture mocks ``App._load_config`` to a no-op so tests observe
+the HARDCODED defaults in ``App.__init__`` rather than whatever the
+developer's local ``~/.edf_collector/config.json`` happens to contain.
+Without this mock, tests pass on machines where the GUI has never been
+launched but fail unpredictably on developer machines that have actually
+saved GUI state.
+"""
 
 import tkinter as tk
 from collections.abc import Iterator
@@ -29,7 +37,8 @@ def _all_widget_text(widget: tk.Misc) -> list[str]:
 
 
 @pytest.fixture
-def app():
+def app(monkeypatch):
+    monkeypatch.setattr(App, "_load_config", lambda self: None)
     root = tk.Tk()
     root.withdraw()
     try:
@@ -52,7 +61,8 @@ class TestOutputFolderPickerUI:
         app.output_folder.set("/tmp/test")
         assert app.output_folder.get() == "/tmp/test"
 
-    def test_output_folder_empty_defaults_to_source_dir(self):
+    def test_output_folder_empty_defaults_to_source_dir(self, monkeypatch):
+        monkeypatch.setattr(App, "_load_config", lambda self: None)
         root = tk.Tk()
         root.withdraw()
         try:
