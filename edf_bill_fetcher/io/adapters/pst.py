@@ -1,4 +1,4 @@
-"""PST / OST reading adapters — attachment-filename walker and
+"""PST / OST reading adapters — attachment-filename walker and.
 
 sender-email extraction used by the PST / OST archive crawler.
 

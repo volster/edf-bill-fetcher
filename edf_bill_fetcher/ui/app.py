@@ -257,6 +257,8 @@ class ReportOptionsDialog:
 
 
 class App:
+    """Tkinter GUI for the EDF Evidence Collector — orchestrates the user-facing workflow."""
+
     def __init__(self, root):
         self.root = root
         self.root.title("EDF Master Evidence Collector")
@@ -463,6 +465,7 @@ class App:
         return os.path.join(folder, filename)
 
     def build_ui(self):
+        """Construct the full tkinter widget tree for the main window."""
         hdr = tk.Frame(self.root, bg=EDF_ORANGE, height=60)
         hdr.pack(fill=tk.X)
         tk.Label(
@@ -751,6 +754,7 @@ class App:
             self._save_config()
 
     def set_status(self, text):
+        """Update the status-bar text, marshalling to the tk main thread."""
         def _apply():
             self.status.set(text)
             self.root.update_idletasks()
@@ -761,6 +765,7 @@ class App:
             self.root.after(0, _apply)
 
     def set_progress(self, current, total, text=None):
+        """Update the progress bar to current/total percent, marshalling to the tk main thread."""
         pct = max(0, min(100, (current / total) * 100)) if total else 0
 
         def _apply():
@@ -978,6 +983,7 @@ class App:
         self.set_status("Cancelling…")
 
     def start_thread(self):
+        """Validate inputs and launch the extraction worker thread."""
         try:
             self.min_amount.get()
             self.analysis_min.get()

@@ -66,7 +66,7 @@ from edf_bill_fetcher.processors.sap_parsers import (
 
 # --- _fallback_inv_num ---
 def _fallback_inv_num(text: str) -> tuple[str | None, str]:
-    """Try the canonical invoice-number regex, then the cover-body regex,
+    """Try the canonical invoice-number regex, then the cover-body regex,.
 
     then a loose bare-token regex. Returns (value, regex_name) or (None, "").
     """
@@ -294,6 +294,8 @@ def _matches_domain_filter(sender_email, filter_str):
 
 # --- EvidenceEngine ---
 class EvidenceEngine:
+    """Orchestrate extraction of EDF billing records from PDF, HTM, and PST sources."""
+
     def __init__(self, config, update_ui_cb, progress_cb=None, cancel_event=None):
         self.config = config
         self.records = []
@@ -382,12 +384,15 @@ class EvidenceEngine:
         self.update_progress = lambda *_a, **_kw: None
 
     def is_cancelled(self):
+        """Return True if the cancel event has been set by the GUI."""
         return self.cancel_event.is_set()
 
     def log_error(self, context, err):
+        """Append a timestamped error entry to the engine's error log."""
         self.error_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] {context} — {err}")
 
     def find_billing_period(self, text):
+        """Extract the billing period (Period From, Period To) from text."""
         m = PERIOD_RE.search(text)
         if m:
             return (
@@ -599,6 +604,7 @@ class EvidenceEngine:
     # ------------------------------------------------------------------
 
     def process_text(self, text, source_type, detail, fallback_date, sender="", attachment_name=""):
+        """Extract a record from a generic text body (old-format PDF or email)."""
         if not text:
             return
 
@@ -732,12 +738,13 @@ class EvidenceEngine:
         """Classify a record as New Bill, Ongoing Balance, or Other based on content.
 
         Args:
-            text (str): the cleaned bill body text.
-            pattern_name (str | None): the name of the regex from
+            text: the cleaned bill body text.
+            pattern_name: the name of the regex from
                 :data:`AMOUNT_PATTERNS` that matched, or ``None`` if no
                 anchored match was found.
-            period_from, period_to (str): ``"N/A"`` or a parsed date.
-            strategy (str): either ``"Smart Context"`` (anchored pattern
+            period_from: ``"N/A"`` or a parsed date string for the billing period start.
+            period_to: ``"N/A"`` or a parsed date string for the billing period end.
+            strategy: either ``"Smart Context"`` (anchored pattern
                 matched) or ``"Large Amount Fallback"`` (anchored missed,
                 number extracted by fallback).
 
@@ -791,6 +798,7 @@ class EvidenceEngine:
     def process_pdf_file(
         self, path, source_label, detail_label, fallback_date, sender="", attachment_name=""
     ):
+        """Read a PDF file, detect its format, and extract any records it contains."""
         if self.is_cancelled():
             return
         try:
@@ -941,6 +949,7 @@ class EvidenceEngine:
     # ------------------------------------------------------------------
 
     def process_htm_file(self, path):
+        """Read an HTM account-history export and extract every record it contains."""
         try:
             # Read with strict UTF-8 first — evidence data must not be
             # silently corrupted by mojibake replacement.  Fall back to
@@ -994,6 +1003,7 @@ class EvidenceEngine:
     # both PST and OST archives. Exposed as an explicit alias so
     # callers picking from the per-file API do not have to know that.
     def process_ost_file(self, path):
+        """Process an OST archive using the same code path as PST."""
         self.process_pst_file(path)
 
     # ------------------------------------------------------------------
@@ -1001,6 +1011,7 @@ class EvidenceEngine:
     # ------------------------------------------------------------------
 
     def crawl_pst(self, folder):
+        """Recursively walk a PST/OST folder and process every EDF email found."""
         if not HAS_PYPFF:
             self.log_error("PST", "pypff not installed — skipping PST processing")
             return
@@ -1129,6 +1140,7 @@ class EvidenceEngine:
     # ------------------------------------------------------------------
 
     def crawl_local_pdfs(self, path):
+        """Recursively walk a local folder and process every PDF bill found."""
         if not path or not os.path.exists(path):
             return
         # Recursive walk: PDF bills are commonly organised into

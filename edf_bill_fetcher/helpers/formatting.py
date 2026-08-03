@@ -34,7 +34,7 @@ def apply_int_format(cell: openpyxl.cell.Cell) -> None:
 
 
 def account_number_matches(acc_filter: str, text: str) -> bool:
-    """Return True when ``acc_filter`` appears as a standalone digit run in ``text``.
+    r"""Return True when ``acc_filter`` appears as a standalone digit run in ``text``.
 
     Phase 1.3: replaces the old "is the digits substring contained anywhere"
     check, which false-matched an unrelated longer string (invoice number,

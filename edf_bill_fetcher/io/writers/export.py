@@ -99,6 +99,12 @@ from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
 
 
 def export_to_excel(data, output_path, error_log, config, filtered=None, sap_rows=None):
+    """Build the multi-sheet evidence workbook by orchestrating each writer submodule.
+
+    Calls every sheet writer in the canonical order so the workbook opens
+    with the Annual Summary, EDF Evidence Report, and analysis tabs in
+    the layout documented in the README.
+    """
     NAVY = "10367A"
     ORANGE = "FE5716"
     RED = "FF6B6B"

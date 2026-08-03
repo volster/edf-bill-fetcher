@@ -201,6 +201,12 @@ def _format_table(table, header_color="#10367A", font_size=8, header_row=True):
 
     Parameters
     ----------
+    table:
+        The python-docx ``Table`` object to format in place.
+    header_color:
+        Hex fill colour applied to the header row (default ``#10367A``).
+    font_size:
+        Point size applied to every cell run (default ``8``).
     header_row:
         When True (the default) row 0 is treated as a header row and
         repainted with the ``header_color`` fill plus WHITE bold runs.

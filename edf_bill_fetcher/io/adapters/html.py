@@ -1,4 +1,4 @@
-"""HTML reading adapters — BeautifulSoup-backed HTM account-history
+"""HTML reading adapters — BeautifulSoup-backed HTM account-history.
 
 parser used by ``EvidenceEngine.process_htm_file``.
 

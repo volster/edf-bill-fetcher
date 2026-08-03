@@ -44,7 +44,7 @@ def _assess_reason(
     period_from: pd.Timestamp,
     period_to: pd.Timestamp,
 ) -> str:
-    """Return a short, deterministic narrative for the Reason Assessment
+    """Return a short, deterministic narrative for the Reason Assessment.
 
     column of the Back-billing sheet. Template-driven (no LLM).
     """

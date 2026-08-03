@@ -1,4 +1,4 @@
-"""Pre-compiled regex patterns used by the amount/reading/period extractors
+"""Pre-compiled regex patterns used by the amount/reading/period extractors.
 
 and the multi-regex fallback chain.
 

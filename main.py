@@ -6,6 +6,7 @@ from edf_bill_fetcher.io.cli import main as _main
 
 
 def main() -> None:
+    """Launch the CLI entry point from the repo-root ``main.py`` script."""
     _main()
 
 

@@ -13,7 +13,7 @@ import pandas as pd
 
 
 def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
-    """Run all Phase-2 detection analyses on the deduplicated
+    """Run all Phase-2 detection analyses on the deduplicated.
 
     DataFrame and return their outputs in a dict.
 
