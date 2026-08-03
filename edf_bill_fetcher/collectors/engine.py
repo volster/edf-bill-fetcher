@@ -404,9 +404,15 @@ class EvidenceEngine:
         return "N/A", "N/A"
 
     def _add_record(self, rec):
-        """Thread-safe record append after optional filter check."""
+        """Thread-safe record append after optional magnitude-based filter check.
+
+        Filter compares ``abs(amount)`` to ``min_amount`` so high-magnitude
+        refunds (e.g. ``-£1000``) are KEPT in the main records — only
+        records whose absolute amount is below the threshold are shelved
+        to ``filtered_records``.
+        """
         amt = rec.get("Amount (£)", 0) or 0
-        if self.config.get("filter_below", True) and amt < self.config["min_amount"]:
+        if self.config.get("filter_below", True) and abs(amt) < self.config["min_amount"]:
             with self.lock:
                 self.filtered_records.append(
                     {
@@ -415,7 +421,7 @@ class EvidenceEngine:
                         "Amount (£)": amt,
                         "Details": rec.get("Details", "")[:60],
                         "Logic Used": rec.get("Logic Used", ""),
-                        "Reason": f"Below minimum threshold (£{self.config['min_amount']:,.2f})",
+                        "Reason": f"Amount magnitude below £{self.config['min_amount']:,.2f} threshold",
                     }
                 )
             return

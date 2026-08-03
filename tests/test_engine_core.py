@@ -68,7 +68,7 @@ class TestEvidenceEngineCore:
 
         assert len(engine.records) == 0
         assert len(engine.filtered_records) == 1
-        assert engine.filtered_records[0]["Reason"] == "Below minimum threshold (£500.00)"
+        assert engine.filtered_records[0]["Reason"] == "Amount magnitude below £500.00 threshold"
 
     def test_add_record_above_filter(self):
         config = {
@@ -101,6 +101,81 @@ class TestEvidenceEngineCore:
 
         assert len(engine.records) == 1
         assert len(engine.filtered_records) == 0
+
+    def test_add_record_negative_amount_above_threshold_kept(self):
+        """Regression test: a high-magnitude refund (e.g. ``-£1000``) must stay in
+        main records when ``min_amount=500`` because ``abs(-1000) >= 500``.
+
+        Pre-fix the comparison was ``amt < min_amount`` so ``-1000 < 500``
+        filtered the refund out — losing valuable dispute evidence.
+        """
+        config = {
+            "use_anchors": True,
+            "use_large": True,
+            "use_reading_classification": True,
+            "use_pdf_fields": True,
+            "use_acc_filter": False,
+            "acc_num": "",
+            "min_amount": 500.0,
+            "analysis_min": 500.0,
+            "filter_below": True,
+            "save_filtered": True,
+            "use_dedup": True,
+            "save_dups": True,
+            "use_domain_filter": True,
+            "domain_filter": "edfenergy.com",
+        }
+        engine = EvidenceEngine(config, lambda x: None)
+        engine._add_record(
+            {
+                "Source": "PST",
+                "Date": "01/01/2024",
+                "Amount (£)": -1000.0,  # High-magnitude refund
+                "Details": "Refund",
+                "Logic Used": "Test refund",
+            }
+        )
+
+        # Refund with abs(amt) >= min_amount stays in main records.
+        assert len(engine.records) == 1
+        assert engine.records[0]["Amount (£)"] == -1000.0
+        assert len(engine.filtered_records) == 0
+
+    def test_add_record_negative_amount_below_threshold_filtered(self):
+        """A small-magnitude negative amount (e.g. ``-£5``) IS filtered when
+        ``min_amount=500`` because ``abs(-5) < 500`` — small refunds of
+        incidental credit balances aren't dispute evidence."""
+        config = {
+            "use_anchors": True,
+            "use_large": True,
+            "use_reading_classification": True,
+            "use_pdf_fields": True,
+            "use_acc_filter": False,
+            "acc_num": "",
+            "min_amount": 500.0,
+            "analysis_min": 500.0,
+            "filter_below": True,
+            "save_filtered": True,
+            "use_dedup": True,
+            "save_dups": True,
+            "use_domain_filter": True,
+            "domain_filter": "edfenergy.com",
+        }
+        engine = EvidenceEngine(config, lambda x: None)
+        engine._add_record(
+            {
+                "Source": "PST",
+                "Date": "01/01/2024",
+                "Amount (£)": -5.0,  # Small-magnitude negative
+                "Details": "Trivial refund",
+                "Logic Used": "Test",
+            }
+        )
+
+        assert len(engine.records) == 0
+        assert len(engine.filtered_records) == 1
+        assert engine.filtered_records[0]["Amount (£)"] == -5.0
+        assert engine.filtered_records[0]["Reason"] == "Amount magnitude below £500.00 threshold"
 
     def test_is_cancelled(self):
         config = {

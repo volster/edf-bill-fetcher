@@ -65,7 +65,7 @@ class TestEvidenceEngineConfig:
         # Should be filtered out
         assert len(engine.records) == 0
         assert len(engine.filtered_records) == 1
-        assert engine.filtered_records[0]["Reason"] == "Below minimum threshold (£1,000.00)"
+        assert engine.filtered_records[0]["Reason"] == "Amount magnitude below £1,000.00 threshold"
 
     def test_no_filter_when_disabled(self):
         config = {

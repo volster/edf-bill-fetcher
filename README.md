@@ -150,9 +150,9 @@ config = {
     "use_pdf_fields": True,
     "use_acc_filter": False,
     "acc_num": "",
-    "min_amount": 500.0,
+    "min_amount": 50.0,
     "analysis_min": 500.0,
-    "filter_below": True,
+    "filter_below": False,
     "save_filtered": True,
     "use_dedup": True,
     "save_dups": True,
@@ -231,7 +231,7 @@ Sheets are written in roughly this order; conditional sheets only appear when th
 | **Annual Summary** | always | Yearly balance range, average, peak, low |
 | **EDF Evidence Report** | always | All extracted records with live formulas |
 | **Duplicate Entries** | `use_dedup and save_dups` (default on/ off respectively) | Deduplicated records, retained for audit so the dropped siblings are visible |
-| **Filtered (Below Min)** | `filter_below and save_filtered` (default on/on) when there *are* records below the minimum-threshold | Records below the minimum-threshold |
+| **Filtered (Below Min)** | `filter_below and save_filtered` (default off/on) when there *are* records whose **absolute** amount is below the minimum-threshold | Records whose `abs(Amount)` is below the minimum threshold (refunds like `-£1000` are KEPT in the main report — only small-magnitude amounts are shelved here) |
 | **Parse Errors** | when the engine captured one or more extraction errors | Any extraction errors encountered |
 | **Key Statistics** | always (when ≥2 records survive dedup) | Account overview, balance figures, periodic charges, reading quality, unit rates |
 | **Balance Trend** | always (≥2 records) | Time-series chart with rolling average and linear trend |
@@ -415,7 +415,7 @@ Key options:
 - `use_reading_classification`: classify Estimated/Actual/Smart readings
 - `use_pdf_fields`: extract kWh, standing charge, invoice number
 - `use_acc_filter`: filter by account number
-- `min_amount`: minimum amount threshold
+- `min_amount`: minimum amount threshold (compared against `abs(amount)` — high-magnitude refunds are kept in the main report)
 - `analysis_min`: threshold for analysis tabs
 - `use_dedup`: enable cross-source deduplication
 - `use_domain_filter`: filter PST emails by sender domain

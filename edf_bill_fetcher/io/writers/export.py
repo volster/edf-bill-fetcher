@@ -7,6 +7,7 @@ using openpyxl.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 
@@ -1629,6 +1630,15 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     ]
     wb._sheets = [wb[name] for name in _SEVERITY_LED_ORDER if name in wb.sheetnames]
 
-    wb.save(output_path)
+    try:
+        wb.save(output_path)
+    except FileNotFoundError:
+        output_dir = os.path.dirname(output_path) or "."
+        raise FileNotFoundError(
+            f"The output folder does not exist:\n\n    {output_dir}\n\n"
+            f"Either create this folder first, or click the 'Browse' button next to "
+            f"'Output Folder' in the GUI to pick an existing folder.\n"
+            f"(Target file was: {os.path.basename(output_path)})"
+        ) from None
 
 __all__ = ["export_to_excel"]
