@@ -3,6 +3,7 @@
 Contains: write_forecast_sheet — renders the "Forecast" worksheet with
 linear and Holt-Winters forecasts + forecast chart.
 """
+
 from __future__ import annotations
 
 from datetime import timedelta

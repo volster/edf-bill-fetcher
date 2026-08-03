@@ -18,6 +18,7 @@ from edf_bill_fetcher.writers._helpers import _recon_hyperlink
 
 # ---- _recon_parse_iso_date (was writers/__init__.py L1822-1833) ----
 
+
 def _recon_parse_iso_date(s: str) -> pd.Timestamp | pd._libs.tslibs.nattype.NaTType:
     if not s:
         return pd.NaT
@@ -30,9 +31,8 @@ def _recon_parse_iso_date(s: str) -> pd.Timestamp | pd._libs.tslibs.nattype.NaTT
     return pd.to_datetime(s, dayfirst=True, errors="coerce")
 
 
-
-
 # ---- _recon_amount_to_float (was L1834-1844) ----
+
 
 def _recon_amount_to_float(v: object) -> float:
     if v is None:
@@ -45,9 +45,8 @@ def _recon_amount_to_float(v: object) -> float:
         return 0.0
 
 
-
-
 # ---- write_reconciliation_sheet (was L1845-2217) ----
+
 
 def write_reconciliation_sheet(
     ws_summary: Worksheet,

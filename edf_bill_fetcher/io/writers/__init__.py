@@ -52,7 +52,10 @@ def __getattr__(name: str) -> Any:
     if name in ("write_evidence_sheet", "write_summary_sheet"):
         from edf_bill_fetcher.io.writers.evidence import write_evidence_sheet, write_summary_sheet
 
-        return {"write_evidence_sheet": write_evidence_sheet, "write_summary_sheet": write_summary_sheet}[name]
+        return {
+            "write_evidence_sheet": write_evidence_sheet,
+            "write_summary_sheet": write_summary_sheet,
+        }[name]
     if name == "write_statistical_analysis_sheet":
         from edf_bill_fetcher.io.writers.statistical import write_statistical_analysis_sheet
 
@@ -76,7 +79,10 @@ def __getattr__(name: str) -> Any:
     if name in ("export_to_excel", "write_reconciliation_sheet"):
         from edf_bill_fetcher.io.writers.export import export_to_excel, write_reconciliation_sheet
 
-        return {"export_to_excel": export_to_excel, "write_reconciliation_sheet": write_reconciliation_sheet}[name]
+        return {
+            "export_to_excel": export_to_excel,
+            "write_reconciliation_sheet": write_reconciliation_sheet,
+        }[name]
     if name == "write_back_billing_sheet":
         from edf_bill_fetcher.io.writers.back_billing import write_back_billing_sheet
 

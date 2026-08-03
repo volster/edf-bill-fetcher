@@ -121,30 +121,34 @@ def test_detect_back_billing_returns_empty_for_empty_df() -> None:
 
 def test_detect_back_billing_returns_empty_for_short_period_invoices() -> None:
     """Invoices with periods ≤ 365 days produce no back-billing rows (skipped)."""
-    df = pd.DataFrame([
-        {
-            "Invoice #": "A1",
-            "Date": "01 Jan 2024",
-            "Period From": "01 Jan 2024",
-            "Period To": "31 Jan 2024",
-            "Amount (£)": "100.00",
-        }
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "A1",
+                "Date": "01 Jan 2024",
+                "Period From": "01 Jan 2024",
+                "Period To": "31 Jan 2024",
+                "Amount (£)": "100.00",
+            }
+        ]
+    )
     result = detect_back_billing(df)
     assert result.empty
 
 
 def test_detect_back_billing_flags_long_period_invoice() -> None:
     """A 400-day-period invoice triggers the over-365-day branch."""
-    df = pd.DataFrame([
-        {
-            "Invoice #": "A1",
-            "Date": "31 Dec 2024",
-            "Period From": "01 Jan 2023",
-            "Period To": "31 Jan 2024",  # 395 days — exceeds 365
-            "Amount (£)": "5000.00",
-        }
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "A1",
+                "Date": "31 Dec 2024",
+                "Period From": "01 Jan 2023",
+                "Period To": "31 Jan 2024",  # 395 days — exceeds 365
+                "Amount (£)": "5000.00",
+            }
+        ]
+    )
     result = detect_back_billing(df)
     assert not result.empty
     assert "Invoice #" in result.columns
@@ -195,9 +199,9 @@ def test_reversal_match_returns_false_for_empty_evidence_df() -> None:
 
 def test_reversal_match_returns_false_when_no_entry_type_column() -> None:
     """evidence_df without 'Entry Type' column returns False."""
-    df = pd.DataFrame([
-        {"Amount (£)": 100.0, "Period From": "2024-01-01", "Period To": "2024-12-31"}
-    ])
+    df = pd.DataFrame(
+        [{"Amount (£)": 100.0, "Period From": "2024-01-01", "Period To": "2024-12-31"}]
+    )
     result = _reversal_match(
         df, "INV1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-12-31")
     )
@@ -206,14 +210,16 @@ def test_reversal_match_returns_false_when_no_entry_type_column() -> None:
 
 def test_reversal_match_returns_false_when_amount_mismatch() -> None:
     """A Credit row with a different amount (≥ £0.50 delta) returns False."""
-    df = pd.DataFrame([
-        {
-            "Entry Type": "Credit",
-            "Amount (£)": 500.00,
-            "Period From": "2024-01-01",
-            "Period To": "2024-12-31",
-        }
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "Entry Type": "Credit",
+                "Amount (£)": 500.00,
+                "Period From": "2024-01-01",
+                "Period To": "2024-12-31",
+            }
+        ]
+    )
     result = _reversal_match(
         df, "INV1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-12-31")
     )
@@ -222,14 +228,16 @@ def test_reversal_match_returns_false_when_amount_mismatch() -> None:
 
 def test_reversal_match_returns_true_when_credit_amount_matches() -> None:
     """A Credit row whose amount matches within £0.50 returns True."""
-    df = pd.DataFrame([
-        {
-            "Entry Type": "Credit",
-            "Amount (£)": 100.10,
-            "Period From": "2024-01-01",
-            "Period To": "2024-12-31",
-        }
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "Entry Type": "Credit",
+                "Amount (£)": 100.10,
+                "Period From": "2024-01-01",
+                "Period To": "2024-12-31",
+            }
+        ]
+    )
     result = _reversal_match(
         df, "INV1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-12-31")
     )
@@ -238,14 +246,16 @@ def test_reversal_match_returns_true_when_credit_amount_matches() -> None:
 
 def test_reversal_match_returns_true_when_credit_period_unparseable() -> None:
     """When the credit row's period is unparseable, amount-alone accepts it."""
-    df = pd.DataFrame([
-        {
-            "Entry Type": "Credit",
-            "Amount (£)": 100.00,
-            "Period From": "garbage",
-            "Period To": "garbage",
-        }
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "Entry Type": "Credit",
+                "Amount (£)": 100.00,
+                "Period From": "garbage",
+                "Period To": "garbage",
+            }
+        ]
+    )
     result = _reversal_match(
         df, "INV1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-12-31")
     )
@@ -263,59 +273,65 @@ def test_detect_rebilling_returns_empty_for_empty_df() -> None:
 
 def test_detect_rebilling_returns_empty_for_single_invoice() -> None:
     """A single-invoice df (no pair possible) returns empty."""
-    df = pd.DataFrame([
-        {
-            "Invoice #": "A1",
-            "Date": "01 Jan 2024",
-            "Period From": "01 Jan 2024",
-            "Period To": "31 Jan 2024",
-            "Amount (£)": "100.00",
-        }
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "A1",
+                "Date": "01 Jan 2024",
+                "Period From": "01 Jan 2024",
+                "Period To": "31 Jan 2024",
+                "Amount (£)": "100.00",
+            }
+        ]
+    )
     result = detect_rebilling(df)
     assert result.empty
 
 
 def test_detect_rebilling_returns_empty_for_normal_non_overlapping_invoices() -> None:
     """Two sequential non-overlapping invoices produce no killer/killed pair."""
-    df = pd.DataFrame([
-        {
-            "Invoice #": "A1",
-            "Date": "01 Jan 2024",
-            "Period From": "01 Jan 2024",
-            "Period To": "31 Jan 2024",
-            "Amount (£)": "100.00",
-        },
-        {
-            "Invoice #": "A2",
-            "Date": "01 Feb 2024",
-            "Period From": "01 Feb 2024",
-            "Period To": "29 Feb 2024",
-            "Amount (£)": "200.00",
-        },
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "A1",
+                "Date": "01 Jan 2024",
+                "Period From": "01 Jan 2024",
+                "Period To": "31 Jan 2024",
+                "Amount (£)": "100.00",
+            },
+            {
+                "Invoice #": "A2",
+                "Date": "01 Feb 2024",
+                "Period From": "01 Feb 2024",
+                "Period To": "29 Feb 2024",
+                "Amount (£)": "200.00",
+            },
+        ]
+    )
     result = detect_rebilling(df)
     assert result.empty
 
 
 def test_detect_rebilling_flags_period_containment_pair() -> None:
     """Killer's billing period fully contains Killed's period AND killer is long → trigger."""
-    df = pd.DataFrame([
-        {
-            "Invoice #": "KILLED",
-            "Date": "01 Mar 2024",
-            "Period From": "01 Mar 2024",
-            "Period To": "31 Mar 2024",
-            "Amount (£)": "100.00",
-        },
-        {
-            "Invoice #": "KILLER",
-            "Date": "31 Dec 2024",
-            "Period From": "01 Jan 2023",
-            "Period To": "31 Dec 2024",
-            "Amount (£)": "5000.00",
-        },
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "KILLED",
+                "Date": "01 Mar 2024",
+                "Period From": "01 Mar 2024",
+                "Period To": "31 Mar 2024",
+                "Amount (£)": "100.00",
+            },
+            {
+                "Invoice #": "KILLER",
+                "Date": "31 Dec 2024",
+                "Period From": "01 Jan 2023",
+                "Period To": "31 Dec 2024",
+                "Amount (£)": "5000.00",
+            },
+        ]
+    )
     result = detect_rebilling(df)
     assert not result.empty
     assert "Killer Invoice" in result.columns
@@ -333,11 +349,13 @@ def test_detect_meter_rollover_returns_empty_for_empty_df() -> None:
 
 def test_detect_meter_rollover_returns_empty_for_no_rollover_cases() -> None:
     """All-Actual readings with no rollover-signature rows returns empty."""
-    df = pd.DataFrame([
-        {"Date": "01 Jan 2024", "Reading": "10000", "Reading Type": "Actual"},
-        {"Date": "01 Feb 2024", "Reading": "10500", "Reading Type": "Actual"},
-        {"Date": "01 Mar 2024", "Reading": "11100", "Reading Type": "Actual"},
-    ])
+    df = pd.DataFrame(
+        [
+            {"Date": "01 Jan 2024", "Reading": "10000", "Reading Type": "Actual"},
+            {"Date": "01 Feb 2024", "Reading": "10500", "Reading Type": "Actual"},
+            {"Date": "01 Mar 2024", "Reading": "11100", "Reading Type": "Actual"},
+        ]
+    )
     result = detect_meter_rollover(df)
     assert result.empty
 
@@ -348,8 +366,7 @@ def test_detect_meter_rollover_returns_empty_for_no_rollover_cases() -> None:
 def test_detect_reconciliation_statement_returns_false_for_no_match() -> None:
     """Plain text returns False."""
     assert (
-        detect_reconciliation_statement("just some random text without the recon header")
-        is False
+        detect_reconciliation_statement("just some random text without the recon header") is False
     )
 
 

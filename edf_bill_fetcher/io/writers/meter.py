@@ -39,6 +39,7 @@ _DEFAULT_ROLLOVER_THRESHOLD = 99999 - 5000
 
 # ---- detect_meter_rollover (was writers/__init__.py L2278-2358) ----
 
+
 def detect_meter_rollover(
     df: pd.DataFrame, rollover_threshold: int = _DEFAULT_ROLLOVER_THRESHOLD
 ) -> pd.DataFrame:
@@ -123,6 +124,7 @@ def detect_meter_rollover(
 
 
 # ---- infer_contracts (was L2361-2449) ----
+
 
 def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
     """Infer contract periods from tariff transitions (spec \u00a73.4).
@@ -216,6 +218,7 @@ def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
 
 
 # ---- write_meter_readings_sheet (was L2607-2782) ----
+
 
 def _write_meter_readings_sheet_impl(
     ws: Worksheet,
@@ -397,6 +400,7 @@ def _write_meter_readings_sheet_impl(
 
 # ---- write_contract_history_sheet (was L2785-2915) ----
 
+
 def write_contract_history_sheet(
     ws: Worksheet,
     contracts: pd.DataFrame,
@@ -548,6 +552,7 @@ def write_meter_readings_sheet(
         evidence_df=evidence_df,
         evidence_index=evidence_index,
     )
+
 
 __all__ = [
     "_write_meter_readings_sheet_impl",

@@ -3,6 +3,7 @@
 Contains: write_payment_analysis_sheet — renders the "Payment Analysis" worksheet
 with bar charts of payment amounts over time and pattern-detection callouts.
 """
+
 from __future__ import annotations
 
 from openpyxl.chart import BarChart, Reference

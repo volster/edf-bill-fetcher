@@ -161,7 +161,9 @@ def test_holt_winters_forecast_pair_too_few_non_nan_returns_none_pair() -> None:
     assert future is None
 
 
-@pytest.mark.skipif(not HAS_STATSMODELS, reason="statsmodels unavailable — branch returns (None, None)")
+@pytest.mark.skipif(
+    not HAS_STATSMODELS, reason="statsmodels unavailable — branch returns (None, None)"
+)
 def test_holt_winters_forecast_pair_well_formed_series_returns_arrays() -> None:
     series = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0])
     fitted, future = _holt_winters_forecast_pair(series, steps=4, seasonal_periods=None)

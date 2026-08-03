@@ -49,10 +49,12 @@ def test_writer_returns_early_for_insufficient_data() -> None:
     """When dfc has fewer than 3 records, the writer only writes the insufficiency banner."""
     wb = _make_workbook()
     ws = wb.active
-    dfc = _make_dataframe([
-        {"Date": "01 Jan 2024", "Amount (£)": "10.00"},
-        {"Date": "15 Jan 2024", "Amount (£)": "20.00"},
-    ])
+    dfc = _make_dataframe(
+        [
+            {"Date": "01 Jan 2024", "Amount (£)": "10.00"},
+            {"Date": "15 Jan 2024", "Amount (£)": "20.00"},
+        ]
+    )
     write_statistical_analysis_sheet(ws, dfc, config={})
     assert ws["A1"].value == "Insufficient data for statistical analysis"
     assert ws.column_dimensions["A"].width == 50
@@ -66,13 +68,15 @@ def test_writer_writes_descriptive_statistics_with_enough_rows() -> None:
     """5 rows are enough to exercise the skewness/kurtosis branches (L126, L128)."""
     wb = _make_workbook()
     ws = wb.active
-    dfc = _make_dataframe([
-        {"Date": "01 Jan 2024", "Amount (£)": "100.00"},
-        {"Date": "01 Feb 2024", "Amount (£)": "105.00"},
-        {"Date": "01 Mar 2024", "Amount (£)": "98.00"},
-        {"Date": "01 Apr 2024", "Amount (£)": "102.50"},
-        {"Date": "01 May 2024", "Amount (£)": "110.00"},
-    ])
+    dfc = _make_dataframe(
+        [
+            {"Date": "01 Jan 2024", "Amount (£)": "100.00"},
+            {"Date": "01 Feb 2024", "Amount (£)": "105.00"},
+            {"Date": "01 Mar 2024", "Amount (£)": "98.00"},
+            {"Date": "01 Apr 2024", "Amount (£)": "102.50"},
+            {"Date": "01 May 2024", "Amount (£)": "110.00"},
+        ]
+    )
     write_statistical_analysis_sheet(ws, dfc, config={})
     assert ws["A1"].value is not None
     assert "STATISTICAL ANALYSIS" in str(ws["A1"].value)
@@ -82,9 +86,7 @@ def test_writer_writes_descriptive_statistics_with_enough_rows() -> None:
         if ws.cell(row=r, column=1).value
     ]
     assert any("DESCRIPTIVE STATISTICS" in s for s in descriptive_cells)
-    all_row_values = [
-        ws.cell(row=r, column=1).value for r in range(2, 50)
-    ]
+    all_row_values = [ws.cell(row=r, column=1).value for r in range(2, 50)]
     assert any(v == "Skewness" for v in all_row_values)
     assert any(v == "Kurtosis" for v in all_row_values)
 
@@ -102,8 +104,18 @@ def test_writer_lists_z_score_anomalies_when_outliers_present() -> None:
         {"Date": f"01 {mon} 2024", "Amount (£)": f"{100.00 + i * 0.50:.2f}"}
         for i, mon in enumerate(
             [
-                "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+                "Jan",
+                "Feb",
+                "Mar",
+                "Apr",
+                "May",
+                "Jun",
+                "Jul",
+                "Aug",
+                "Sep",
+                "Oct",
+                "Nov",
+                "Dec",
             ]
         )
     ]
@@ -112,9 +124,7 @@ def test_writer_lists_z_score_anomalies_when_outliers_present() -> None:
     rows = normal_rows[:13] + outlier_row
     dfc = _make_dataframe(rows)
     write_statistical_analysis_sheet(ws, dfc, config={})
-    all_row_values = [
-        ws.cell(row=r, column=1).value for r in range(1, 80)
-    ]
+    all_row_values = [ws.cell(row=r, column=1).value for r in range(1, 80)]
     assert any(v and "Z-Score Anomaly" in str(v) for v in all_row_values), (
         "Z-Score Anomaly Dates header should be written when z_count > 0"
     )
@@ -127,18 +137,18 @@ def test_writer_lists_iqr_anomalies_when_outliers_present() -> None:
     """A series with a clear outlier triggers the IQR Anomaly Dates block (L228-236)."""
     wb = _make_workbook()
     ws = wb.active
-    dfc = _make_dataframe([
-        {"Date": "01 Jan 2024", "Amount (£)": "100.00"},
-        {"Date": "01 Feb 2024", "Amount (£)": "101.00"},
-        {"Date": "01 Mar 2024", "Amount (£)": "99.00"},
-        {"Date": "01 Apr 2024", "Amount (£)": "100.50"},
-        {"Date": "01 May 2024", "Amount (£)": "98.50"},
-        {"Date": "01 Jun 2024", "Amount (£)": "99999.00"},
-    ])
+    dfc = _make_dataframe(
+        [
+            {"Date": "01 Jan 2024", "Amount (£)": "100.00"},
+            {"Date": "01 Feb 2024", "Amount (£)": "101.00"},
+            {"Date": "01 Mar 2024", "Amount (£)": "99.00"},
+            {"Date": "01 Apr 2024", "Amount (£)": "100.50"},
+            {"Date": "01 May 2024", "Amount (£)": "98.50"},
+            {"Date": "01 Jun 2024", "Amount (£)": "99999.00"},
+        ]
+    )
     write_statistical_analysis_sheet(ws, dfc, config={})
-    all_row_values = [
-        ws.cell(row=r, column=1).value for r in range(1, 80)
-    ]
+    all_row_values = [ws.cell(row=r, column=1).value for r in range(1, 80)]
     assert any(v and "IQR Anomaly" in str(v) for v in all_row_values), (
         "IQR Anomaly Dates header should be written when iqr_count > 0"
     )
@@ -152,20 +162,20 @@ def test_writer_runs_scipy_normality_tests_when_available() -> None:
     """When scipy is installed, the Jarque-Bera / Shapiro-Wilk block executes (L267-272)."""
     wb = _make_workbook()
     ws = wb.active
-    dfc = _make_dataframe([
-        {"Date": "01 Jan 2024", "Amount (£)": "100.00"},
-        {"Date": "01 Feb 2024", "Amount (£)": "105.00"},
-        {"Date": "01 Mar 2024", "Amount (£)": "98.00"},
-        {"Date": "01 Apr 2024", "Amount (£)": "102.50"},
-        {"Date": "01 May 2024", "Amount (£)": "110.00"},
-        {"Date": "01 Jun 2024", "Amount (£)": "97.50"},
-        {"Date": "01 Jul 2024", "Amount (£)": "103.00"},
-        {"Date": "01 Aug 2024", "Amount (£)": "100.50"},
-    ])
+    dfc = _make_dataframe(
+        [
+            {"Date": "01 Jan 2024", "Amount (£)": "100.00"},
+            {"Date": "01 Feb 2024", "Amount (£)": "105.00"},
+            {"Date": "01 Mar 2024", "Amount (£)": "98.00"},
+            {"Date": "01 Apr 2024", "Amount (£)": "102.50"},
+            {"Date": "01 May 2024", "Amount (£)": "110.00"},
+            {"Date": "01 Jun 2024", "Amount (£)": "97.50"},
+            {"Date": "01 Jul 2024", "Amount (£)": "103.00"},
+            {"Date": "01 Aug 2024", "Amount (£)": "100.50"},
+        ]
+    )
     write_statistical_analysis_sheet(ws, dfc, config={})
-    all_row_values = [
-        ws.cell(row=r, column=1).value for r in range(1, 100)
-    ]
+    all_row_values = [ws.cell(row=r, column=1).value for r in range(1, 100)]
     assert any(v and "Jarque-Bera" in str(v) for v in all_row_values), (
         "Jarque-Bera normality test header should be written when scipy is installed"
     )
@@ -176,16 +186,16 @@ def test_writer_prints_scipy_unavailable_message_when_not_installed() -> None:
     """When scipy is NOT installed, the writer writes the 'Scipy not available' banner (L272)."""
     wb = _make_workbook()
     ws = wb.active
-    dfc = _make_dataframe([
-        {"Date": "01 Jan 2024", "Amount (£)": "100.00"},
-        {"Date": "01 Feb 2024", "Amount (£)": "105.00"},
-        {"Date": "01 Mar 2024", "Amount (£)": "98.00"},
-        {"Date": "01 Apr 2024", "Amount (£)": "102.50"},
-    ])
+    dfc = _make_dataframe(
+        [
+            {"Date": "01 Jan 2024", "Amount (£)": "100.00"},
+            {"Date": "01 Feb 2024", "Amount (£)": "105.00"},
+            {"Date": "01 Mar 2024", "Amount (£)": "98.00"},
+            {"Date": "01 Apr 2024", "Amount (£)": "102.50"},
+        ]
+    )
     write_statistical_analysis_sheet(ws, dfc, config={})
-    all_row_values = [
-        ws.cell(row=r, column=1).value for r in range(1, 100)
-    ]
+    all_row_values = [ws.cell(row=r, column=1).value for r in range(1, 100)]
     assert any(v and "Scipy not available" in str(v) for v in all_row_values), (
         "Scipy-not-available banner should be written when _HAS_SCIPY is False"
     )

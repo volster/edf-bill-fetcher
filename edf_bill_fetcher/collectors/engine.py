@@ -16,6 +16,7 @@ import threading
 
 try:
     import pypff  # type: ignore[import-untyped]  # noqa: F401
+
     HAS_PYPFF = True
 except ImportError:
     HAS_PYPFF = False
@@ -1208,5 +1209,3 @@ class EvidenceEngine:
 # ---------------------------------------------------------------------------
 
 THIN = _Side(style="thin", color="DDDDDD")
-
-

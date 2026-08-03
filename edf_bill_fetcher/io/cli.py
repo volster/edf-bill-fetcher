@@ -25,7 +25,6 @@ HAS_PDF_REPORT = importlib.util.find_spec("edf_report") is not None
 HAS_DOCX_REPORT = importlib.util.find_spec("edf_report_docx") is not None
 
 
-
 class _RestrictedUnpickler(pickle.Unpickler):
     """Unpickler that only allows known-safe types.
 
@@ -181,6 +180,7 @@ def run_cli_extract(args: list[str]) -> None:
         sys.exit(1)
 
     from edf_bill_fetcher.collectors.engine import EvidenceEngine  # noqa: F402,E402
+
     engine = EvidenceEngine(config, print, None, None)
 
     try:
@@ -415,6 +415,7 @@ def main() -> None:
 
     root = tk.Tk()
     from edf_bill_fetcher.ui.app import App  # noqa: F402,E402
+
     App(root)
     root.mainloop()
 

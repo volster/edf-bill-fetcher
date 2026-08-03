@@ -26,6 +26,7 @@ from edf_bill_fetcher.io.reporters import pdf_report as _pdf_shim
 
 # ---------- __init__.py package-level re-exports ----------
 
+
 def test_reporters_init_re_exports_pdf_report_names_are_twin_identical() -> None:
     """Each name re-exported via reporters.__init__ is the same object as edf_report."""
     assert reporters.REPORT_SECTIONS is edf_report.REPORT_SECTIONS
@@ -63,6 +64,7 @@ def test_reporters_all_lists_canonical_names() -> None:
 
 # ---------- pdf_report.py submodule re-exports ----------
 
+
 def test_pdf_report_shim_re_exports_are_twin_identical() -> None:
     """io.reporters.pdf_report re-exports are the same objects as canonical edf_report."""
     assert _pdf_shim.REPORT_SECTIONS is edf_report.REPORT_SECTIONS
@@ -91,6 +93,7 @@ def test_pdf_report_shim_all_lists_canonical_names() -> None:
 
 
 # ---------- docx_report.py submodule re-exports ----------
+
 
 def test_docx_report_shim_re_exports_are_twin_identical() -> None:
     """io.reporters.docx_report re-exports are the same objects as canonical edf_report_docx."""

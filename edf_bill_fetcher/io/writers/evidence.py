@@ -4,6 +4,7 @@ Extracted from ``edf_bill_fetcher/writers/__init__.py`` (Phase 5A) during the
 modularization refactor.  These two functions are the heart of the Evidence tab
 and Summary tab.
 """
+
 from __future__ import annotations
 
 import openpyxl
@@ -18,6 +19,7 @@ from edf_bill_fetcher.helpers.theme import CELL_BORDER, DUP_GREY
 from edf_bill_fetcher.writers._helpers import EST_YELLOW, JUMP_RED
 
 # --- function body 1: write_evidence_sheet (was writers/__init__.py L182-422) ---
+
 
 def write_evidence_sheet(ws, df, is_duplicate=False):
     """Render the EDF Evidence Report (or Duplicate Entries) worksheet."""
@@ -269,6 +271,7 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
 # ---------------------------------------------------------------------------
 
 # --- function body 2: write_summary_sheet (was writers/__init__.py L431-519) ---
+
 
 def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
     """Render the Annual Summary worksheet with per-year balance aggregates."""

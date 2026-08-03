@@ -104,7 +104,10 @@ class TestEvidenceEnginePDF:
         engine = self._make_engine()
 
         with patch("builtins.open", mock_open(read_data=b"fake")):
-            with patch("edf_bill_fetcher.collectors.engine.pdfplumber.open", side_effect=Exception("PDF read error")):
+            with patch(
+                "edf_bill_fetcher.collectors.engine.pdfplumber.open",
+                side_effect=Exception("PDF read error"),
+            ):
                 engine.process_pdf_file("bad.pdf", "Test", "bad.pdf", "01/01/2024")
 
         assert len(engine.error_log) == 1

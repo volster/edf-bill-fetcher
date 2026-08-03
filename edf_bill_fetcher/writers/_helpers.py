@@ -47,9 +47,7 @@ def _analyze_tariff_impact(df: pd.DataFrame) -> dict[str, object]:
         return {}
 
     # Convert unit rate to numeric
-    tariff_data["unit_rate_num"] = pd.to_numeric(
-        tariff_data["Unit Rate (p/kWh)"], errors="coerce"
-    )
+    tariff_data["unit_rate_num"] = pd.to_numeric(tariff_data["Unit Rate (p/kWh)"], errors="coerce")
     tariff_data = tariff_data.dropna(subset=["unit_rate_num"])
 
     if tariff_data.empty:
@@ -73,9 +71,7 @@ def _analyze_tariff_impact(df: pd.DataFrame) -> dict[str, object]:
     )
 
     # Find tariff changes
-    tariff_data = tariff_data.sort_values(
-        "_dt" if "_dt" in tariff_data.columns else "Date"
-    )
+    tariff_data = tariff_data.sort_values("_dt" if "_dt" in tariff_data.columns else "Date")
     tariff_changes = tariff_data["Tariff"].ne(tariff_data["Tariff"].shift()).cumsum()
 
     return {
@@ -118,9 +114,7 @@ def _data_quality_report(df: pd.DataFrame) -> dict[str, object]:
     reading_classified = (df["Reading"] != "N/A").sum() if "Reading" in df.columns else 0
 
     # Unit rate computable — count numeric values only.
-    ur_computable = df["Unit Rate (p/kWh)"].apply(
-        lambda x: isinstance(x, int | float)
-    ).sum()
+    ur_computable = df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, int | float)).sum()
 
     # Duplicates (same date + amount)
     dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
@@ -129,11 +123,7 @@ def _data_quality_report(df: pd.DataFrame) -> dict[str, object]:
     source_dist = df["Source"].value_counts().to_dict()
 
     # Entry type distribution
-    entry_dist = (
-        df["Entry Type"].value_counts().to_dict()
-        if "Entry Type" in df.columns
-        else {}
-    )
+    entry_dist = df["Entry Type"].value_counts().to_dict() if "Entry Type" in df.columns else {}
 
     return {
         "total_records": total_records,
@@ -143,17 +133,11 @@ def _data_quality_report(df: pd.DataFrame) -> dict[str, object]:
         "amt_complete": int(amt_complete),
         "amt_missing": int(amt_missing),
         "period_complete": int(period_complete),
-        "period_completeness_rate": (
-            period_complete / total_records if total_records > 0 else 0
-        ),
+        "period_completeness_rate": (period_complete / total_records if total_records > 0 else 0),
         "reading_classified": int(reading_classified),
-        "reading_classify_rate": (
-            reading_classified / total_records if total_records > 0 else 0
-        ),
+        "reading_classify_rate": (reading_classified / total_records if total_records > 0 else 0),
         "ur_computable": int(ur_computable),
-        "ur_computable_rate": (
-            ur_computable / total_records if total_records > 0 else 0
-        ),
+        "ur_computable_rate": (ur_computable / total_records if total_records > 0 else 0),
         "duplicate_count": int(dup_count),
         "duplicate_rate": dup_count / total_records if total_records > 0 else 0,
         "source_distribution": source_dist,
@@ -190,9 +174,7 @@ def _reading_type_to_aem(reading_value: str) -> str:
     return "E"
 
 
-def build_evidence_index(
-    df: pd.DataFrame, header_row_offset: int = 1
-) -> dict[str, int]:
+def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[str, int]:
     """Map match-key signatures to the Excel row on the Evidence Report."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return {}
@@ -299,11 +281,7 @@ def _holt_winters_forecast_pair(series, steps=6, seasonal_periods=None):
         if len(clean_series) < 4:
             return None, None
         if seasonal_periods is None:
-            seasonal_periods = (
-                min(12, len(clean_series) // 2)
-                if len(clean_series) >= 8
-                else None
-            )
+            seasonal_periods = min(12, len(clean_series) // 2) if len(clean_series) >= 8 else None
         model = ExponentialSmoothing(
             clean_series,
             trend="add",
@@ -346,9 +324,7 @@ def _detect_payment_patterns(df):
     if "Period Charge (£)" in payments.columns:
         pc_numeric = pd.to_numeric(payments["Period Charge (£)"], errors="coerce")
     else:
-        pc_numeric = pd.Series(
-            [float("nan")] * len(payments), index=payments.index
-        )
+        pc_numeric = pd.Series([float("nan")] * len(payments), index=payments.index)
     amt_numeric = pd.to_numeric(payments["Amount (£)"], errors="coerce")
     pay_amounts = pc_numeric.where(pc_numeric.notna() & (pc_numeric > 0), amt_numeric)
 
@@ -362,9 +338,7 @@ def _detect_payment_patterns(df):
         "avg_interval_days": float(intervals.mean()) if len(intervals) > 0 else None,
         "median_interval_days": float(intervals.median()) if len(intervals) > 0 else None,
         "last_payment_date": payments.iloc[-1]["Date"] if len(payments) > 0 else None,
-        "last_payment_amount": (
-            abs(pay_amounts.iloc[-1]) if len(pay_amounts) > 0 else None
-        ),
+        "last_payment_amount": (abs(pay_amounts.iloc[-1]) if len(pay_amounts) > 0 else None),
     }
 
 

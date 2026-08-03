@@ -3,6 +3,7 @@
 Contains: write_tariff_analysis_sheet — renders the "Tariff Analysis" worksheet
 with average tariff-change stats and tariff impact breakdown.
 """
+
 from __future__ import annotations
 
 import pandas as pd

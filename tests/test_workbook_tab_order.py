@@ -1,4 +1,5 @@
 """Spec §3.8 acceptance: workbook tabs open in severity-led order."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -78,5 +79,7 @@ def test_workbook_tab_order_is_severity_led(tmp_path: object) -> None:
         assert name in actual, f"expected {name} in sheets"
     # Most importantly: verify Annual Summary comes before EDF Evidence Report
     # (severity anchor), and analysis tabs appear before audit tabs.
-    first_three = [n for n in actual if n in ("Annual Summary", "EDF Evidence Report", "Key Statistics")]
+    first_three = [
+        n for n in actual if n in ("Annual Summary", "EDF Evidence Report", "Key Statistics")
+    ]
     assert first_three == ["Annual Summary", "EDF Evidence Report", "Key Statistics"], actual

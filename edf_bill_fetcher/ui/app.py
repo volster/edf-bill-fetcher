@@ -44,7 +44,6 @@ EDF_OFFWHITE = "#F5F5F5"
 MEDIUM_GREY = "#666666"
 
 
-
 class ReportOptionsDialog:
     """Modern report options dialog with format selection and section checkboxes."""
 
@@ -755,6 +754,7 @@ class App:
 
     def set_status(self, text):
         """Update the status-bar text, marshalling to the tk main thread."""
+
         def _apply():
             self.status.set(text)
             self.root.update_idletasks()
@@ -1038,6 +1038,7 @@ class App:
         }
 
         from edf_bill_fetcher.collectors.engine import EvidenceEngine  # noqa: F402,E402
+
         engine = EvidenceEngine(config, self.set_status, self.set_progress, self.cancel_event)
         self.engine = engine
 

@@ -100,7 +100,9 @@ def num(
     return cell
 
 
-def money(ws: Any, r: int, c: int, val: Any, bold: bool = False, fill_hex: str | None = None) -> Any:
+def money(
+    ws: Any, r: int, c: int, val: Any, bold: bool = False, fill_hex: str | None = None
+) -> Any:
     """Money-formatted cell (£#,##0.00)."""
     cell = ws.cell(row=r, column=c, value=val)
     cell.font = Font(name="Calibri", size=10, bold=bold)
@@ -163,7 +165,7 @@ def suppress_text_warnings_post_save(output_path: str) -> None:
                         for col_letter, start_row, end_row in suppressions:
                             sqref = f"{col_letter}{start_row}:{col_letter}{end_row}"
                             block = (
-                                f"<ignoredErrors><ignoredError sqref=\"{sqref}\" "
+                                f'<ignoredErrors><ignoredError sqref="{sqref}" '
                                 f'numberStoredAsText="1"/></ignoredErrors>'
                             )
                             xml = xml.replace("</worksheet>", f"{block}</worksheet>")

@@ -88,6 +88,7 @@ try:
 except ImportError:  # pragma: no cover, scipy is in dev extras — ImportError impossible in CI
     HAS_SCIPY = False
 
+
 # 4. Defensive fallback that the public API contract makes unreachable:
 def f(x: int) -> int:
     if x < 0:

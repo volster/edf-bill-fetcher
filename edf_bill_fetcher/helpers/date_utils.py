@@ -11,16 +11,26 @@ from typing import Any
 """
 
 
-
 COMPLETENESS_FIELDS: tuple[str, ...] = (
-    "Date", "Period From", "Period To", "Invoice #",
-    "Period Charge (£)", "Unit Rate (p/kWh)", "Entry Type",
-    "Reading", "Units (kWh)", "Standing Chg (p/day)", "Tariff",
-    "Attachment Name", "Details",
+    "Date",
+    "Period From",
+    "Period To",
+    "Invoice #",
+    "Period Charge (£)",
+    "Unit Rate (p/kWh)",
+    "Entry Type",
+    "Reading",
+    "Units (kWh)",
+    "Standing Chg (p/day)",
+    "Tariff",
+    "Attachment Name",
+    "Details",
 )
+
 
 def completeness_score(row: Any) -> int:
     """Count populated fields in a record row across the canonical completeness set."""
+
     def _is_populated(v: object) -> bool:
         if v is None:
             return False
@@ -33,7 +43,9 @@ def completeness_score(row: Any) -> int:
             s = v.strip()
             return s != "" and s != "N/A"
         return True
+
     return sum(1 for f in COMPLETENESS_FIELDS if _is_populated(row.get(f)))
+
 
 def compute_rolling_stats(series: Any, window: int = 6) -> dict[str, Any]:
     """Compute rolling mean/std/min/max/median over a fixed window."""
@@ -47,22 +59,27 @@ def compute_rolling_stats(series: Any, window: int = 6) -> dict[str, Any]:
         "median": series.rolling(window=window, min_periods=1).median(),
     }
 
+
 def compute_ema(series: Any, span: int = 6) -> Any:
     """Compute the exponential moving average of a series."""
     return series.ewm(span=span, adjust=False).mean()
 
+
 def compute_momentum(series: Any, period: int = 3) -> Any:
     """Compute the period-over-period delta of a series."""
     return series - series.shift(period)
+
 
 def build_evidence_trail(rows: list[dict[str, Any]]) -> str:
     """Build a one-line evidence-trail summary from a list of record rows."""
     if not rows:
         return "No rows"
     f = rows[0]
-    return f'{len(rows)} rows from {f.get("Source", "")} totalling {f.get("Amount (£)", "")}'
+    return f"{len(rows)} rows from {f.get('Source', '')} totalling {f.get('Amount (£)', '')}"
+
 
 _ISO_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 def parse_to_sort_date(date_input):
     """Parse a date string into a pandas Timestamp suitable for sorting."""
@@ -78,6 +95,7 @@ def parse_to_sort_date(date_input):
         return dt
     except Exception:
         return pd.NaT
+
 
 def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp | pd.Series:
     if isinstance(value, pd.Series | pd.Index):
@@ -102,13 +120,14 @@ def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp |
             return pd.NaT
     return dt
 
+
 def parse_to_display_date(date_input):
     """Parse a date string into a DD/MM/YYYY display string."""
     dt = parse_to_sort_date(date_input)
     return dt.strftime("%d/%m/%Y") if not pd.isna(dt) else str(date_input)
 
+
 def to_excel_date(date_input):
     """Parse a date string into a Python datetime suitable for openpyxl cells."""
     dt = parse_to_sort_date(date_input)
     return None if pd.isna(dt) else dt.to_pydatetime()
-

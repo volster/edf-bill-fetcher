@@ -37,8 +37,6 @@ def _bb_invoice_value(rec: dict, key: str) -> object:
     return v
 
 
-
-
 # ---- _write_sap_header_row (was L1976-2002) ----
 def _write_sap_header_row(ws: Worksheet, row: int, columns: list) -> None:
     NAVY = "10367A"
@@ -66,7 +64,6 @@ def _write_sap_header_row(ws: Worksheet, row: int, columns: list) -> None:
 # Transactions sheet (using the first underlying row's row index),
 # and the matched EDF Evidence Report row (using the pre-dedup index
 # into ``evidence_rows`` passed by the caller).
-
 
 
 # ---- write_sap_contract_history_sheet (IMPL — was L1811-1866) ----
@@ -124,8 +121,6 @@ def _write_sap_contract_history_sheet_impl(
             cell.border = CELL_BORDER
             if i % 2 == 0:
                 cell.fill = PatternFill("solid", start_color=EDF_OFFWHITE.lstrip("#"))
-
-
 
 
 # ---- write_sap_meter_readings_sheet (was L1867-1936) ----
@@ -199,8 +194,6 @@ def write_sap_meter_readings_sheet(
                     cell.fill = PatternFill("solid", start_color=EDF_OFFWHITE.lstrip("#"))
 
 
-
-
 # ---- write_sap_financial_transactions_sheet (was L1937-1975) ----
 def write_sap_financial_transactions_sheet(
     ws: Worksheet,
@@ -241,8 +234,6 @@ def write_sap_financial_transactions_sheet(
                 cell.fill = PatternFill("solid", start_color=EDF_OFFWHITE.lstrip("#"))
 
 
-
-
 # ---- write_sap_back_billing_sheets (was L2018-2055) ----
 def write_sap_back_billing_sheets(
     wb: openpyxl.Workbook,
@@ -280,8 +271,6 @@ def write_sap_back_billing_sheets(
         account=account,
     )
     return ws1, ws2
-
-
 
 
 # ---- _write_sap_bb_events_sheet (was L2056-2250) ----
@@ -478,8 +467,6 @@ def _write_sap_bb_events_sheet(
 
     # Freeze top header
     ws.freeze_panes = "A4"  # was A8 — header moved to row 3 (spec §3.3)
-
-
 
 
 # ---- _write_sap_bb_matches_sheet (was L2251-2448) ----
@@ -681,8 +668,6 @@ def _write_sap_bb_matches_sheet(
 # straight from a Discrepancy on the Reconciliation tab to the underlying row.
 
 
-
-
 # ---- Public adapter for write_sap_contract_history_sheet ----
 def write_sap_contract_history_sheet(
     ws: Worksheet,
@@ -690,7 +675,9 @@ def write_sap_contract_history_sheet(
     account: str = "",
 ) -> None:
     """Adapter: test contract uses ``(ws, df)``; convert DataFrame to rows."""
-    rows = df_or_rows.to_dict(orient="records") if isinstance(df_or_rows, pd.DataFrame) else df_or_rows
+    rows = (
+        df_or_rows.to_dict(orient="records") if isinstance(df_or_rows, pd.DataFrame) else df_or_rows
+    )
     return _write_sap_contract_history_sheet_impl(ws, rows, account)
 
 

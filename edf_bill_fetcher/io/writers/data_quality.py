@@ -3,6 +3,7 @@
 Contains: write_data_quality_sheet — renders the "Data Quality" worksheet
 with row checks (missing dates, missing amounts, sign mismatch) and summary banner.
 """
+
 from __future__ import annotations
 
 from typing import Any as _Any

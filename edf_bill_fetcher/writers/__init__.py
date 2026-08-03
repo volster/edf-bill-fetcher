@@ -52,6 +52,7 @@ from edf_bill_fetcher.helpers.formatting import (  # noqa: E402,F401,I001
     account_number_matches as _account_number_matches,
 )
 from edf_bill_fetcher.io.adapters.pdf import legal_context  # noqa: E402,F401,I001
+
 # NB: the eager ``from edf_bill_fetcher.io.writers.evidence import (...)`` and
 # ``from edf_bill_fetcher.io.writers.sap import (...)`` blocks that used to
 # live here were REMOVED — they re-triggered ``writers/__init__.py`` mid-init
@@ -141,6 +142,7 @@ from edf_bill_fetcher.io.writers.sap import (  # noqa: E402,F401,I001
     write_sap_meter_readings_sheet,
 )
 
+
 def __getattr__(name: str) -> object:
     if name == "run_analysers":
         from edf_bill_fetcher.io.writers.analysis import run_analysers
@@ -152,7 +154,10 @@ def __getattr__(name: str) -> object:
             write_summary_sheet,
         )
 
-        return {"write_evidence_sheet": write_evidence_sheet, "write_summary_sheet": write_summary_sheet}[name]
+        return {
+            "write_evidence_sheet": write_evidence_sheet,
+            "write_summary_sheet": write_summary_sheet,
+        }[name]
     if name == "write_statistical_analysis_sheet":
         from edf_bill_fetcher.io.writers.statistical import write_statistical_analysis_sheet
 
@@ -238,4 +243,3 @@ def __getattr__(name: str) -> object:
 
         return getattr(_m_helpers, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
