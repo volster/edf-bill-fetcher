@@ -163,14 +163,26 @@ jobs:
           # manifest in the mirror so the file-system cache is warm
           # even if a scanner (Search Indexer, SmartScreen) races Tk
           # init. Read each file twice with a 200ms gap to defeat
-          # race-based read denial.
-          Get-ChildItem -Path $tclLib -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
-          Get-ChildItem -Path $tkLib  -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
-          Get-ChildItem -Path $tclLib -Recurse -Filter tclIndex | ForEach-Object { $_ | Out-Null }
+          # race-based read denial.  Wrapped in try/catch with
+          # -ErrorAction SilentlyContinue because non-existent paths
+          # or empty -Filter results would otherwise throw under
+          # $ErrorActionPreference='Stop' and abort the step.
+          $warmup = {
+            param($path)
+            try {
+              Get-ChildItem -Path $path -Recurse -Filter *.tcl -ErrorAction SilentlyContinue |
+                ForEach-Object { $_ | Out-Null }
+              Get-ChildItem -Path $path -Recurse -Filter tclIndex -ErrorAction SilentlyContinue |
+                ForEach-Object { $_ | Out-Null }
+            } catch {
+              Write-Host "Warmup warning for $path : $_"
+            }
+          }
+          & $warmup $tclLib
+          & $warmup $tkLib
           Start-Sleep -Milliseconds 200
-          Get-ChildItem -Path $tclLib -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
-          Get-ChildItem -Path $tkLib  -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
-          Get-ChildItem -Path $tclLib -Recurse -Filter tclIndex | ForEach-Object { $_ | Out-Null }
+          & $warmup $tclLib
+          & $warmup $tkLib
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
