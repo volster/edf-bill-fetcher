@@ -4423,6 +4423,9 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     dfc["month"] = dfc["_dt"].dt.month
 
     if len(dfc) < 2:
+        # Insufficient analysis-eligible records for the statistical
+        # sheets — save the workbook with the core sheets only.
+        wb.save(output_path)
         return
 
     amounts = dfc["Amount (£)"].values.astype(float)
