@@ -126,6 +126,13 @@ jobs:
           if ($LASTEXITCODE -ge 8) {
             throw "robocopy failed with exit code $LASTEXITCODE"
           }
+          # Clear $LASTEXITCODE so robocopy's success-but-non-zero
+          # return (exit 1 = files copied) does NOT propagate to the
+          # step's exit code. PowerShell treats $LASTEXITCODE from
+          # any native command as the process exit code at end of
+          # script — so a successful copy would otherwise mark the
+          # step as failed.
+          $LASTEXITCODE = 0
           "TCL_LIBRARY=$tclLib" | Out-File -Append -FilePath $env:GITHUB_ENV
           "TK_LIBRARY=$tkLib"   | Out-File -Append -FilePath $env:GITHUB_ENV
 
