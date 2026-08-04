@@ -1,6 +1,7 @@
 """Spec §3.4 + §4 acceptance: typed-numbers pass, live-formulas pass,
 post-save ignoredErrors injection, column-width helper, currency/int formatters.
 PR #8: workbook-wide polish."""
+
 from __future__ import annotations
 
 import os
@@ -51,6 +52,7 @@ def test_apply_int_format_sets_int_with_no_decimal() -> None:
 def test_suppress_text_warning_adds_to_queue() -> None:
     """_suppress_text_warning queues a suppression entry keyed by sheet title."""
     from edf_collector import _TEXT_SUPPRESSION_QUEUE
+
     _TEXT_SUPPRESSION_QUEUE.clear()
     wb = Workbook()
     ws = wb.active
@@ -63,6 +65,7 @@ def test_suppress_text_warning_adds_to_queue() -> None:
 def test_suppress_text_warnings_post_save_rewrites_zip_with_block() -> None:
     """Post-save zip injection rounds cleanly: ignoredErrors block appears in sheet XML."""
     from edf_collector import _TEXT_SUPPRESSION_QUEUE
+
     _TEXT_SUPPRESSION_QUEUE.clear()
 
     out = "/tmp/opencode/test_post_save.xlsx"  # type: ignore[operator]

@@ -3211,14 +3211,11 @@ def _suppress_text_warning(
     """Queue a text-ID suppression for column ``col_letter`` rows
     ``start_row`` through ``end_row`` to be injected after save."""
     key = ws.title
-    _TEXT_SUPPRESSION_QUEUE.setdefault(key, []).append(
-        (col_letter, start_row, end_row)
-    )
+    _TEXT_SUPPRESSION_QUEUE.setdefault(key, []).append((col_letter, start_row, end_row))
 
 
 def _suppress_text_warnings_post_save(output_path: str) -> None:
-    """Post-save zip injection for ``<ignoredErrors>`` blocks.
-    """
+    """Post-save zip injection for ``<ignoredErrors>`` blocks."""
     tmp = tempfile.NamedTemporaryFile(
         suffix=".xlsx", delete=False, dir=os.path.dirname(output_path) or "."
     )
@@ -3235,7 +3232,7 @@ def _suppress_text_warnings_post_save(output_path: str) -> None:
                         for col_letter, start_row, end_row in suppressions:
                             sqref = f"{col_letter}{start_row}:{col_letter}{end_row}"
                             block = (
-                                f"<ignoredErrors><ignoredError sqref=\"{sqref}\" "
+                                f'<ignoredErrors><ignoredError sqref="{sqref}" '
                                 f'numberStoredAsText="1"/></ignoredErrors>'
                             )
                             xml = xml.replace("</worksheet>", f"{block}</worksheet>")
@@ -8696,11 +8693,7 @@ def write_reconciliation_sheet(
         unmatched_inferred = list(range(len(inferred_rows)))
         for sap in sap_items:
             sap_date = _recon_parse_iso_date(sap.get(sap_date_key, ""))
-            sap_read = (
-                _recon_amount_to_float(sap.get(sap_read_key, ""))
-                if sap_read_key
-                else None
-            )
+            sap_read = _recon_amount_to_float(sap.get(sap_read_key, "")) if sap_read_key else None
             matched = False
             for i in unmatched_inferred[:]:
                 inf = inferred_rows[i]
@@ -8727,13 +8720,15 @@ def write_reconciliation_sheet(
                 ws.cell(row=detail_row, column=1, value="Missing in Inferred")
                 ws.cell(row=detail_row, column=2, value=sap.get(sap_date_key, ""))
                 ws.cell(
-                    row=detail_row, column=3,
+                    row=detail_row,
+                    column=3,
                     value=sap.get(sap_read_key or sap_ref_key, ""),
                 )
                 for col in (4, 5):
                     ws.cell(row=detail_row, column=col, value="—")
                 ws.cell(
-                    row=detail_row, column=6,
+                    row=detail_row,
+                    column=6,
                     value=f"SAP {title.lower()} row not present in {inferred_label}",
                 )
                 ws.cell(row=detail_row, column=7, value=source_label)
@@ -8747,15 +8742,18 @@ def write_reconciliation_sheet(
             for col in (2, 3):
                 ws.cell(row=detail_row, column=col, value="—")
             ws.cell(
-                row=detail_row, column=4,
+                row=detail_row,
+                column=4,
                 value=inf.get(inferred_date_key, ""),
             )
             ws.cell(
-                row=detail_row, column=5,
+                row=detail_row,
+                column=5,
                 value=inf.get(inferred_read_key, ""),
             )
             ws.cell(
-                row=detail_row, column=6,
+                row=detail_row,
+                column=6,
                 value=f"{inferred_label} row not present in SAP dump",
             )
             ws.cell(row=detail_row, column=7, value=inferred_label)
@@ -8805,7 +8803,8 @@ def write_reconciliation_sheet(
     _section_banner(ws_detail, detail_row, "Financial Reconciliation")
     detail_row += 1
     _header(
-        ws_detail, detail_row,
+        ws_detail,
+        detail_row,
         [
             "Status",
             "SAP Document No.",
@@ -8870,7 +8869,8 @@ def write_reconciliation_sheet(
             for col in (5, 6):
                 ws_detail.cell(row=detail_row, column=col, value="—")
             ws_detail.cell(
-                row=detail_row, column=7,
+                row=detail_row,
+                column=7,
                 value="SAP financial row not on Evidence Report",
             )
             _recon_hyperlink(ws_detail, detail_row, 8, "SAP Financial Transactions", sap_idx)
@@ -8885,7 +8885,8 @@ def write_reconciliation_sheet(
         ws_detail.cell(row=detail_row, column=5, value=ev.get("Date", ""))
         ws_detail.cell(row=detail_row, column=6, value=ev.get("Amount (£)", ""))
         ws_detail.cell(
-            row=detail_row, column=7,
+            row=detail_row,
+            column=7,
             value="Evidence row not present in SAP Financial dump",
         )
         _recon_hyperlink(ws_detail, detail_row, 8, "EDF Evidence Report", ev_target)
