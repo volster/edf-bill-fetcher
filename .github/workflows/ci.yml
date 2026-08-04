@@ -107,10 +107,25 @@ jobs:
           $tkTemp = Join-Path $env:RUNNER_TEMP "tklibs"
           $tclLib = Join-Path $tkTemp "tcl8.6"
           $tkLib  = Join-Path $tkTemp "tk8.6"
-          New-Item -ItemType Directory -Path $tclLib -Force | Out-Null
-          New-Item -ItemType Directory -Path $tkLib  -Force | Out-Null
-          Copy-Item -Path (Join-Path $tclLibSrc '*') -Destination $tclLib -Recurse -Force
-          Copy-Item -Path (Join-Path $tkLibSrc  '*') -Destination $tkLib  -Recurse -Force
+          # Use robocopy (Windows-native) for reliable bulk copy —
+          # Copy-Item -Recurse with a wildcard path silently skips
+          # some files on PowerShell 5.x, leaving the mirror
+          # incomplete (listbox.tcl, dialog.tcl, etc.).  robocopy
+          # also retries on transient read locks, defeating any
+          # residual scanner race during the copy itself.
+          # /E   = copy subdirectories including empty ones
+          # /NFL = no file-listing in output (quiet)
+          # /NDL = no directory-listing in output
+          # /NJH = no job header
+          # /NJS = no job summary
+          # /R:3 /W:1 = retry 3× with 1s wait on locked files
+          robocopy $tclLibSrc $tclLib /E /NFL /NDL /NJH /NJS /R:3 /W:1
+          robocopy $tkLibSrc  $tkLib  /E /NFL /NDL /NJH /NJS /R:3 /W:1
+          # robocopy exit codes 0-7 are success (1=files copied,
+          # 2=extra files, 3=both, etc.) — only 8+ indicates failure.
+          if ($LASTEXITCODE -ge 8) {
+            throw "robocopy failed with exit code $LASTEXITCODE"
+          }
           "TCL_LIBRARY=$tclLib" | Out-File -Append -FilePath $env:GITHUB_ENV
           "TK_LIBRARY=$tkLib"   | Out-File -Append -FilePath $env:GITHUB_ENV
 
