@@ -33,9 +33,18 @@ output/
 .claude/
 .hermes/
 .coverage*
-.omo
+# Local-only tooling caches + regenerable index databases.
+# These can be hundreds of MB and are rebuilt on demand by the
+# respective tool — never source-controlled.
+.mypy_cache/
+.ruff_cache/
+.codegraph/
+# Omo scratch dir used by the orchestration tooling.
 .omo/
-omo/
+# magic-context project-local config + session artefacts.
+# Sibling of the user-level `~/.config/cortexkit/`; holds
+# compressed historian/dreamer/sidekick session data.
+.cortexkit/
 
 # OS
 .DS_Store
@@ -54,7 +63,6 @@ coverage.xml
 *.pst
 *.ost
 data/
-.omo/
 
 # Scratch / debug scripts moved out of the source tree during
 # cleanup.  These are one-off investigation scripts that the
