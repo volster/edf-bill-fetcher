@@ -92,32 +92,35 @@ jobs:
           "PATH=$envDir;$envDirScripts;$env:PATH" | Out-File -Append -FilePath $env:GITHUB_ENV
           "pythonLocation=$envDir" | Out-File -Append -FilePath $env:GITHUB_ENV
 
-          # Explicit TCL_LIBRARY / TK_LIBRARY so Tk doesn't search
-          # multiple candidate dirs (each search adds latency and
-          # makes errors harder to read).
-          $tclLib = Join-Path $envDir "Library\lib\tcl8.6"
-          $tkLib  = Join-Path $envDir "Library\lib\tk8.6"
-          if (-not (Test-Path $tclLib)) {
-            throw "Tcl lib dir missing: $tclLib"
+          # Mirror the Tcl/Tk library tree to the runner's $RUNNER_TEMP
+          # (D:\a\_temp on windows-latest) and repoint TCL_LIBRARY/TK_LIBRARY
+          # at the mirror. The runner temp directory is on GitHub Actions'
+          # built-in Defender exclusion list, so real-time scanning never
+          # races Tk init. This is a more reliable fix than pre-warming +
+          # Defender disable, which kept failing on different .tcl files
+          # (init.tcl, ttk/sizegrip.tcl, scale.tcl, etc.) week-over-week.
+          $tclLibSrc = Join-Path $envDir "Library\lib\tcl8.6"
+          $tkLibSrc  = Join-Path $envDir "Library\lib\tk8.6"
+          if (-not (Test-Path $tclLibSrc)) {
+            throw "Tcl lib dir missing: $tclLibSrc"
           }
+          $tkTemp = Join-Path $env:RUNNER_TEMP "tklibs"
+          $tclLib = Join-Path $tkTemp "tcl8.6"
+          $tkLib  = Join-Path $tkTemp "tk8.6"
+          New-Item -ItemType Directory -Path $tclLib -Force | Out-Null
+          New-Item -ItemType Directory -Path $tkLib  -Force | Out-Null
+          Copy-Item -Path (Join-Path $tclLibSrc '*') -Destination $tclLib -Recurse -Force
+          Copy-Item -Path (Join-Path $tkLibSrc  '*') -Destination $tkLib  -Recurse -Force
           "TCL_LIBRARY=$tclLib" | Out-File -Append -FilePath $env:GITHUB_ENV
           "TK_LIBRARY=$tkLib"   | Out-File -Append -FilePath $env:GITHUB_ENV
 
-          # Windows Defender's real-time monitor holds .tcl files
-          # open with exclusive read denial as it scans them,
-          # causing tkinter.Tk() to intermittently fail with
-          # 'couldn't read file "init.tcl" / "ttk/sizegrip.tcl" /
-          # ttk/treeview.tcl / etc.: No error' partway through
-          # the test run.  Disable real-time monitoring for the
-          # rest of this ephemeral CI job.  The runner is
-          # disposable and is reset between jobs.
-          #
-          # Tamper Protection (Windows 11) can make Set-MpPreference
-          # silently no-op or revert.  Retry up to 3 times with a
-          # short sleep, then VERIFY the disable actually took.
-          # If verification fails, log loudly but don't fail the
-          # job — pre-warming the .tcl cache (below) is a
-          # belt-and-braces fallback.
+          # Best-effort disable of Defender real-time monitoring as a
+          # belt-and-braces measure even though the Tcl/Tk files now
+          # live in the Defender-excluded temp dir. Tamper Protection
+          # can make Set-MpPreference silently no-op or revert.  Retry
+          # up to 3 times with a short sleep, then VERIFY the disable
+          # actually took. Don't fail the job if verification fails —
+          # the temp-mirror is the primary fix.
           $disableAttempts = 0
           $maxAttempts = 3
           $verified = $false
@@ -138,25 +141,14 @@ jobs:
             }
           }
           if (-not $verified) {
-            Write-Host "WARNING: Could not verify Defender disable — relying on .tcl pre-warming only"
+            Write-Host "WARNING: Could not verify Defender disable — relying on Tcl/Tk temp mirror"
           }
 
-          # Belt-and-braces: pre-read every Tcl/Tk script AND the
-          # tclIndex autoload manifest so the file-system cache is
-          # warm even if Defender re-engages or another scanner
-          # (Search Indexer, SmartScreen) races the Tk init.
-          #
-          # Why tclIndex needs explicit pre-warming: Tcl's init.tcl
-          # opens tclIndex (no .tcl extension) via `open [file join
-          # $dir tclIndex]` to register autoload procs like
-          # `tcl_findLibrary` (which lives in auto.tcl).  If Defender
-          # locks tclIndex mid-read, the catch-wrapped open fails
-          # silently, auto.tcl never sources, and `tcl_findLibrary`
-          # is undefined when Tk's init.tcl later calls it to locate
-          # tk.tcl — surfacing as `_tkinter.TclError: invalid command
-          # name "tcl_findLibrary"` from tkinter.Tk().  The
-          # `-Filter *.tcl` Get-ChildItem skips tclIndex (no
-          # extension), so it must be pre-warmed explicitly.
+          # Pre-read every Tcl/Tk script AND the tclIndex autoload
+          # manifest in the mirror so the file-system cache is warm
+          # even if a scanner (Search Indexer, SmartScreen) races Tk
+          # init. Read each file twice with a 200ms gap to defeat
+          # race-based read denial.
           Get-ChildItem -Path $tclLib -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
           Get-ChildItem -Path $tkLib  -Recurse -Filter *.tcl | ForEach-Object { $_ | Out-Null }
           Get-ChildItem -Path $tclLib -Recurse -Filter tclIndex | ForEach-Object { $_ | Out-Null }
