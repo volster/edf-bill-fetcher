@@ -133,20 +133,28 @@ config = {
     # report_sections tells the report generator which sections to include.
     # If absent, every section in `edf_report.REPORT_SECTIONS` is selected.
     "report_sections": [
-        "exec_summary", "key_findings", "evidence_index", "detailed_findings",
-        "timeline", "ofgem", "statistical", "payment", "forecast",
-        "data_quality", "tariff",
-        "appendix_methodology", "appendix_glossary", "appendix_full_evidence",
+        "exec_summary",
+        "key_findings",
+        "evidence_index",
+        "detailed_findings",
+        "timeline",
+        "ofgem",
+        "statistical",
+        "payment",
+        "forecast",
+        "data_quality",
+        "tariff",
+        "appendix_methodology",
+        "appendix_glossary",
+        "appendix_full_evidence",
     ],
 }
 
 engine = EvidenceEngine(config, print)
-engine.process_pdf_file("path/to/a.pdf",
-                        source_label="Local PDF",
-                        detail_label="bill.pdf",
-                        fallback_date="2026-03-01")
-engine.process_htm_file("path/to/export.htm",
-                        fallback_date="2026-03-01")
+engine.process_pdf_file(
+    "path/to/a.pdf", source_label="Local PDF", detail_label="bill.pdf", fallback_date="2026-03-01"
+)
+engine.process_htm_file("path/to/export.htm", fallback_date="2026-03-01")
 engine.process_pst_file("path/to/archive.pst")
 # …each call extracts whatever it can and appends to engine.records.
 
