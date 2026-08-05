@@ -6,7 +6,7 @@ on:
     workflows: ["CI"]
     types:
       - completed
-    branches: [main, dev]
+    branches: [how-its-going]
 
 jobs:
   build:
@@ -99,8 +99,6 @@ jobs:
             --hidden-import=statsmodels \
             --hidden-import=statsmodels.tsa.holtwinters \
             --hidden-import=pypff \
-            --hidden-import=edf_report \
-            --hidden-import=edf_report_docx \
             main.py
 
       - name: Verify executable exists
