@@ -25,7 +25,7 @@ from xml.sax.saxutils import escape as xml_escape
 import pandas as pd
 from reportlab.platypus import Paragraph
 
-from edf_report import (
+from edf_bill_fetcher.io.reporters.pdf_report import (
     create_appendix_methodology,
     create_cover_page,
     create_evidence_index,
@@ -230,7 +230,7 @@ class TestDispatcherFaultPaths:
         """Drive the TOC fault path by replicating the try/except in
         ``generate_ombudsman_pdf`` against a stub that raises.
         """
-        import edf_report as er
+        import edf_bill_fetcher.io.reporters.pdf_report as er
 
         class _BoomError(Exception):
             pass

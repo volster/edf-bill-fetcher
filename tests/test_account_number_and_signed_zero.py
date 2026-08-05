@@ -29,11 +29,11 @@ DEFECTS PINNED
 
 from __future__ import annotations
 
+from edf_bill_fetcher.io.reporters.pdf_report import fmt_money
 from edf_bill_fetcher.processors.sap_parsers import (
     extract_new_credit_fields,
     extract_new_invoice_fields,
 )
-from edf_report import fmt_money
 
 
 class TestFmtMoneySignedZero:

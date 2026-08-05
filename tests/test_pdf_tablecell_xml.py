@@ -29,7 +29,7 @@ import pandas as pd
 import pdfplumber
 import pytest
 
-from edf_report import (
+from edf_bill_fetcher.io.reporters.pdf_report import (
     create_appendix_full_evidence,
     create_evidence_index,
 )

@@ -29,7 +29,7 @@ developer notices.
 
 import pytest
 
-from edf_report import REPORT_SECTIONS, RenderContext
+from edf_bill_fetcher.io.reporters.pdf_report import REPORT_SECTIONS, RenderContext
 
 
 def _enabled_keys(*want: str) -> set[str]:
@@ -275,7 +275,7 @@ class TestRenderContextDispatchGuard:
         must raise because we never wired ``__test_orphan_section__``
         into the dispatch dict.
         """
-        import edf_report
+        import edf_bill_fetcher.io.reporters.pdf_report as edf_report
 
         original = edf_report.REPORT_SECTIONS
         try:

@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 from reportlab.platypus import TableStyle
 
-from edf_report import (
+from edf_bill_fetcher.io.reporters.pdf_report import (
     Colors,
     build_styles,
     create_anomaly_detail_section,
@@ -371,7 +371,9 @@ class TestTableOfContents:
     """Tests for table of contents creation."""
 
     def test_create_table_of_contents(self):
-        from edf_report import RenderContext  # local: avoid disturbing imports at top
+        from edf_bill_fetcher.io.reporters.pdf_report import (  # local: avoid disturbing imports at top
+            RenderContext,
+        )
 
         elements = create_table_of_contents(RenderContext())
         assert isinstance(elements, list)
@@ -508,7 +510,7 @@ class TestOFGEMComparison:
         }
 
         monkeypatch.setattr(
-            sys.modules["edf_report"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps
+            sys.modules["edf_bill_fetcher.io.reporters.pdf_report"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps
         )
 
         # One bill per quarter in our minimal cap set, plus a bill

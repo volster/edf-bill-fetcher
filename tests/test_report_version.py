@@ -19,7 +19,7 @@ from pathlib import Path
 
 from reportlab.platypus import Paragraph
 
-from edf_report import _get_package_version, create_cover_page
+from edf_bill_fetcher.io.reporters.pdf_report import _get_package_version, create_cover_page
 
 
 def _read_pyproject_version() -> str:
@@ -96,7 +96,7 @@ def test_get_package_version_falls_back_to_zero_when_pyproject_missing(
 
     monkeypatch.setattr(builtins, "open", _raise_open)
     try:
-        from edf_report import _get_package_version as _get
+        from edf_bill_fetcher.io.reporters.pdf_report import _get_package_version as _get
 
         _get()
     except OSError:

@@ -37,7 +37,7 @@ import pytest
 from docx import Document
 from docx.document import Document as DocumentType
 
-from edf_report_docx import (
+from edf_bill_fetcher.io.reporters.docx_report import (
     NAVY,
     WHITE,
     _format_table,
@@ -181,12 +181,12 @@ def _install_minimal_caps(monkeypatch: pytest.MonkeyPatch, *, with_latest: bool)
     """Install a deterministic one-quarter OFGEM cap table for the test
     plus, optionally, the ``_LATEST_KNOWN`` carry-forward sentinel.
 
-    ``_load_ofgem_caps`` is bound into ``edf_report_docx``'s module
-    namespace at import time (via ``from edf_report import _load_ofgem_caps``
-    on line 34 of ``edf_report_docx.py``) and the call site
-    ``edf_report_docx:743`` resolves it locally — patching
-    ``sys.modules["edf_report"]._load_ofgem_caps`` alone is therefore
-    insufficient; we must patch the symbol in the ``edf_report_docx``
+    ``_load_ofgem_caps`` is bound into ``docx_report``'s module
+    namespace at import time (via ``from edf_bill_fetcher.io.reporters.pdf_report import _load_ofgem_caps``
+    on line 34 of ``docx_report.py``) and the call site
+    ``docx_report:743`` resolves it locally — patching
+    ``sys.modules["edf_bill_fetcher.io.reporters.pdf_report"]._load_ofgem_caps`` alone is therefore
+    insufficient; we must patch the symbol in the ``docx_report``
     namespace too, which is what this helper does.
     """
     minimal_caps: dict[str, dict[str, float]] = {
@@ -195,7 +195,7 @@ def _install_minimal_caps(monkeypatch: pytest.MonkeyPatch, *, with_latest: bool)
     if with_latest:
         minimal_caps["_LATEST_KNOWN"] = {"unit_rate": 25.0}
     monkeypatch.setattr(
-        sys.modules["edf_report_docx"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps
+        sys.modules["edf_bill_fetcher.io.reporters.docx_report"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps
     )
 
 

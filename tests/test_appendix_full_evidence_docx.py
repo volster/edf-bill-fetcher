@@ -7,7 +7,10 @@ import pytest
 from docx import Document
 from docx.document import Document as DocumentType
 
-from edf_report_docx import _get_or_create_styles, create_appendix_full_evidence
+from edf_bill_fetcher.io.reporters.docx_report import (
+    _get_or_create_styles,
+    create_appendix_full_evidence,
+)
 
 
 @pytest.fixture

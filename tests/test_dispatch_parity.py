@@ -20,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from edf_report import REPORT_SECTIONS
+from edf_bill_fetcher.io.reporters.pdf_report import REPORT_SECTIONS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,14 +58,14 @@ def _dispatcher_keys_for_function(function_name: str, source_path: str) -> set[s
 def _pdf_dispatcher_keys() -> set[str]:
     return _dispatcher_keys_for_function(
         "generate_ombudsman_pdf",
-        str(REPO_ROOT / "edf_report.py"),
+        str(REPO_ROOT / "edf_bill_fetcher/io/reporters/pdf_report.py"),
     )
 
 
 def _docx_dispatcher_keys() -> set[str]:
     return _dispatcher_keys_for_function(
         "generate_ombudsman_docx",
-        str(REPO_ROOT / "edf_report_docx.py"),
+        str(REPO_ROOT / "edf_bill_fetcher/io/reporters/docx_report.py"),
     )
 
 
@@ -100,14 +100,14 @@ class TestRenderContextBuildable:
     """RenderContext's section_in_order is empty for unknown keys."""
 
     def test_registry_keys_all_resolve(self):
-        from edf_report import RenderContext
+        from edf_bill_fetcher.io.reporters.pdf_report import RenderContext
 
         ctx = RenderContext()  # default = all sections
         looked = {s.section.key for s in ctx.sections_in_order}
         assert looked == _registry_keys()
 
     def test_unknown_key_in_render_context_does_not_explode(self):
-        from edf_report import RenderContext
+        from edf_bill_fetcher.io.reporters.pdf_report import RenderContext
 
         ctx = RenderContext({"this_key_is_not_in_registry"})
         assert isinstance(ctx.sections_in_order, list)
@@ -122,7 +122,7 @@ class TestDispatcherBuildersAllCallable:
         # Walk the same way as the runtime: for each registry key,
         # look up the entry in section_builders; the registered
         # invoke function must be callable with the dict's kwargs.
-        from edf_report import generate_ombudsman_pdf
+        from edf_bill_fetcher.io.reporters.pdf_report import generate_ombudsman_pdf
 
         # Reach into the module by re-evaluating its AST and
         # locating the literal ``lambda kwargs: create_X(**kwargs)``
@@ -131,7 +131,7 @@ class TestDispatcherBuildersAllCallable:
         assert callable(generate_ombudsman_pdf)
 
     def test_docx_dispatchers_all_callable(self):
-        from edf_report_docx import generate_ombudsman_docx
+        from edf_bill_fetcher.io.reporters.docx_report import generate_ombudsman_docx
 
         assert callable(generate_ombudsman_docx)
 
@@ -163,8 +163,8 @@ class TestFmtDateParity:
         ],
     )
     def test_fmt_date_pdf_matches_docx_for_every_input(self, input_val):
-        from edf_report import fmt_date as pdf_fmt_date
-        from edf_report_docx import fmt_date as docx_fmt_date
+        from edf_bill_fetcher.io.reporters.docx_report import fmt_date as docx_fmt_date
+        from edf_bill_fetcher.io.reporters.pdf_report import fmt_date as pdf_fmt_date
 
         # Pandas NaT can't be compared with ``==`` cleanly (raises
         # warnings), so we route through ``isinstance`` + ``pd.isna``
@@ -183,7 +183,7 @@ class TestFmtDateParity:
         tested so ``"Unknown"`` (the old DOCX-only string) cannot sneak
         back in.
         """
-        from edf_report import fmt_date
+        from edf_bill_fetcher.io.reporters.pdf_report import fmt_date
 
         for missing in (None, "", "N/A", "NA", pd.NaT):
             assert fmt_date(missing) == "", (
@@ -191,7 +191,7 @@ class TestFmtDateParity:
             )
 
     def test_fmt_date_renders_iso_and_uk_to_same_dd_mm_yyyy(self):
-        from edf_report import fmt_date
+        from edf_bill_fetcher.io.reporters.pdf_report import fmt_date
 
         # Both inputs collapse to the same canonical dd/mm/yyyy form,
         # matching the convention the Excel export already uses.
@@ -200,11 +200,11 @@ class TestFmtDateParity:
 
     def test_docx_uses_edf_report_fmt_date_not_local_definition(self):
         """A docx-local ``fmt_date`` would diverge from the PDF and break
-        this project.  The import in ``edf_report_docx`` must be the
-        one in ``edf_report``.
+        this project.  The import in ``docx_report`` must be the
+        one in ``pdf_report``.
         """
-        from edf_report import fmt_date as pdf_fmt_date
-        from edf_report_docx import fmt_date as docx_fmt_date
+        from edf_bill_fetcher.io.reporters.docx_report import fmt_date as docx_fmt_date
+        from edf_bill_fetcher.io.reporters.pdf_report import fmt_date as pdf_fmt_date
 
         assert docx_fmt_date is pdf_fmt_date, (
             "DOCX fmt_date is a different object; the two renderers "

@@ -912,8 +912,8 @@ class App:
             )
 
             def _generate():
-                from edf_report import generate_pdf_from_gui
-                from edf_report_docx import generate_docx_from_gui
+                from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
+                from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
 
                 try:
                     msgs = []
@@ -1182,8 +1182,8 @@ class App:
         Uses persisted _report_options; writes to output_folder;
         returns list of written paths.
         """
-        from edf_report import generate_pdf_from_gui
-        from edf_report_docx import generate_docx_from_gui
+        from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
+        from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
 
         ro = getattr(self, "_report_options", {})
         fmt = ro.get("format", "both")

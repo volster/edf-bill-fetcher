@@ -302,7 +302,7 @@ def run_cli_pdf_report(args: list[str]) -> None:
             engine = _safe_pickle_load(parsed.engine_data)
             filtered = getattr(engine, "filtered_records", None)
 
-        from edf_report import generate_pdf_from_gui
+        from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
 
         success, msg = generate_pdf_from_gui(
             records=records,
@@ -369,7 +369,7 @@ def run_cli_docx_report(args: list[str]) -> None:
             engine = _safe_pickle_load(parsed.engine_data)
             filtered = getattr(engine, "filtered_records", None)
 
-        from edf_report_docx import generate_docx_from_gui
+        from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
 
         success, msg = generate_docx_from_gui(
             records=records,
