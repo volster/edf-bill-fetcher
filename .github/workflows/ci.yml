@@ -2,9 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [how-it-started, things-got-out-of-hand, how-its-going]
+    branches: [How-it-started, things-got-out-of-hand, how-its-going]
+    # Patch-tag CI: runs on every 0.0.X tag (patch releases) on the
+    # how-its-going branch only — that's the release line.
+    # 0.X.0 (minor) tags are handled by release.yml (build + GitHub
+    # Release) instead.
+    tags:
+      - '0.0.*'
   pull_request:
-    branches: [how-it-started, things-got-out-of-hand, how-its-going]
+    branches: [How-it-started, things-got-out-of-hand, how-its-going]
 
 permissions:
   actions: write
@@ -267,7 +273,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Trigger build workflow on success
-        if: success() && github.ref == 'refs/heads/dev' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        if: success() && github.ref == 'refs/heads/how-its-going' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         uses: actions/github-script@v8
         with:
           script: |
@@ -275,5 +281,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'matrix_build.yml',
-              ref: 'dev'
+              ref: 'how-its-going'
             });
