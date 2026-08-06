@@ -5,10 +5,6 @@ These helpers are the *file-reading primitives* the
 ``libpff-python`` is the only mandatory dep; the helpers tolerate a
 missing or version-mismatched library by returning safe defaults
 (``None`` / empty string) rather than propagating ``AttributeError``.
-
-Compat re-exports live in ``edf_collector.py`` so callers using
-``from edf_collector import _pst_attachment_filename`` continue to
-work.
 """
 
 from __future__ import annotations

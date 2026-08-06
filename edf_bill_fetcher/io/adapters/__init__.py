@@ -8,11 +8,6 @@ Owns the framework-library wrappers used by the EvidenceEngine:
   sender-email extractor used by ``EvidenceEngine.crawl_pst``.
 * ``html`` — beautifulsoup4-backed HTM account-history parser used
   by ``EvidenceEngine.process_htm_file``.
-
-During the modularization refactor window (Tasks 5 / 7) the
-extracted helpers are also re-exported from ``edf_collector.py`` so
-existing ``from edf_collector import slice_pdf_pages`` call sites
-keep working.  Task 7 strips those compat re-exports.
 """
 
 from __future__ import annotations

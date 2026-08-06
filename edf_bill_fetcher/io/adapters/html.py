@@ -6,10 +6,6 @@ Invoices`` HTML export into the same record-dict shape as the PDF /
 PST paths.  ``beautifulsoup4`` is the only mandatory dep (used by
 the engine to strip tags before invoking
 :func:`parse_htm_account_history`).
-
-Compat re-exports live in ``edf_collector.py`` so callers using
-``from edf_collector import parse_htm_account_history`` continue to
-work.
 """
 
 from __future__ import annotations

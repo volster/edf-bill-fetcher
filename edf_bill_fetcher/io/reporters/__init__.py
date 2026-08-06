@@ -1,21 +1,16 @@
 """Reporters — PDF and DOCX report rendering for the evidence bundle.
 
-This package wraps the two historical top-level renderer modules,
-``edf_report`` (PDF / reportlab) and ``edf_report_docx`` (DOCX /
-python-docx), so callers can use the package layout while the
-compat-shim refactor window is open:
+The two renderers moved into this package during the modularization:
 
     from edf_bill_fetcher.io.reporters import (
         generate_pdf_from_gui,
         generate_docx_from_gui,
     )
 
-Each submodule (``pdf_report``, ``docx_report``) is a thin
-re-export shim — the implementation lives in
-``edf_report.py`` / ``edf_report_docx.py`` because they predate
-the modularization refactor and are imported directly by
-``edf_collector.py`` and the test suite.  Task 7 strips the compat
-layer and moves the implementations into these submodules.
+Each submodule (``pdf_report``, ``docx_report``) is the canonical
+implementation; the pre-refactor top-level ``edf_report.py`` and
+``edf_report_docx.py`` monoliths were deleted outright (no compat
+layer).
 """
 
 from __future__ import annotations

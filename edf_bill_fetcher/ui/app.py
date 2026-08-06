@@ -67,6 +67,7 @@ class ReportOptionsDialog:
     ]
 
     def __init__(self, parent):
+        """Create the report-options dialog bound to its parent window."""
         self.parent = parent
         self.result = None
         self.dialog = None
@@ -259,6 +260,7 @@ class App:
     """Tkinter GUI for the EDF Evidence Collector — orchestrates the user-facing workflow."""
 
     def __init__(self, root):
+        """Set up the application window, widgets, and state."""
         self.root = root
         self.root.title("EDF Master Evidence Collector")
         self.root.geometry("780x860")

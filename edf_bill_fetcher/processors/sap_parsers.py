@@ -19,11 +19,7 @@ Extracted from ``edf_collector.py`` as part of the modularization refactor
 
 Internal helpers (regexes + small functions) live alongside the function
 that uses them so the module is self-contained (no cross-import back into
-``edf_collector``).
-
-Compat re-exports live in ``edf_collector.py`` so callers using
-``from edf_collector import parse_sap_contract_history`` continue to
-work; stripped by Task 7.
+the pre-refactor monolith).
 """
 
 from __future__ import annotations
@@ -62,8 +58,8 @@ _SAP_FINANCIAL_COLS = re.compile(
 # Invoice / credit-note field regexes — used by ``extract_new_invoice_fields``
 # and ``extract_new_credit_fields``.  These stayed in ``edf_collector`` for
 # years; the moved extractors need them too, so we copy the canonical
-# definitions here.  Backward compat (``from edf_collector import _ACC_NUM_RE``
-# etc.) is preserved by keeping the originals in ``edf_collector`` unchanged.
+# definitions here.  The pre-refactor monolith is gone (deleted in the
+# modularization), so these are now the single source of truth.
 # ---------------------------------------------------------------------------
 _ACC_NUM_RE = re.compile(r"Account number:\s*(A-\d+|\d[\d ]*\d)", re.IGNORECASE)
 _DATE_ISSUED_RE = re.compile(r"Date issued:\s*(\d{1,2}\s+\w+\s+\d{4})", re.IGNORECASE)

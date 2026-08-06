@@ -3,11 +3,8 @@
 The functions in this module are the *file-reading primitives* of
 the evidence engine. They are framework-agnostic from the caller's
 perspective (pdfplumber is the only mandatory dep) and exposed via
-``edf_bill_fetcher.io.adapters.pdf`` while the modularization
-refactor window is open.
-
-Compat re-exports live in ``edf_collector.py`` so that callers using
-``from edf_collector import slice_pdf_pages`` continue to work.
+``edf_bill_fetcher.io.adapters.pdf`` (the top-level ``edf_collector.py``
+compat module was removed in the modularization).
 """
 
 from __future__ import annotations

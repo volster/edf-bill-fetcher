@@ -252,7 +252,7 @@ def _iqr_anomalies(series, multiplier=1.5):
 
 
 def _linear_forecast_pair(series, steps=6):
-    """Simple linear regression: returns (fitted, future) values."""
+    """Compute a simple linear regression and return (fitted, future) values."""
     if len(series) < 3:
         return None, None
     x = np.arange(len(series))
@@ -298,7 +298,7 @@ def _holt_winters_forecast_pair(series, steps=6, seasonal_periods=None):
 
 
 def _linear_forecast(series, steps=6):
-    """Simple linear regression forecast (forward-only legacy entry point)."""
+    """Produce a forward-only linear regression forecast (legacy entry point)."""
     _, forecast = _linear_forecast_pair(series, steps)
     return forecast
 

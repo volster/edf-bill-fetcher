@@ -3,10 +3,6 @@
 Extracted from ``edf_collector.py`` as part of the modularization refactor
 (Task 5 — Phase 4).  Pure-pandas helpers with optional ``statsmodels``
 fallback for Holt-Winters exponential smoothing.
-
-Compat re-exports live in ``edf_collector.py`` so callers using
-``from edf_collector import _holt_winters_forecast`` continue to work;
-stripped by Task 7.
 """
 
 from __future__ import annotations
@@ -67,7 +63,7 @@ def _iqr_anomalies(series, multiplier=1.5):
 
 
 def _linear_forecast_pair(series, steps=6):
-    """Simple linear regression: returns (fitted, future) values.
+    """Compute a simple linear regression and return (fitted, future) values.
 
     The fitted series is the model's prediction at each historical
     point — this lets the Forecast tab back-paint predictions onto
@@ -149,7 +145,7 @@ def _holt_winters_forecast_pair(series, steps=6, seasonal_periods=None):
 
 
 def _linear_forecast(series, steps=6):
-    """Simple linear regression forecast (forward-only legacy entry point).
+    """Produce a forward-only linear regression forecast (legacy entry point).
 
     See ``_linear_forecast_pair`` for the (fitted, future) form that
     the Forecast tab now uses.  This single-value shim is kept for

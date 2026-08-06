@@ -490,7 +490,7 @@ def build_doc_template(output_path: str) -> BaseDocTemplate:
 #
 #   1. Add an entry to ``REPORT_SECTIONS`` below with its key, title, is_appendix.
 #   2. Add a matching key to ``ReportOptionsDialog.SECTIONS`` in
-#      edf_collector.py so the user can toggle it from the GUI.
+#      ui/app.py so the user can toggle it from the GUI.
 #   3. Add a ``def create_<name>(...)`` builder function in this module.
 #   4. Add the builder to the ``section_builders`` dict in BOTH
 #      ``generate_ombudsman_pdf`` (PDF) and ``generate_ombudsman_docx`` (DOCX).
@@ -547,6 +547,14 @@ class RenderContext:
     """
 
     def __init__(self, selected: set[str] | list[str] | None = None) -> None:
+        """Build a render context for the selected report sections.
+
+        Args:
+            selected: Section keys to include; ``None`` defaults to every
+                registered section so legacy context-free callers see the
+                full 1..11 + A..C layout.
+
+        """
         # Distinguish three cases:
         #   * ``selected is None`` — no explicit choice; default to every
         #     section so legacy context-free tests/CI still see the
@@ -2776,7 +2784,7 @@ def generate_ombudsman_pdf(
 
 
 def generate_pdf_from_gui(records, output_path, config, engine, filtered=None):
-    """Wrapper for GUI integration."""
+    """Generate a professional PDF report for GUI integration."""
     try:
         path = generate_ombudsman_pdf(records, output_path, config, engine, filtered)
         return True, f"Professional PDF report generated:\n{path}"

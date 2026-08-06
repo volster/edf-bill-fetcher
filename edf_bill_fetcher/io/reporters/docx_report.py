@@ -1695,7 +1695,7 @@ def generate_ombudsman_docx(
 
 
 def generate_docx_from_gui(records, output_path, config, engine, filtered=None):
-    """Wrapper for GUI integration."""
+    """Generate a professional DOCX report for GUI integration."""
     try:
         path = generate_ombudsman_docx(records, output_path, config, engine, filtered)
         return True, f"Professional DOCX report generated:\n{path}"

@@ -1,5 +1,6 @@
+"""Date and time helpers for parsing, formatting, and comparing EDF billing dates."""
+
 from __future__ import annotations  # noqa: I001
-from __future__ import annotations
 
 import re as _re
 import warnings as _w

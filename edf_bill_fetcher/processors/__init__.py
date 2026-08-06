@@ -7,7 +7,4 @@ Submodules:
   ``_fallback_period_from``, ``_fallback_period_to``, ``_fallback_amount``)
   and PST/OST helpers (``_pst_attachment_filename``, ``_extract_sender_email``,
   ``_matches_domain_filter``).
-
-Compat re-exports live in ``edf_collector.py`` so callers using
-``from edf_collector import AMOUNT_PATTERNS`` continue to work.
 """

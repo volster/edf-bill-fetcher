@@ -300,6 +300,7 @@ class EvidenceEngine:
     """Orchestrate extraction of EDF billing records from PDF, HTM, and PST sources."""
 
     def __init__(self, config, update_ui_cb, progress_cb=None, cancel_event=None):
+        """Initialize the engine with config, a UI callback, and cancellation hooks."""
         self.config = config
         self.records = []
         self.filtered_records = []
