@@ -289,9 +289,9 @@ class TestReversalMatch:
             _reversal_match(
                 df,
                 "INV-1",
-                "oops",
+                "oops",  # type: ignore[arg-type]  # deliberate: exercise the ValueError path
                 pd.Timestamp("2024-01-01"),
-                pd.Timestamp("2024-02-01"),  # type: ignore[arg-type]
+                pd.Timestamp("2024-02-01"),
             )
             is False
         )
