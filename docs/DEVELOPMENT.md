@@ -169,8 +169,8 @@ See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) for:
 - The full package layout
 - The hexagonal layering rules (which layer can import what)
 - The PEP 562 lazy-shim pattern + when to use it
-- The dual public API (flat `from edf_collector import X` AND submodule-scoped `from edf_bill_fetcher.io.writers.export import export_to_excel`)
-- The compat shim maintenance rule (do NOT extend `edf_collector.py` / `edf_report*.py`)
+- The dual public API (flat `from edf_bill_fetcher.writers import X` AND submodule-scoped `from edf_bill_fetcher.io.writers.export import export_to_excel`)
+- The compat shim maintenance rule (do NOT extend the `writers`/`io.writers` PEP 562 shim layers; top-level `edf_collector.py` / `edf_report*.py` shims were removed in the modularization)
 
 ## Commit conventions
 

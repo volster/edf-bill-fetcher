@@ -36,7 +36,7 @@ The codebase has been refactored from a single 10,645-line `edf_collector.py` mo
 | `edf_bill_fetcher.models`       | dataclasses       | Event / data models                                                            |
 | `edf_bill_fetcher.writers`      | compat re-export  | PEP 562 lazy shim — preserves the flat `from edf_bill_fetcher.writers import X` import path |
 
-Backward-compat note: the legacy `edf_collector.py` / `edf_report.py` / `edf_report_docx.py` modules at the repo root are thin re-export shims so existing scripts that do `from edf_collector import EvidenceEngine, export_to_excel` continue to work. New code should import from the canonical `edf_bill_fetcher.*` paths shown above.
+Backward-compat note: the legacy `edf_collector.py` / `edf_report.py` / `edf_report_docx.py` modules at the repo root were deleted in the modularization (no top-level shims remain — existing scripts must import from `edf_bill_fetcher.*`). The flat `from edf_bill_fetcher.writers import export_to_excel` path is preserved via the `writers` PEP 562 shim; new code should import from the canonical `edf_bill_fetcher.*` paths shown above.
 
 ## Installation
 
@@ -134,8 +134,8 @@ Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records s
 > pipeline still runs.
 >
 > The canonical post-refactor import paths are shown below. The
-> legacy `from edf_collector import …` form is still supported
-> via a compat shim — see the *Package layout* section above.
+> flat `from edf_bill_fetcher.writers import …` form is preserved
+> via a PEP 562 shim — see the *Package layout* section above.
 
 ```python
 from edf_bill_fetcher.collectors import EvidenceEngine
