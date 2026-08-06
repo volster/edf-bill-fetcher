@@ -17,12 +17,9 @@ edf-bill-fetcher/
 │   ├── helpers/              # pure stdlib — date math, formatting, excel helpers, theme
 │   ├── models/               # dataclasses — event/data models
 │   ├── ui/                   # tkinter — GUI (App, ReportOptionsDialog)
-│   └── writers/__init__.py   # PEP 562 lazy re-export shim for backward compat
-├── edf_collector.py          # Compat shim re-exporting from edf_bill_fetcher.* — DO NOT extend
-├── edf_report.py             # Compat shim re-exporting from io.reporters.pdf_report — DO NOT extend
-├── edf_report_docx.py        # Compat shim re-exporting from io.reporters.docx_report — DO NOT extend
+│   └── writers/__init__.py   # facade re-exporting writers._helpers analysis helpers
 ├── main.py                   # Console-script entrypoint: one-line re-export of io.cli.main
-├── tests/                    # Test suite (790+ tests)
+├── tests/                    # Test suite (1280+ tests)
 └── docs/                     # This directory
 ```
 
@@ -66,36 +63,16 @@ The package enforces a strict hexagonal dependency direction. Outer layers may i
 
 The `processors/` no-framework-import rule is the load-bearing constraint. It keeps business logic (dedup, pattern detection, reconciliation, forecasting) unit-testable with synthetic DataFrames — no Excel/PDF/tkinter required.
 
-## Dual public API
+## Public import API
 
-The package exposes two import paths for the same symbols, kept in lockstep by PEP 562 lazy shims:
+The package exposes writer entry points through `edf_bill_fetcher.io.writers` — both flat (aggregated in `io/writers/__init__.py`'s `__all__`) and submodule-scoped:
 
-| Style                    | Example                                                       | Use when                                     |
-| ------------------------ | ------------------------------------------------------------- | -------------------------------------------- |
-| **Flat** (compat)        | `from edf_collector import EvidenceEngine, export_to_excel`   | Legacy scripts, backward compat               |
-| **Flat-canonical**       | `from edf_bill_fetcher.writers import export_to_excel`         | New scripts — short path, package-internal   |
-| **Submodule-scoped**     | `from edf_bill_fetcher.io.writers.export import export_to_excel` | New code that wants to be dependency-explicit |
+| Style                | Example                                                          | Use when                                     |
+| -------------------- | ---------------------------------------------------------------- | -------------------------------------------- |
+| **Flat-canonical**   | `from edf_bill_fetcher.io.writers import export_to_excel`        | Common case — short path                     |
+| **Submodule-scoped** | `from edf_bill_fetcher.io.writers.export import export_to_excel` | Code that wants to be dependency-explicit    |
 
-The `edf_bill_fetcher.writers/__init__.py` shim exposes all 33 writer function names via PEP 562 `__getattr__` — the actual implementations live in `edf_bill_fetcher.io.writers.*`. Twin-identity tests in `tests/test_writers.py` assert that the flat-namespace re-export resolves to the same object as the canonical submodule import.
-
-## PEP 562 lazy shims
-
-Several `__init__.py` files use PEP 562 module-level `__getattr__` to defer re-exports to first attribute access. This pattern breaks circular imports that would otherwise occur when submodules back-ref the parent package.
-
-Shim locations:
-
-| File                                   | Why lazy                                                                                                                    |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `edf_bill_fetcher/writers/__init__.py` | Resolves writer functions from `io.writers.*` lazily — eager import would cycle through `io.writers.export`'s 16 sibling imports. |
-| `edf_bill_fetcher/io/writers/__init__.py` | Aggregator shim — deferred resolution avoids triggering writer submodules' `writers._helpers` import while `writers/__init__.py` is mid-init. |
-| `edf_bill_fetcher/io/writers/back_billing.py`, `meter.py`, `rebilling.py`, `sap.py`, `export.py`, `reporters/__init__.py` | Leaf shim files with PEP 562 `__getattr__` — legacy paths still expose the function-bearing submodule names that they used to own before extraction. |
-
-### When to use PEP 562 vs eager import
-
-- **Use PEP 562** when two modules import each other transitively (cycle would form).
-- **Use eager import** when there's no cycle risk — it gives better static-analysis support (mypy sees the actual type, not `object` via `__getattr__`).
-
-The `# type: ignore  # noqa: F821` annotation on PEP 562-resolved names at call sites is required because static analyzers can't follow the lazy resolution. Two call sites in the codebase use this annotation today (`ui/app.py` and `io/cli.py` for `export_to_excel`-family names).
+`edf_bill_fetcher.io.writers/__init__.py` eagerly re-exports all writer function names in `__all__`; the implementations live in the per-sheet submodules. The top-level `edf_collector.py` / `edf_report*.py` compat modules and the temporary PEP 562 lazy-shim layers were removed after consumers migrated — no backward-compat shims remain.
 
 ## The `EvidenceEngine` — ingestion surface
 
@@ -157,17 +134,15 @@ Located in `edf_bill_fetcher.processors`:
 
 Processors receive DataFrames as function arguments — they do not pull data from any module-scope state. This is what makes them unit-testable with synthetic input.
 
-## Compat shims — the legacy layer
+## Legacy compatibility layer — removed
 
-The repo-root modules `edf_collector.py`, `edf_report.py`, and `edf_report_docx.py` are thin re-export shims. They exist so existing user scripts that do `from edf_collector import EvidenceEngine, export_to_excel, detect_back_billing, …` continue to work without modification.
-
-**Maintenance rule**: do NOT extend these shim files. New code goes into `edf_bill_fetcher/`. The shims are documented in `tests/test_writers.py`, `tests/test_engine.py`, and `tests/test_collectors.py` (twin-identity tests that assert the shim re-export resolves to the same object as the canonical submodule import).
+The repo-root modules `edf_collector.py`, `edf_report.py`, and `edf_report_docx.py` were deleted in the modularization (commit `b7a185d`, Option A — no compat shims). Scripts that imported `from edf_collector import …` must migrate to the `edf_bill_fetcher.*` package paths; the temporary PEP 562 re-export layers that bridged the migration were likewise removed once consumers migrated.
 
 ## CI gate
 
 CI (`.github/workflows/ci.yml`) runs on Python 3.10 / 3.11 / 3.12 × ubuntu / windows / macos. The four gates:
 
-1. `ruff check .` — PEP 8 + PEP 257 + import ordering (see `pyproject.toml [tool.ruff]` for the rule selection, including the D-rule relaxations documented in ruff config)
+1. `ruff check .` — PEP 8 + PEP 257 + import ordering (see `pyproject.toml [tool.ruff]` for the rule selection; the full D-rule docstring set is enforced)
 2. `ruff format --check .` — formatting
 3. `mypy edf_bill_fetcher` — strict type check (`check_untyped_defs = true`, `disallow_incomplete_defs = true`)
 4. `pytest -v` — full test suite (auto-activates `pytest-xvfb` on headless Linux for tkinter tests)

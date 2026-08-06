@@ -34,9 +34,9 @@ The codebase has been refactored from a single 10,645-line `edf_collector.py` mo
 | `edf_bill_fetcher.io.adapters`  | libpff-python      | PST/OST archive adapter                                                        |
 | `edf_bill_fetcher.ui`            | tkinter           | GUI: `App`, `ReportOptionsDialog`                                              |
 | `edf_bill_fetcher.models`       | dataclasses       | Event / data models                                                            |
-| `edf_bill_fetcher.writers`      | compat re-export  | PEP 562 lazy shim — preserves the flat `from edf_bill_fetcher.writers import X` import path |
+| `edf_bill_fetcher.writers`      | internal facade  | Re-exports `writers._helpers` analysis helpers; canonical writer entry points live in `edf_bill_fetcher.io.writers` |
 
-Backward-compat note: the legacy `edf_collector.py` / `edf_report.py` / `edf_report_docx.py` modules at the repo root were deleted in the modularization (no top-level shims remain — existing scripts must import from `edf_bill_fetcher.*`). The flat `from edf_bill_fetcher.writers import export_to_excel` path is preserved via the `writers` PEP 562 shim; new code should import from the canonical `edf_bill_fetcher.*` paths shown above.
+Backward-compat note: the legacy `edf_collector.py` / `edf_report.py` / `edf_report_docx.py` modules at the repo root were deleted in the modularization (no top-level shims remain — existing scripts must import from `edf_bill_fetcher.*`). The temporary PEP 562 re-export layers were removed after consumers migrated; writer functions import from the canonical `edf_bill_fetcher.io.writers` path (or the per-sheet submodule, e.g. `edf_bill_fetcher.io.writers.export`).
 
 ## Installation
 
@@ -133,9 +133,10 @@ Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records s
 > environment, the wrapper logs the error and the rest of the
 > pipeline still runs.
 >
-> The canonical post-refactor import paths are shown below. The
-> flat `from edf_bill_fetcher.writers import …` form is preserved
-> via a PEP 562 shim — see the *Package layout* section above.
+> The canonical post-refactor import paths are shown below; all
+> writer functions import from `edf_bill_fetcher.io.writers`
+> (the flat `edf_bill_fetcher.writers` facade only re-exports the
+> `writers._helpers` analysis helpers).
 
 ```python
 from edf_bill_fetcher.collectors import EvidenceEngine

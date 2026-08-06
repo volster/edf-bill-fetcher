@@ -94,26 +94,14 @@ Configured in `pyproject.toml [tool.ruff.lint]`:
 
 ### PEP 257 D-rule relaxations
 
-The codebase enables the `D` rule family but selectively relaxes rules that would create a gate-blocking backlog of retroactive violations. Each relaxation in `pyproject.toml` has a comment explaining WHY and references the post-refactor compliance pass goal. The currently-relaxed rules:
+The `D` rule family is enforced in near-full strict mode: the nine rules relaxed during the refactor window (`D100`, `D104`, `D105`, `D107`, `D400`, `D401`, `D406`–`D409`) were un-ignored in the docstring compliance pass, and the retroactive class/method/parameter backlog (`D101`/`D102`/`D103`/`D415`/`D417`) was cleared during modularization. The only remaining relaxations are deliberate style conflicts, each with a comment in `pyproject.toml`:
 
 | Rule    | Why relaxed                                                            |
 | ------- | -------------------------------------------------------------------- |
-| `D100`  | module-level docstring not required for thin re-export shims        |
-| `D101`  | class-level docstring — 28 retroactive pre-existing undocumented classes |
-| `D102`  | method docstring — 13 retroactive pre-existing undocumented methods   |
-| `D103`  | public function docstring — but tests/ relaxed to avoid ~900 retroactive adds |
-| `D104`  | `__init__.py` package docstring not required                         |
-| `D105`  | docstring on dunder methods not required                            |
-| `D107`  | `__init__` docstring not required                                   |
-| `D203`  | blank line before class docstring conflicts with `D211`              |
+| `D203`  | blank line before class docstring conflicts with `D211` — we use no-blank-line |
 | `D213`  | multi-line docstring summary on second line — we use first-line summary (`D212`) |
-| `D400`  | first line of docstring ends in period — sometimes awkward for one-liners |
-| `D401`  | imperative-mood first line of docstring                            |
-| `D406`–`D409` | section-name formatting variations                              |
-| `D415`  | first line ends in punctuation — terminal-punctuation consistency rule |
-| `D417`  | undocumented parameter — only one pre-existing case                |
 
-A post-refactor goal (separate scope from this work) is to remove the D-rule relaxations one by one and add the missing docstrings, eventually enforcing full PEP 257 strict mode.
+Tests (`tests/*`) remain exempt from all `D` rules via per-file-ignores.
 
 ## Type checking
 
@@ -141,9 +129,9 @@ See [`docs/COVERAGE.md`](COVERAGE.md) for the full coverage protocol. The short 
 ### A new Excel sheet writer
 
 1. Create the writer function in `edf_bill_fetcher/io/writers/<sheet_name>.py`. Follow the existing pattern (file signature: takes `ws: openpyxl.Workbook.active`, `df: pandas.DataFrame`, optional config args).
-2. Add an export re-export at the bottom of `edf_bill_fetcher/writers/__init__.py` via PEP 562 `__getattr__` (or extend the existing `__all__`).
+2. Add the writer's name to `__all__` in `edf_bill_fetcher/io/writers/__init__.py` (eager re-exports — the PEP 562 shim layers were removed, so no `__getattr__` is needed).
 3. Wire the writer into `export_to_excel` in `edf_bill_fetcher/io/writers/export.py` — call it in the correct sheet-order position with the correct conditional-emission gating.
-4. Add the writer to the `tests/test_writers.py` twin-identity test (if it's a new function symbol that should be importable from `edf_bill_fetcher.writers`).
+4. Add the writer to the `tests/test_writers.py` import test (if it's a new function symbol that should be importable from `edf_bill_fetcher.io.writers`).
 5. Add unit tests in `tests/test_<sheet_name>_writer.py` calling the writer with synthetic DataFrames covering the empty / single-row / multi-row branches.
 6. Run gates: `ruff check .`, `mypy edf_bill_fetcher`, `pytest -v`. If the writer adds new statements, also run `coverage run --branch -m pytest && coverage report --fail-under=90`.
 
@@ -168,9 +156,8 @@ See [`docs/COVERAGE.md`](COVERAGE.md) for the full coverage protocol. The short 
 See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) for:
 - The full package layout
 - The hexagonal layering rules (which layer can import what)
-- The PEP 562 lazy-shim pattern + when to use it
-- The dual public API (flat `from edf_bill_fetcher.writers import X` AND submodule-scoped `from edf_bill_fetcher.io.writers.export import export_to_excel`)
-- The compat shim maintenance rule (do NOT extend the `writers`/`io.writers` PEP 562 shim layers; top-level `edf_collector.py` / `edf_report*.py` shims were removed in the modularization)
+- The public import API (flat `from edf_bill_fetcher.io.writers import X` and submodule-scoped `from edf_bill_fetcher.io.writers.export import export_to_excel`)
+- The maintenance rule (no backward-compat shims remain: top-level `edf_collector.py` / `edf_report*.py` were removed in the modularization, as were the temporary `writers` / `io.writers` PEP 562 layers — new symbols re-export eagerly via `io/writers/__init__.py`'s `__all__`)
 
 ## Commit conventions
 
