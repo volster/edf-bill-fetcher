@@ -95,6 +95,110 @@ from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
 )
 
 # ---------------------------------------------------------------------------
+# Module-level colour constants (lifted from export_to_excel locals so the
+# module-private helpers below can reference them without closing over locals)
+# ---------------------------------------------------------------------------
+
+NAVY = "10367A"
+ORANGE = "FE5716"
+RED = "FF6B6B"
+AMBER = "FFD166"
+GREEN = "06D6A0"
+LGREY = "F0F0F0"
+DGREY = "888888"
+
+
+# ---------------------------------------------------------------------------
+# Module-private helpers (lifted from export_to_excel closures)
+# ---------------------------------------------------------------------------
+
+
+def _compute_unit_rate(row):
+    """Per-row unit-rate stamping for the duplicate DataFrame.
+
+    Pure function of a row dict (reads ``Period Charge (£)`` and ``Units (kWh)``).
+    Lifted to module scope for testability and pickle-safety (closures aren't picklable).
+    """
+    pc = row.get("Period Charge (£)")
+    units = row.get("Units (kWh)")
+    try:
+        pc_f = float(pc)
+        u_f = float(str(units).replace(",", ""))
+        if u_f > 0 and pc_f > 0:
+            return round((pc_f / u_f) * 100, 2)
+    except (ValueError, TypeError):
+        pass
+    return np.nan
+
+
+def _summary(kept_idx_by_dup: dict[int, dict], idx: int) -> str:
+    """Build the printable kept-row-reference string for a duplicate row.
+
+    ``kept_idx_by_dup`` is threaded explicitly (formerly a closure var).
+    """
+    row = kept_idx_by_dup.get(idx)
+    if not row:
+        return ""
+    try:
+        amount_val = float(row["Amount (£)"])  # type: ignore[arg-type]
+        amt_str = "£" + format(amount_val, ".2f")
+    except (TypeError, ValueError):
+        amt_str = "£--"
+    return f"{row['Source']} · {row['Date']} · {amt_str}"
+
+
+def _ks_row(ws_ks, r, label, value, note="", fmt=None, bold=False, alt=False):
+    """Key-statistics row renderer; ``ws_ks`` threaded explicitly (formerly a closure var)."""
+    bg = LGREY if alt else None
+    _text(ws_ks, r, 1, label, bold=bold, fill_hex=bg)
+    if fmt == "£":
+        _money(ws_ks, r, 2, value, bold=bold, fill_hex=bg)
+    elif fmt == "%":
+        _num(ws_ks, r, 2, value, fmt="0.0%", bold=bold, fill_hex=bg)
+    elif fmt == "date":
+        cell = ws_ks.cell(row=r, column=2, value=value)
+        cell.number_format = "dd/mm/yyyy"
+        cell.font = Font(name="Calibri", size=10, bold=bold)
+        cell.border = CELL_BORDER
+        cell.alignment = Alignment(horizontal="right", vertical="center")
+        if bg:
+            cell.fill = PatternFill("solid", start_color=bg)
+    elif fmt:
+        _num(ws_ks, r, 2, value, fmt=fmt, bold=bold, fill_hex=bg)
+    else:
+        _text(ws_ks, r, 2, value, bold=bold, fill_hex=bg, align="right")
+    _text(ws_ks, r, 3, note, fill_hex=bg, color=DGREY)
+
+
+def _pc_stat(ws_pc, r, lbl, formula, fmt="£"):
+    """Period-charges summary-stat row renderer; ``ws_pc`` threaded explicitly (formerly a closure var)."""
+    _text(ws_pc, r, 1, lbl, bold=True, fill_hex=LGREY)
+    c = ws_pc.cell(row=r, column=2, value=formula)
+    c.font = Font(name="Calibri", size=10, bold=True)
+    c.fill = PatternFill("solid", start_color=LGREY)
+    c.border = CELL_BORDER
+    c.alignment = Alignment(horizontal="right")
+    c.number_format = "£#,##0.00" if fmt == "£" else fmt
+    for cc in range(3, 9):
+        ws_pc.cell(row=r, column=cc).fill = PatternFill("solid", start_color=LGREY)
+        ws_pc.cell(row=r, column=cc).border = CELL_BORDER
+
+
+def _banner(ws, r, text, bg):
+    """Section-header banner writer; already takes ``ws`` — moved verbatim to module scope."""
+    c = ws.cell(row=r, column=1, value=text)
+    c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    c.fill = PatternFill("solid", start_color=bg)
+    c.border = CELL_BORDER
+    c.alignment = Alignment(horizontal="left", vertical="center")
+    for col in range(2, 7):
+        x = ws.cell(row=r, column=col)
+        x.fill = PatternFill("solid", start_color=bg)
+        x.border = CELL_BORDER
+    ws.row_dimensions[r].height = 20
+
+
+# ---------------------------------------------------------------------------
 # Main export function
 # ---------------------------------------------------------------------------
 
@@ -106,14 +210,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     with the Annual Summary, EDF Evidence Report, and analysis tabs in
     the layout documented in the README.
     """
-    NAVY = "10367A"
-    ORANGE = "FE5716"
-    RED = "FF6B6B"
-    AMBER = "FFD166"
-    GREEN = "06D6A0"
-    LGREY = "F0F0F0"
-    DGREY = "888888"
-
     df = pd.DataFrame(data)
     df["_sort"] = df["Date"].apply(parse_to_sort_date)
     df = df.sort_values(by=["_sort", "Invoice #"], ascending=[True, False]).reset_index(drop=True)
@@ -381,22 +477,9 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
 
     # ``dup_df`` computation is kept in the path for backward
     # compatibility — the dup DataFrame is much smaller than the
-    # kept set, so per-row apply only adds ms-level overhead.  We
-    # use a tiny module-scope helper rather than a closure so
-    # ``pickle`` can find it on round-trip (the spec used to break
-    # here because closures aren't picklable).
-    def _compute_unit_rate(row):
-        pc = row.get("Period Charge (£)")
-        units = row.get("Units (kWh)")
-        try:
-            pc_f = float(pc)
-            u_f = float(str(units).replace(",", ""))
-            if u_f > 0 and pc_f > 0:
-                return round((pc_f / u_f) * 100, 2)
-        except (ValueError, TypeError):
-            pass
-        return np.nan
-
+    # kept set, so per-row apply only adds ms-level overhead.  The
+    # per-row unit-rate helper lives at module scope (``_compute_unit_rate``)
+    # so ``pickle`` can find it on round-trip (closures aren't picklable).
     if not dup_df.empty:
         dup_df["Unit Rate (p/kWh)"] = dup_df.apply(_compute_unit_rate, axis=1)
         # Matched-against kept-record block (Phase-2 follow-up).
@@ -429,27 +512,11 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         for rank, orig_idx in enumerate(sorted(kept_for_summary.keys())):
             kept_rank[int(orig_idx)] = rank
 
-        def _summary(idx: int) -> str:
-            # Build the printable kept-row-reference string.  Falls
-            # back to an empty string if the matched-against kept
-            # row was rolled up by Pass 1 *after* the lookup
-            # captured -1 (a corner case where the pattern matched
-            # but no kept frame picked it up).
-            row = kept_idx_by_dup.get(idx)
-            if not row:
-                return ""
-            try:
-                amount_val = float(row["Amount (£)"])  # type: ignore[arg-type]
-                amt_str = "£" + format(amount_val, ".2f")
-            except (TypeError, ValueError):
-                amt_str = "£--"
-            return f"{row['Source']} · {row['Date']} · {amt_str}"
-
         # ``Duplicate Of`` is the visible column on the dup sheet
         # itself; ``_matches_kept_idx`` is the link target the
         # Excel writer will use to mint the click-through hyperlink
         # back to the kept row in the main evidence report.
-        dup_df["Duplicate Of"] = [_summary(idx) for idx in dup_df.index]
+        dup_df["Duplicate Of"] = [_summary(kept_idx_by_dup, idx) for idx in dup_df.index]
         # ``_matches_kept_idx`` is the *post-reset* position of
         # the kept row in ``EDF Evidence Report`` — the Excel
         # writer uses this with ``A{+1}`` as the click target
@@ -727,35 +794,15 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         x.border = CELL_BORDER
     ws_ks.row_dimensions[1].height = 26
 
-    def ks_row(r, label, value, note="", fmt=None, bold=False, alt=False):
-        bg = LGREY if alt else None
-        _text(ws_ks, r, 1, label, bold=bold, fill_hex=bg)
-        if fmt == "£":
-            _money(ws_ks, r, 2, value, bold=bold, fill_hex=bg)
-        elif fmt == "%":
-            _num(ws_ks, r, 2, value, fmt="0.0%", bold=bold, fill_hex=bg)
-        elif fmt == "date":
-            cell = ws_ks.cell(row=r, column=2, value=value)
-            cell.number_format = "dd/mm/yyyy"
-            cell.font = Font(name="Calibri", size=10, bold=bold)
-            cell.border = CELL_BORDER
-            cell.alignment = Alignment(horizontal="right", vertical="center")
-            if bg:
-                cell.fill = PatternFill("solid", start_color=bg)
-        elif fmt:
-            _num(ws_ks, r, 2, value, fmt=fmt, bold=bold, fill_hex=bg)
-        else:
-            _text(ws_ks, r, 2, value, bold=bold, fill_hex=bg, align="right")
-        _text(ws_ks, r, 3, note, fill_hex=bg, color=DGREY)
-
     acc_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
 
     r = 2
     _section_hdr(ws_ks, r, "ACCOUNT OVERVIEW")
     r = 3
-    ks_row(r, "Account reference", acc_ref, alt=True)
+    _ks_row(ws_ks, r, "Account reference", acc_ref, alt=True)
     r = 4
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "First bill on record",
         "='Balance Trend'!A2",
@@ -763,7 +810,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         note="From Balance Trend sheet",
     )
     r = 5
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Most recent bill",
         "=INDEX('Balance Trend'!A:A,MATCH(9.99E+307,'Balance Trend'!B:B)+1)",
@@ -771,7 +819,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         alt=True,
     )
     r = 6
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Period covered (days)",
         "=IFERROR(INT(INDEX('Balance Trend'!A:A,MATCH(9.99E+307,'Balance Trend'!B:B)+1)-'Balance Trend'!A2),\"\")",
@@ -779,7 +828,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         note="Days between first and last bill",
     )
     r = 7
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Total bills on record",
         "=IFERROR(COUNT('Balance Trend'!B:B),\"\")",
@@ -790,7 +840,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     r = 8
     _section_hdr(ws_ks, r, "BALANCE FIGURES")
     r = 9
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Opening balance (first bill)",
         "='Balance Trend'!B2",
@@ -799,7 +850,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         note="First entry in Balance Trend",
     )
     r = 10
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Current balance (latest bill)",
         "=INDEX('Balance Trend'!B:B,MATCH(9.99E+307,'Balance Trend'!B:B))",
@@ -808,7 +860,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         note="Last numeric entry in Balance Trend",
     )
     r = 11
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Total balance increase",
         '=IFERROR(B10-B9,"")',
@@ -818,9 +871,10 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         note="Latest minus earliest",
     )
     r = 12
-    ks_row(r, "% increase over full period", '=IFERROR((B10-B9)/B9,"")', fmt="%", bold=True)
+    _ks_row(ws_ks, r, "% increase over full period", '=IFERROR((B10-B9)/B9,"")', fmt="%", bold=True)
     r = 13
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Mean balance across all bills",
         "=IFERROR(AVERAGE('Balance Trend'!B:B),\"\")",
@@ -828,30 +882,40 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         alt=True,
     )
     r = 14
-    ks_row(r, "Median balance", "=IFERROR(MEDIAN('Balance Trend'!B:B),\"\")", fmt="£")
+    _ks_row(ws_ks, r, "Median balance", "=IFERROR(MEDIAN('Balance Trend'!B:B),\"\")", fmt="£")
     r = 15
-    ks_row(r, "Peak balance recorded", "=IFERROR(MAX('Balance Trend'!B:B),\"\")", fmt="£", alt=True)
+    _ks_row(
+        ws_ks,
+        r,
+        "Peak balance recorded",
+        "=IFERROR(MAX('Balance Trend'!B:B),\"\")",
+        fmt="£",
+        alt=True,
+    )
     r = 16
-    ks_row(r, "Lowest balance recorded", "=IFERROR(MIN('Balance Trend'!B:B),\"\")", fmt="£")
+    _ks_row(ws_ks, r, "Lowest balance recorded", "=IFERROR(MIN('Balance Trend'!B:B),\"\")", fmt="£")
 
     r = 17
     _section_hdr(ws_ks, r, "PERIODIC CHARGES")
     r = 18
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Note",
         "Bills are a running cumulative balance — periodic charge = closing minus opening balance",
         alt=True,
     )
     r = 19
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Mean charge per period (positive only)",
         '=IFERROR(AVERAGEIF(\'Period Charges\'!F:F,">0"),"")',
         fmt="£",
     )
     r = 20
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Largest single-period charge",
         "=IFERROR(MAX('Period Charges'!F:F),\"\")",
@@ -860,14 +924,16 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         alt=True,
     )
     r = 21
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Smallest positive charge",
         "=IFERROR(_xlfn.MINIFS('Period Charges'!F:F,'Period Charges'!F:F,\">0\"),\"\")",
         fmt="£",
     )
     r = 22
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Periods where balance increased",
         '=IFERROR(COUNTIF(\'Period Charges\'!F:F,">0"),"")',
@@ -875,14 +941,16 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         alt=True,
     )
     r = 23
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Periods where balance fell (payments/credits)",
         '=IFERROR(COUNTIF(\'Period Charges\'!F:F,"<0"),"")',
         fmt="#,##0",
     )
     r = 24
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Implied annual rate (avg last 6 charges ×12)",
         "=IFERROR(AVERAGE(OFFSET('Period Charges'!F1,MAX(1,COUNTIF('Period Charges'!F:F,\">0\")-5),0,6,1))*12,\"\")",
@@ -895,7 +963,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     r = 25
     _section_hdr(ws_ks, r, "READING & DATA QUALITY")
     r = 26
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Estimated readings",
         '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Estimated"),"")',
@@ -903,14 +972,16 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         alt=True,
     )
     r = 27
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Actual / customer readings",
         '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Actual"),"")',
         fmt="#,##0",
     )
     r = 28
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Smart meter readings",
         '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Smart"),"")',
@@ -918,7 +989,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         alt=True,
     )
     r = 29
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "% of bills with estimated readings",
         "=IFERROR(B26/COUNT('EDF Evidence Report'!G:G),\"\")",
@@ -928,7 +1000,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     r = 30
     _section_hdr(ws_ks, r, "UNIT RATES")
     r = 31
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Average unit rate (p/kWh)",
         "=IFERROR(AVERAGE('EDF Evidence Report'!I:I),\"\")",
@@ -937,7 +1010,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         note="Across all bills with valid period charge and kWh",
     )
     r = 32
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Maximum unit rate (p/kWh)",
         "=IFERROR(MAX('EDF Evidence Report'!I:I),\"\")",
@@ -945,7 +1019,8 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         note="Highest effective rate — potential overcharge",
     )
     r = 33
-    ks_row(
+    _ks_row(
+        ws_ks,
         r,
         "Minimum unit rate (p/kWh)",
         "=IFERROR(MIN('EDF Evidence Report'!I:I),\"\")",
@@ -1219,24 +1294,23 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         dr = f"F2:F{pc_r - 1}"
         cr = f"C2:C{pc_r - 1}"
 
-        def pc_stat(r, lbl, formula, fmt="£"):
-            _text(ws_pc, r, 1, lbl, bold=True, fill_hex=LGREY)
-            c = ws_pc.cell(row=r, column=2, value=formula)
-            c.font = Font(name="Calibri", size=10, bold=True)
-            c.fill = PatternFill("solid", start_color=LGREY)
-            c.border = CELL_BORDER
-            c.alignment = Alignment(horizontal="right")
-            c.number_format = "£#,##0.00" if fmt == "£" else fmt
-            for cc in range(3, 9):
-                ws_pc.cell(row=r, column=cc).fill = PatternFill("solid", start_color=LGREY)
-                ws_pc.cell(row=r, column=cc).border = CELL_BORDER
-
-        pc_stat(sr, "Mean charge per period (positive only)", f'=IFERROR(AVERAGEIF({dr},">0"),"")')
-        pc_stat(sr + 1, "Largest single charge", f'=IFERROR(MAX({dr}),"")')
-        pc_stat(sr + 2, "Largest credit / reduction", f'=IFERROR(MIN({dr}),"")')
-        pc_stat(sr + 3, "Charge periods", f'=IFERROR(COUNTIF({dr},">0"),"")', fmt="#,##0")
-        pc_stat(sr + 4, "Credit periods", f'=IFERROR(COUNTIF({dr},"<0"),"")', fmt="#,##0")
-        pc_stat(sr + 5, "Average days between bills", f'=IFERROR(AVERAGE({cr}),"")', fmt="#,##0.0")
+        _pc_stat(
+            ws_pc,
+            sr,
+            "Mean charge per period (positive only)",
+            f'=IFERROR(AVERAGEIF({dr},">0"),"")',
+        )
+        _pc_stat(ws_pc, sr + 1, "Largest single charge", f'=IFERROR(MAX({dr}),"")')
+        _pc_stat(ws_pc, sr + 2, "Largest credit / reduction", f'=IFERROR(MIN({dr}),"")')
+        _pc_stat(ws_pc, sr + 3, "Charge periods", f'=IFERROR(COUNTIF({dr},">0"),"")', fmt="#,##0")
+        _pc_stat(ws_pc, sr + 4, "Credit periods", f'=IFERROR(COUNTIF({dr},"<0"),"")', fmt="#,##0")
+        _pc_stat(
+            ws_pc,
+            sr + 5,
+            "Average days between bills",
+            f'=IFERROR(AVERAGE({cr}),"")',
+            fmt="#,##0.0",
+        )
 
     if len(pc_rows_data) > 1:
         bc2 = BarChart()
@@ -1260,18 +1334,6 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
 
     # ----- TAB E: DISPUTE FLAGS -----
     ws_df = wb.create_sheet(title="Dispute Flags")
-
-    def _banner(ws, r, text, bg):
-        c = ws.cell(row=r, column=1, value=text)
-        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        c.fill = PatternFill("solid", start_color=bg)
-        c.border = CELL_BORDER
-        c.alignment = Alignment(horizontal="left", vertical="center")
-        for col in range(2, 7):
-            x = ws.cell(row=r, column=col)
-            x.fill = PatternFill("solid", start_color=bg)
-            x.border = CELL_BORDER
-        ws.row_dimensions[r].height = 20
 
     _banner(ws_df, 1, "EDF ENERGY DISPUTE  —  AUTOMATED ANALYSIS FLAGS", ORANGE)
     ws_df.cell(
