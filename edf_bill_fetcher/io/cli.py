@@ -21,9 +21,6 @@ except ImportError:
 
 HAS_TK = importlib.util.find_spec("tkinter") is not None
 
-HAS_PDF_REPORT = importlib.util.find_spec("edf_report") is not None
-HAS_DOCX_REPORT = importlib.util.find_spec("edf_report_docx") is not None
-
 
 class _RestrictedUnpickler(pickle.Unpickler):
     """Unpickler that only allows known-safe types.
