@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from evidence_bundle import (
+from edf_bill_fetcher.io.writers.evidence_bundle import (
     build_bundle_index,
     save_evidence_files,
 )

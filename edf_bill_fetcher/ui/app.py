@@ -1130,7 +1130,10 @@ class App:
                     try:
                         import pandas as pd
 
-                        from evidence_bundle import build_bundle_index, save_evidence_files
+                        from edf_bill_fetcher.io.writers.evidence_bundle import (
+                            build_bundle_index,
+                            save_evidence_files,
+                        )
 
                         out_dir = os.path.dirname(xlsx_path) or os.getcwd()
                         ev_dir = os.path.join(out_dir, "evidence_files")

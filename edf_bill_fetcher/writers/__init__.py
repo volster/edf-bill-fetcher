@@ -90,7 +90,7 @@ from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
     detect_sap_back_billing_events,
     match_sap_events_to_edf,
 )
-from evidence_bundle import build_bundle_index, save_evidence_files  # noqa: E402,F401
+from edf_bill_fetcher.io.writers.evidence_bundle import build_bundle_index, save_evidence_files  # noqa: E402,F401
 
 __all__ = [
     "_analyze_tariff_impact",

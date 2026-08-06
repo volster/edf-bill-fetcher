@@ -1,5 +1,8 @@
 """Save referenced evidence files and build a themed DOCX bundle index.
 
+Canonical home: ``edf_bill_fetcher.io.writers.evidence_bundle`` (absorbed
+from the top-level ``evidence_bundle.py`` during the shim-removal wave).
+
 This module implements Stream P5 of the SAP/Evidence Bundle design
 (``scratch/superpowers/specs/2026-07-16-sap-dumps-and-evidence-bundle-design.md``):
 
