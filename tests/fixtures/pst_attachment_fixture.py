@@ -328,7 +328,7 @@ def make_att_with_raw_bytes_long_filename(name: str) -> FakeAttachment:
     """
     entry: FakeRecordEntry = FakeRecordEntryRawBytes(
         PR_ATTACH_LONG_FILENAME, name.encode("utf-16-le")
-    )
+    )  # type: ignore[assignment]
     return FakeAttachment([FakeRecordSet([entry])])
 
 
@@ -339,7 +339,7 @@ def make_att_with_empty_raw_bytes_long_filename() -> FakeAttachment:
     the helper decodes but discards the empty result and falls through to
     ``return None``.
     """
-    entry: FakeRecordEntry = FakeRecordEntryEmptyBytes(PR_ATTACH_LONG_FILENAME)
+    entry: FakeRecordEntry = FakeRecordEntryEmptyBytes(PR_ATTACH_LONG_FILENAME)  # type: ignore[assignment]
     return FakeAttachment([FakeRecordSet([entry])])
 
 
@@ -348,7 +348,7 @@ def make_att_with_get_data_raises() -> FakeAttachment:
 
     Exercises the ``except`` branches at lines 89-90 and 95-96.
     """
-    entry: FakeRecordEntry = FakeRecordEntryGetDataRaises(PR_ATTACH_LONG_FILENAME)
+    entry: FakeRecordEntry = FakeRecordEntryGetDataRaises(PR_ATTACH_LONG_FILENAME)  # type: ignore[assignment]
     return FakeAttachment([FakeRecordSet([entry])])
 
 
@@ -358,7 +358,7 @@ def make_att_with_empty_string_get_data_raises() -> FakeAttachment:
     Exercises the ``except`` branch at lines 95-96 (str branch falsy, then
     ``get_data()`` raises).
     """
-    entry: FakeRecordEntry = FakeRecordEntryEmptyStringGetDataRaises(PR_ATTACH_LONG_FILENAME)
+    entry: FakeRecordEntry = FakeRecordEntryEmptyStringGetDataRaises(PR_ATTACH_LONG_FILENAME)  # type: ignore[assignment]
     return FakeAttachment([FakeRecordSet([entry])])
 
 
@@ -368,13 +368,13 @@ def make_att_with_empty_string_non_bytes_data() -> FakeAttachment:
     Exercises the ``isinstance(raw_data, bytes | bytearray)`` falsy branch
     at line 97 (branch 97->76).
     """
-    entry: FakeRecordEntry = FakeRecordEntryEmptyStringNonBytesData(PR_ATTACH_LONG_FILENAME)
+    entry: FakeRecordEntry = FakeRecordEntryEmptyStringNonBytesData(PR_ATTACH_LONG_FILENAME)  # type: ignore[assignment]
     return FakeAttachment([FakeRecordSet([entry])])
 
 
 def make_att_with_bad_entry_type() -> FakeAttachment:
     """Entry whose ``entry_type`` cannot be coerced to ``int`` (line 82-83)."""
-    entry: FakeRecordEntry = FakeRecordEntryBadEntryType()
+    entry: FakeRecordEntry = FakeRecordEntryBadEntryType()  # type: ignore[assignment]
     return FakeAttachment([FakeRecordSet([entry])])
 
 
@@ -400,7 +400,7 @@ def make_att_with_record_set_entries_getter_raises() -> FakeAttachment:
 
 def make_att_with_record_set_get_entry_raises() -> FakeAttachment:
     """Record-set whose ``get_entry`` raises for every index (line 78-79)."""
-    broken_rs: FakeRecordSet = FakeRecordSetGetEntryRaises(n_entries=2)
+    broken_rs: FakeRecordSet = FakeRecordSetGetEntryRaises(n_entries=2)  # type: ignore[assignment]
     return FakeAttachment([broken_rs])  # type: ignore[list-item]
 
 

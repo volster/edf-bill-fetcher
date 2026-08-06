@@ -195,7 +195,9 @@ def _install_minimal_caps(monkeypatch: pytest.MonkeyPatch, *, with_latest: bool)
     if with_latest:
         minimal_caps["_LATEST_KNOWN"] = {"unit_rate": 25.0}
     monkeypatch.setattr(
-        sys.modules["edf_bill_fetcher.io.reporters.docx_report"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps
+        sys.modules["edf_bill_fetcher.io.reporters.docx_report"],
+        "_load_ofgem_caps",
+        lambda auto_carry=False: minimal_caps,
     )
 
 

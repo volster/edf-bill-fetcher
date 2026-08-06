@@ -187,10 +187,8 @@ def test_reversal_match_returns_false_when_killed_amount_unparseable() -> None:
     """A killed_amount that cannot be coerced to float short-circuits to False."""
     killed_pf = pd.Timestamp("2023-01-01")
     killed_pt = pd.Timestamp("2023-03-31")
-    evidence = pd.DataFrame(
-        [_credit_row("A", "01 Jan 2023", "31 Mar 2023", -250.0)]
-    )
-    assert _reversal_match(evidence, "A", "not-a-number", killed_pf, killed_pt) is False
+    evidence = pd.DataFrame([_credit_row("A", "01 Jan 2023", "31 Mar 2023", -250.0)])
+    assert _reversal_match(evidence, "A", "not-a-number", killed_pf, killed_pt) is False  # type: ignore[arg-type]
 
 
 def test_reversal_match_returns_true_on_amount_match_with_unparseable_period() -> None:
@@ -214,9 +212,7 @@ def test_reversal_match_returns_true_when_period_overlap_at_least_30_days() -> N
     """Credit period overlapping the killed period by >= 30 days matches."""
     killed_pf = pd.Timestamp("2023-01-01")
     killed_pt = pd.Timestamp("2023-03-31")
-    evidence = pd.DataFrame(
-        [_credit_row("A", "01 Jan 2023", "31 Mar 2023", -250.0)]
-    )
+    evidence = pd.DataFrame([_credit_row("A", "01 Jan 2023", "31 Mar 2023", -250.0)])
     assert _reversal_match(evidence, "A", 250.0, killed_pf, killed_pt) is True
 
 
@@ -224,9 +220,7 @@ def test_reversal_match_returns_false_when_amount_mismatch_exceeds_tolerance() -
     """Credit amount outside the +/- 0.50 tolerance does not match."""
     killed_pf = pd.Timestamp("2023-01-01")
     killed_pt = pd.Timestamp("2023-03-31")
-    evidence = pd.DataFrame(
-        [_credit_row("A", "01 Jan 2023", "31 Mar 2023", -260.0)]
-    )
+    evidence = pd.DataFrame([_credit_row("A", "01 Jan 2023", "31 Mar 2023", -260.0)])
     assert _reversal_match(evidence, "A", 250.0, killed_pf, killed_pt) is False
 
 
@@ -235,9 +229,7 @@ def test_reversal_match_returns_false_when_overlap_under_30_days() -> None:
     killed_pf = pd.Timestamp("2023-01-01")
     killed_pt = pd.Timestamp("2023-03-31")
     # Credit is a 7-day fragment at the tail of the killed window.
-    evidence = pd.DataFrame(
-        [_credit_row("A", "25 Mar 2023", "31 Mar 2023", -250.0)]
-    )
+    evidence = pd.DataFrame([_credit_row("A", "25 Mar 2023", "31 Mar 2023", -250.0)])
     assert _reversal_match(evidence, "A", 250.0, killed_pf, killed_pt) is False
 
 
@@ -389,9 +381,7 @@ def test_detect_rebilling_reversal_signal_emits_row() -> None:
             _row("B", "01 May 2023", "01 Dec 2022", "31 Mar 2023"),
         ]
     )
-    evidence_df = pd.DataFrame(
-        [_credit_row("A", "01 Jan 2023", "31 Mar 2023", -250.0)]
-    )
+    evidence_df = pd.DataFrame([_credit_row("A", "01 Jan 2023", "31 Mar 2023", -250.0)])
     out = detect_rebilling(invoice_rows, evidence_df=evidence_df)
     assert len(out) == 1
     row = out.iloc[0]

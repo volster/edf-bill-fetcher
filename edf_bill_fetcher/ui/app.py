@@ -30,12 +30,12 @@ except ImportError:
 try:
     import importlib.util
 
-    HAS_PDF_REPORT = importlib.util.find_spec(
-        "edf_bill_fetcher.io.reporters.pdf_report"
-    ) is not None
-    HAS_DOCX_REPORT = importlib.util.find_spec(
-        "edf_bill_fetcher.io.reporters.docx_report"
-    ) is not None
+    HAS_PDF_REPORT = (
+        importlib.util.find_spec("edf_bill_fetcher.io.reporters.pdf_report") is not None
+    )
+    HAS_DOCX_REPORT = (
+        importlib.util.find_spec("edf_bill_fetcher.io.reporters.docx_report") is not None
+    )
 except ImportError:
     HAS_PDF_REPORT = False
     HAS_DOCX_REPORT = False

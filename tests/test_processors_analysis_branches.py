@@ -260,29 +260,64 @@ class TestReversalMatch:
     """_reversal_match — guard, amount, and overlap branches (lines 417-440)."""
 
     def test_none_or_empty_evidence(self):
-        assert _reversal_match(None, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")) is False
+        assert (
+            _reversal_match(
+                None, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")
+            )
+            is False
+        )
         empty = pd.DataFrame()
-        assert _reversal_match(empty, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")) is False
+        assert (
+            _reversal_match(
+                empty, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")
+            )
+            is False
+        )
 
     def test_missing_entry_type_column(self):
         df = pd.DataFrame({"Amount (£)": [100.0]})
-        assert _reversal_match(df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")) is False
+        assert (
+            _reversal_match(
+                df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")
+            )
+            is False
+        )
 
     def test_unparseable_killed_amount(self):
         df = pd.DataFrame({"Entry Type": ["Credit"], "Amount (£)": [100.0]})
-        assert _reversal_match(df, "INV-1", "oops", pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")) is False
+        assert (
+            _reversal_match(
+                df, "INV-1", "oops", pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")  # type: ignore[arg-type]
+            )
+            is False
+        )
 
     def test_row_amount_parse_error_skipped(self):
         df = pd.DataFrame({"Entry Type": ["Credit"], "Amount (£)": ["bad"]})
-        assert _reversal_match(df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")) is False
+        assert (
+            _reversal_match(
+                df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")
+            )
+            is False
+        )
 
     def test_amount_within_50p_matches(self):
         df = pd.DataFrame({"Entry Type": ["Credit"], "Amount (£)": [100.20]})
-        assert _reversal_match(df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")) is True
+        assert (
+            _reversal_match(
+                df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")
+            )
+            is True
+        )
 
     def test_amount_outside_50p_no_match(self):
         df = pd.DataFrame({"Entry Type": ["Credit"], "Amount (£)": [200.0]})
-        assert _reversal_match(df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")) is False
+        assert (
+            _reversal_match(
+                df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")
+            )
+            is False
+        )
 
     def test_unparseable_period_accepts_on_amount(self):
         df = pd.DataFrame(
@@ -293,7 +328,12 @@ class TestReversalMatch:
                 "Period To": [None],
             }
         )
-        assert _reversal_match(df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")) is True
+        assert (
+            _reversal_match(
+                df, "INV-1", 100.0, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")
+            )
+            is True
+        )
 
     def test_overlap_ge_30_days_matches(self):
         df = pd.DataFrame(

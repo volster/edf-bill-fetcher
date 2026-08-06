@@ -155,12 +155,27 @@ def test_unit_rate_with_usage(tmp_path: object) -> None:
     cell holds 20.0.
     """
     records = [
-        _record(invoice="KEPT-001", amount=500.0, period_to="31/05/2024",
-                period_charge=100.0, units=500.0),
-        _record(invoice="DUP-001", amount=500.0, period_to="31/05/2024",
-                period_charge=100.0, units=500.0),
-        _record(invoice="UNIQ-001", amount=300.0, period_to="30/04/2024",
-                period_charge=60.0, units=300.0),
+        _record(
+            invoice="KEPT-001",
+            amount=500.0,
+            period_to="31/05/2024",
+            period_charge=100.0,
+            units=500.0,
+        ),
+        _record(
+            invoice="DUP-001",
+            amount=500.0,
+            period_to="31/05/2024",
+            period_charge=100.0,
+            units=500.0,
+        ),
+        _record(
+            invoice="UNIQ-001",
+            amount=300.0,
+            period_to="30/04/2024",
+            period_charge=60.0,
+            units=300.0,
+        ),
     ]
     wb = _export(records, tmp_path)
     assert "Duplicate Entries" in wb.sheetnames, wb.sheetnames
@@ -181,19 +196,28 @@ def test_unit_rate_without_usage(tmp_path: object) -> None:
     cell is empty (None), NOT a numeric zero.
     """
     records = [
-        _record(invoice="KEPT-002", amount=500.0, period_to="31/05/2024",
-                period_charge=100.0, units=500.0),
-        _record(invoice="DUP-002", amount=500.0, period_to="31/05/2024",
-                period_charge=100.0, units=None),
-        _record(invoice="UNIQ-002", amount=300.0, period_to="30/04/2024",
-                period_charge=60.0, units=300.0),
+        _record(
+            invoice="KEPT-002",
+            amount=500.0,
+            period_to="31/05/2024",
+            period_charge=100.0,
+            units=500.0,
+        ),
+        _record(
+            invoice="DUP-002", amount=500.0, period_to="31/05/2024", period_charge=100.0, units=None
+        ),
+        _record(
+            invoice="UNIQ-002",
+            amount=300.0,
+            period_to="30/04/2024",
+            period_charge=60.0,
+            units=300.0,
+        ),
     ]
     wb = _export(records, tmp_path)
     assert "Duplicate Entries" in wb.sheetnames, wb.sheetnames
     cell = _dup_unit_rate_cell(wb["Duplicate Entries"])
-    assert cell.value is None, (
-        f"unit rate without usage: expected None (NaN), got {cell.value!r}"
-    )
+    assert cell.value is None, f"unit rate without usage: expected None (NaN), got {cell.value!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -222,10 +246,22 @@ def test_key_statistics_row_variants(tmp_path: object) -> None:
         reference string ``"A-TEST-REF-123"``.
     """
     records = [
-        _record(invoice="KS-001", amount=500.0, period_to="31/05/2024",
-                period_charge=100.0, units=500.0, date="01/05/2024"),
-        _record(invoice="KS-002", amount=300.0, period_to="30/04/2024",
-                period_charge=60.0, units=300.0, date="01/04/2024"),
+        _record(
+            invoice="KS-001",
+            amount=500.0,
+            period_to="31/05/2024",
+            period_charge=100.0,
+            units=500.0,
+            date="01/05/2024",
+        ),
+        _record(
+            invoice="KS-002",
+            amount=300.0,
+            period_to="30/04/2024",
+            period_charge=60.0,
+            units=300.0,
+            date="01/04/2024",
+        ),
     ]
     wb = _export(records, tmp_path)
     assert "Key Statistics" in wb.sheetnames, wb.sheetnames
@@ -261,9 +297,7 @@ def test_key_statistics_row_variants(tmp_path: object) -> None:
     assert pct_cell.number_format == "0.0%", (
         f"ks_row % number_format: expected '0.0%', got {pct_cell.number_format!r}"
     )
-    assert pct_cell.font.bold is True, (
-        f"ks_row % bold: expected True, got {pct_cell.font.bold!r}"
-    )
+    assert pct_cell.font.bold is True, f"ks_row % bold: expected True, got {pct_cell.font.bold!r}"
 
     # fmt="#,##0" — Period covered (r=6).
     int_cell = ws.cell(row=6, column=2)
@@ -289,10 +323,22 @@ def test_dispute_flags_banner_layout(tmp_path: object) -> None:
       (``FE5716``) solid fill, and the row height is 20.
     """
     records = [
-        _record(invoice="BNR-001", amount=500.0, period_to="31/05/2024",
-                period_charge=100.0, units=500.0, date="01/05/2024"),
-        _record(invoice="BNR-002", amount=300.0, period_to="30/04/2024",
-                period_charge=60.0, units=300.0, date="01/04/2024"),
+        _record(
+            invoice="BNR-001",
+            amount=500.0,
+            period_to="31/05/2024",
+            period_charge=100.0,
+            units=500.0,
+            date="01/05/2024",
+        ),
+        _record(
+            invoice="BNR-002",
+            amount=300.0,
+            period_to="30/04/2024",
+            period_charge=60.0,
+            units=300.0,
+            date="01/04/2024",
+        ),
     ]
     wb = _export(records, tmp_path)
     assert "Dispute Flags" in wb.sheetnames, wb.sheetnames
@@ -315,8 +361,7 @@ def test_dispute_flags_banner_layout(tmp_path: object) -> None:
         fill = cell.fill
         assert fill.patternType == "solid", f"col {col}: {fill.patternType!r}"
         assert str(fill.start_color.rgb).endswith(ORANGE), (
-            f"banner col {col} fill: expected ORANGE {ORANGE}, "
-            f"got {fill.start_color.rgb!r}"
+            f"banner col {col} fill: expected ORANGE {ORANGE}, got {fill.start_color.rgb!r}"
         )
 
     assert ws.row_dimensions[1].height == 20, (

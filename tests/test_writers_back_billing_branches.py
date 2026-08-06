@@ -255,7 +255,7 @@ def test_detect_back_billing_unparseable_amount_falls_back_to_zero() -> None:
                 date="09 Aug 2023",
                 period_from="04 Apr 2022",
                 period_to="26 Jul 2023",
-                amount="not-a-number",  # type: ignore[dict-item]
+                amount="not-a-number",  # type: ignore[arg-type]
                 admitted=False,
             )
         ]
@@ -496,7 +496,9 @@ def test_write_back_billing_sheet_excess_days_under_30_no_red_highlight() -> Non
     write_back_billing_sheet(ws, bb, account="A1")
     font = ws.cell(row=8, column=8).font
     # The default _num cell font is not the red bold one.
-    assert not (font.bold is True and font.color is not None and font.color.rgb in ("FFC00000", "C00000"))
+    assert not (
+        font.bold is True and font.color is not None and font.color.rgb in ("FFC00000", "C00000")
+    )
 
 
 def test_write_back_billing_sheet_account_in_title_banner() -> None:

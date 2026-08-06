@@ -629,9 +629,12 @@ class TestRunWorker:
                 with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
                     mock_pd.DataFrame.return_value = MagicMock()
                     with patch(
-                        "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files", return_value={"a": "b"}
+                        "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files",
+                        return_value={"a": "b"},
                     ) as mock_save_ev:
-                        with patch("edf_bill_fetcher.io.writers.evidence_bundle.build_bundle_index") as mock_build:
+                        with patch(
+                            "edf_bill_fetcher.io.writers.evidence_bundle.build_bundle_index"
+                        ) as mock_build:
                             app._run()
                             root.update()
                             root.update()
@@ -649,7 +652,8 @@ class TestRunWorker:
                 with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
                     mock_pd.DataFrame.return_value = MagicMock()
                     with patch(
-                        "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files", side_effect=RuntimeError("boom")
+                        "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files",
+                        side_effect=RuntimeError("boom"),
                     ):
                         app._run()
                         root.update()

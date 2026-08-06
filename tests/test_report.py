@@ -510,7 +510,9 @@ class TestOFGEMComparison:
         }
 
         monkeypatch.setattr(
-            sys.modules["edf_bill_fetcher.io.reporters.pdf_report"], "_load_ofgem_caps", lambda auto_carry=False: minimal_caps
+            sys.modules["edf_bill_fetcher.io.reporters.pdf_report"],
+            "_load_ofgem_caps",
+            lambda auto_carry=False: minimal_caps,
         )
 
         # One bill per quarter in our minimal cap set, plus a bill

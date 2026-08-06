@@ -78,7 +78,9 @@ class _StubEngine:
     """
 
     def __init__(self, records: list[dict[str, Any]] | None = None) -> None:
-        self.records: list[dict[str, Any]] = records if records is not None else _synthetic_records()
+        self.records: list[dict[str, Any]] = (
+            records if records is not None else _synthetic_records()
+        )
         self.filtered_records: list[dict[str, Any]] = []
         self.error_log: list[str] = []
         self.pdf_count: int = 1
@@ -130,9 +132,7 @@ def stub_engine(monkeypatch: pytest.MonkeyPatch) -> _StubEngine:
 
 
 @pytest.fixture
-def stub_export_to_excel(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> dict[str, list[Any]]:
+def stub_export_to_excel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, list[Any]]:
     """Stub ``export_to_excel`` to record calls without writing a workbook.
 
     ``run_cli_extract`` imports ``export_to_excel`` lazily from
@@ -224,7 +224,7 @@ class TestRestrictedUnpicklerFindClass:
             with pytest.raises(pickle.UnpicklingError, match="is not a class"):
                 _RestrictedUnpickler(io.BytesIO(payload)).load()
         finally:
-            engine_mod.EvidenceEngine = real_evidence_engine
+            engine_mod.__dict__["EvidenceEngine"] = real_evidence_engine
 
 
 # ---------------------------------------------------------------------------
@@ -605,9 +605,7 @@ class TestRunCliPdfReport:
         calls = self._patch_pdf_generator(monkeypatch, (True, "Report written"))
 
         with pytest.raises(SystemExit) as exc:
-            run_cli_pdf_report(
-                ["-i", str(records_json), "-o", str(tmp_path / "r.pdf")]
-            )
+            run_cli_pdf_report(["-i", str(records_json), "-o", str(tmp_path / "r.pdf")])
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "Report written" in out
@@ -737,7 +735,9 @@ class TestRunCliPdfReport:
         """
         # A missing records file makes json.load raise FileNotFoundError.
         with pytest.raises(SystemExit) as exc:
-            run_cli_pdf_report(["-i", str(tmp_path / "missing.json"), "-o", str(tmp_path / "r.pdf")])
+            run_cli_pdf_report(
+                ["-i", str(tmp_path / "missing.json"), "-o", str(tmp_path / "r.pdf")]
+            )
         assert exc.value.code == 1
         assert "ERROR:" in capsys.readouterr().err
 
@@ -790,9 +790,7 @@ class TestRunCliDocxReport:
         calls = self._patch_docx_generator(monkeypatch, (True, "DOCX written"))
 
         with pytest.raises(SystemExit) as exc:
-            run_cli_docx_report(
-                ["-i", str(records_json), "-o", str(tmp_path / "r.docx")]
-            )
+            run_cli_docx_report(["-i", str(records_json), "-o", str(tmp_path / "r.docx")])
         assert exc.value.code == 0
         assert "DOCX written" in capsys.readouterr().out
         assert calls["calls"][0]["records"] == records
@@ -951,7 +949,18 @@ class TestMainDispatch:
             "generate_pdf_from_gui",
             lambda **kw: (True, "ok"),
         )
-        monkeypatch.setattr(sys, "argv", ["edf-collector", "--pdf-report", "-i", str(records_json), "-o", str(tmp_path / "r.pdf")])
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "edf-collector",
+                "--pdf-report",
+                "-i",
+                str(records_json),
+                "-o",
+                str(tmp_path / "r.pdf"),
+            ],
+        )
 
         with pytest.raises(SystemExit):
             main()
@@ -977,7 +986,16 @@ class TestMainDispatch:
             lambda **kw: (True, "ok"),
         )
         monkeypatch.setattr(
-            sys, "argv", ["edf-collector", "--docx-report", "-i", str(records_json), "-o", str(tmp_path / "r.docx")]
+            sys,
+            "argv",
+            [
+                "edf-collector",
+                "--docx-report",
+                "-i",
+                str(records_json),
+                "-o",
+                str(tmp_path / "r.docx"),
+            ],
         )
 
         with pytest.raises(SystemExit):
@@ -999,7 +1017,14 @@ class TestMainDispatch:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["edf-collector", "--extract", "--pdf-dir", str(pdf_dir), "-o", str(tmp_path / "o.xlsx")],
+            [
+                "edf-collector",
+                "--extract",
+                "--pdf-dir",
+                str(pdf_dir),
+                "-o",
+                str(tmp_path / "o.xlsx"),
+            ],
         )
 
         main()  # Should complete without raising SystemExit.
@@ -1037,7 +1062,7 @@ class TestMainDispatch:
         monkeypatch.setattr(cli_module, "HAS_TK", True)
         monkeypatch.setattr(sys, "argv", ["edf-collector"])
 
-        mainloop_called: list[bool] = []
+        mainloop_called: list[bool | str] = []
 
         class _FakeRoot:
             def mainloop(self) -> None:
