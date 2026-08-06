@@ -12,10 +12,8 @@ dispatcher ↔ DOCX dispatcher key set parity.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
@@ -621,25 +619,23 @@ class RenderContext:
 def _get_package_version() -> str:
     """Return the package version declared in ``pyproject.toml``.
 
-    Reads ``pyproject.toml`` next to this module (so a vendored /
-    frozen checkout of the source continues to report the version
-    that ships with it) and falls back to ``"0.1.0"`` if the file
+    Delegates to ``edf_bill_fetcher.helpers.version.get_package_version``,
+    which walks up from the helpers module to the repo-root
+    ``pyproject.toml`` and falls back to ``"0.1.0"`` if the file
     cannot be read or no ``version`` line is present.
+
+    Kept as a thin wrapper (rather than importing the helper name
+    directly) because the DOCX report generator and tests import
+    this exact name from this module.
 
     The function is intentionally defensive — a missing or rotated
     pyproject.toml should not break report generation. The cover
     page is what a user will see first, and a missing
     version string is uglier than a stable fallback.
     """
-    try:
-        pyproject = Path(__file__).resolve().parent / "pyproject.toml"
-        text = pyproject.read_text(encoding="utf-8", errors="replace")
-    except (OSError, UnicodeDecodeError):
-        return "0.1.0"
-    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    if not m:
-        return "0.1.0"
-    return m.group(1)
+    from edf_bill_fetcher.helpers.version import get_package_version
+
+    return get_package_version()
 
 
 def _compute_mean_daily(df_sorted: pd.DataFrame) -> float:

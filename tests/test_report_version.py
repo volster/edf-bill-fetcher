@@ -106,3 +106,25 @@ def test_get_package_version_falls_back_to_zero_when_pyproject_missing(
             "_get_package_version() leaked an OSError when pyproject.toml is unreadable; "
             "expected fall-back to '0.1.0'"
         )
+
+
+def test_get_package_version_uses_repo_root_not_module_dir(monkeypatch, tmp_path):
+    """A pyproject.toml sitting next to the module must be ignored.
+
+    The helper resolves the version from the *repo-root* pyproject.toml.
+    Regression pin: the original implementation looked at
+    ``Path(__file__).parent / "pyproject.toml"`` — the module's own
+    directory — which does not contain a pyproject.toml, so it
+    silently returned the ``"0.1.0"`` fallback for every run.  That
+    bug was invisible because the repo root *also* declared 0.1.0.
+    This test plants a decoy pyproject.toml with a distinct version
+    in a fake module directory and asserts it is never read.
+    """
+    import edf_bill_fetcher.io.reporters.pdf_report as pdf_mod
+
+    decoy_dir = tmp_path / "edf_bill_fetcher" / "io" / "reporters"
+    decoy_dir.mkdir(parents=True)
+    (decoy_dir / "pyproject.toml").write_text('version = "9.9.9"\n')
+
+    monkeypatch.setattr(pdf_mod, "__file__", str(decoy_dir / "pdf_report.py"))
+    assert pdf_mod._get_package_version() == _read_pyproject_version()
