@@ -198,6 +198,53 @@ def _banner(ws, r, text, bg):
     ws.row_dimensions[r].height = 20
 
 
+def _write_provenance_sheet(wb, config, n_records, n_filtered, n_errors):
+    """Write the opening Provenance tab documenting how this workbook was made.
+
+    The sheet is created at index 0 so it is the first tab on both the
+    full path and the fewer-than-2-analysis-rows early-exit path (where
+    the workbook is saved before the analyser sheets render).  It
+    records the tool version (resolved from the repo-root pyproject,
+    not a fallback), the generation timestamp in UTC, the account
+    reference, record counts, and a snapshot of the configuration
+    thresholds that produced the evidence — so a filed submission is
+    self-documenting without reverse-engineering the run.
+
+    Must be listed first in ``_SEVERITY_LED_ORDER``: the final sheet
+    reorder rebuilds ``wb._sheets`` from that list, so an unlisted tab
+    is silently dropped from the saved workbook.
+    """
+    from datetime import datetime, timezone
+
+    from edf_bill_fetcher.helpers.version import get_package_version
+
+    ws = wb.create_sheet(title="Provenance", index=0)
+    _banner(ws, 1, "EDF Bill Fetcher — Evidence Workbook", NAVY)
+
+    rows = [
+        ("Generated (UTC)", datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        ("Version", get_package_version()),
+        ("Account Reference", str(config.get("report_account_ref") or config.get("acc_num") or "")),
+        ("Input Records", str(n_records)),
+        ("Filtered Records", str(n_filtered)),
+        ("Error Log Entries", str(n_errors)),
+    ]
+    for r_idx, (label, value) in enumerate(rows, 2):
+        _hcell(ws, r_idx, 1, label, bg=DGREY)
+        _text(ws, r_idx, 2, value)
+
+    r_idx = len(rows) + 3
+    _banner(ws, r_idx, "Configuration snapshot", ORANGE)
+    r_idx += 1
+    for key in sorted(config):
+        _hcell(ws, r_idx, 1, key, bg=LGREY)
+        _text(ws, r_idx, 2, str(config[key]))
+        r_idx += 1
+
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 60
+
+
 # ---------------------------------------------------------------------------
 # Main export function
 # ---------------------------------------------------------------------------
@@ -653,6 +700,16 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     # Tab 1: Evidence (created first — summary formulas reference it by name)
     ws_main = wb.active
     ws_main.title = "EDF Evidence Report"
+    # Provenance sheet must be created AFTER ``ws_main.title`` is set above:
+    # inserting at index 0 makes the new tab the active sheet, so creating it
+    # earlier would steal ``wb.active`` and the Evidence tab would lose its name.
+    _write_provenance_sheet(
+        wb,
+        config,
+        n_records=len(df),
+        n_filtered=len(filtered) if filtered else 0,
+        n_errors=len(error_log),
+    )
     # The diagnostic-only columns (``Source PDF Text``, ``_regex_trace``,
     # ``Balance Last Bill (£)``) are captured by the parsers for the
     # analyser tabs' Source Excerpt column / balance-context rendering.
@@ -1662,6 +1719,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
             )
 
     _SEVERITY_LED_ORDER = [
+        "Provenance",
         "Annual Summary",
         "EDF Evidence Report",
         "SAP Financial Transactions",
