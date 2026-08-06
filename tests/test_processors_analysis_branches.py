@@ -287,7 +287,11 @@ class TestReversalMatch:
         df = pd.DataFrame({"Entry Type": ["Credit"], "Amount (£)": [100.0]})
         assert (
             _reversal_match(
-                df, "INV-1", "oops", pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01")  # type: ignore[arg-type]
+                df,
+                "INV-1",
+                "oops",
+                pd.Timestamp("2024-01-01"),
+                pd.Timestamp("2024-02-01"),  # type: ignore[arg-type]
             )
             is False
         )
