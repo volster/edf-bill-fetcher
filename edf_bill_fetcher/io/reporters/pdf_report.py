@@ -44,7 +44,7 @@ from edf_bill_fetcher.helpers.date_utils import (
 )
 
 # Import from main module
-from edf_bill_fetcher.writers import HAS_SCIPY
+from edf_bill_fetcher.io.writers import HAS_SCIPY
 
 # =============================================================================
 # COLOR PALETTE & CONSTANTS

@@ -43,7 +43,7 @@ def _multi_period_df() -> pd.DataFrame:
 
 
 def test_payment_bar_chart(tmp_path: object) -> None:
-    from edf_bill_fetcher.writers import export_to_excel
+    from edf_bill_fetcher.io.writers import export_to_excel
 
     out = tmp_path / "payment_bar_chart.xlsx"  # type: ignore[operator]
     df = _multi_period_df()
@@ -59,7 +59,7 @@ def test_payment_bar_chart(tmp_path: object) -> None:
 
 
 def test_balance_trend_line_chart(tmp_path: object) -> None:
-    from edf_bill_fetcher.writers import export_to_excel
+    from edf_bill_fetcher.io.writers import export_to_excel
 
     out = tmp_path / "balance_trend_line_chart.xlsx"  # type: ignore[operator]
     df = _multi_period_df()
@@ -72,7 +72,7 @@ def test_balance_trend_line_chart(tmp_path: object) -> None:
 
 
 def test_period_charges_bar_chart(tmp_path: object) -> None:
-    from edf_bill_fetcher.writers import export_to_excel
+    from edf_bill_fetcher.io.writers import export_to_excel
 
     out = tmp_path / "period_charges_bar_chart.xlsx"  # type: ignore[operator]
     df = _multi_period_df()
@@ -85,7 +85,7 @@ def test_period_charges_bar_chart(tmp_path: object) -> None:
 
 
 def test_year_on_year_bar_chart(tmp_path: object) -> None:
-    from edf_bill_fetcher.writers import export_to_excel
+    from edf_bill_fetcher.io.writers import export_to_excel
 
     out = tmp_path / "year_on_year_bar_chart.xlsx"  # type: ignore[operator]
     df = _multi_period_df()

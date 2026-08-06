@@ -12,7 +12,7 @@ import pandas as pd
 from edf_bill_fetcher.models.events import SapBackBillingEvent
 from edf_bill_fetcher.processors.matching import match_sap_events_to_edf
 from edf_bill_fetcher.processors.sap_parsers import parse_sap_financial_transactions
-from edf_bill_fetcher.writers import detect_sap_back_billing_events
+from edf_bill_fetcher.writers._helpers import detect_sap_back_billing_events
 
 # ---------------------------------------------------------------------------
 # Parser

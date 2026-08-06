@@ -838,7 +838,7 @@ class TestEDFCollectorFunctions:
     """Tests for functions in edf_collector module."""
 
     def test_export_to_excel_creates_file(self, sample_records, sample_config):
-        from edf_bill_fetcher.writers import export_to_excel
+        from edf_bill_fetcher.io.writers import export_to_excel
 
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
             tmp_path = tmp.name
@@ -861,7 +861,7 @@ class TestIntegration:
 
     def test_full_extract_generate_cycle(self, sample_records, sample_config, mock_engine):
         """Test extracting to Excel then generating PDF."""
-        from edf_bill_fetcher.writers import export_to_excel
+        from edf_bill_fetcher.io.writers import export_to_excel
 
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "test.xlsx"

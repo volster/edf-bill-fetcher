@@ -47,6 +47,13 @@ __all__ = [
     "write_sap_meter_readings_sheet",
 ]
 
+try:
+    import importlib.util
+
+    HAS_SCIPY = importlib.util.find_spec("scipy") is not None
+except ImportError:
+    HAS_SCIPY = False
+
 
 def __getattr__(name: str) -> Any:
     if name in ("write_evidence_sheet", "write_summary_sheet"):

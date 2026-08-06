@@ -4,8 +4,8 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from edf_bill_fetcher.io.writers import write_rebilling_sheet
 from edf_bill_fetcher.processors.detection import detect_rebilling
-from edf_bill_fetcher.writers import write_rebilling_sheet
 
 
 def _sample_df() -> pd.DataFrame:

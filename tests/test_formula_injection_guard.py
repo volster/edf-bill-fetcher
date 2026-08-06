@@ -36,7 +36,7 @@ import pytest
 from openpyxl import Workbook, load_workbook
 
 from edf_bill_fetcher.helpers.excel_utils import text
-from edf_bill_fetcher.writers import export_to_excel
+from edf_bill_fetcher.io.writers import export_to_excel
 
 
 @pytest.fixture

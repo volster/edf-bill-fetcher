@@ -27,7 +27,7 @@ from typing import Any
 import pandas as pd
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
-from edf_bill_fetcher.writers import export_to_excel
+from edf_bill_fetcher.io.writers import export_to_excel
 
 
 def _engine_with_config(save_dups: bool) -> EvidenceEngine:

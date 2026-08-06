@@ -22,12 +22,12 @@ import pandas as pd
 from openpyxl import load_workbook
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.io.writers import export_to_excel
 from edf_bill_fetcher.processors.sap_parsers import (
     parse_sap_contract_history,
     parse_sap_financial_transactions,
     parse_sap_meter_read_history,
 )
-from edf_bill_fetcher.writers import export_to_excel
 
 # Reuse the synthetic SAP CSV strings from the existing test fixtures.
 from tests.test_sap_parser import CONTRACT_CSV, FINANCIAL_CSV, METER_CSV  # type: ignore
@@ -184,7 +184,7 @@ def test_static_check_sap_and_recon_toggles_are_read_inside_export(
     Mirrors ``test_save_dups_kwarg_match_dedup_branch_in_export``."""
     import inspect
 
-    from edf_bill_fetcher.writers import export_to_excel as _export_to_excel
+    from edf_bill_fetcher.io.writers import export_to_excel as _export_to_excel
 
     src = inspect.getsource(_export_to_excel)
     # The export body must consult both toggles to gate the SAP /

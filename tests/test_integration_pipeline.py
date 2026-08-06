@@ -36,7 +36,7 @@ import pytest
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
 from edf_bill_fetcher.io.reporters.pdf_report import generate_ombudsman_pdf
-from edf_bill_fetcher.writers import export_to_excel
+from edf_bill_fetcher.io.writers import export_to_excel
 
 FixturePath = Path(__file__).parent / "fixtures" / "sample_bill.pdf"
 

@@ -34,7 +34,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from edf_bill_fetcher.writers import export_to_excel
+from edf_bill_fetcher.io.writers import export_to_excel
 
 
 @pytest.fixture

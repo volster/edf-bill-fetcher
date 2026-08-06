@@ -18,13 +18,10 @@ from __future__ import annotations
 from openpyxl import Workbook, load_workbook
 
 from edf_bill_fetcher.helpers.excel_utils import build_sap_row_index_map
+from edf_bill_fetcher.io.writers import export_to_excel, write_sap_back_billing_sheets
 from edf_bill_fetcher.processors.matching import match_sap_events_to_edf
 from edf_bill_fetcher.processors.sap_parsers import parse_sap_financial_transactions
-from edf_bill_fetcher.writers import (
-    detect_sap_back_billing_events,
-    export_to_excel,
-    write_sap_back_billing_sheets,
-)
+from edf_bill_fetcher.writers._helpers import detect_sap_back_billing_events
 
 # ---------------------------------------------------------------------------
 # Helper builders
@@ -407,7 +404,7 @@ def test_sap_bb_events_title_row_contains_event_count_summary() -> None:
     )
     # Reach the writer directly so the test is hermetic — the public
     # write_sap_back_billing_sheets wrapper doesn't yet forward account.
-    from edf_bill_fetcher.writers import _write_sap_bb_events_sheet
+    from edf_bill_fetcher.io.writers.sap import _write_sap_bb_events_sheet
 
     ws = wb.create_sheet("SAP Back-billing Events")
     _write_sap_bb_events_sheet(ws, events, sap_financial_first_row=4, account="A-31105244")

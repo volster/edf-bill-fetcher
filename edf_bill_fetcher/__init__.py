@@ -10,18 +10,12 @@ as part of the modularization refactor.  Each submodule owns a domain:
 - ``writers`` — Excel sheet writers (write_reconciliation_sheet, export_to_excel, etc.)
 
 The top-level ``__init__.py`` does NOT eagerly import from submodules
-because doing so triggers a circular import through ``edf_collector.py``
-(which re-exports ``EvidenceEngine`` from ``edf_bill_fetcher.collectors``).
-Callers should use submodule imports directly:
+because doing so triggers a circular import between the submodule
+groups.  Callers should use submodule imports directly:
 
   from edf_bill_fetcher.collectors import EvidenceEngine
-  from edf_bill_fetcher.writers import export_to_excel
+  from edf_bill_fetcher.io.writers import export_to_excel
   from edf_bill_fetcher.models import SapBackBillingEvent
-
-During the modularization window the parsing helpers, regex patterns,
-and format detectors still live in ``edf_collector.py`` and are reached
-via the compat re-export block.  That block is stripped by the final
-compat-shim cleanup commit.
 """
 
 __all__: list[str] = []
