@@ -458,12 +458,15 @@ class TestResolveOutputPath:
         assert path.endswith(f"stem_{ds}_3_Report.pdf")
 
     def test_empty_output_folder_falls_back_to_cwd(
-        self, app: App, monkeypatch: pytest.MonkeyPatch
+        self, app: App, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         app.output_folder.set("")
-        monkeypatch.chdir("/tmp")
+        monkeypatch.chdir(tmp_path)
         path = app._resolve_output_path("stem", "xlsx", batch_n=1)
-        assert path.startswith("/tmp" + os.sep)
+        # Assert against the real cwd, not a hardcoded /tmp: macOS resolves
+        # /tmp to /private/tmp and Windows has no /tmp at all.
+        cwd = os.getcwd()
+        assert path.startswith(cwd + os.sep)
 
 
 # ---------------------------------------------------------------------------
