@@ -200,11 +200,10 @@ omit = [
 ]
 
 [tool.coverage.report]
-# Coverage gate is intentionally below current measured baseline (73%)
-# until Phase 2 Wave 2-4 coverage work completes (backburner per user).
-# The gate exists to catch future regressions; raising back to 90
-# is part of Phase 4 / Task 4.1 final audit.
-fail_under = 73
+# Coverage gate restored to 90% (Task 4.1): all Wave 2-4 targets landed,
+# global coverage measured at 92% (baseline 73.44%). The gate catches
+# future regressions against the completed coverage campaign.
+fail_under = 90
 show_missing = true
 skip_covered = true
 exclude_lines = [
