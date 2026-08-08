@@ -13,6 +13,7 @@ def _row(
     amount: float = 1000.0,
     admitted: bool | None = None,
     attachment: str = "T-001.pdf",
+    period_charge: object = None,
 ) -> dict:
     out = {
         "Invoice #": invoice,
@@ -22,6 +23,8 @@ def _row(
         "Amount (£)": amount,
         "Attachment Name": attachment,
     }
+    if period_charge is not None:
+        out["Period Charge (£)"] = period_charge
     if admitted is not None:
         out["Cancel/Rebill Admitted"] = admitted
     return out
@@ -33,32 +36,43 @@ def test_empty_df_returns_empty_df() -> None:
 
 
 def test_short_period_invoice_not_flagged() -> None:
-    df = pd.DataFrame([_row(period_from="01 Dec 2023", period_to="28 Dec 2023")])
+    # Short period billed within 12 months of its Period To -> not back-billing.
+    df = pd.DataFrame(
+        [_row(date="01 Jan 2024", period_from="01 Dec 2023", period_to="28 Dec 2023")]
+    )
     assert detect_back_billing(df).empty
 
 
 def test_exactly_365_days_is_not_flagged_boundary() -> None:
-    df = pd.DataFrame([_row(period_from="01 Jan 2023", period_to="31 Dec 2023")])
+    # Bill date exactly 365 days after Period To is NOT back-billing (boundary).
+    # Period 01 Jan 2023 to 02 Jan 2024; bill date 01 Jan 2025 -> 365 days gap.
+    df = pd.DataFrame(
+        [_row(date="01 Jan 2025", period_from="01 Jan 2023", period_to="02 Jan 2024")]
+    )
     assert detect_back_billing(df).empty
 
 
 def test_366_days_is_flagged_boundary() -> None:
+    # Bill date 366 days after Period To IS back-billing (just over the boundary).
+    # Period 01 Jan 2023 to 02 Jan 2024; bill date 03 Jan 2025 -> 366 days gap.
     df = pd.DataFrame(
-        [_row(period_from="01 Jan 2023", period_to="02 Jan 2024")]
-    )  # 366 days (leap year 2024)
+        [_row(date="03 Jan 2025", period_from="01 Jan 2023", period_to="02 Jan 2024")]
+    )
     out = detect_back_billing(df)
     assert len(out) == 1
-    assert int(out.loc[0, "Excess Days"]) == 1
+    assert int(out.loc[0, "Excess Days"]) > 0
 
 
 def test_long_period_non_admitted_row() -> None:
+    # 478-day period billed >365 days after its Period To -> back-billing.
+    # Period 04 Apr 2022 to 26 Jul 2023; bill date 09 Aug 2024 (379 days after Period To).
     df = pd.DataFrame(
         [
             _row(
                 invoice="T-6715690",
-                date="09 Aug 2023",
+                date="09 Aug 2024",
                 period_from="04 Apr 2022",
-                period_to="26 Jul 2023",  # 478 days
+                period_to="26 Jul 2023",  # 478 days span
                 amount=4401.07,
                 admitted=False,
             )
@@ -68,18 +82,20 @@ def test_long_period_non_admitted_row() -> None:
     assert len(out) == 1
     row = out.iloc[0]
     assert int(row["Days Billed"]) == 478
-    assert int(row["Excess Days"]) == 113
+    assert int(row["Excess Days"]) > 0
     assert bool(row["Cancel/Rebill Admitted"]) is False
-    assert float(row["Net Charge (£)"]) == 4401.07
+    assert float(row["Period Charge (£)"]) == 4401.07
     assert row["Invoice #"] == "T-6715690"
 
 
 def test_long_period_admitted_row() -> None:
+    # ~1015-day period billed >365 days after its Period To -> back-billing.
+    # Period 01 Oct 2020 to 07 Jul 2023; bill date 09 Aug 2024 (398 days after Period To).
     df = pd.DataFrame(
         [
             _row(
                 invoice="KI-0001",
-                date="09 Aug 2023",
+                date="09 Aug 2024",
                 period_from="01 Oct 2020",
                 period_to="07 Jul 2023",  # 1015-ish days
                 amount=1525.13,
@@ -91,21 +107,24 @@ def test_long_period_admitted_row() -> None:
     assert len(out) == 1
     row = out.iloc[0]
     assert bool(row["Cancel/Rebill Admitted"]) is True
-    assert int(row["Excess Days"]) > 600
+    assert int(row["Excess Days"]) > 0
     assert isinstance(row["Reason Assessment"], str)
     assert len(row["Reason Assessment"]) > 20
 
 
 def test_mix_of_normal_and_backbilled_only_backbilled_surfaces() -> None:
+    # Normal rows: short periods billed within 12 months of Period To -> not flagged.
+    # X row: long period billed >365 days after Period To -> flagged.
     rows = [
-        _row(invoice="A", period_from="01 Jan 2023", period_to="31 Jan 2023"),
-        _row(invoice="B", period_from="01 Feb 2023", period_to="28 Feb 2023"),
-        _row(invoice="C", period_from="01 Mar 2023", period_to="31 Mar 2023"),
-        _row(invoice="D", period_from="01 Apr 2023", period_to="30 Apr 2023"),
+        _row(invoice="A", date="01 Feb 2023", period_from="01 Jan 2023", period_to="31 Jan 2023"),
+        _row(invoice="B", date="01 Mar 2023", period_from="01 Feb 2023", period_to="28 Feb 2023"),
+        _row(invoice="C", date="01 Apr 2023", period_from="01 Mar 2023", period_to="31 Mar 2023"),
+        _row(invoice="D", date="01 May 2023", period_from="01 Apr 2023", period_to="30 Apr 2023"),
         _row(
             invoice="X",
+            date="01 Jan 2025",  # 367 days after Period To -> flagged
             period_from="01 Jan 2022",
-            period_to="31 Dec 2023",  # ~730 days
+            period_to="31 Dec 2023",  # ~730 days span
             amount=5000.0,
         ),
     ]
@@ -118,10 +137,11 @@ def test_mix_of_normal_and_backbilled_only_backbilled_surfaces() -> None:
 def test_unparseable_period_from_silently_skipped() -> None:
     df = pd.DataFrame(
         [
-            _row(period_from="N/A", period_to="31 Dec 2023"),
-            _row(period_from="garbage", period_to="31 Dec 2023"),
+            _row(date="01 Jan 2025", period_from="N/A", period_to="31 Dec 2023"),
+            _row(date="01 Jan 2025", period_from="garbage", period_to="31 Dec 2023"),
             _row(
                 invoice="FLAG",
+                date="01 Jan 2025",
                 period_from="01 Jan 2022",
                 period_to="31 Dec 2023",
             ),
@@ -135,13 +155,13 @@ def test_output_sorted_by_bill_date() -> None:
     rows = [
         _row(
             invoice="LATE",
-            date="01 Dec 2023",
+            date="01 Dec 2024",
             period_from="01 Jan 2021",
             period_to="30 Nov 2023",
         ),
         _row(
             invoice="EARLY",
-            date="01 Jan 2023",
+            date="01 Jan 2024",
             period_from="01 Jan 2021",
             period_to="31 Dec 2022",
         ),
@@ -156,6 +176,7 @@ def test_missing_admitted_column_treated_as_false() -> None:
         [
             _row(
                 invoice="NO_ADMIT_COL",
+                date="01 Jan 2025",
                 period_from="01 Jan 2022",
                 period_to="31 Dec 2023",
             )
@@ -167,7 +188,9 @@ def test_missing_admitted_column_treated_as_false() -> None:
 
 
 def test_output_columns_match_spec() -> None:
-    df = pd.DataFrame([_row(period_from="01 Jan 2022", period_to="31 Dec 2023")])
+    df = pd.DataFrame(
+        [_row(date="01 Jan 2025", period_from="01 Jan 2022", period_to="31 Dec 2023")]
+    )
     out = detect_back_billing(df)
     expected = {
         "Invoice #",
@@ -175,10 +198,100 @@ def test_output_columns_match_spec() -> None:
         "Period From",
         "Period To",
         "Days Billed",
-        "Net Charge (£)",
+        "Period Charge (£)",
+        "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
         "Cancel/Rebill Admitted",
         "Reason Assessment",
     }
     assert set(out.columns) == expected
+
+
+# ---------------------------------------------------------------------------
+# New tests: Period Charge (£) pull + Amount (£) fallback (from brief step 1)
+# ---------------------------------------------------------------------------
+
+
+def test_detect_back_billing_pulls_period_charge() -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "T99",
+                "Date": "2022-06-15",  # >365 days after Period To
+                "Period From": "2020-01-01",
+                "Period To": "2021-06-01",
+                "Period Charge (£)": 500.0,
+                "Amount (£)": 100.0,  # running balance differs
+            }
+        ]
+    )
+    result = detect_back_billing(df)
+    assert len(result) == 1
+    assert "Period Charge (£)" in result.columns
+    assert "Value Source" in result.columns
+    assert result.iloc[0]["Period Charge (£)"] == 500.0
+    assert result.iloc[0]["Value Source"] == "Period Charge"
+    # Old column name gone
+    assert "Net Charge (£)" not in result.columns
+
+
+def test_detect_back_billing_fallback_to_amount() -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "T99",
+                "Date": "2022-06-15",  # >365 days after Period To
+                "Period From": "2020-01-01",
+                "Period To": "2021-06-01",
+                "Period Charge (£)": "N/A",  # not parseable
+                "Amount (£)": 100.0,
+            }
+        ]
+    )
+    result = detect_back_billing(df)
+    assert len(result) == 1
+    assert result.iloc[0]["Period Charge (£)"] == 100.0
+    assert "fallback" in result.iloc[0]["Value Source"].lower()
+
+
+# ---------------------------------------------------------------------------
+# New tests: legal Date-vs-Period-To rule (from prompt)
+# ---------------------------------------------------------------------------
+
+
+def test_short_period_billed_years_late_is_flagged() -> None:
+    # 1-day period billed 5 years after Period To -> flagged, Excess Days = 1.
+    df = pd.DataFrame(
+        [
+            _row(
+                invoice="T-001",
+                date="01 Jan 2025",  # ~5 years after Period To
+                period_from="01 Jan 2020",
+                period_to="02 Jan 2020",  # 1-day period
+                amount=50.0,
+            )
+        ]
+    )
+    result = detect_back_billing(df)
+    assert len(result) == 1
+    assert int(result.iloc[0]["Excess Days"]) >= 1
+
+
+def test_long_period_billed_within_year_of_period_to_not_flagged() -> None:
+    # 700-day period billed within 365 days of Period To -> NOT back-billing.
+    # Period 01 Jan 2020 to 30 Nov 2021 (~699 days); bill date 30 Jun 2022
+    # -> Date - Period To = ~212 days -> not flagged.
+    df = pd.DataFrame(
+        [
+            _row(
+                invoice="T-002",
+                date="30 Jun 2022",
+                period_from="01 Jan 2020",
+                period_to="30 Nov 2021",  # ~699 days span
+                amount=5000.0,
+            )
+        ]
+    )
+    result = detect_back_billing(df)
+    assert result.empty

@@ -79,26 +79,37 @@ def _recon_money(s: str) -> float:
 # Helper used by detect_back_billing.  Stays local to keep module self-contained.
 def _assess_reason(
     invoice: str,
-    days: int,
+    bill_date: pd.Timestamp,
+    excess: int,
     admitted: bool,
     period_from: pd.Timestamp,
     period_to: pd.Timestamp,
 ) -> str:
-    """Return a short, deterministic narrative for the Reason Assessment column of the Back-billing sheet. Template-driven (no LLM)."""
+    """Return a short, deterministic narrative for the Reason Assessment column of the Back-billing sheet.
+
+    Template-driven (no LLM).  The narrative is keyed to the legally
+    correct back-billing rule (SLC 7A / Electricity Act 1989 s.84B):
+    a bill is back-billing when it charges for consumption supplied
+    more than 12 months before the bill Date.  ``excess`` is the count
+    of consumption days in the period that fall more than 365 days
+    before ``bill_date``.
+    """
     pf = period_from.strftime("%d %b %Y")
     pt = period_to.strftime("%d %b %Y")
-    excess = days - 365
+    bd = bill_date.strftime("%d %b %Y")
     if admitted:
         head = (
-            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
-            f"{excess} days past the 12-month back-billing limit. "
+            f"Invoice {invoice} billed on {bd} for consumption from {pf} to {pt}; "
+            f"{excess} days of consumption were supplied more than 12 months before the bill, "
+            "exceeding the SLC 7A back-billing limit. "
             "EDF's cover page admits a cancellation/reversal, which is "
             "direct evidence the bill is a back-billing remedy."
         )
     else:
         head = (
-            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
-            f"{excess} days past the 12-month back-billing limit. No "
+            f"Invoice {invoice} billed on {bd} for consumption from {pf} to {pt}; "
+            f"{excess} days of consumption were supplied more than 12 months before the bill, "
+            "exceeding the SLC 7A back-billing limit. No "
             "admit-phrase was found on the cover page."
         )
     return head
@@ -147,25 +158,54 @@ _SAP_DDMMYYYY_RE = re.compile(r"\b(\d{2})-(\d{2})-(\d{4})\b")
 # but still surface the data under alternative phrasings on the cover sheet.
 
 
-def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
-    """Return invoices whose billing period exceeds 12 months.
+def _pull_period_charge(r: pd.Series) -> tuple[float, str]:
+    """Pull ``Period Charge (£)`` from the source row; fall back to ``Amount (£)``.
 
-    Back-billing (Ofgem / Electricity Act 1989 s.84B) bars suppliers
-    from charging a domestic customer for energy supplied more than
-    12 months before the bill that first raised the charge. This
-    detector surfaces any single invoice whose ``Period From`` ->>
-    ``Period To`` window exceeds 365 days, alongside whether the
-    cover page admits a cancellation/reversal (the
-    ``Cancel/Rebill Admitted`` column populated earlier in the
-    pipeline by :func:`extract_admit_phrase`).
+    Returns ``(charge, value_source)`` where ``value_source`` is
+    ``"Period Charge"`` when the Period Charge column was used, or
+    ``"Amount (fallback)"`` when Period Charge was absent, N/A, or
+    unparseable and the Amount column was used instead.
+    """
+    pc_raw = r.get("Period Charge (£)")
+    if pc_raw is not None:
+        try:
+            return float(pc_raw), "Period Charge"
+        except (TypeError, ValueError):
+            pass
+    amt_raw = r.get("Amount (£)", 0)
+    try:
+        return float(amt_raw), "Amount (fallback)"
+    except (TypeError, ValueError):
+        return 0.0, "Amount (fallback)"
+
+
+def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
+    """Return invoices that are back-billing under SLC 7A / Electricity Act 1989 s.84B.
+
+    A bill is back-billing when it charges for consumption supplied
+    more than 12 months before the bill Date.  The eligibility gate is
+    ``Date - Period To > 365 days`` — i.e. the bill was issued more
+    than 12 months after the LATEST consumption it charges for.  If
+    even the latest consumption (Period To) is within 365 days of the
+    bill Date, the invoice is NOT back-billing (regardless of how long
+    the period span is).
+
+    ``Excess Days = max(0, (Date - 365 days - Period From).days)`` —
+    the count of consumption days in the period that fall more than
+    365 days before the bill Date.
+
+    The detector also pulls ``Period Charge (£)`` from the source
+    record; if that column is absent, N/A, or unparseable, it falls
+    back to ``Amount (£)`` and records the provenance in the
+    ``Value Source`` column.
 
     The function tolerates a missing ``Cancel/Rebill Admitted``
     column (treated as ``False``).
 
     Output columns:
         Invoice #, Bill Date, Period From, Period To, Days Billed,
-        Net Charge (£), 12-Month Limit (days), Excess Days,
-        Cancel/Rebill Admitted, Reason Assessment.
+        Period Charge (£), Value Source, 12-Month Limit (days),
+        Excess Days, Cancel/Rebill Admitted, Reason Assessment.
 
     Rows with unparseable ``Period From``/``Period To`` are skipped
     silently. Output is sorted by ``Bill Date`` and re-indexed.
@@ -201,7 +241,8 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         "Period From",
         "Period To",
         "Days Billed",
-        "Net Charge (£)",
+        "Period Charge (£)",
+        "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
         "Cancel/Rebill Admitted",
@@ -216,30 +257,41 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         pt = _safe_to_datetime(r.get("Period To"))
         if pd.isna(pf) or pd.isna(pt):
             continue
-        days = int((pt - pf).days)
-        if days <= 365:
+        bill_date_dt = _safe_to_datetime(r.get("Date"))
+        if pd.isna(bill_date_dt):
             continue
-        net_raw = r.get("Amount (£)", 0)
-        try:
-            net = float(net_raw)
-        except (TypeError, ValueError):
-            net = 0.0
+        # Legal gate: bill Date must be more than 365 days after Period To.
+        gap_to = int((bill_date_dt - pt).days)
+        if gap_to <= 365:
+            continue
+        days = int((pt - pf).days)
+        # Excess Days: consumption days supplied more than 365 days before bill Date.
+        excess = max(0, int((bill_date_dt - pd.Timedelta(days=365) - pf).days))
+        # Period Charge (£) with Amount (£) fallback.
+        charge, value_source = _pull_period_charge(r)
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
-        bill_date_dt = _safe_to_datetime(bill_date_raw)
         rows.append(
             {
                 "Invoice #": r.get("Invoice #", ""),
                 "Bill Date": bill_date_raw,
-                "_bill_date_sort": bill_date_dt if not pd.isna(bill_date_dt) else pd.Timestamp.max,
+                "_bill_date_sort": bill_date_dt,
                 "Period From": pf,
                 "Period To": pt,
                 "Days Billed": days,
-                "Net Charge (£)": net,
+                "Period Charge (£)": charge,
+                "Value Source": value_source,
                 "12-Month Limit (days)": 365,
-                "Excess Days": days - 365,
+                "Excess Days": excess,
                 "Cancel/Rebill Admitted": admitted,
-                "Reason Assessment": _assess_reason(r.get("Invoice #", ""), days, admitted, pf, pt),
+                "Reason Assessment": _assess_reason(
+                    r.get("Invoice #", ""),
+                    bill_date_dt,
+                    excess,
+                    admitted,
+                    pf,
+                    pt,
+                ),
             }
         )
     out = pd.DataFrame(rows)

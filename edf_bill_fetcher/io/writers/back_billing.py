@@ -40,26 +40,37 @@ from edf_bill_fetcher.writers._helpers import _disclosed_label
 
 def _assess_reason(
     invoice: str,
-    days: int,
+    bill_date: pd.Timestamp,
+    excess: int,
     admitted: bool,
     period_from: pd.Timestamp,
     period_to: pd.Timestamp,
 ) -> str:
-    """Return a short, deterministic narrative for the Reason Assessment column of the Back-billing sheet. Template-driven (no LLM)."""
+    """Return a short, deterministic narrative for the Reason Assessment column of the Back-billing sheet.
+
+    Template-driven (no LLM).  The narrative is keyed to the legally
+    correct back-billing rule (SLC 7A / Electricity Act 1989 s.84B):
+    a bill is back-billing when it charges for consumption supplied
+    more than 12 months before the bill Date.  ``excess`` is the count
+    of consumption days in the period that fall more than 365 days
+    before ``bill_date``.
+    """
     pf = period_from.strftime("%d %b %Y")
     pt = period_to.strftime("%d %b %Y")
-    excess = days - 365
+    bd = bill_date.strftime("%d %b %Y")
     if admitted:
         head = (
-            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
-            f"{excess} days past the 12-month back-billing limit. "
+            f"Invoice {invoice} billed on {bd} for consumption from {pf} to {pt}; "
+            f"{excess} days of consumption were supplied more than 12 months before the bill, "
+            "exceeding the SLC 7A back-billing limit. "
             "EDF's cover page admits a cancellation/reversal, which is "
             "direct evidence the bill is a back-billing remedy."
         )
     else:
         head = (
-            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
-            f"{excess} days past the 12-month back-billing limit. No "
+            f"Invoice {invoice} billed on {bd} for consumption from {pf} to {pt}; "
+            f"{excess} days of consumption were supplied more than 12 months before the bill, "
+            "exceeding the SLC 7A back-billing limit. No "
             "admit-phrase was found on the cover page."
         )
     return head
@@ -68,25 +79,54 @@ def _assess_reason(
 # --- detect_back_billing (was writers/__init__.py L2704-2806) ---
 
 
-def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
-    """Return invoices whose billing period exceeds 12 months.
+def _pull_period_charge(r: pd.Series) -> tuple[float, str]:
+    """Pull ``Period Charge (£)`` from the source row; fall back to ``Amount (£)``.
 
-    Back-billing (Ofgem / Electricity Act 1989 s.84B) bars suppliers
-    from charging a domestic customer for energy supplied more than
-    12 months before the bill that first raised the charge. This
-    detector surfaces any single invoice whose ``Period From`` ->
-    ``Period To`` window exceeds 365 days, alongside whether the
-    cover page admits a cancellation/reversal (the
-    ``Cancel/Rebill Admitted`` column populated earlier in the
-    pipeline by :func:`extract_admit_phrase`).
+    Returns ``(charge, value_source)`` where ``value_source`` is
+    ``"Period Charge"`` when the Period Charge column was used, or
+    ``"Amount (fallback)"`` when Period Charge was absent, N/A, or
+    unparseable and the Amount column was used instead.
+    """
+    pc_raw = r.get("Period Charge (£)")
+    if pc_raw is not None:
+        try:
+            return float(pc_raw), "Period Charge"
+        except (TypeError, ValueError):
+            pass
+    amt_raw = r.get("Amount (£)", 0)
+    try:
+        return float(amt_raw), "Amount (fallback)"
+    except (TypeError, ValueError):
+        return 0.0, "Amount (fallback)"
+
+
+def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
+    """Return invoices that are back-billing under SLC 7A / Electricity Act 1989 s.84B.
+
+    A bill is back-billing when it charges for consumption supplied
+    more than 12 months before the bill Date.  The eligibility gate is
+    ``Date - Period To > 365 days`` — i.e. the bill was issued more
+    than 12 months after the LATEST consumption it charges for.  If
+    even the latest consumption (Period To) is within 365 days of the
+    bill Date, the invoice is NOT back-billing (regardless of how long
+    the period span is).
+
+    ``Excess Days = max(0, (Date - 365 days - Period From).days)`` —
+    the count of consumption days in the period that fall more than
+    365 days before the bill Date.
+
+    The detector also pulls ``Period Charge (£)`` from the source
+    record; if that column is absent, N/A, or unparseable, it falls
+    back to ``Amount (£)`` and records the provenance in the
+    ``Value Source`` column.
 
     The function tolerates a missing ``Cancel/Rebill Admitted``
     column (treated as ``False``).
 
     Output columns:
         Invoice #, Bill Date, Period From, Period To, Days Billed,
-        Net Charge (£), 12-Month Limit (days), Excess Days,
-        Cancel/Rebill Admitted, Reason Assessment.
+        Period Charge (£), Value Source, 12-Month Limit (days),
+        Excess Days, Cancel/Rebill Admitted, Reason Assessment.
 
     Rows with unparseable ``Period From``/``Period To`` are skipped
     silently. Output is sorted by ``Bill Date`` and re-indexed.
@@ -122,7 +162,8 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         "Period From",
         "Period To",
         "Days Billed",
-        "Net Charge (£)",
+        "Period Charge (£)",
+        "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
         "Cancel/Rebill Admitted",
@@ -137,30 +178,41 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         pt = _safe_to_datetime(r.get("Period To"))
         if pd.isna(pf) or pd.isna(pt):
             continue
-        days = int((pt - pf).days)
-        if days <= 365:
+        bill_date_dt = _safe_to_datetime(r.get("Date"))
+        if pd.isna(bill_date_dt):
             continue
-        net_raw = r.get("Amount (£)", 0)
-        try:
-            net = float(net_raw)
-        except (TypeError, ValueError):
-            net = 0.0
+        # Legal gate: bill Date must be more than 365 days after Period To.
+        gap_to = int((bill_date_dt - pt).days)
+        if gap_to <= 365:
+            continue
+        days = int((pt - pf).days)
+        # Excess Days: consumption days supplied more than 365 days before bill Date.
+        excess = max(0, int((bill_date_dt - pd.Timedelta(days=365) - pf).days))
+        # Period Charge (£) with Amount (£) fallback.
+        charge, value_source = _pull_period_charge(r)
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
-        bill_date_dt = _safe_to_datetime(bill_date_raw)
         rows.append(
             {
                 "Invoice #": r.get("Invoice #", ""),
                 "Bill Date": bill_date_raw,
-                "_bill_date_sort": bill_date_dt if not pd.isna(bill_date_dt) else pd.Timestamp.max,
+                "_bill_date_sort": bill_date_dt,
                 "Period From": pf,
                 "Period To": pt,
                 "Days Billed": days,
-                "Net Charge (£)": net,
+                "Period Charge (£)": charge,
+                "Value Source": value_source,
                 "12-Month Limit (days)": 365,
-                "Excess Days": days - 365,
+                "Excess Days": excess,
                 "Cancel/Rebill Admitted": admitted,
-                "Reason Assessment": _assess_reason(r.get("Invoice #", ""), days, admitted, pf, pt),
+                "Reason Assessment": _assess_reason(
+                    r.get("Invoice #", ""),
+                    bill_date_dt,
+                    excess,
+                    admitted,
+                    pf,
+                    pt,
+                ),
             }
         )
     out = pd.DataFrame(rows)
@@ -222,7 +274,7 @@ def write_back_billing_sheet(
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
     t1.alignment = Alignment(horizontal="left", vertical="center")
-    for c in range(2, 12):
+    for c in range(2, 14):
         x = ws.cell(row=1, column=c)
         x.fill = PatternFill("solid", start_color=ORANGE)
         x.border = CELL_BORDER
@@ -233,7 +285,7 @@ def write_back_billing_sheet(
     lc_hdr.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     lc_hdr.fill = PatternFill("solid", start_color=NAVY)
     lc_hdr.border = CELL_BORDER
-    for c in range(2, 12):
+    for c in range(2, 14):
         x = ws.cell(row=2, column=c)
         x.fill = PatternFill("solid", start_color=NAVY)
         x.border = CELL_BORDER
@@ -245,7 +297,7 @@ def write_back_billing_sheet(
     lc_cell.font = Font(name="Calibri", size=10)
     lc_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     lc_cell.border = CELL_BORDER
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=11)
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=13)
     ws.row_dimensions[3].height = 90
 
     # Row 5: instruction
@@ -258,7 +310,7 @@ def write_back_billing_sheet(
     inst_cell = ws.cell(row=5, column=1, value=inst)
     inst_cell.font = Font(name="Calibri", size=10, italic=True)
     inst_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=11)
+    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=13)
     ws.row_dimensions[5].height = 45
 
     # Row 7: headers
@@ -268,7 +320,8 @@ def write_back_billing_sheet(
         "Period From",
         "Period To",
         "Days Billed",
-        "Net Charge (£)",
+        "Period Charge (£)",
+        "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
         "Cancel/Rebill Disclosed",
@@ -290,8 +343,9 @@ def write_back_billing_sheet(
         inv = str(row.get("Invoice #", ""))
         overlap_flag = inv in overlaps
         disclosed = _disclosed_label(bool(row.get("Cancel/Rebill Admitted")), overlap_flag)
-        net = float(row.get("Net Charge (£)", 0.0) or 0.0)
-        total += net
+        charge = float(row.get("Period Charge (£)", 0.0) or 0.0)
+        total += charge
+        value_src = str(row.get("Value Source", ""))
         bill_date_val = row.get("Bill Date", "")
         if isinstance(bill_date_val, pd.Timestamp | datetime):
             bill_date_val = bill_date_val.strftime("%d %b %Y")
@@ -306,16 +360,17 @@ def write_back_billing_sheet(
         _text(ws, r, 3, pf, fill_hex=bg)
         _text(ws, r, 4, pt, fill_hex=bg)
         _num(ws, r, 5, int(row.get("Days Billed", 0)), fmt="#,##0", fill_hex=bg)
-        _money(ws, r, 6, net, fill_hex=bg)
-        _num(ws, r, 7, int(row.get("12-Month Limit (days)", 365)), fmt="#,##0", fill_hex=bg)
-        _num(ws, r, 8, int(row.get("Excess Days", 0)), fmt="#,##0", fill_hex=bg)
+        _money(ws, r, 6, charge, fill_hex=bg)
+        _text(ws, r, 7, value_src, fill_hex=bg)
+        _num(ws, r, 8, int(row.get("12-Month Limit (days)", 365)), fmt="#,##0", fill_hex=bg)
+        _num(ws, r, 9, int(row.get("Excess Days", 0)), fmt="#,##0", fill_hex=bg)
         # Highlight excess-days when >30 (i.e. back-billing is materially over)
         if int(row.get("Excess Days", 0)) > 30:
-            ws.cell(row=r, column=8).font = Font(name="Calibri", size=10, bold=True, color="C00000")
-        _text(ws, r, 9, disclosed, fill_hex=bg)
-        _text(ws, r, 10, row.get("Reason Assessment", ""), wrap=True, fill_hex=bg)
-        _open_pdf_hyperlink_cell(ws, r, 11, evidence_df, inv)
-        # View on Evidence Report (col 12): bidirectional hotlink back to the
+            ws.cell(row=r, column=9).font = Font(name="Calibri", size=10, bold=True, color="C00000")
+        _text(ws, r, 10, disclosed, fill_hex=bg)
+        _text(ws, r, 11, row.get("Reason Assessment", ""), wrap=True, fill_hex=bg)
+        _open_pdf_hyperlink_cell(ws, r, 12, evidence_df, inv)
+        # View on Evidence Report (col 13): bidirectional hotlink back to the
         # row on the EDF Evidence Report sheet. Match by Invoice # first,
         # falling back to the amt|days signature.
         target_row = None
@@ -323,14 +378,14 @@ def write_back_billing_sheet(
             target_row = evidence_index.get(f"inv:{inv}")
             if target_row is None:
                 try:
-                    amt = float(row.get("Net Charge (£)", 0.0) or 0.0)
+                    amt = float(row.get("Period Charge (£)", 0.0) or 0.0)
                     days = int(row.get("Days Billed", 0) or 0)
                     key = f"amt_days:{amt:.2f}|{days}"
                     target_row = evidence_index.get(key)
                 except (TypeError, ValueError):
                     pass
         if target_row is not None:
-            cell = ws.cell(row=r, column=12, value="→")
+            cell = ws.cell(row=r, column=13, value="→")
             cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
                 ref=cell.coordinate,
                 location=f"'EDF Evidence Report'!A{target_row}",
@@ -339,7 +394,7 @@ def write_back_billing_sheet(
             )
             cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
         else:
-            cell = ws.cell(row=r, column=12, value="No match")
+            cell = ws.cell(row=r, column=13, value="No match")
             cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
         r += 1
 
@@ -361,7 +416,7 @@ def write_back_billing_sheet(
         total_cell.fill = PatternFill("solid", start_color=NAVY)
         total_cell.border = CELL_BORDER
         total_cell.number_format = "#,##0.00"
-        for c in range(7, 13):
+        for c in range(7, 14):
             x = ws.cell(row=r, column=c)
             x.fill = PatternFill("solid", start_color=NAVY)
             x.border = CELL_BORDER
@@ -377,11 +432,12 @@ def write_back_billing_sheet(
         "E": 12,
         "F": 16,
         "G": 18,
-        "H": 12,
-        "I": 22,
-        "J": 60,
-        "K": 60,  # Open PDF
-        "L": 22,  # View on Evidence Report
+        "H": 14,
+        "I": 12,
+        "J": 22,
+        "K": 60,
+        "L": 60,  # Open PDF
+        "M": 22,  # View on Evidence Report
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
