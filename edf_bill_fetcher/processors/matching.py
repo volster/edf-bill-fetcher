@@ -195,6 +195,15 @@ def match_sap_events_to_edf(
         if pd.isna(ev.clearing_date):
             continue
         ev_cd = pd.Timestamp(ev.clearing_date)
+        posting_ts = pd.NaT
+        for r in ev.rows:
+            p_raw = r.get("Posting Date")
+            if p_raw is None or str(p_raw).strip().upper() in ("", "N/A", "NONE"):
+                continue
+            p_ts = _safe_to_datetime(p_raw)
+            if not pd.isna(p_ts):
+                posting_ts = pd.Timestamp(p_ts)
+                break
         for idx, pf, pt, edf_amt, _invoice in parsed_edf:
             # Compute the date delta in days vs Period To (or From fallback)
             if not pd.isna(pt):
@@ -237,25 +246,33 @@ def match_sap_events_to_edf(
                 elif 0.50 <= ratio <= 1.50:
                     amount_score = 5
 
-            # Date score — Clearing Date within EDF Period span gets
-            # the 50-point bonus ONLY when amount also matched (spec
-            # §3.1 — Option C).  Without amount correspondence the
-            # in-span case falls through to the day-band ladder
-            # measured against the nearer boundary, so a pure
+            # Date score — Posting Date (preferred) or Clearing Date within
+            # the EDF Period span gets the 50-point bonus ONLY when amount
+            # also matched (spec §3.1 — Option C).  Without amount
+            # correspondence the in-span case falls through to the day-band
+            # ladder measured against the nearer boundary, so a pure
             # coincidental date-in-span can no longer reach Medium.
             date_score = 0
             date_in_span = False
+            date_axis = ev_cd
+            if (
+                not pd.isna(posting_ts)
+                and not pd.isna(pf)
+                and not pd.isna(pt)
+                and pd.Timestamp(pf) <= posting_ts <= pd.Timestamp(pt)
+            ):
+                date_axis = posting_ts
             if (
                 not pd.isna(pf)
                 and not pd.isna(pt)
-                and pd.Timestamp(pf) <= ev_cd <= pd.Timestamp(pt)
+                and pd.Timestamp(pf) <= date_axis <= pd.Timestamp(pt)
             ):
                 date_in_span = True
                 if amount_score > 0:
                     date_score = 50
                 else:
-                    delta_to_pf = abs((ev_cd - pd.Timestamp(pf)).days)
-                    delta_to_pt = abs((ev_cd - pd.Timestamp(pt)).days)
+                    delta_to_pf = abs((date_axis - pd.Timestamp(pf)).days)
+                    delta_to_pt = abs((date_axis - pd.Timestamp(pt)).days)
                     nearest_delta = min(delta_to_pf, delta_to_pt)
                     for band_days, band_score in _SAP_MATCH_DAY_BANDS:
                         if nearest_delta <= band_days:
