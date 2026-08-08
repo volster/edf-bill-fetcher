@@ -247,6 +247,38 @@ def _write_provenance_sheet(wb, config, n_records, n_filtered, n_errors):
     ws.column_dimensions["B"].width = 60
 
 
+def _prepare_analysis_frame(df_an: pd.DataFrame, config: ConfigDict) -> pd.DataFrame:
+    """Apply the analysis-min magnitude filter to the analysis frame.
+
+    Balance-affecting entries are split by ``Entry Type``: every
+    ``Payment``/``Credit`` row is kept, while ``New Bill``/``Ongoing
+    Balance`` rows are kept only when their ``Amount (£)`` is at or above
+    ``config["analysis_min"]``.
+
+    Legal back-billing candidates are exempt from the amount gate so a
+    late-billed invoice is not silently dropped from the analysis input.
+    A candidate is an invoice whose bill ``Date`` is more than 365 days
+    after the start of its billed consumption (``Period From``) -- the
+    SLC 7A back-billing test compares the bill date with the consumption
+    date, NOT the ``Period To - Period From`` span.  A one-day period
+    billed five years late passes; a long period billed contemporaneously
+    does not pass solely because of its span.
+
+    This is the gate logic that was previously inline at export.py:807-811.
+    """
+    analysis_min = float(config.get("analysis_min", 500.0))
+    payment_credit_mask = df_an["Entry Type"].isin(("Payment", "Credit"))
+    bill_mask = df_an["Entry Type"].isin(("New Bill", "Ongoing Balance"))
+    amount_mask = df_an["Amount (£)"] >= analysis_min
+
+    bill_date = _safe_to_datetime(df_an["Date"])
+    period_from = _safe_to_datetime(df_an["Period From"])
+    legal_candidate = (bill_date - period_from).dt.days > 365
+
+    dfc = df_an[(payment_credit_mask) | (bill_mask & (amount_mask | legal_candidate))]
+    return dfc.copy().reset_index(drop=True)
+
+
 # ---------------------------------------------------------------------------
 # Main export function
 # ---------------------------------------------------------------------------
@@ -800,15 +832,8 @@ def export_to_excel(data, output_path, error_log, config: ConfigDict, filtered=N
     df_an = df.copy()
     df_an["_dt"] = df_an["Date"].apply(parse_to_sort_date)
     df_an = df_an.sort_values("_dt").reset_index(drop=True)
-    analysis_min = float(config.get("analysis_min", 500.0))
 
-    # For balance-affecting entries: include all Payments/Credits, but filter
-    # New Bill/Ongoing Balance by analysis_min threshold
-    payment_credit_mask = df_an["Entry Type"].isin(("Payment", "Credit"))
-    bill_mask = df_an["Entry Type"].isin(("New Bill", "Ongoing Balance"))
-    amount_mask = df_an["Amount (£)"] >= analysis_min
-
-    dfc = df_an[(payment_credit_mask) | (bill_mask & amount_mask)].copy().reset_index(drop=True)
+    dfc = _prepare_analysis_frame(df_an, config)
     dfc["year"] = dfc["_dt"].dt.year
     dfc["month"] = dfc["_dt"].dt.month
 
