@@ -12,6 +12,7 @@ stripped by Task 7.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 
 import pandas as pd
 
@@ -446,6 +447,92 @@ def detect_rebilling(
     return out[columns]
 
 
+def compute_transitive_domination(
+    rebilling_df: pd.DataFrame,
+    back_billing_rows: pd.DataFrame,
+) -> dict[str, tuple[str, bool]]:
+    """Compute the transitive closure of the kill-chain edges restricted to back-billing rows.
+
+    Consumes:
+        rebilling_df: output of detect_rebilling with columns
+            'Killer Invoice', 'Killed Invoice' (and others).
+        back_billing_rows: output of detect_back_billing with
+            'Invoice #' key and 'Period From'/'Period To'.
+
+    Returns a mapping {superseded_invoice_id: (survivor_invoice_id, partial_overlap_flag)}.
+    A back-billing row is superseded iff there exists a later back-billing row that
+    transitively dominates it. The survivor is the transitive root (the live row from
+    which the superseded row is reachable).
+
+    partial_overlap_flag is True when the killer's period does NOT fully contain the
+    killed's period (strict containment guard failed but a K*-edge still fired).
+    """
+    if rebilling_df.empty:
+        edges: list[tuple[str, str]] = []
+    else:
+        edges = list(
+            zip(
+                rebilling_df["Killer Invoice"].astype(str),
+                rebilling_df["Killed Invoice"].astype(str),
+                strict=True,
+            )
+        )
+
+    # Build the set of back-billing invoice IDs.
+    bb_ids = {str(row["Invoice #"]) for _, row in back_billing_rows.iterrows()}
+
+    period_map: dict[str, tuple[pd.Timestamp, pd.Timestamp]] = {}
+    for _, row in back_billing_rows.iterrows():
+        inv_id = str(row["Invoice #"])
+        pf = _safe_to_datetime(row.get("Period From"))
+        pt = _safe_to_datetime(row.get("Period To"))
+        if pd.notna(pf) and pd.notna(pt):
+            period_map[inv_id] = (pf, pt)
+
+    bb_edges = [(u, v) for u, v in edges if u in bb_ids and v in bb_ids]
+
+    adj: dict[str, list[str]] = defaultdict(list)
+    for u, v in bb_edges:
+        adj[u].append(v)
+
+    reachable_from: dict[str, set[str]] = defaultdict(set)
+    for source in bb_ids:
+        visited: set[str] = set()
+        queue = [source]
+        while queue:
+            node = queue.pop(0)
+            if node in visited:
+                continue
+            visited.add(node)
+            for neighbor in adj.get(node, []):
+                if neighbor not in visited:
+                    queue.append(neighbor)
+        reachable_from[source] = visited - {source}
+
+    def sort_key(inv_id: str) -> tuple[pd.Timestamp, str]:
+        if inv_id in period_map:
+            return (period_map[inv_id][0], inv_id)
+        return (pd.Timestamp.max, inv_id)
+
+    domination_map: dict[str, tuple[str, bool]] = {}
+    for target in bb_ids:
+        superseded_by = [
+            source for source in bb_ids if source != target and target in reachable_from[source]
+        ]
+        if not superseded_by:
+            continue
+        # The survivor is the transitive root: earliest period start, then ID tiebreak.
+        survivor = min(superseded_by, key=sort_key)
+        partial_overlap = False
+        if survivor in period_map and target in period_map:
+            survivor_start, survivor_end = period_map[survivor]
+            target_start, target_end = period_map[target]
+            if not (survivor_start <= target_start and survivor_end >= target_end):
+                partial_overlap = True
+        domination_map[target] = (survivor, partial_overlap)
+    return domination_map
+
+
 # Default 99,999 - 5,000 rollover threshold per spec \u00a73.3.
 _DEFAULT_ROLLOVER_THRESHOLD = 99999 - 5000
 
@@ -728,6 +815,7 @@ __all__ = [
     "detect_pdf_format",
     "detect_back_billing",
     "detect_rebilling",
+    "compute_transitive_domination",
     "detect_meter_rollover",
     "detect_reconciliation_statement",
     "extract_reconciliation_statement_rows",
