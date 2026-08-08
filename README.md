@@ -102,7 +102,7 @@ Or run the built executable `EDF_Evidence_Collector.exe`.
 2. **Configure Options**:
    - **Account Filter**: Filter by EDF account number (e.g., `A-12345678` or `123 456 789 012`). Both compact and grouped-digit renderings are matched against the bill — `extract_new_invoice_fields` accepts the spaceless `A-NNNNNNNN` shape and the bank-row-style `NNN NNN NNN NNN` shape.
    - **Domain Filter**: Filter PST emails by sender domain (default: edfenergy.com)
-   - **Minimum Amount**: Filter out records below this threshold (default: £500)
+   - **Minimum Amount**: Filter out records below this threshold (default: £50)
    - **Analysis Threshold**: Minimum bill amount for analysis tabs (default: £500)
    - **Report Account Ref**: Override account reference in report header
 3. **Click "EXTRACT TO EXCEL"** — produces the evidence workbook. The same button toggles to `Cancel` while running and `Cancelling...` after you click Cancel; it returns to `EXTRACT TO EXCEL` when the worker exits.
@@ -237,6 +237,7 @@ Sheets are written in roughly this order; conditional sheets only appear when th
 
 | Sheet | When emitted | Description |
 | --- | --- | --- |
+| **Provenance** | always (first tab) | Tool version, generation timestamp, account reference, record counts, and a full snapshot of the run configuration — so a filed workbook is self-documenting about how its conclusions were produced |
 | **Annual Summary** | always | Yearly balance range, average, peak, low |
 | **EDF Evidence Report** | always | All extracted records with live formulas |
 | **Duplicate Entries** | `use_dedup and save_dups` (default on/ off respectively) | Deduplicated records, retained for audit so the dropped siblings are visible |
@@ -412,11 +413,11 @@ release is one CI green away from shippable.
 
 ### Test coverage
 
-Coverage is measured with `coverage` (configured in `pyproject.toml [tool.coverage.run]`) over the `edf_bill_fetcher/` source tree. The CI gate is **`coverage report --fail-under=90`** — see [`docs/COVERAGE.md`](docs/COVERAGE.md) for the measurement protocol, the strict `# pragma: no cover` policy, and how to extend coverage.
+Coverage is measured with `coverage` (configured in `pyproject.toml [tool.coverage.run]`) over the `edf_bill_fetcher/` source tree. The CI gate is **`fail_under = 90`** in `pyproject.toml [tool.coverage.report]` — CI runs `pytest --cov=. --cov-report=xml` (Linux wraps it in `xvfb-run -a`) — see [`docs/COVERAGE.md`](docs/COVERAGE.md) for the measurement protocol, the strict `# pragma: no cover` policy, and how to extend coverage.
 
 ## Configuration
 
-All options are available in the GUI. For programmatic use, see the `config` dict in the usage example above.
+All options are available in the GUI. For programmatic use, see the `config` dict in the usage example above. The configuration contract is typed as `edf_bill_fetcher.models.config.ConfigDict` (a `TypedDict` — every key optional, documented with its default in one place); passing a dict literal with a misspelled key or wrong value type to any consumer is a `mypy` error, and the GUI/CLI boundary normalises the legacy short key names (`use_acc_filt`, `use_reading_class`) to the canonical long ones.
 
 Key options:
 - `use_anchors`: enable smart-context amount patterns

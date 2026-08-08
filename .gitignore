@@ -74,3 +74,9 @@ scratch/
 # Subagent scratch directory — must be outside repo and
 # should NOT be tracked. See .omo/ as the approved scratch path.
 .superpowers/
+
+# Internal-only design specs / superpowers workflow artefacts.
+# Public documentation lives under docs/ root-level topics; the
+# superpowers/ subtree is internal-only planning material that
+# should not be visible in a public docs tree.
+docs/superpowers/
