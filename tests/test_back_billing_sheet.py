@@ -16,7 +16,7 @@ def _sample_df() -> pd.DataFrame:
                 "Invoice #": "T-6715690",
                 "Date": "09 Aug 2023",
                 "Period From": "04 Apr 2022",
-                "Period To": "26 Jul 2023",
+                "Period To": "26 Jul 2022",
                 "Amount (£)": 4401.07,
                 "Cancel/Rebill Admitted": True,
                 "Attachment Name": "671078701920_060264189544_20230809.pdf",
@@ -64,19 +64,25 @@ def test_write_back_billing_sheet_writes_table_headers() -> None:
     ws = _open_ws()
     bb = detect_back_billing(_sample_df())
     write_back_billing_sheet(ws, bb, account="A1")
-    # Per spec, row 7 = table header row.
-    headers = [ws.cell(row=7, column=c).value for c in range(1, 11)]
+    # Per spec, row 7 = table header row. 16 columns after Task 4.
+    headers = [ws.cell(row=7, column=c).value for c in range(1, 17)]
     expected = [
         "Invoice #",
         "Bill Date",
         "Period From",
         "Period To",
         "Days Billed",
-        "Net Charge (£)",
+        "Period Charge (£)",
+        "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
         "Cancel/Rebill Disclosed",
         "Reason Assessment",
+        "Open PDF",
+        "View on Evidence Report",
+        "Status",
+        "Superseded By",
+        "Partial Overlap",
     ]
     assert headers == expected
 
@@ -122,7 +128,8 @@ def test_write_back_billing_sheet_empty_df_still_renders_header_and_legal_contex
             "Period From",
             "Period To",
             "Days Billed",
-            "Net Charge (£)",
+            "Period Charge (£)",
+            "Value Source",
             "12-Month Limit (days)",
             "Excess Days",
             "Cancel/Rebill Admitted",
@@ -134,9 +141,10 @@ def test_write_back_billing_sheet_empty_df_still_renders_header_and_legal_contex
     a3 = ws.cell(row=3, column=1).value
     assert isinstance(a3, str)
     assert "back-billing" in a3.lower()
-    # Table headers still rendered.
-    headers = [ws.cell(row=7, column=c).value for c in range(1, 11)]
+    # Table headers still rendered (16 columns after Task 4).
+    headers = [ws.cell(row=7, column=c).value for c in range(1, 17)]
     assert headers[0] == "Invoice #"
+    assert "Status" in headers
     # No data rows.
     assert ws.cell(row=8, column=1).value in (None, "")
 
@@ -145,7 +153,127 @@ def test_write_back_billing_sheet_admitted_cell_value_uses_phrase_label() -> Non
     ws = _open_ws()
     bb = detect_back_billing(_sample_df())
     write_back_billing_sheet(ws, bb, account="A1")
-    # Admit column (col 9) on row 8 must say 'Admitted phrase' for our
+    # Admit column (col 10) on row 8 must say 'Admitted phrase' for our
     # sample (the cover-page admit fired).
-    v = ws.cell(row=8, column=9).value
+    v = ws.cell(row=8, column=10).value
     assert v == "Admitted phrase"
+
+
+def _two_row_bb() -> pd.DataFrame:
+    """Two back-billing rows with synthetic invoice IDs A and B."""
+    return pd.DataFrame(
+        [
+            {
+                "Invoice #": "A",
+                "Bill Date": "2021-06-01",
+                "Period From": "2020-01-01",
+                "Period To": "2021-06-01",
+                "Days Billed": 517,
+                "Period Charge (£)": 500.0,
+                "Value Source": "Period Charge",
+                "12-Month Limit (days)": 365,
+                "Excess Days": 152,
+                "Cancel/Rebill Admitted": False,
+                "Reason Assessment": "test",
+            },
+            {
+                "Invoice #": "B",
+                "Bill Date": "2021-12-01",
+                "Period From": "2020-06-01",
+                "Period To": "2021-12-01",
+                "Days Billed": 549,
+                "Period Charge (£)": 300.0,
+                "Value Source": "Period Charge",
+                "12-Month Limit (days)": 365,
+                "Excess Days": 184,
+                "Cancel/Rebill Admitted": False,
+                "Reason Assessment": "test",
+            },
+        ]
+    )
+
+
+def test_write_back_billing_sheet_status_columns() -> None:
+    ws = _open_ws()
+    bb = _two_row_bb()
+    domination_map: dict[str, tuple[str, bool]] = {"B": ("A", False)}
+    write_back_billing_sheet(ws, bb, domination_map=domination_map)
+
+    # Row 7 is the header row.
+    header_row = [cell.value for cell in ws[7]]
+    assert "Status" in header_row
+    assert "Superseded By" in header_row
+    assert "Partial Overlap" in header_row
+    assert "Value Source" in header_row
+
+    status_col = header_row.index("Status") + 1
+    superseded_by_col = header_row.index("Superseded By") + 1
+    partial_overlap_col = header_row.index("Partial Overlap") + 1
+    inv_col = header_row.index("Invoice #") + 1
+
+    for row_idx in range(8, ws.max_row + 1):
+        inv_num = ws.cell(row=row_idx, column=inv_col).value
+        if inv_num == "A":
+            assert ws.cell(row=row_idx, column=status_col).value == "Live"
+            assert ws.cell(row=row_idx, column=superseded_by_col).value in (None, "")
+            assert ws.cell(row=row_idx, column=partial_overlap_col).value in (None, "")
+        elif inv_num == "B":
+            assert ws.cell(row=row_idx, column=status_col).value == "Superseded"
+            assert ws.cell(row=row_idx, column=superseded_by_col).value == "A"
+            assert ws.cell(row=row_idx, column=partial_overlap_col).value in ("", None)
+            # Superseded rows are outline-collapsed sub-rows.
+            assert ws.row_dimensions[row_idx].outline_level == 1
+            assert ws.row_dimensions[row_idx].hidden is True
+
+
+def test_write_back_billing_sheet_status_partial_overlap_yes() -> None:
+    """When domination_map carries partial_overlap=True, the cell reads 'Yes'."""
+    ws = _open_ws()
+    bb = _two_row_bb()
+    domination_map: dict[str, tuple[str, bool]] = {"B": ("A", True)}
+    write_back_billing_sheet(ws, bb, domination_map=domination_map)
+
+    header_row = [cell.value for cell in ws[7]]
+    partial_overlap_col = header_row.index("Partial Overlap") + 1
+    inv_col = header_row.index("Invoice #") + 1
+    for row_idx in range(8, ws.max_row + 1):
+        if ws.cell(row=row_idx, column=inv_col).value == "B":
+            assert ws.cell(row=row_idx, column=partial_overlap_col).value == "Yes"
+            return
+    raise AssertionError("Row for invoice B not found")
+
+
+def test_write_back_billing_sheet_total_excludes_superseded() -> None:
+    ws = _open_ws()
+    bb = _two_row_bb()
+    domination_map: dict[str, tuple[str, bool]] = {"B": ("A", False)}
+    write_back_billing_sheet(ws, bb, domination_map=domination_map)
+
+    header_row = [cell.value for cell in ws[7]]
+    period_charge_col = header_row.index("Period Charge (£)") + 1
+
+    total_row_idx = None
+    for row_idx in range(8, ws.max_row + 1):
+        v = ws.cell(row=row_idx, column=1).value
+        if v and "TOTAL RETROSPECTIVE" in str(v):
+            total_row_idx = row_idx
+            break
+    assert total_row_idx is not None
+    total_value = ws.cell(row=total_row_idx, column=period_charge_col).value
+    assert total_value == 500.0  # only A (Live), not B (Superseded)
+
+
+def test_write_back_billing_sheet_no_domination_map_all_live() -> None:
+    """Without a domination_map, every row is Live and the total sums all rows."""
+    ws = _open_ws()
+    bb = _two_row_bb()
+    write_back_billing_sheet(ws, bb)
+
+    header_row = [cell.value for cell in ws[7]]
+    status_col = header_row.index("Status") + 1
+    inv_col = header_row.index("Invoice #") + 1
+    for row_idx in range(8, ws.max_row + 1):
+        inv_num = ws.cell(row=row_idx, column=inv_col).value
+        if inv_num in ("A", "B"):
+            assert ws.cell(row=row_idx, column=status_col).value == "Live"
+            assert ws.row_dimensions[row_idx].outline_level == 0

@@ -235,6 +235,7 @@ def write_back_billing_sheet(
     overlapping_invoices: set[str] | None = None,
     evidence_df: pd.DataFrame | None = None,
     evidence_index: dict[str, int] | None = None,
+    domination_map: dict[str, tuple[str, bool]] | None = None,
 ) -> None:
     """Render the Back-billing Analysis tab.
 
@@ -245,20 +246,31 @@ def write_back_billing_sheet(
       row 4: empty
       row 5: short instruction
       row 6: empty
-      row 7: column headers (11 cols incl. Open PDF)
+      row 7: column headers (16 cols incl. Open PDF, View on Evidence
+              Report, Status, Superseded By, Partial Overlap)
       rows 8+: data rows (sorted by Bill Date as produced by
               :func:`detect_back_billing`)
       trailing: 'TOTAL RETROSPECTIVE CHARGES IN BACK-BILLED INVOICES'
 
-    The ``Cancel/Rebill Disclosed`` cell (col 9) is the
+    The ``Cancel/Rebill Disclosed`` cell (col 10) is the
     :func:`_disclosed_label` value taking the row's
     ``Cancel/Rebill Admitted`` bool AND whether this invoice also
     appears in ``overlapping_invoices`` (a set populated by the
     rebilling detector; defaults to empty).
 
-    Open PDF column (col 11) carries hyperlink
+    Open PDF column (col 12) carries hyperlink
     the first ~400 chars of the source PDF text so a reviewer can
     see why N/A entries were N/A and which regex produced which value.
+
+    ``domination_map`` (from :func:`compute_transitive_domination`)
+    maps ``superseded_invoice_id -> (survivor_invoice_id, partial_overlap)``.
+    Rows whose ``Invoice #`` is a key in this map are rendered as
+    outline-collapsed sub-rows (``outline_level=1``, ``hidden=True``,
+    mirroring ``io/writers/sap.py:440``) with ``Status="Superseded"``,
+    ``Superseded By=survivor``, ``Partial Overlap="Yes"`` when the flag
+    is set. They are preserved for the audit trail but EXCLUDED from
+    the trailing total. Rows not in the map are ``Status="Live"`` and
+    their ``Period Charge (£)`` is added to the total.
     """
     ws.title = "Back-billing Analysis"
     NAVY = "10367A"
@@ -274,7 +286,7 @@ def write_back_billing_sheet(
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
     t1.alignment = Alignment(horizontal="left", vertical="center")
-    for c in range(2, 14):
+    for c in range(2, 17):
         x = ws.cell(row=1, column=c)
         x.fill = PatternFill("solid", start_color=ORANGE)
         x.border = CELL_BORDER
@@ -285,7 +297,7 @@ def write_back_billing_sheet(
     lc_hdr.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     lc_hdr.fill = PatternFill("solid", start_color=NAVY)
     lc_hdr.border = CELL_BORDER
-    for c in range(2, 14):
+    for c in range(2, 17):
         x = ws.cell(row=2, column=c)
         x.fill = PatternFill("solid", start_color=NAVY)
         x.border = CELL_BORDER
@@ -297,7 +309,7 @@ def write_back_billing_sheet(
     lc_cell.font = Font(name="Calibri", size=10)
     lc_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     lc_cell.border = CELL_BORDER
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=13)
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=16)
     ws.row_dimensions[3].height = 90
 
     # Row 5: instruction
@@ -310,7 +322,7 @@ def write_back_billing_sheet(
     inst_cell = ws.cell(row=5, column=1, value=inst)
     inst_cell.font = Font(name="Calibri", size=10, italic=True)
     inst_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=13)
+    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=16)
     ws.row_dimensions[5].height = 45
 
     # Row 7: headers
@@ -328,6 +340,9 @@ def write_back_billing_sheet(
         "Reason Assessment",
         "Open PDF",
         "View on Evidence Report",
+        "Status",
+        "Superseded By",
+        "Partial Overlap",
     ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 7, col, h, bg=NAVY)
@@ -344,7 +359,6 @@ def write_back_billing_sheet(
         overlap_flag = inv in overlaps
         disclosed = _disclosed_label(bool(row.get("Cancel/Rebill Admitted")), overlap_flag)
         charge = float(row.get("Period Charge (£)", 0.0) or 0.0)
-        total += charge
         value_src = str(row.get("Value Source", ""))
         bill_date_val = row.get("Bill Date", "")
         if isinstance(bill_date_val, pd.Timestamp | datetime):
@@ -355,6 +369,19 @@ def write_back_billing_sheet(
         pt = row.get("Period To")
         if isinstance(pt, pd.Timestamp | datetime):
             pt = pt.strftime("%d %b %Y")
+
+        # Domination: is this invoice superseded by another?
+        superseded_by = ""
+        partial_overlap = ""
+        if domination_map is not None and inv in domination_map:
+            survivor, partial = domination_map[inv]
+            superseded_by = survivor
+            partial_overlap = "Yes" if partial else ""
+            status = "Superseded"
+        else:
+            status = "Live"
+            total += charge
+
         _text(ws, r, 1, inv, fill_hex=bg)
         _text(ws, r, 2, bill_date_val, fill_hex=bg)
         _text(ws, r, 3, pf, fill_hex=bg)
@@ -396,6 +423,16 @@ def write_back_billing_sheet(
         else:
             cell = ws.cell(row=r, column=13, value="No match")
             cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
+        # Status / Superseded By / Partial Overlap (cols 14-16)
+        _text(ws, r, 14, status, fill_hex=bg)
+        _text(ws, r, 15, superseded_by, fill_hex=bg)
+        _text(ws, r, 16, partial_overlap, fill_hex=bg)
+        # Superseded rows are outline-collapsed sub-rows (mirrors
+        # io/writers/sap.py:440) — preserved for the audit trail but
+        # visually grouped under their surviving invoice.
+        if status == "Superseded":
+            ws.row_dimensions[r].outline_level = 1
+            ws.row_dimensions[r].hidden = True
         r += 1
 
     # Trailing totals row
@@ -416,7 +453,7 @@ def write_back_billing_sheet(
         total_cell.fill = PatternFill("solid", start_color=NAVY)
         total_cell.border = CELL_BORDER
         total_cell.number_format = "#,##0.00"
-        for c in range(7, 14):
+        for c in range(7, 17):
             x = ws.cell(row=r, column=c)
             x.fill = PatternFill("solid", start_color=NAVY)
             x.border = CELL_BORDER
@@ -438,6 +475,9 @@ def write_back_billing_sheet(
         "K": 60,
         "L": 60,  # Open PDF
         "M": 22,  # View on Evidence Report
+        "N": 14,  # Status
+        "O": 16,  # Superseded By
+        "P": 16,  # Partial Overlap
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
