@@ -183,11 +183,24 @@ def match_sap_events_to_edf(
             continue
         pf = _safe_to_datetime(rec.get("Period From"))
         pt = _safe_to_datetime(rec.get("Period To"))
+        # Canonical amount axis: Period Charge (£) is the charge for the
+        # billing period; Amount (£) is the running balance. Prefer Period
+        # Charge, falling back to Amount only when it is N/A/unparseable.
+        period_charge_raw = rec.get("Period Charge (£)")
         amt_raw = rec.get("Amount (£)")
         try:
-            amt = float(str(amt_raw).replace(",", "").lstrip("£").strip())
+            if pd.isna(period_charge_raw) or str(period_charge_raw).strip().upper() in (
+                "N/A",
+                "NONE",
+                "",
+            ):
+                raise ValueError("Period Charge is N/A")
+            amt = float(str(period_charge_raw).replace(",", "").lstrip("£").strip())
         except (TypeError, ValueError):
-            amt = 0.0
+            try:
+                amt = float(str(amt_raw).replace(",", "").lstrip("£").strip())
+            except (TypeError, ValueError):
+                amt = 0.0
         parsed_edf.append((i, pf, pt, amt, invoice))
 
     matches: list[SapEdfMatch] = []
