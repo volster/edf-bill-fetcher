@@ -16,6 +16,11 @@ except ImportError:
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 
+# Re-export the canonical SAP<->EDF matcher from processors.matching so
+# the two copies are unified into a single implementation.  Existing
+# importers (writers/__init__.py, io/writers/export.py) keep working.
+from edf_bill_fetcher.processors.matching import match_sap_events_to_edf  # noqa: F401
+
 # Colour constants used across the writer functions.
 EDF_ORANGE = "#FE5716"
 EDF_NAVY = "#10367A"
@@ -480,131 +485,6 @@ def detect_sap_back_billing_events(
         ),
     )
     return events_sorted
-
-
-def match_sap_events_to_edf(events: list, edf_records: list[dict]) -> list:
-    """Fuzzy-match SAP events to EDF Evidence Report rows."""
-    from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime
-    from edf_bill_fetcher.models.events import SapEdfMatch
-
-    if not events or not edf_records:
-        return []
-
-    parsed_edf: list = []
-    for i, rec in enumerate(edf_records):
-        invoice = str(rec.get("Invoice #", "")).strip()
-        if not invoice or invoice in ("N/A", "None"):
-            continue
-        pf = _safe_to_datetime(rec.get("Period From"))
-        pt = _safe_to_datetime(rec.get("Period To"))
-        amt_raw = rec.get("Amount (£)")
-        try:
-            amt = float(str(amt_raw).replace(",", "").lstrip("£").strip())
-        except (TypeError, ValueError):
-            amt = 0.0
-        parsed_edf.append((i, pf, pt, amt, invoice))
-
-    matches: list = []
-    for ev in events:
-        if pd.isna(ev.clearing_date):
-            continue
-        ev_cd = pd.Timestamp(ev.clearing_date)
-        for idx, pf, pt, edf_amt, _invoice in parsed_edf:
-            if not pd.isna(pt):
-                date_delta_days = int(abs((ev_cd - pd.Timestamp(pt)).days))
-            elif not pd.isna(pf):
-                date_delta_days = int(abs((ev_cd - pd.Timestamp(pf)).days))
-            else:
-                continue
-
-            amount_score = 0
-            if abs(ev.net_amount) < 1.0 and edf_amt > 0:
-                best_rel_delta = float("inf")
-                for r in ev.rows:
-                    row_amt = _parse_amount_for_event(r.get("Amount"))
-                    if abs(row_amt) < 1 or abs(edf_amt) < 1:
-                        continue
-                    rel_delta = abs(abs(row_amt) - edf_amt) / max(abs(edf_amt), 0.01)
-                    if rel_delta < best_rel_delta:
-                        best_rel_delta = rel_delta
-                if best_rel_delta != float("inf"):
-                    for band_amt, band_score in _SAP_MATCH_AMOUNT_BANDS:
-                        if best_rel_delta <= band_amt:
-                            amount_score = band_score
-                            break
-            elif ev.net_amount != 0 and edf_amt > 0:
-                ratio = ev.net_amount / edf_amt
-                if 0.95 <= ratio <= 1.05:
-                    amount_score = 40
-                elif 0.75 <= ratio <= 1.25:
-                    amount_score = 20
-                elif 0.50 <= ratio <= 1.50:
-                    amount_score = 5
-
-            date_score = 0
-            date_in_span = False
-            if (
-                not pd.isna(pf)
-                and not pd.isna(pt)
-                and pd.Timestamp(pf) <= ev_cd <= pd.Timestamp(pt)
-            ):
-                date_in_span = True
-                if amount_score > 0:
-                    date_score = 50
-                else:
-                    delta_to_pf = abs((ev_cd - pd.Timestamp(pf)).days)
-                    delta_to_pt = abs((ev_cd - pd.Timestamp(pt)).days)
-                    nearest_delta = min(delta_to_pf, delta_to_pt)
-                    for band_days, band_score in _SAP_MATCH_DAY_BANDS:
-                        if nearest_delta <= band_days:
-                            date_score = band_score
-                            break
-            else:
-                for band_days, band_score in _SAP_MATCH_DAY_BANDS:
-                    if date_delta_days <= band_days:
-                        date_score = band_score
-                        break
-
-            total_score = date_score + amount_score
-            band = _confidence_band(total_score)
-            if band in ("High", "Medium") and amount_score == 0:
-                band = "Low" if total_score >= 10 else None
-            if band is None:
-                continue
-
-            amt_delta = round(ev.net_amount - edf_amt, 2)
-            if band == "High":
-                notes = (
-                    "Clearing date inside EDF period + amount within 5%"
-                    if date_in_span
-                    else f"Within {date_delta_days}d of period-end + amount within 5%"
-                )
-            elif band == "Medium":
-                if date_in_span:
-                    notes = "Clearing date inside EDF period + amount within 25%"
-                else:
-                    notes = f"Within {date_delta_days}d of period-end + amount within 25%"
-            else:
-                if date_in_span and amount_score == 0:
-                    notes = (
-                        "Clearing date inside EDF period but amounts do not "
-                        "correspond — likely coincidental"
-                    )
-                else:
-                    notes = f"Within {date_delta_days}d of period-end; may be coincidental"
-
-            matches.append(
-                SapEdfMatch(
-                    event=ev,
-                    edf_record=edf_records[idx],
-                    confidence_band=band,
-                    confidence_score=total_score,
-                    amount_delta=amt_delta,
-                    date_delta_days=date_delta_days,
-                    notes=notes,
-                )
-            )
-    return matches
 
 
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
