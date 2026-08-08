@@ -15,6 +15,7 @@ except ImportError:
     HAS_STATSMODELS = False
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.models.events import SapBackBillingEvent
 
 # Re-export the canonical SAP<->EDF matcher from processors.matching so
 # the two copies are unified into a single implementation.  Existing
@@ -485,6 +486,85 @@ def detect_sap_back_billing_events(
         ),
     )
     return events_sorted
+
+
+def handle_cluster_unmatched(
+    sap_event: SapBackBillingEvent,
+    clusters: list[dict],
+) -> dict | None:
+    """Tag a SAP event as an internal mechanism of a back-billing cluster.
+
+    When a SAP back-billing event's Posting Date falls inside a known
+    back-billing cluster's posting-date window but no invoice in that
+    cluster achieves amount-band agreement with the event's net amount,
+    return a match dict tagging the event as an internal mechanism of
+    that cluster.  Returns ``None`` when the event's posting-date range
+    is empty, when no cluster window contains the posting date, or when
+    an in-cluster invoice matches on the amount band (within 50%).
+
+    The amount-band agreement test mirrors the spec §3.3 matcher's
+    outer band: a SAP event and an EDF invoice agree when their amounts
+    are within 50% of each other.  ``sap_event.net_amount`` is compared
+    against each cluster invoice's ``Period Charge (£)``.
+
+    Args:
+        sap_event: A ``SapBackBillingEvent`` dataclass instance.  The
+            event's ``posting_date_range`` (a ``(start, end)`` tuple of
+            ISO date strings) supplies the posting date; the first
+            non-empty bound is used as the comparison date.
+        clusters: A list of cluster dicts, each with keys ``name``,
+            ``posting_date_start``, ``posting_date_end``, and
+            ``invoices`` (a list of dicts with ``Invoice #`` and
+            ``Period Charge (£)``).
+
+    Returns:
+        A match dict with keys ``Matched EDF Invoice #``, ``Confidence``,
+        ``Notes``, and ``Evidence Trail``; or ``None`` when the event
+        should not be tagged as a cluster-unmatched internal mechanism.
+
+    """
+    posting_start, posting_end = sap_event.posting_date_range
+    posting_date = posting_start or posting_end
+    if not posting_date:
+        return None
+
+    sap_amount = sap_event.net_amount
+
+    for cluster in clusters:
+        cluster_start = cluster.get("posting_date_start", "")
+        cluster_end = cluster.get("posting_date_end", "")
+        if not cluster_start or not cluster_end:
+            continue
+        if not (cluster_start <= posting_date <= cluster_end):
+            continue
+
+        # Posting Date is inside this cluster's window.  Check whether any
+        # in-cluster invoice achieves amount-band agreement (within 50%,
+        # mirroring the spec §3.3 matcher's outer band).
+        for invoice in cluster.get("invoices", []):
+            inv_amount = float(invoice.get("Period Charge (£)", 0) or 0)
+            if inv_amount <= 0:
+                continue
+            if abs(sap_amount - inv_amount) / inv_amount <= 0.50:
+                # Amount agreement exists → not cluster-unmatched.
+                return None
+
+        # No amount agreement in-cluster → tag as internal mechanism.
+        return {
+            "Matched EDF Invoice #": f"{cluster.get('name', '')} internal mechanism",
+            "Confidence": 0,
+            "Notes": (
+                "Posting Date inside cluster window but no amount agreement "
+                f"with any in-cluster invoice (SAP net £{sap_amount:.2f})"
+            ),
+            "Evidence Trail": (
+                f"Posting Date: {posting_date}, "
+                f"cluster window: {cluster_start}..{cluster_end}, "
+                f"cluster: {cluster.get('name', '')}"
+            ),
+        }
+
+    return None
 
 
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
