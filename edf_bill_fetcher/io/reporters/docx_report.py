@@ -25,6 +25,7 @@ from docx.shared import (
 
 # Import from main module
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.io.reporters.pdf_report import (
     REPORT_SECTIONS,
     RenderContext,
@@ -1694,7 +1695,7 @@ def generate_ombudsman_docx(
     return output_path
 
 
-def generate_docx_from_gui(records, output_path, config, engine, filtered=None):
+def generate_docx_from_gui(records, output_path, config: ConfigDict, engine, filtered=None):
     """Generate a professional DOCX report for GUI integration."""
     try:
         path = generate_ombudsman_docx(records, output_path, config, engine, filtered)

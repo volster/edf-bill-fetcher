@@ -46,7 +46,9 @@ from edf_bill_fetcher.helpers.excel_utils import (
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
+from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.helpers.formatting import (
+
     _apply_amalgamate_to_kept_frame,
 )
 from edf_bill_fetcher.io.writers.back_billing import (  # noqa: E402,F401
@@ -250,7 +252,7 @@ def _write_provenance_sheet(wb, config, n_records, n_filtered, n_errors):
 # ---------------------------------------------------------------------------
 
 
-def export_to_excel(data, output_path, error_log, config, filtered=None, sap_rows=None):
+def export_to_excel(data, output_path, error_log, config: ConfigDict, filtered=None, sap_rows=None):
     """Build the multi-sheet evidence workbook by orchestrating each writer submodule.
 
     Calls every sheet writer in the canonical order so the workbook opens

@@ -43,6 +43,7 @@ from edf_bill_fetcher.helpers.date_utils import (
 
 # Import from main module
 from edf_bill_fetcher.io.writers import HAS_SCIPY
+from edf_bill_fetcher.models.config import ConfigDict
 
 # =============================================================================
 # COLOR PALETTE & CONSTANTS
@@ -2151,7 +2152,7 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
 # =============================================================================
 
 
-def create_appendix_methodology(config: dict, ctx: RenderContext | None = None) -> list:
+def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = None) -> list:
     """Create Methodology appendix."""
     elements = []
     if ctx is None:
@@ -2779,7 +2780,7 @@ def generate_ombudsman_pdf(
 # =============================================================================
 
 
-def generate_pdf_from_gui(records, output_path, config, engine, filtered=None):
+def generate_pdf_from_gui(records, output_path, config: ConfigDict, engine, filtered=None):
     """Generate a professional PDF report for GUI integration."""
     try:
         path = generate_ombudsman_pdf(records, output_path, config, engine, filtered)

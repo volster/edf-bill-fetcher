@@ -340,9 +340,9 @@ class App:
         _bool_keys: dict[str, tk.Variable] = {
             "use_anchors": self.use_anchors,
             "use_large": self.use_large,
-            "use_reading_class": self.use_reading_class,
+            "use_reading_classification": self.use_reading_class,
             "use_pdf_fields": self.use_pdf_fields,
-            "use_acc_filt": self.use_acc_filt,
+            "use_acc_filter": self.use_acc_filt,
             "filter_below": self.filter_below,
             "save_filtered": self.save_filtered,
             "use_dedup": self.use_dedup,
@@ -357,6 +357,13 @@ class App:
         for key, var in _bool_keys.items():
             if key in gui:
                 var.set(bool(gui[key]))
+
+        # Legacy names (pre-typed-config) — apply only when the canonical
+        # key is absent, so old config files keep working.
+        if "use_reading_classification" not in gui and "use_reading_class" in gui:
+            self.use_reading_class.set(bool(gui["use_reading_class"]))
+        if "use_acc_filter" not in gui and "use_acc_filt" in gui:
+            self.use_acc_filt.set(bool(gui["use_acc_filt"]))
 
         _str_keys: dict[str, tk.Variable] = {
             "acc_num": self.acc_num,
@@ -395,9 +402,9 @@ class App:
         gui = {
             "use_anchors": self.use_anchors.get(),
             "use_large": self.use_large.get(),
-            "use_reading_class": self.use_reading_class.get(),
+            "use_reading_classification": self.use_reading_class.get(),
             "use_pdf_fields": self.use_pdf_fields.get(),
-            "use_acc_filt": self.use_acc_filt.get(),
+            "use_acc_filter": self.use_acc_filt.get(),
             "acc_num": self.acc_num.get(),
             "min_amount": self.min_amount.get(),
             "analysis_min": self.analysis_min.get(),

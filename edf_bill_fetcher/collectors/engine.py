@@ -33,6 +33,7 @@ from edf_bill_fetcher.helpers.date_utils import (
 from edf_bill_fetcher.helpers.formatting import account_number_matches
 from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
 from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pages
+from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.detection import detect_pdf_format
 from edf_bill_fetcher.processors.patterns import (
     _AMOUNT_PATTERN_NEW_BILL,
@@ -299,7 +300,7 @@ def _matches_domain_filter(sender_email, filter_str):
 class EvidenceEngine:
     """Orchestrate extraction of EDF billing records from PDF, HTM, and PST sources."""
 
-    def __init__(self, config, update_ui_cb, progress_cb=None, cancel_event=None):
+    def __init__(self, config: ConfigDict, update_ui_cb, progress_cb=None, cancel_event=None):
         """Initialize the engine with config, a UI callback, and cancellation hooks."""
         self.config = config
         self.records = []
@@ -414,7 +415,7 @@ class EvidenceEngine:
         to ``filtered_records``.
         """
         amt = rec.get("Amount (£)", 0) or 0
-        if self.config.get("filter_below", True) and abs(amt) < self.config["min_amount"]:
+        if self.config.get("filter_below", True) and abs(amt) < self.config.get("min_amount", 50.0):
             with self.lock:
                 self.filtered_records.append(
                     {
@@ -647,7 +648,7 @@ class EvidenceEngine:
             matches = _POUND_AMOUNT_FALLBACK_RE.findall(clean_text)
             if matches:
                 floats = [float(x.replace(",", "")) for x in matches]
-                highs = [x for x in floats if x >= self.config["min_amount"]]
+                highs = [x for x in floats if x >= self.config.get("min_amount", 50.0)]
                 if highs:
                     found_amt = max(highs)
                     strategy = "Large Amount Fallback"
