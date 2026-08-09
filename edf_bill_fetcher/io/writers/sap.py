@@ -381,6 +381,12 @@ def _write_sap_bb_events_sheet(
             cell.alignment = Alignment(
                 horizontal="left" if j == 10 else "center", vertical="top", wrap_text=True
             )
+        # Cluster-unmatched tags (set by handle_cluster_unmatched in the
+        # export pipeline) are rendered italic + grey in the Matched EDF
+        # Invoice # column (col 11) to distinguish them from real matches.
+        if getattr(ev, "_cluster_unmatched_tag", None) is not None:
+            tag_cell = ws.cell(row=r, column=11)
+            tag_cell.font = Font(name="Calibri", size=10, bold=False, italic=True, color="666666")
         # Last column: hyperlink (added below once we know target row)
         # Add medium top border on the first event visible in a band
         # — actually we want a top border on every summary row to

@@ -433,6 +433,65 @@ _PST_PR_ATTACH_LONG_FILENAME = 0x3707
 _PST_PR_ATTACH_FILENAME = 0x3704
 
 
+def _build_bb_clusters(back_billing_df: pd.DataFrame) -> list[dict]:
+    """Build cluster dicts from ``detect_back_billing`` output.
+
+    Used by the cluster-unmatched tagger (``handle_cluster_unmatched``).
+    Each back-billing row becomes a single-invoice cluster whose
+    posting-date window is the invoice's ``Period From``..``Period To``
+    span.  Dates are converted to ISO ``YYYY-MM-DD`` strings because
+    ``handle_cluster_unmatched`` compares them as strings
+    (``cluster_start <= posting_date <= cluster_end``) — the SAP event's
+    ``posting_date_range`` is already ISO, so the formats must match.
+
+    ``back_billing_df`` is the DataFrame returned by ``detect_back_billing``;
+    expected columns include ``Invoice #``, ``Period From``, ``Period To``,
+    and ``Period Charge (£)`` (all produced by the detector).
+
+    Returns a list of cluster dicts, each with keys ``name``,
+    ``posting_date_start``, ``posting_date_end``, and ``invoices``
+    (a one-element list of ``{"Invoice #", "Period Charge (£)"}``).
+    Rows with unparseable dates or a missing invoice id are skipped.
+    Returns ``[]`` for an empty/None frame.
+    """
+    if back_billing_df is None or back_billing_df.empty:
+        return []
+    clusters: list[dict] = []
+    for _, row in back_billing_df.iterrows():
+        invoice_id = str(row.get("Invoice #", "") or "").strip()
+        if not invoice_id or invoice_id in ("N/A", "None", "nan"):
+            continue
+        pf = row.get("Period From")
+        pt = row.get("Period To")
+        # detect_back_billing stores pd.Timestamp objects; guard against NaT.
+        if pd.isna(pf) or pd.isna(pt):
+            continue
+        try:
+            start_iso = pd.Timestamp(pf).strftime("%Y-%m-%d")
+            end_iso = pd.Timestamp(pt).strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            continue
+        charge_raw = row.get("Period Charge (£)", 0)
+        try:
+            charge = float(charge_raw) if not pd.isna(charge_raw) else 0.0
+        except (TypeError, ValueError):
+            charge = 0.0
+        clusters.append(
+            {
+                "name": invoice_id,
+                "posting_date_start": start_iso,
+                "posting_date_end": end_iso,
+                "invoices": [
+                    {
+                        "Invoice #": invoice_id,
+                        "Period Charge (£)": charge,
+                    }
+                ],
+            }
+        )
+    return clusters
+
+
 __all__ = [
     "build_evidence_index",
     "infer_contracts",

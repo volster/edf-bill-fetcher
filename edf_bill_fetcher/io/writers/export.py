@@ -91,10 +91,12 @@ from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.detection import (  # noqa: E402,F401
     compute_transitive_domination,
 )
+from edf_bill_fetcher.processors.matching import _build_bb_clusters
 from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
     _SOURCE_PRECEDENCE,
     compute_dispute_flags,
     detect_sap_back_billing_events,
+    handle_cluster_unmatched,
     match_sap_events_to_edf,
 )
 
@@ -1726,6 +1728,21 @@ def export_to_excel(data, output_path, error_log, config: ConfigDict, filtered=N
                         ),
                     )[0]
                     ev.matched_edf_invoice = str(best.edf_record.get("Invoice #", "") or "") or None
+            # Wire cluster-unmatched: SAP events with no amount-banded invoice
+            # match that fall inside a known back-billing cluster's window are
+            # tagged as internal mechanism events of that cluster.
+            unmatched_events = [ev for ev in bb_events if ev.matched_edf_invoice is None]
+            if (
+                unmatched_events
+                and "back_billing" in analyses
+                and not analyses["back_billing"].empty
+            ):
+                clusters = _build_bb_clusters(analyses["back_billing"])
+                for ev in unmatched_events:
+                    tag = handle_cluster_unmatched(ev, clusters)
+                    if tag is not None:
+                        ev.matched_edf_invoice = tag["Matched EDF Invoice #"]
+                        ev._cluster_unmatched_tag = tag
             write_sap_back_billing_sheets(
                 wb,
                 bb_events,

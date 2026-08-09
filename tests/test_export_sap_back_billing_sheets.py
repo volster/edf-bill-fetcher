@@ -535,3 +535,90 @@ def test_export_to_excel_orders_new_sheets_before_reconciliation(
     i_m = sheets.index("SAP ↔ EDF Matched Events")
     i_r = sheets.index("Reconciliation")
     assert i_ft < i_bb < i_m < i_r, f"order wrong: ft={i_ft}, bb={i_bb}, m={i_m}, r={i_r}"
+
+
+# ---------------------------------------------------------------------------
+# Cluster-unmatched wiring: unmatched SAP events tagged as internal mechanism
+# ---------------------------------------------------------------------------
+
+
+def test_export_tags_unmatched_event_as_cluster_internal_mechanism(
+    tmp_path: object,
+) -> None:
+    """End-to-end: a SAP event whose posting date falls inside a
+    back-billing cluster window but whose amount disagrees with the
+    cluster invoice gets tagged 'internal mechanism' in the Matched EDF
+    Invoice # column on Sheet 1."""
+    # EDF invoice: Date 01 Aug 2023, Period From 01/01/2019 → >365 days gap
+    # → detect_back_billing flags it. Period window 01/01/2019..09/08/2023
+    # contains the SAP fixture's posting date 01-01-2020. Period Charge 100.0.
+    edf_base = {
+        "Source": "Local PDF Folder",
+        "Sender": "edf.co.uk",
+        "Date": "01 Aug 2023",
+        "Period From": "01/01/2019",
+        "Period To": "09/08/2023",
+        "Invoice #": "T-TAG",
+        "Amount (£)": 1234.56,
+        "Period Charge (£)": 100.0,
+        "Unit Rate (p/kWh)": "",
+        "% Change": "",
+        "Entry Type": "New Bill",
+        "Reading": "Actual",
+        "Units (kWh)": "",
+        "Standing Chg (p/day)": "",
+        "Tariff": "Standard",
+        "Attachment Name": "test.pdf",
+        "Details": "",
+        "Logic Used": "PDF new-format",
+        "Anomaly Flag": "",
+        "Cancel/Rebill Admitted": False,
+    }
+    edf_second = dict(edf_base)
+    edf_second["Invoice #"] = "T-TAG2"
+    edf_second["Period From"] = "10/08/2023"
+    edf_second["Period To"] = "10/09/2023"
+    edf_second["Date"] = "10/09/2023"
+    edf = [edf_base, edf_second]
+    # SAP cluster: posting date 01-01-2020 (inside the EDF period window),
+    # net amount 0.0 (net-zero cluster, disagrees with EDF Period Charge 100.0
+    # → no amount-band match → cluster-unmatched).
+    sap_rows = parse_sap_financial_transactions(
+        _sap_csv_with_cluster(
+            clear_doc="CL-TAG",
+            clear_date="15-03-2021",
+            rows=[
+                ("D1", "999.00", "Dr- Consum Billing Receivable", ""),
+                ("D2", "-999.00", "Cr- Credit for Consum Billing", ""),
+                ("D3", "0.00", "Dr- Consum Billing Receivable", ""),
+                ("D4", "0.00", "Dr- Consum Billing Receivable", ""),
+            ],
+        ),
+        source_file="test.pdf",
+    )
+    out = str(tmp_path / "wb_tag.xlsx")  # type: ignore[operator]
+    export_to_excel(
+        data=edf,
+        output_path=out,
+        error_log=[],
+        config={
+            "use_dedup": False,
+            "acc_num": "0123456789",
+            "scan_sap_dumps": True,
+            "generate_reconciliation_sheet": False,
+        },
+        sap_rows={"financial": sap_rows, "contract": [], "meter": []},
+    )
+    wb = load_workbook(out)
+    ws1 = wb["SAP Back-billing Events"]
+    # Find the summary row for CL-TAG (column 1 = Clearing Doc #).
+    tagged_value = None
+    for r in range(4, ws1.max_row + 1):
+        if str(ws1.cell(row=r, column=1).value or "") == "CL-TAG":
+            tagged_value = ws1.cell(row=r, column=11).value
+            break
+    wb.close()
+    assert tagged_value is not None, "CL-TAG summary row not found"
+    assert "internal mechanism" in str(tagged_value), (
+        f"expected 'internal mechanism' tag, got {tagged_value!r}"
+    )
