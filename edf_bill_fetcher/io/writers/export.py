@@ -88,6 +88,9 @@ from edf_bill_fetcher.io.writers.tariff import (  # noqa: E402,F401
     write_tariff_analysis_sheet,
 )
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.processors.detection import (  # noqa: E402,F401
+    compute_transitive_domination,
+)
 from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
     _SOURCE_PRECEDENCE,
     compute_dispute_flags,
@@ -1630,6 +1633,10 @@ def export_to_excel(data, output_path, error_log, config: ConfigDict, filtered=N
     overlapping_invoices: set[str] = (
         {str(x) for x in rb["Killer Invoice"].tolist()} if not rb.empty else set()
     )
+    domination_map = compute_transitive_domination(
+        rb,
+        analyses["back_billing"],
+    )
     write_back_billing_sheet(
         wb.create_sheet(title="Back-billing Analysis"),
         analyses["back_billing"],
@@ -1637,6 +1644,7 @@ def export_to_excel(data, output_path, error_log, config: ConfigDict, filtered=N
         overlapping_invoices=overlapping_invoices,
         evidence_df=dfc,
         evidence_index=analyses["evidence_index"],
+        domination_map=domination_map,
     )
     write_rebilling_sheet(
         wb.create_sheet(title="Rebilling & Corrections"),
