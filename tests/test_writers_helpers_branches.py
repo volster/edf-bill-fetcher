@@ -24,6 +24,7 @@ import pandas as pd
 import pytest
 
 from edf_bill_fetcher.models.events import SapBackBillingEvent
+from edf_bill_fetcher.processors.detection import _assess_reason
 from edf_bill_fetcher.writers import _helpers as h
 
 # ---------------------------------------------------------------------------
@@ -348,14 +349,32 @@ def test_detect_payment_patterns_happy_path() -> None:
 
 
 def test_assess_reason_admitted() -> None:
-    narrative = h._assess_reason("KI-1", 400, True, datetime(2023, 1, 1), datetime(2024, 2, 5))
+    narrative = _assess_reason(
+        "KI-1",
+        datetime(2024, 3, 1),
+        35,
+        True,
+        datetime(2023, 1, 1),
+        datetime(2024, 2, 5),
+    )
     assert "KI-1" in narrative
-    assert "400 days" in narrative
+    assert "billed on 01 Mar 2024" in narrative
+    assert "35 days of consumption were supplied more than 12 months before the bill" in narrative
     assert "admits a cancellation/reversal" in narrative
 
 
 def test_assess_reason_not_admitted() -> None:
-    narrative = h._assess_reason("KI-2", 400, False, datetime(2023, 1, 1), datetime(2024, 2, 5))
+    narrative = _assess_reason(
+        "KI-2",
+        datetime(2024, 3, 1),
+        35,
+        False,
+        datetime(2023, 1, 1),
+        datetime(2024, 2, 5),
+    )
+    assert "KI-2" in narrative
+    assert "billed on 01 Mar 2024" in narrative
+    assert "35 days of consumption were supplied more than 12 months before the bill" in narrative
     assert "No admit-phrase was found" in narrative
 
 

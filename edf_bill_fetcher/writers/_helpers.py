@@ -348,25 +348,6 @@ def _detect_payment_patterns(df):
     }
 
 
-def _assess_reason(invoice, days, admitted, period_from, period_to):
-    """Return a short, deterministic narrative for the Reason Assessment column."""
-    pf = period_from.strftime("%d %b %Y")
-    pt = period_to.strftime("%d %b %Y")
-    excess = days - 365
-    if admitted:
-        return (
-            f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
-            f"{excess} days past the 12-month back-billing limit. "
-            "EDF's cover page admits a cancellation/reversal, which is "
-            "direct evidence the bill is a back-billing remedy."
-        )
-    return (
-        f"Invoice {invoice} billed {days} days ({pf} to {pt}), "
-        f"{excess} days past the 12-month back-billing limit. No "
-        "admit-phrase was found on the cover page."
-    )
-
-
 # SAP back-billing constants
 _SAP_DEBT_MGMT_FLAG_VALUE = "Installment Plan Item"
 _SAP_MIN_CLUSTER_SIZE = 4
