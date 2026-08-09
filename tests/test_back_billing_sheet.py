@@ -64,8 +64,8 @@ def test_write_back_billing_sheet_writes_table_headers() -> None:
     ws = _open_ws()
     bb = detect_back_billing(_sample_df())
     write_back_billing_sheet(ws, bb, account="A1")
-    # Per spec, row 7 = table header row. 16 columns after Task 4.
-    headers = [ws.cell(row=7, column=c).value for c in range(1, 17)]
+    # Per spec, row 7 = table header row. 17 columns after Unlawful Charge.
+    headers = [ws.cell(row=7, column=c).value for c in range(1, 18)]
     expected = [
         "Invoice #",
         "Bill Date",
@@ -76,6 +76,7 @@ def test_write_back_billing_sheet_writes_table_headers() -> None:
         "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
+        "Unlawful Charge (£)",
         "Cancel/Rebill Disclosed",
         "Reason Assessment",
         "Open PDF",
@@ -132,6 +133,7 @@ def test_write_back_billing_sheet_empty_df_still_renders_header_and_legal_contex
             "Value Source",
             "12-Month Limit (days)",
             "Excess Days",
+            "Unlawful Charge (£)",
             "Cancel/Rebill Admitted",
             "Reason Assessment",
         ]
@@ -141,8 +143,8 @@ def test_write_back_billing_sheet_empty_df_still_renders_header_and_legal_contex
     a3 = ws.cell(row=3, column=1).value
     assert isinstance(a3, str)
     assert "back-billing" in a3.lower()
-    # Table headers still rendered (16 columns after Task 4).
-    headers = [ws.cell(row=7, column=c).value for c in range(1, 17)]
+    # Table headers still rendered (17 columns after Unlawful Charge).
+    headers = [ws.cell(row=7, column=c).value for c in range(1, 18)]
     assert headers[0] == "Invoice #"
     assert "Status" in headers
     # No data rows.
@@ -153,9 +155,9 @@ def test_write_back_billing_sheet_admitted_cell_value_uses_phrase_label() -> Non
     ws = _open_ws()
     bb = detect_back_billing(_sample_df())
     write_back_billing_sheet(ws, bb, account="A1")
-    # Admit column (col 10) on row 8 must say 'Admitted phrase' for our
-    # sample (the cover-page admit fired).
-    v = ws.cell(row=8, column=10).value
+    # Admit column (col 11) on row 8 must say 'Admitted phrase' for our
+    # sample (the cover-page admit fired). Col 10 is now Unlawful Charge.
+    v = ws.cell(row=8, column=11).value
     assert v == "Admitted phrase"
 
 
@@ -173,6 +175,7 @@ def _two_row_bb() -> pd.DataFrame:
                 "Value Source": "Period Charge",
                 "12-Month Limit (days)": 365,
                 "Excess Days": 152,
+                "Unlawful Charge (£)": round(500.0 * (152 / 517), 2),
                 "Cancel/Rebill Admitted": False,
                 "Reason Assessment": "test",
             },
@@ -186,6 +189,7 @@ def _two_row_bb() -> pd.DataFrame:
                 "Value Source": "Period Charge",
                 "12-Month Limit (days)": 365,
                 "Excess Days": 184,
+                "Unlawful Charge (£)": round(300.0 * (184 / 549), 2),
                 "Cancel/Rebill Admitted": False,
                 "Reason Assessment": "test",
             },

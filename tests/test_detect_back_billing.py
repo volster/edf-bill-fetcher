@@ -204,10 +204,42 @@ def test_output_columns_match_spec() -> None:
         "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
+        "Unlawful Charge (£)",
         "Cancel/Rebill Admitted",
         "Reason Assessment",
     }
     assert set(out.columns) == expected
+
+
+def test_unlawful_charge_is_prorated_share() -> None:
+    # Period 01 Jan 2022 to 31 Dec 2023 = 729 days; bill date 01 Jan 2025.
+    # Excess Days = (01 Jan 2025 - 365 days - 01 Jan 2022).days = 731 days.
+    # Unlawful Charge = round(charge * (excess / days), 2).
+    # Note: excess (731) > days (729) here because the bill date is far
+    # enough out that the entire period plus some pre-period days are
+    # unlawful — so the unlawful charge can exceed the period charge.
+    df = pd.DataFrame(
+        [
+            _row(
+                invoice="UC-001",
+                date="01 Jan 2025",
+                period_from="01 Jan 2022",
+                period_to="31 Dec 2023",
+                amount=1000.0,
+            )
+        ]
+    )
+    out = detect_back_billing(df)
+    assert len(out) == 1
+    row = out.iloc[0]
+    days = int(row["Days Billed"])
+    excess = int(row["Excess Days"])
+    charge = float(row["Period Charge (£)"])
+    expected_unlawful = round(charge * (excess / days), 2)
+    assert float(row["Unlawful Charge (£)"]) == expected_unlawful
+    # Sanity: unlawful charge is prorated by the excess/days ratio.
+    assert excess > 0
+    assert days > 0
 
 
 # ---------------------------------------------------------------------------

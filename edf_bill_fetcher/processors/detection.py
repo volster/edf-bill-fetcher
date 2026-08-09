@@ -205,7 +205,15 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     Output columns:
         Invoice #, Bill Date, Period From, Period To, Days Billed,
         Period Charge (£), Value Source, 12-Month Limit (days),
-        Excess Days, Cancel/Rebill Admitted, Reason Assessment.
+        Excess Days, Unlawful Charge (£), Cancel/Rebill Admitted,
+        Reason Assessment.
+
+    ``Unlawful Charge (£)`` is the prorated share of the Period Charge
+    attributable to the Excess Days — i.e.
+    ``round(charge * (excess / days), 2)`` where ``days`` is the full
+    Days Billed span. A reviewer seeing the full Period Charge might
+    otherwise mistake the entire amount as at issue, when only the
+    Excess Days portion is unlawful.
 
     Rows with unparseable ``Period From``/``Period To`` are skipped
     silently. Output is sorted by ``Bill Date`` and re-indexed.
@@ -245,6 +253,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
+        "Unlawful Charge (£)",
         "Cancel/Rebill Admitted",
         "Reason Assessment",
     ]
@@ -275,6 +284,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         charge, value_source = _pull_period_charge(r)
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
+        unlawful_charge = round(charge * (excess / days), 2) if days > 0 else 0.0
         rows.append(
             {
                 "Invoice #": r.get("Invoice #", ""),
@@ -287,6 +297,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
                 "Value Source": value_source,
                 "12-Month Limit (days)": 365,
                 "Excess Days": excess,
+                "Unlawful Charge (£)": unlawful_charge,
                 "Cancel/Rebill Admitted": admitted,
                 "Reason Assessment": _assess_reason(
                     r.get("Invoice #", ""),
@@ -516,12 +527,18 @@ def compute_transitive_domination(
             'Invoice #' key and 'Period From'/'Period To'.
 
     Returns a mapping {superseded_invoice_id: (survivor_invoice_id, partial_overlap_flag)}.
-    A back-billing row is superseded iff there exists a later back-billing row that
-    transitively dominates it. The survivor is the transitive root (the live row from
-    which the superseded row is reachable).
+    A back-billing row is superseded iff there exists a later invoice that
+    transitively dominates it. The survivor is the transitive root (the live row
+    from which the superseded row is reachable). The survivor MAY be an invoice
+    that is NOT itself a back-billing row (e.g. a regular monthly rebill that
+    cancels/replaces a back-billing invoice); in that case it appears in the
+    map as the superseding ID even though it has no row in the back-billing
+    sheet.
 
     partial_overlap_flag is True when the killer's period does NOT fully contain the
     killed's period (strict containment guard failed but a K*-edge still fired).
+    When the survivor is not a back-billing row (no period in period_map),
+    partial_overlap defaults to False.
     """
     if rebilling_df.empty:
         edges: list[tuple[str, str]] = []
@@ -545,14 +562,25 @@ def compute_transitive_domination(
         if pd.notna(pf) and pd.notna(pt):
             period_map[inv_id] = (pf, pt)
 
-    bb_edges = [(u, v) for u, v in edges if u in bb_ids and v in bb_ids]
+    # Widen the edge filter to include any edge where the KILLED endpoint
+    # is a back-billing row, regardless of whether the killer is. A
+    # non-back-billing rebill (e.g. a regular monthly bill) CAN supersede
+    # a back-billing invoice; the survivor then carries that killer's ID
+    # even though it has no row in the back-billing sheet.
+    bb_edges = [(u, v) for u, v in edges if v in bb_ids]
 
     adj: dict[str, list[str]] = defaultdict(list)
     for u, v in bb_edges:
         adj[u].append(v)
 
+    # Sources for BFS include every back-billing row PLUS every non-bb
+    # killer that appears as the 'u' endpoint of a widened edge — a
+    # non-bb rebill can be the ultimate survivor that supersedes a bb
+    # invoice, so its reachable set must be computed too.
+    sources = set(bb_ids) | {u for u, _ in bb_edges}
+
     reachable_from: dict[str, set[str]] = defaultdict(set)
-    for source in bb_ids:
+    for source in sources:
         visited: set[str] = set()
         queue = [source]
         while queue:
@@ -570,15 +598,30 @@ def compute_transitive_domination(
             return (period_map[inv_id][0], inv_id)
         return (pd.Timestamp.max, inv_id)
 
+    # First pass: identify which sources are themselves superseded by
+    # any other source. A source is superseded if some other source can
+    # reach it transitively. This lets the second pass pick the ultimate
+    # root (a source not itself superseded) as the survivor.
+    superseded_sources: set[str] = set()
+    for source in sources:
+        for other in sources:
+            if other != source and source in reachable_from[other]:
+                superseded_sources.add(source)
+                break
+
     domination_map: dict[str, tuple[str, bool]] = {}
     for target in bb_ids:
         superseded_by = [
-            source for source in bb_ids if source != target and target in reachable_from[source]
+            source for source in sources if source != target and target in reachable_from[source]
         ]
         if not superseded_by:
             continue
-        # The survivor is the transitive root: earliest period start, then ID tiebreak.
-        survivor = min(superseded_by, key=sort_key)
+        # The survivor is the ultimate transitive root — a source that is
+        # not itself superseded by any other candidate. Only fall back to
+        # earliest-period-start tiebreak if every candidate is superseded
+        # (a cycle, which shouldn't happen in well-formed kill chains).
+        roots = [s for s in superseded_by if s not in superseded_sources]
+        survivor = min(roots if roots else superseded_by, key=sort_key)
         partial_overlap = False
         if survivor in period_map and target in period_map:
             survivor_start, survivor_end = period_map[survivor]

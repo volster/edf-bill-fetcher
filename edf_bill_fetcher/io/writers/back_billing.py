@@ -126,7 +126,15 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     Output columns:
         Invoice #, Bill Date, Period From, Period To, Days Billed,
         Period Charge (£), Value Source, 12-Month Limit (days),
-        Excess Days, Cancel/Rebill Admitted, Reason Assessment.
+        Excess Days, Unlawful Charge (£), Cancel/Rebill Admitted,
+        Reason Assessment.
+
+    ``Unlawful Charge (£)`` is the prorated share of the Period Charge
+    attributable to the Excess Days — i.e.
+    ``round(charge * (excess / days), 2)`` where ``days`` is the full
+    Days Billed span. A reviewer seeing the full Period Charge might
+    otherwise mistake the entire amount as at issue, when only the
+    Excess Days portion is unlawful.
 
     Rows with unparseable ``Period From``/``Period To`` are skipped
     silently. Output is sorted by ``Bill Date`` and re-indexed.
@@ -166,6 +174,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
+        "Unlawful Charge (£)",
         "Cancel/Rebill Admitted",
         "Reason Assessment",
     ]
@@ -196,6 +205,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         charge, value_source = _pull_period_charge(r)
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
+        unlawful_charge = round(charge * (excess / days), 2) if days > 0 else 0.0
         rows.append(
             {
                 "Invoice #": r.get("Invoice #", ""),
@@ -208,6 +218,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
                 "Value Source": value_source,
                 "12-Month Limit (days)": 365,
                 "Excess Days": excess,
+                "Unlawful Charge (£)": unlawful_charge,
                 "Cancel/Rebill Admitted": admitted,
                 "Reason Assessment": _assess_reason(
                     r.get("Invoice #", ""),
@@ -250,8 +261,9 @@ def write_back_billing_sheet(
       row 4: empty
       row 5: short instruction
       row 6: empty
-      row 7: column headers (16 cols incl. Open PDF, View on Evidence
-              Report, Status, Superseded By, Partial Overlap)
+      row 7: column headers (17 cols incl. Unlawful Charge, Open PDF,
+              View on Evidence Report, Status, Superseded By,
+              Partial Overlap)
       rows 8+: data rows (sorted by Bill Date as produced by
               :func:`detect_back_billing`)
       trailing: 'TOTAL RETROSPECTIVE CHARGES IN BACK-BILLED INVOICES'
@@ -274,7 +286,10 @@ def write_back_billing_sheet(
     ``Superseded By=survivor``, ``Partial Overlap="Yes"`` when the flag
     is set. They are preserved for the audit trail but EXCLUDED from
     the trailing total. Rows not in the map are ``Status="Live"`` and
-    their ``Period Charge (£)`` is added to the total.
+    their ``Period Charge (£)`` is added to the total. The
+    ``Unlawful Charge (£)`` column is rendered for each row but is
+    NOT summed into the trailing total — only ``Period Charge (£)``
+    is totaled, consistent with the existing total-row pattern.
     """
     ws.title = "Back-billing Analysis"
     NAVY = "10367A"
@@ -290,7 +305,7 @@ def write_back_billing_sheet(
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
     t1.alignment = Alignment(horizontal="left", vertical="center")
-    for c in range(2, 17):
+    for c in range(2, 18):
         x = ws.cell(row=1, column=c)
         x.fill = PatternFill("solid", start_color=ORANGE)
         x.border = CELL_BORDER
@@ -301,7 +316,7 @@ def write_back_billing_sheet(
     lc_hdr.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     lc_hdr.fill = PatternFill("solid", start_color=NAVY)
     lc_hdr.border = CELL_BORDER
-    for c in range(2, 17):
+    for c in range(2, 18):
         x = ws.cell(row=2, column=c)
         x.fill = PatternFill("solid", start_color=NAVY)
         x.border = CELL_BORDER
@@ -313,7 +328,7 @@ def write_back_billing_sheet(
     lc_cell.font = Font(name="Calibri", size=10)
     lc_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     lc_cell.border = CELL_BORDER
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=16)
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=17)
     ws.row_dimensions[3].height = 90
 
     # Row 5: instruction
@@ -326,7 +341,7 @@ def write_back_billing_sheet(
     inst_cell = ws.cell(row=5, column=1, value=inst)
     inst_cell.font = Font(name="Calibri", size=10, italic=True)
     inst_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=16)
+    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=17)
     ws.row_dimensions[5].height = 45
 
     # Row 7: headers
@@ -340,6 +355,7 @@ def write_back_billing_sheet(
         "Value Source",
         "12-Month Limit (days)",
         "Excess Days",
+        "Unlawful Charge (£)",
         "Cancel/Rebill Disclosed",
         "Reason Assessment",
         "Open PDF",
@@ -398,10 +414,14 @@ def write_back_billing_sheet(
         # Highlight excess-days when >30 (i.e. back-billing is materially over)
         if int(row.get("Excess Days", 0)) > 30:
             ws.cell(row=r, column=9).font = Font(name="Calibri", size=10, bold=True, color="C00000")
-        _text(ws, r, 10, disclosed, fill_hex=bg)
-        _text(ws, r, 11, row.get("Reason Assessment", ""), wrap=True, fill_hex=bg)
-        _open_pdf_hyperlink_cell(ws, r, 12, evidence_df, inv)
-        # View on Evidence Report (col 13): bidirectional hotlink back to the
+        # Unlawful Charge (£): prorated share of Period Charge for the
+        # Excess Days. Rendered as money; NOT summed into the trailing total.
+        unlawful = float(row.get("Unlawful Charge (£)", 0.0) or 0.0)
+        _money(ws, r, 10, unlawful, fill_hex=bg)
+        _text(ws, r, 11, disclosed, fill_hex=bg)
+        _text(ws, r, 12, row.get("Reason Assessment", ""), wrap=True, fill_hex=bg)
+        _open_pdf_hyperlink_cell(ws, r, 13, evidence_df, inv)
+        # View on Evidence Report (col 14): bidirectional hotlink back to the
         # row on the EDF Evidence Report sheet. Match by Invoice # first,
         # falling back to the amt|days signature.
         target_row = None
@@ -416,7 +436,7 @@ def write_back_billing_sheet(
                 except (TypeError, ValueError):
                     pass
         if target_row is not None:
-            cell = ws.cell(row=r, column=13, value="→")
+            cell = ws.cell(row=r, column=14, value="→")
             cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
                 ref=cell.coordinate,
                 location=f"'EDF Evidence Report'!A{target_row}",
@@ -425,12 +445,12 @@ def write_back_billing_sheet(
             )
             cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
         else:
-            cell = ws.cell(row=r, column=13, value="No match")
+            cell = ws.cell(row=r, column=14, value="No match")
             cell.font = Font(name="Calibri", size=10, italic=True, color="A6A6A6")
-        # Status / Superseded By / Partial Overlap (cols 14-16)
-        _text(ws, r, 14, status, fill_hex=bg)
-        _text(ws, r, 15, superseded_by, fill_hex=bg)
-        _text(ws, r, 16, partial_overlap, fill_hex=bg)
+        # Status / Superseded By / Partial Overlap (cols 15-17)
+        _text(ws, r, 15, status, fill_hex=bg)
+        _text(ws, r, 16, superseded_by, fill_hex=bg)
+        _text(ws, r, 17, partial_overlap, fill_hex=bg)
         # Superseded rows are outline-collapsed sub-rows (mirrors
         # io/writers/sap.py:440) — preserved for the audit trail but
         # visually grouped under their surviving invoice.
@@ -457,7 +477,22 @@ def write_back_billing_sheet(
         total_cell.fill = PatternFill("solid", start_color=NAVY)
         total_cell.border = CELL_BORDER
         total_cell.number_format = "#,##0.00"
-        for c in range(7, 17):
+        # Unlawful Charge total (col 10): sum of Unlawful Charge (£) across
+        # Live rows only (Superseded rows are excluded, mirroring the Period
+        # Charge total). Separate from the Period Charge total so a reviewer
+        # can see the prorated unlawful exposure at a glance.
+        unlawful_total = 0.0
+        for _, _row in bb.iterrows():
+            _inv = str(_row.get("Invoice #", ""))
+            if domination_map is not None and _inv in domination_map:
+                continue
+            unlawful_total += float(_row.get("Unlawful Charge (£)", 0.0) or 0.0)
+        unlawful_total_cell = ws.cell(row=r, column=10, value=round(unlawful_total, 2))
+        unlawful_total_cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        unlawful_total_cell.fill = PatternFill("solid", start_color=NAVY)
+        unlawful_total_cell.border = CELL_BORDER
+        unlawful_total_cell.number_format = "#,##0.00"
+        for c in range(7, 18):
             x = ws.cell(row=r, column=c)
             x.fill = PatternFill("solid", start_color=NAVY)
             x.border = CELL_BORDER
@@ -475,13 +510,14 @@ def write_back_billing_sheet(
         "G": 18,
         "H": 14,
         "I": 12,
-        "J": 22,
-        "K": 60,
-        "L": 60,  # Open PDF
-        "M": 22,  # View on Evidence Report
-        "N": 14,  # Status
-        "O": 16,  # Superseded By
-        "P": 16,  # Partial Overlap
+        "J": 16,  # Unlawful Charge (£)
+        "K": 22,  # Cancel/Rebill Disclosed
+        "L": 60,  # Reason Assessment
+        "M": 60,  # Open PDF
+        "N": 22,  # View on Evidence Report
+        "O": 14,  # Status
+        "P": 16,  # Superseded By
+        "Q": 16,  # Partial Overlap
     }
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width

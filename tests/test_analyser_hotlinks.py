@@ -91,13 +91,13 @@ def test_back_billing_view_on_evidence_report_column_present() -> None:
     wb = Workbook()
     ws = wb.active
     write_back_billing_sheet(ws, bb, account="A-31105244", evidence_df=ev, evidence_index=ev_idx)
-    # Header row=7. The hotlink column is "View on Evidence Report" at col 13
-    # (post Task 3 + Task 4 the sheet has 16 columns: Open PDF is col 12,
-    # View on Evidence Report is col 13, Status/Superseded By/Partial Overlap
-    # are cols 14-16).
-    hdr = ws.cell(row=7, column=13).value
+    # Header row=7. The hotlink column is "View on Evidence Report" at col 14
+    # (post Unlawful Charge the sheet has 17 columns: Open PDF is col 13,
+    # View on Evidence Report is col 14, Status/Superseded By/Partial Overlap
+    # are cols 15-17).
+    hdr = ws.cell(row=7, column=14).value
     assert hdr == "View on Evidence Report"
-    body = ws.cell(row=8, column=13)
+    body = ws.cell(row=8, column=14)
     assert body.value == "→"
     assert body.hyperlink is not None
     # Excel report sheet name wrapped in single quotes with leading #.
@@ -127,7 +127,7 @@ def test_back_billing_unmatched_emits_no_match() -> None:
     wb = Workbook()
     ws = wb.active
     write_back_billing_sheet(ws, bb, account="A-31105244", evidence_df=ev, evidence_index=ev_idx)
-    body = ws.cell(row=8, column=13).value
+    body = ws.cell(row=8, column=14).value
     assert body == "No match"
 
 

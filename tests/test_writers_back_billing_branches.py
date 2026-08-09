@@ -42,6 +42,7 @@ _EXPECTED_COLUMNS = [
     "Value Source",
     "12-Month Limit (days)",
     "Excess Days",
+    "Unlawful Charge (£)",
     "Cancel/Rebill Admitted",
     "Reason Assessment",
 ]
@@ -322,6 +323,7 @@ def _bb_row(
     period_charge: object = 1347.96,
     value_source: str = "Period Charge",
     excess_days: int = 365,
+    unlawful_charge: object = 673.98,
     admitted: bool = False,
     reason: str = "back-billing",
 ) -> dict:
@@ -336,6 +338,7 @@ def _bb_row(
         "Value Source": value_source,
         "12-Month Limit (days)": 365,
         "Excess Days": excess_days,
+        "Unlawful Charge (£)": unlawful_charge,
         "Cancel/Rebill Admitted": admitted,
         "Reason Assessment": reason,
     }
@@ -408,7 +411,7 @@ def test_write_back_billing_sheet_evidence_index_amt_days_fallback_path_exercise
     evidence_index = {"amt_days:1347.96|730": 42}
     ws = _open_ws()
     write_back_billing_sheet(ws, bb, account="A1", evidence_index=evidence_index)
-    cell = ws.cell(row=8, column=13)
+    cell = ws.cell(row=8, column=14)
     assert cell.value == "\u2192"
     assert cell.hyperlink is not None
     assert cell.hyperlink.location == "'EDF Evidence Report'!A42"
@@ -436,7 +439,7 @@ def test_write_back_billing_sheet_evidence_index_inv_lookup_resolves_directly() 
     evidence_index = {"inv:KI-DIRECT": 7}
     ws = _open_ws()
     write_back_billing_sheet(ws, bb, account="A1", evidence_index=evidence_index)
-    cell = ws.cell(row=8, column=13)
+    cell = ws.cell(row=8, column=14)
     assert cell.value == "\u2192"
     assert cell.hyperlink is not None
     assert cell.hyperlink.location == "'EDF Evidence Report'!A7"
@@ -456,7 +459,7 @@ def test_write_back_billing_sheet_no_evidence_index_emits_no_match() -> None:
     )
     ws = _open_ws()
     write_back_billing_sheet(ws, bb, account="A1", evidence_index=None)
-    assert ws.cell(row=8, column=13).value == "No match"
+    assert ws.cell(row=8, column=14).value == "No match"
 
 
 def test_write_back_billing_sheet_excess_days_over_30_highlights_red() -> None:
