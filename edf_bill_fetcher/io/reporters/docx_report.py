@@ -25,7 +25,6 @@ from docx.shared import (
 
 # Import from main module
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
-from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.io.reporters.pdf_report import (
     REPORT_SECTIONS,
     RenderContext,
@@ -37,6 +36,7 @@ from edf_bill_fetcher.io.reporters.pdf_report import (
     _period_to_ofgem_quarter,
     fmt_date,
 )
+from edf_bill_fetcher.models.config import ConfigDict
 
 # =============================================================================
 # CONSTANTS

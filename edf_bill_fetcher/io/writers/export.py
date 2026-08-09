@@ -46,9 +46,7 @@ from edf_bill_fetcher.helpers.excel_utils import (
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
-from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.helpers.formatting import (
-
     _apply_amalgamate_to_kept_frame,
 )
 from edf_bill_fetcher.io.writers.back_billing import (  # noqa: E402,F401
@@ -89,6 +87,7 @@ from edf_bill_fetcher.io.writers.statistical import (  # noqa: E402,F401
 from edf_bill_fetcher.io.writers.tariff import (  # noqa: E402,F401
     write_tariff_analysis_sheet,
 )
+from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
     _SOURCE_PRECEDENCE,
     compute_dispute_flags,
