@@ -74,6 +74,27 @@ jobs:
             --hidden-import=pypff \
             main.py
 
+      - name: Code-sign macOS bundle (ad-hoc)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Ad-hoc signing (sign with `-` identity = no developer cert).
+          # This won't pass Gatekeeper's notarization check, but it DOES
+          # fix the "damaged" error caused by the unsigned bundle's
+          # symlink/structure being mangled by zip compression during
+          # artifact upload. Users who download the artifact will need
+          # to `xattr -cr EDF_Evidence_Collector.app` to clear the
+          # quarantine flag before running.
+          if [ -d "dist/EDF_Evidence_Collector.app" ]; then
+            codesign --force --deep --sign - dist/EDF_Evidence_Collector.app
+            echo "Ad-hoc signed dist/EDF_Evidence_Collector.app"
+          elif [ -f "dist/EDF_Evidence_Collector" ]; then
+            codesign --force --sign - dist/EDF_Evidence_Collector
+            echo "Ad-hoc signed dist/EDF_Evidence_Collector (single binary)"
+          else
+            echo "WARNING: No executable found to sign"
+          fi
+
       - name: Verify executable exists
         run: |
           if [ -d "dist" ]; then
