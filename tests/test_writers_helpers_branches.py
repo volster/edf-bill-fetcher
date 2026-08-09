@@ -463,12 +463,22 @@ def _event(
     cdate: object = "2024-03-15",
     net: float = 100.0,
     rows: list[dict] | None = None,
+    posting: str | None = None,
 ) -> SapBackBillingEvent:
+    # Task 6 (commit d06909c) made Posting Date the preferred date axis.
+    # When ``posting`` is given, the rows carry a Posting Date so the
+    # matcher's Posting Date branch is exercised; otherwise the rows
+    # omit it and the matcher falls back to Clearing Date.
+    if rows is None:
+        row: dict = {"Amount": f"{net:.2f}"}
+        if posting is not None:
+            row["Posting Date"] = posting
+        rows = [row]
     return SapBackBillingEvent(
         clearing_doc="CD1",
         clearing_date=pd.Timestamp(cdate) if cdate is not None else pd.NaT,
         clearing_reason="Back-bill",
-        rows=rows or [{"Amount": f"{net:.2f}"}],
+        rows=rows,
         net_amount=net,
         has_credit_for_consum_billing=False,
         has_account_maintenance=False,
@@ -484,8 +494,19 @@ def _rec(
     pf: str = "01/03/2024",
     pt: str = "31/03/2024",
     amt: str = "100.00",
+    period_charge: str | None = None,
 ) -> dict:
-    return {"Invoice #": invoice, "Period From": pf, "Period To": pt, "Amount (£)": amt}
+    # Task 7 (commit dcdf6eb) made Period Charge (£) the canonical amount
+    # axis; Amount (£) is the fallback.  Default period_charge to amt so
+    # the canonical path is exercised; pass period_charge explicitly to
+    # drive the fallback branch.
+    return {
+        "Invoice #": invoice,
+        "Period From": pf,
+        "Period To": pt,
+        "Period Charge (£)": amt if period_charge is None else period_charge,
+        "Amount (£)": amt,
+    }
 
 
 def test_match_sap_events_empty_inputs() -> None:
@@ -614,6 +635,100 @@ def test_match_sap_events_low_in_span_coincidental_note() -> None:
     assert len(matches) == 1
     assert matches[0].confidence_band == "Low"
     assert "amounts do not correspond" in matches[0].notes
+
+
+# ---------------------------------------------------------------------------
+# handle_cluster_unmatched (Task 8 — Decision 4)
+# Spec §3.3: a SAP event whose Posting Date falls inside a back-billing
+# cluster window but achieves no amount-band agreement with any in-cluster
+# invoice is tagged as an internal mechanism of that cluster.
+# ---------------------------------------------------------------------------
+
+
+def test_handle_cluster_unmatched_tags_when_no_amount_agreement() -> None:
+    # Posting Date inside the cluster window; SAP net 999 vs in-cluster
+    # invoices 100/200 -> no amount-band agreement -> tagged.
+    ev = SapBackBillingEvent(
+        clearing_doc="CD-TAG",
+        clearing_date=pd.Timestamp("2024-03-15"),
+        clearing_reason="Back-bill",
+        rows=[{"Posting Date": "2024-03-15", "Amount": "999.00"}],
+        net_amount=999.0,
+        has_credit_for_consum_billing=False,
+        has_account_maintenance=False,
+        largest_single_posting=999.0,
+        posting_date_range=("2024-03-15", "2024-03-15"),
+        evidence_trail="",
+    )
+    clusters = [
+        {
+            "name": "T60/T61",
+            "posting_date_start": "2024-03-01",
+            "posting_date_end": "2024-03-31",
+            "invoices": [
+                {"Invoice #": "T60", "Period Charge (£)": 100.0},
+                {"Invoice #": "T61", "Period Charge (£)": 200.0},
+            ],
+        }
+    ]
+    result = h.handle_cluster_unmatched(ev, clusters)
+    assert result is not None
+    assert result["Matched EDF Invoice #"] == "T60/T61 internal mechanism"
+    assert result["Confidence"] == 0
+    assert "Posting Date inside cluster window" in result["Notes"]
+    assert "£999.00" in result["Notes"]
+
+
+def test_handle_cluster_unmatched_none_when_amount_agrees() -> None:
+    # SAP net 100 vs in-cluster invoice 100 -> within 50% -> not tagged.
+    ev = SapBackBillingEvent(
+        clearing_doc="CD-AGREE",
+        clearing_date=pd.Timestamp("2024-03-15"),
+        clearing_reason="Back-bill",
+        rows=[{"Posting Date": "2024-03-15", "Amount": "100.00"}],
+        net_amount=100.0,
+        has_credit_for_consum_billing=False,
+        has_account_maintenance=False,
+        largest_single_posting=100.0,
+        posting_date_range=("2024-03-15", "2024-03-15"),
+        evidence_trail="",
+    )
+    clusters = [
+        {
+            "name": "T62",
+            "posting_date_start": "2024-03-01",
+            "posting_date_end": "2024-03-31",
+            "invoices": [{"Invoice #": "T62", "Period Charge (£)": 100.0}],
+        }
+    ]
+    result = h.handle_cluster_unmatched(ev, clusters)
+    assert result is None
+
+
+def test_handle_cluster_unmatched_none_when_window_excludes_date() -> None:
+    # Posting Date outside the cluster window -> None.
+    ev = SapBackBillingEvent(
+        clearing_doc="CD-OUTSIDE",
+        clearing_date=pd.Timestamp("2024-06-15"),
+        clearing_reason="Back-bill",
+        rows=[{"Posting Date": "2024-06-15", "Amount": "999.00"}],
+        net_amount=999.0,
+        has_credit_for_consum_billing=False,
+        has_account_maintenance=False,
+        largest_single_posting=999.0,
+        posting_date_range=("2024-06-15", "2024-06-15"),
+        evidence_trail="",
+    )
+    clusters = [
+        {
+            "name": "T63",
+            "posting_date_start": "2024-03-01",
+            "posting_date_end": "2024-03-31",
+            "invoices": [{"Invoice #": "T63", "Period Charge (£)": 100.0}],
+        }
+    ]
+    result = h.handle_cluster_unmatched(ev, clusters)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------

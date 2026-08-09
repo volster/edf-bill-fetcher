@@ -12,7 +12,10 @@ import pandas as pd
 from edf_bill_fetcher.models.events import SapBackBillingEvent
 from edf_bill_fetcher.processors.matching import match_sap_events_to_edf
 from edf_bill_fetcher.processors.sap_parsers import parse_sap_financial_transactions
-from edf_bill_fetcher.writers._helpers import detect_sap_back_billing_events
+from edf_bill_fetcher.writers._helpers import (
+    detect_sap_back_billing_events,
+    handle_cluster_unmatched,
+)
 
 # ---------------------------------------------------------------------------
 # Parser
@@ -357,21 +360,36 @@ def _mk_edf(
     period_from: str = "02/10/2020",
     period_to: str = "09/08/2023",
     amount: float = 28192.35,
+    period_charge: float | None = None,
 ) -> dict:
     # Use UK DD/MM/YYYY strings — that's the form EDF Evidence Report
     # rows carry their Period From/To fields in when match_sap_events_to_edf
     # is called via export_to_excel (dfc.to_dict(orient="records")).
+    #
+    # Task 7 (commit dcdf6eb) made Period Charge (£) the canonical amount
+    # axis, with Amount (£) (the running balance) as a fallback only when
+    # Period Charge is N/A/unparseable.  Tests default ``period_charge`` to
+    # ``amount`` so the canonical path is exercised; pass ``period_charge``
+    # explicitly to drive the fallback branch.
     return {
         "Invoice #": invoice,
         "Period From": period_from,
         "Period To": period_to,
+        "Period Charge (£)": amount if period_charge is None else period_charge,
         "Amount (£)": amount,
         "Date": period_to,
     }
 
 
 def test_match_sap_events_to_edf_exact_day_high_conf() -> None:
-    """Clearing Date inside EDF period + amount within 5% → High."""
+    """Posting Date (== Clearing Date here) inside EDF period + amount within 5% → High.
+
+    Task 6 (commit d06909c) made Posting Date the preferred date axis; the
+    matcher falls back to Clearing Date only when no underlying row's Posting
+    Date falls inside the EDF period.  In this fixture the row's Posting Date
+    equals the Clearing Date and both sit inside the EDF period, so the
+    in-span 50-point bonus applies on the Posting Date axis.
+    """
     ev = _mk_ev(
         clearing_date="2023-08-09",
         net_amount=28000.0,
@@ -405,7 +423,7 @@ def test_match_sap_events_to_edf_exact_day_high_conf() -> None:
 
 
 def test_match_sap_events_to_edf_three_day_medium_conf() -> None:
-    """3-day delta + amount within 25% → Medium."""
+    """3-day delta + amount within 25% → Medium (Posting Date == Clearing Date here)."""
     ev = _mk_ev(
         clearing_date="2023-08-09",
         net_amount=25000.0,
@@ -511,11 +529,13 @@ def test_match_sap_events_to_edf_net_zero_gross_amount_match_high() -> None:
 
 
 def test_matcher_demotes_in_span_no_amount_to_low() -> None:
-    """Clearing date inside EDF period but amount wildly off → Low (not Medium).
+    """Posting/Clearing Date inside EDF period but amount wildly off → Low (not Medium).
 
     Spec §3.1 — Option C: previously this row would have scored Medium
     purely from the in-span 50-point bonus with zero amount correspondence;
-    the new gate caps it at Low.
+    the new gate caps it at Low.  The row's Posting Date equals the
+    Clearing Date and both fall inside the EDF period, so the date axis is
+    the Posting Date (Task 6).
     """
     ev = _mk_ev(clearing_date="2019-09-03", net_amount=-831.45)
     edf = [
@@ -532,7 +552,7 @@ def test_matcher_demotes_in_span_no_amount_to_low() -> None:
 
 
 def test_matcher_in_span_with_amount_within_5pct_stays_high() -> None:
-    """Date in-span + amount within 5% keeps the High band."""
+    """Posting Date in-span + Period Charge within 5% keeps the High band."""
     ev = _mk_ev(clearing_date="2024-01-15", net_amount=100.00)
     edf = [
         _mk_edf(
@@ -548,7 +568,7 @@ def test_matcher_in_span_with_amount_within_5pct_stays_high() -> None:
 
 
 def test_matcher_in_span_with_amount_within_25pct_caps_at_medium() -> None:
-    """Date in-span + amount within 25% but not 5% → Medium (amount_score>0)."""
+    """Posting Date in-span + Period Charge within 25% but not 5% → Medium (amount_score>0)."""
     ev = _mk_ev(clearing_date="2024-01-15", net_amount=120.00)
     edf = [
         _mk_edf(
@@ -564,7 +584,7 @@ def test_matcher_in_span_with_amount_within_25pct_caps_at_medium() -> None:
 
 
 def test_matcher_near_boundary_no_amount_caps_at_low() -> None:
-    """Clearing within 3d of period end (25 pts) but no amount → Low not Medium."""
+    """Posting/Clearing Date within 3d of period end (25 pts) but no amount → Low not Medium."""
     ev = _mk_ev(clearing_date="2024-01-28", net_amount=50.00)
     edf = [
         _mk_edf(
@@ -602,3 +622,91 @@ def test_matcher_notes_string_says_coincidental_when_no_amount() -> None:
     assert matches, "expected a Low match"
     assert matches[0].confidence_band == "Low", matches[0].confidence_band
     assert "coincidental" in matches[0].notes.lower(), matches[0].notes
+
+
+# ---------------------------------------------------------------------------
+# handle_cluster_unmatched (Task 8 — Decision 4)
+# Spec §3.3: a SAP event whose Posting Date falls inside a back-billing
+# cluster window but achieves no amount-band agreement with any in-cluster
+# invoice is tagged as an internal mechanism of that cluster.
+# ---------------------------------------------------------------------------
+
+
+def test_cluster_unmatched_uses_posting_date_end_when_start_empty() -> None:
+    """When posting_date_range[0] is empty, the handler falls back to the end bound.
+
+    This exercises the ``posting_start or posting_end`` fallback in
+    ``handle_cluster_unmatched`` — a path not covered by
+    test_sap_cluster_unmatched.py, which always passes a populated start
+    bound.  The event's Posting Date (via the end bound) lands inside the
+    cluster window with no amount agreement, so it is tagged.
+    """
+    ev = SapBackBillingEvent(
+        clearing_doc="CD-FALLBACK",
+        clearing_date=pd.Timestamp("2021-04-01"),
+        clearing_reason="Statistical Item Reset",
+        rows=[{"Posting Date": "", "Amount": "999.00"}],
+        net_amount=999.0,
+        has_credit_for_consum_billing=False,
+        has_account_maintenance=False,
+        largest_single_posting=999.0,
+        posting_date_range=("", "2021-03-15"),
+        evidence_trail="",
+    )
+    clusters = [
+        {
+            "name": "T40/T41",
+            "posting_date_start": "2021-03-01",
+            "posting_date_end": "2021-03-31",
+            "invoices": [
+                {"Invoice #": "T40", "Period Charge (£)": 100.0},
+                {"Invoice #": "T41", "Period Charge (£)": 200.0},
+            ],
+        }
+    ]
+    result = handle_cluster_unmatched(ev, clusters)
+    assert result is not None
+    assert result["Matched EDF Invoice #"] == "T40/T41 internal mechanism"
+    assert "Posting Date inside cluster window" in result["Notes"]
+    assert "2021-03-15" in result["Evidence Trail"]
+
+
+def test_cluster_unmatched_skips_first_cluster_tags_second() -> None:
+    """When the first cluster's window excludes the date, the second cluster tags it.
+
+    Covers multi-cluster iteration: the event's Posting Date is outside the
+    first cluster's window but inside the second's, with no amount
+    agreement in the second cluster.
+    """
+    ev = SapBackBillingEvent(
+        clearing_doc="CD-MULTI",
+        clearing_date=pd.Timestamp("2021-06-01"),
+        clearing_reason="Statistical Item Reset",
+        rows=[{"Posting Date": "2021-06-15", "Amount": "999.00"}],
+        net_amount=999.0,
+        has_credit_for_consum_billing=False,
+        has_account_maintenance=False,
+        largest_single_posting=999.0,
+        posting_date_range=("2021-06-15", "2021-06-15"),
+        evidence_trail="",
+    )
+    clusters = [
+        {
+            "name": "T50",
+            "posting_date_start": "2021-03-01",
+            "posting_date_end": "2021-03-31",
+            "invoices": [{"Invoice #": "T50", "Period Charge (£)": 100.0}],
+        },
+        {
+            "name": "T51/T52",
+            "posting_date_start": "2021-06-01",
+            "posting_date_end": "2021-06-30",
+            "invoices": [
+                {"Invoice #": "T51", "Period Charge (£)": 100.0},
+                {"Invoice #": "T52", "Period Charge (£)": 200.0},
+            ],
+        },
+    ]
+    result = handle_cluster_unmatched(ev, clusters)
+    assert result is not None
+    assert result["Matched EDF Invoice #"] == "T51/T52 internal mechanism"
