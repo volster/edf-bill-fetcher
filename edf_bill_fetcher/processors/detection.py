@@ -184,11 +184,11 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
 
     A bill is back-billing when it charges for consumption supplied
     more than 12 months before the bill Date.  The eligibility gate is
-    ``Date - Period To > 365 days`` — i.e. the bill was issued more
-    than 12 months after the LATEST consumption it charges for.  If
-    even the latest consumption (Period To) is within 365 days of the
-    bill Date, the invoice is NOT back-billing (regardless of how long
-    the period span is).
+    ``Date - Period From > 365 days`` — i.e. the bill charges for
+    consumption supplied more than 12 months before the bill Date.
+    If even the earliest consumption (Period From) is within 365 days
+    of the bill Date, none of the period's consumption is unlawful
+    and the invoice is NOT back-billing.
 
     ``Excess Days = max(0, (Date - 365 days - Period From).days)`` —
     the count of consumption days in the period that fall more than
@@ -260,9 +260,13 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         bill_date_dt = _safe_to_datetime(r.get("Date"))
         if pd.isna(bill_date_dt):
             continue
-        # Legal gate: bill Date must be more than 365 days after Period To.
-        gap_to = int((bill_date_dt - pt).days)
-        if gap_to <= 365:
+        # Legal gate: bill Date must be more than 365 days after Period From.
+        # Any consumption day supplied more than 12 months before the bill
+        # Date is unlawful (SLC 21BA per-unit test). If even the EARLIEST
+        # consumption (Period From) is within 365 days, the whole period is
+        # lawful and we skip.
+        gap_from = int((bill_date_dt - pf).days)
+        if gap_from <= 365:
             continue
         days = int((pt - pf).days)
         # Excess Days: consumption days supplied more than 365 days before bill Date.

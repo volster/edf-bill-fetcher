@@ -44,17 +44,19 @@ def test_short_period_invoice_not_flagged() -> None:
 
 
 def test_exactly_365_days_is_not_flagged_boundary() -> None:
-    # Bill date exactly 365 days after Period To is NOT back-billing (boundary).
-    # Period 01 Jan 2023 to 02 Jan 2024; bill date 01 Jan 2025 -> 365 days gap.
+    # Bill date exactly 365 days after Period From is NOT back-billing (boundary).
+    # Period 02 Jan 2024 to 31 Dec 2024; bill date 01 Jan 2025 -> 365 days gap
+    # from Period From.
     df = pd.DataFrame(
-        [_row(date="01 Jan 2025", period_from="01 Jan 2023", period_to="02 Jan 2024")]
+        [_row(date="01 Jan 2025", period_from="02 Jan 2024", period_to="31 Dec 2024")]
     )
     assert detect_back_billing(df).empty
 
 
 def test_366_days_is_flagged_boundary() -> None:
-    # Bill date 366 days after Period To IS back-billing (just over the boundary).
-    # Period 01 Jan 2023 to 02 Jan 2024; bill date 03 Jan 2025 -> 366 days gap.
+    # Bill date 366+ days after Period From IS back-billing (just over the boundary).
+    # Period 01 Jan 2023 to 02 Jan 2024; bill date 03 Jan 2025 -> 733 days gap
+    # from Period From.
     df = pd.DataFrame(
         [_row(date="03 Jan 2025", period_from="01 Jan 2023", period_to="02 Jan 2024")]
     )
@@ -279,16 +281,17 @@ def test_short_period_billed_years_late_is_flagged() -> None:
 
 
 def test_long_period_billed_within_year_of_period_to_not_flagged() -> None:
-    # 700-day period billed within 365 days of Period To -> NOT back-billing.
-    # Period 01 Jan 2020 to 30 Nov 2021 (~699 days); bill date 30 Jun 2022
-    # -> Date - Period To = ~212 days -> not flagged.
+    # Long-ish period billed within 365 days of its Period From -> NOT back-billing.
+    # Under the per-unit SLC 21BA test the gate is Date - Period From > 365.
+    # Period 01 Jan 2023 to 30 Nov 2023 (333 days); bill date 31 Dec 2023
+    # -> Date - Period From = 364 days -> not flagged.
     df = pd.DataFrame(
         [
             _row(
                 invoice="T-002",
-                date="30 Jun 2022",
-                period_from="01 Jan 2020",
-                period_to="30 Nov 2021",  # ~699 days span
+                date="31 Dec 2023",
+                period_from="01 Jan 2023",
+                period_to="30 Nov 2023",  # 333 days span
                 amount=5000.0,
             )
         ]

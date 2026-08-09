@@ -6,15 +6,15 @@ from edf_bill_fetcher.io.writers.analysis import run_analysers
 
 
 def _df() -> pd.DataFrame:
-    # Bill dates are >365 days after Period To so both invoices clear the
-    # SLC 7A back-billing gate (Date - Period To > 365 days). T-X2 is issued
+    # Bill dates are >365 days after Period From so both invoices clear the
+    # SLC 7A back-billing gate (Date - Period From > 365 days). T-X2 is issued
     # after T-X1 and its period fully contains T-X1's, so the rebilling
     # detector flags the Killer=T-X2 / Killed=T-X1 pair.
     return pd.DataFrame(
         [
             {
                 "Invoice #": "T-X1",
-                "Date": "01 Sep 2024",  # 397 days after Period To (31 Jul 2023)
+                "Date": "01 Sep 2024",  # ~970 days after Period From (01 Jan 2022)
                 "Period From": "01 Jan 2022",
                 "Period To": "31 Jul 2023",
                 "Reading": "Actual",
@@ -25,7 +25,7 @@ def _df() -> pd.DataFrame:
             },
             {
                 "Invoice #": "T-X2",
-                "Date": "01 Oct 2024",  # 397 days after Period To (31 Aug 2023)
+                "Date": "01 Oct 2024",  # ~1000 days after Period From (01 Jan 2022)
                 "Period From": "01 Jan 2022",  # fully contains T-X1 from 2022-01-01
                 "Period To": "31 Aug 2023",
                 "Reading": "Actual",

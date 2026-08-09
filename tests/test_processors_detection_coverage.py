@@ -137,18 +137,18 @@ def test_detect_back_billing_returns_empty_for_short_period_invoices() -> None:
 
 
 def test_detect_back_billing_flags_late_billed_invoice() -> None:
-    """A bill issued >365 days after its Period To triggers the back-billing branch.
+    """A bill issued >365 days after its Period From triggers the back-billing branch.
 
     Under the legally correct SLC 7A / Electricity Act 1989 s.84B rule
-    (post Task 3), back-billing is gated on ``Date - Period To > 365 days`` —
-    i.e. the bill was issued more than 12 months after the LATEST consumption
-    it charges for. A long period span alone is NOT back-billing.
+    (post Task 3), back-billing is gated on ``Date - Period From > 365 days`` —
+    i.e. the bill charges for consumption supplied more than 12 months before
+    the bill Date. A long period span alone is NOT back-billing.
     """
     df = pd.DataFrame(
         [
             {
                 "Invoice #": "A1",
-                "Date": "01 Mar 2025",  # 395 days after Period To -> > 365 gate
+                "Date": "01 Mar 2025",  # 425 days after Period From -> > 365 gate
                 "Period From": "01 Jan 2024",
                 "Period To": "31 Jan 2024",  # 30-day period; the late bill date is what triggers
                 "Amount (£)": "5000.00",
