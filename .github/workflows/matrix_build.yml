@@ -112,14 +112,33 @@ jobs:
           # artifact upload. Users who download the artifact will need
           # to `xattr -cr EDF_Evidence_Collector.app` to clear the
           # quarantine flag before running.
+          #
+          # --deep is deprecated since macOS 11 and can corrupt nested
+          # framework signatures, so sign the inner binary first, then
+          # the outer .app.
           if [ -d "dist/EDF_Evidence_Collector.app" ]; then
-            codesign --force --deep --sign - dist/EDF_Evidence_Collector.app
+            codesign --force --sign - dist/EDF_Evidence_Collector.app/Contents/MacOS/EDF_Evidence_Collector || true
+            codesign --force --sign - dist/EDF_Evidence_Collector.app || true
             echo "Ad-hoc signed dist/EDF_Evidence_Collector.app"
           elif [ -f "dist/EDF_Evidence_Collector" ]; then
             codesign --force --sign - dist/EDF_Evidence_Collector
             echo "Ad-hoc signed dist/EDF_Evidence_Collector (single binary)"
           else
             echo "WARNING: No executable found to sign"
+          fi
+
+      - name: Verify macOS code signature (ad-hoc)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -d "dist/EDF_Evidence_Collector.app" ]; then
+            codesign --verify --verbose=4 dist/EDF_Evidence_Collector.app
+            echo "Signature verification passed for dist/EDF_Evidence_Collector.app"
+          elif [ -f "dist/EDF_Evidence_Collector" ]; then
+            codesign --verify --verbose=4 dist/EDF_Evidence_Collector
+            echo "Signature verification passed for dist/EDF_Evidence_Collector (single binary)"
+          else
+            echo "WARNING: No signed executable found to verify"
           fi
 
       - name: Verify executable exists
