@@ -29,6 +29,7 @@ class SapBackBillingEvent:
     posting_date_range: tuple[str, str] = ("", "")
     evidence_trail: str = ""
     matched_edf_invoice: str | None = None
+    _cluster_unmatched_tag: dict[str, str] | None = field(default=None, repr=False)
 
 
 @dataclass

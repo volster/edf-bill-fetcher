@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import warnings
 from datetime import datetime
 from typing import Any
 
@@ -279,6 +280,13 @@ def _prepare_analysis_frame(df_an: pd.DataFrame, config: ConfigDict) -> pd.DataF
     bill_date = _safe_to_datetime(df_an["Date"])
     period_from = _safe_to_datetime(df_an["Period From"])
     legal_candidate = (bill_date - period_from).dt.days > 365
+
+    nat_count = bill_mask & (bill_date.isna() | period_from.isna())
+    if nat_count.any():
+        warnings.warn(
+            f"{int(nat_count.sum())} bill row(s) with unparseable dates dropped from analysis frame",
+            stacklevel=2,
+        )
 
     dfc = df_an[(payment_credit_mask) | (bill_mask & (amount_mask | legal_candidate))]
     return dfc.copy().reset_index(drop=True)

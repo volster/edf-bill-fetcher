@@ -509,7 +509,10 @@ def handle_cluster_unmatched(
     if not posting_date:
         return None
 
-    sap_amount = sap_event.net_amount
+    if sap_event.net_amount == 0 and sap_event.largest_single_posting is not None:
+        comparison_amount = abs(sap_event.largest_single_posting)
+    else:
+        comparison_amount = sap_event.net_amount
 
     for cluster in clusters:
         cluster_start = cluster.get("posting_date_start", "")
@@ -526,7 +529,7 @@ def handle_cluster_unmatched(
             inv_amount = float(invoice.get("Period Charge (£)", 0) or 0)
             if inv_amount <= 0:
                 continue
-            if abs(sap_amount - inv_amount) / inv_amount <= 0.50:
+            if abs(comparison_amount - inv_amount) / inv_amount <= 0.50:
                 # Amount agreement exists → not cluster-unmatched.
                 return None
 
@@ -536,7 +539,7 @@ def handle_cluster_unmatched(
             "Confidence": 0,
             "Notes": (
                 "Posting Date inside cluster window but no amount agreement "
-                f"with any in-cluster invoice (SAP net £{sap_amount:.2f})"
+                f"with any in-cluster invoice (SAP net £{comparison_amount:.2f})"
             ),
             "Evidence Trail": (
                 f"Posting Date: {posting_date}, "

@@ -1,4 +1,6 @@
 # tests/test_export_analysis_min_exemption.py
+import warnings
+
 import pandas as pd
 
 from edf_bill_fetcher.io.writers.export import _prepare_analysis_frame
@@ -51,3 +53,27 @@ def test_analysis_min_still_filters_short_period_low_amount():
     config: ConfigDict = {"analysis_min": 500.0}
     dfc = _prepare_analysis_frame(df_an, config)
     assert len(dfc) == 0
+
+
+def test_unparseable_dates_warn():
+    """A New Bill row with unparseable Date/Period From warns about the drop."""
+    df_an = pd.DataFrame(
+        [
+            {
+                "Invoice #": "KI-BAD",
+                "Date": "not-a-date",
+                "Period From": "also-not-a-date",
+                "Period To": "2021-03-31",
+                "Amount (£)": 100.0,  # below analysis_min £500
+                "Period Charge (£)": 50.0,
+                "Entry Type": "New Bill",
+            }
+        ]
+    )
+    config: ConfigDict = {"analysis_min": 500.0}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        dfc = _prepare_analysis_frame(df_an, config)
+
+    assert len(dfc) == 0
+    assert any("unparseable dates" in str(w.message) for w in caught)

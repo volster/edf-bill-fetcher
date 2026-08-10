@@ -33,10 +33,17 @@ def _start_virtual_display() -> None:
         from pyvirtualdisplay import Display
     except ImportError:
         return  # PyVirtualDisplay not installed
+    _display = None
     try:
-        _virtual_display = Display(visible=False, size=(1920, 1080))
-        _virtual_display.start()
+        _display = Display(visible=False, size=(1920, 1080))
+        _display.start()
+        _virtual_display = _display
     except Exception:
+        if _display is not None:
+            try:
+                _display.stop()
+            except Exception:
+                pass
         _virtual_display = None
 
 
