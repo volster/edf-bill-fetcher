@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import sys
 
 _virtual_display = None  # type: ignore[var-annotated]
 
@@ -27,6 +28,8 @@ _virtual_display = None  # type: ignore[var-annotated]
 def _start_virtual_display() -> None:
     """Start a virtual X display if no ``$DISPLAY`` is set."""
     global _virtual_display
+    if sys.platform != "linux":
+        return  # PyVirtualDisplay requires Xvfb (Linux only)
     if os.environ.get("DISPLAY"):
         return  # a display is already active
     try:
