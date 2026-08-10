@@ -10,10 +10,9 @@ Targets the missed-line inventory reported by coverage:
     TypeError/ValueError guard around that fallback, and the hyperlink cell
     emitted when a target row is resolved.
 
-The tests exercise the writer module's OWN public surface (imported from
-``edf_bill_fetcher.io.writers.back_billing``) rather than the re-exported
-``processors.detection.detect_back_billing`` copy the sibling suites use, so
-the writer module's lines are the ones recorded as covered.
+The tests exercise the detector's canonical ``processors.detection``
+implementation (re-exported from the writer module) plus the writer
+module's own ``write_back_billing_sheet`` surface.
 """
 
 from __future__ import annotations
@@ -24,11 +23,9 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from edf_bill_fetcher.io.writers.back_billing import (
-    _assess_reason,
-    detect_back_billing,
-    write_back_billing_sheet,
-)
+from edf_bill_fetcher.io.writers.back_billing import write_back_billing_sheet
+from edf_bill_fetcher.processors.detection import _assess_reason, detect_back_billing
+from edf_bill_fetcher.processors.matching import build_evidence_index
 
 # Canonical output column set produced by detect_back_billing. Kept here as a
 # module constant so every shape assertion names the same contract.
@@ -321,6 +318,7 @@ def _bb_row(
     period_to: object = "31 Dec 2023",
     days_billed: int = 730,
     period_charge: object = 1347.96,
+    amount: object | None = None,
     value_source: str = "Period Charge",
     excess_days: int = 365,
     unlawful_charge: object = 673.98,
@@ -328,7 +326,7 @@ def _bb_row(
     reason: str = "back-billing",
 ) -> dict:
     """Build a single back-billing output row dict (the writer's input shape)."""
-    return {
+    out = {
         "Invoice #": invoice,
         "Bill Date": bill_date,
         "Period From": period_from,
@@ -342,6 +340,9 @@ def _bb_row(
         "Cancel/Rebill Admitted": admitted,
         "Reason Assessment": reason,
     }
+    if amount is not None:
+        out["Amount (£)"] = amount
+    return out
 
 
 def test_write_back_billing_sheet_bill_date_as_timestamp_is_formatted() -> None:
@@ -389,32 +390,49 @@ def test_write_back_billing_sheet_bill_date_as_datetime_is_formatted() -> None:
 
 
 def test_write_back_billing_sheet_evidence_index_amt_days_fallback_path_exercised() -> None:
-    """Exercise the evidence_index amt_days fallback path (lines 323-329).
+    """Exercise the evidence_index amt_days fallback path.
 
-    The inv: lookup misses, so the writer computes the amt_days signature and
-    looks it up. Here the signature matches a target row, so the hyperlink cell
-    is emitted.
+    The index is built with the production ``build_evidence_index``, which
+    keys the amt_days signature on the evidence sheet's ``Amount (£)`` and
+    the Period From/To span. The writer's fallback must build the same
+    signature from the row's ``Amount (£)`` and ``Days Billed`` to resolve
+    the target row. ``period_charge`` is deliberately different from
+    ``Amount (£)`` so a regression to keying on ``Period Charge (£)``
+    breaks this test (the exact mismatch this fix corrects).
     """
+    evidence_df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "EVID-OTHER",
+                "Period From": "01 Jan 2022",
+                "Period To": "01 Jan 2024",
+                "Amount (£)": 1347.96,
+            }
+        ]
+    )
+    evidence_index = build_evidence_index(evidence_df, header_row_offset=1)
+    # The bb invoice has no inv: entry, so the fallback is the only path.
+    assert "inv:UNKNOWN-INVOICE" not in evidence_index
     bb = pd.DataFrame(
         [
             _bb_row(
                 invoice="UNKNOWN-INVOICE",
                 bill_date="01 Jan 2024",
                 period_from="01 Jan 2022",
-                period_to="31 Dec 2023",
+                period_to="01 Jan 2024",
                 days_billed=730,
-                period_charge=1347.96,
+                period_charge=100.0,
+                amount=1347.96,
                 excess_days=365,
             )
         ]
     )
-    evidence_index = {"amt_days:1347.96|730": 42}
     ws = _open_ws()
     write_back_billing_sheet(ws, bb, account="A1", evidence_index=evidence_index)
     cell = ws.cell(row=8, column=14)
     assert cell.value == "\u2192"
     assert cell.hyperlink is not None
-    assert cell.hyperlink.location == "'EDF Evidence Report'!A42"
+    assert cell.hyperlink.location == "'EDF Evidence Report'!A2"
 
 
 def test_write_back_billing_sheet_evidence_index_inv_lookup_resolves_directly() -> None:

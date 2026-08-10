@@ -1,9 +1,10 @@
 """Back-billing analysis writer — extracted from writers/__init__.py.
 
-Contains: detect_back_billing (pure-pandas detector), write_back_billing_sheet
-(renders the "Back-billing Analysis" worksheet), and the private
-_assess_reason helper that builds the deterministic Reason Assessment
-narrative.
+Contains: write_back_billing_sheet (renders the "Back-billing Analysis"
+worksheet).  The pure-pandas detector ``detect_back_billing`` and its
+private helpers ``_assess_reason`` / ``_pull_period_charge`` are
+re-exported from :mod:`edf_bill_fetcher.processors.detection` (the
+canonical home) so there is exactly one definition in the codebase.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
-from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime
 from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
@@ -33,212 +33,16 @@ from edf_bill_fetcher.helpers.excel_utils import (
 )
 from edf_bill_fetcher.helpers.theme import CELL_BORDER
 from edf_bill_fetcher.io.adapters.pdf import legal_context
+
+# Re-exported from processors.detection (canonical home) for backwards
+# compatibility — existing imports of these names from this module keep
+# working, but the pipeline only ever uses the processors.detection copy.
+from edf_bill_fetcher.processors.detection import (
+    _assess_reason,  # noqa: F401 — re-exported for backwards compatibility
+    _pull_period_charge,  # noqa: F401
+    detect_back_billing,  # noqa: F401
+)
 from edf_bill_fetcher.writers._helpers import _disclosed_label
-
-# --- _assess_reason (was writers/__init__.py L2663-2689) ---
-
-
-def _assess_reason(
-    invoice: str,
-    bill_date: pd.Timestamp,
-    excess: int,
-    admitted: bool,
-    period_from: pd.Timestamp,
-    period_to: pd.Timestamp,
-) -> str:
-    """Return a short, deterministic narrative for the Reason Assessment column of the Back-billing sheet.
-
-    Template-driven (no LLM).  The narrative is keyed to the legally
-    correct back-billing rule (SLC 7A / Electricity Act 1989 s.84B):
-    a bill is back-billing when it charges for consumption supplied
-    more than 12 months before the bill Date.  ``excess`` is the count
-    of consumption days in the period that fall more than 365 days
-    before ``bill_date``.
-    """
-    pf = period_from.strftime("%d %b %Y")
-    pt = period_to.strftime("%d %b %Y")
-    bd = bill_date.strftime("%d %b %Y")
-    if admitted:
-        head = (
-            f"Invoice {invoice} billed on {bd} for consumption from {pf} to {pt}; "
-            f"{excess} days of consumption were supplied more than 12 months before the bill, "
-            "exceeding the SLC 7A back-billing limit. "
-            "EDF's cover page admits a cancellation/reversal, which is "
-            "direct evidence the bill is a back-billing remedy."
-        )
-    else:
-        head = (
-            f"Invoice {invoice} billed on {bd} for consumption from {pf} to {pt}; "
-            f"{excess} days of consumption were supplied more than 12 months before the bill, "
-            "exceeding the SLC 7A back-billing limit. No "
-            "admit-phrase was found on the cover page."
-        )
-    return head
-
-
-# --- detect_back_billing (was writers/__init__.py L2704-2806) ---
-
-
-def _pull_period_charge(r: pd.Series) -> tuple[float, str]:
-    """Pull ``Period Charge (£)`` from the source row; fall back to ``Amount (£)``.
-
-    Returns ``(charge, value_source)`` where ``value_source`` is
-    ``"Period Charge"`` when the Period Charge column was used, or
-    ``"Amount (fallback)"`` when Period Charge was absent, N/A, or
-    unparseable and the Amount column was used instead.
-    """
-    pc_raw = r.get("Period Charge (£)")
-    if pc_raw is not None:
-        try:
-            return float(pc_raw), "Period Charge"
-        except (TypeError, ValueError):
-            pass
-    amt_raw = r.get("Amount (£)", 0)
-    try:
-        return float(amt_raw), "Amount (fallback)"
-    except (TypeError, ValueError):
-        return 0.0, "Amount (fallback)"
-
-
-def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
-    """Return invoices that are back-billing under SLC 7A / Electricity Act 1989 s.84B.
-
-    A bill is back-billing when it charges for consumption supplied
-    more than 12 months before the bill Date.  The eligibility gate is
-    ``Date - Period From > 365 days`` — i.e. the bill charges for
-    consumption supplied more than 12 months before the bill Date.
-    If even the earliest consumption (Period From) is within 365 days
-    of the bill Date, none of the period's consumption is unlawful
-    and the invoice is NOT back-billing.
-
-    ``Excess Days = max(0, (Date - 365 days - Period From).days)`` —
-    the count of consumption days in the period that fall more than
-    365 days before the bill Date.
-
-    The detector also pulls ``Period Charge (£)`` from the source
-    record; if that column is absent, N/A, or unparseable, it falls
-    back to ``Amount (£)`` and records the provenance in the
-    ``Value Source`` column.
-
-    The function tolerates a missing ``Cancel/Rebill Admitted``
-    column (treated as ``False``).
-
-    Output columns:
-        Invoice #, Bill Date, Period From, Period To, Days Billed,
-        Period Charge (£), Value Source, 12-Month Limit (days),
-        Excess Days, Unlawful Charge (£), Cancel/Rebill Admitted,
-        Reason Assessment.
-
-    ``Unlawful Charge (£)`` is the prorated share of the Period Charge
-    attributable to the Excess Days — i.e.
-    ``round(charge * (excess / days), 2)`` where ``days`` is the full
-    Days Billed span. A reviewer seeing the full Period Charge might
-    otherwise mistake the entire amount as at issue, when only the
-    Excess Days portion is unlawful.
-
-    Rows with unparseable ``Period From``/``Period To`` are skipped
-    silently. Output is sorted by ``Bill Date`` and re-indexed.
-
-    Architectural note (SAP cross-feeding):
-    This detector takes only the inferred-evidence dataframe. SAP
-    data-dump rows (Contract-and-Product-Change-History,
-    Meter-Read-History, Financial-Transactions) are surfaced in
-    their own tabs (SAP Contract History / SAP Meter Readings /
-    SAP Financial Transactions) plus the cross-source
-    Reconciliation tab; they are NOT joined back into
-    ``detect_back_billing`` because:
-
-      * SAP financial transactions carry a Document No. (e.g.
-        ``531000424090``) not an Invoice #, and their Transaction
-        Text is the generic ledger description
-        (``Dr- Consum Billing Receivable`` etc.) -- they cannot
-        be unambiguously matched to an inferred invoice.
-      * SAP records have no ``Period From`` / ``Period To`` span
-        (only Posting Date / Document Date) so they cannot
-        independently drive a back-billing judgement.
-      * The Reconciliation sheet is the proper place to surface
-        agreements and disagreements between the inferred and
-        SAP samples; naively joining SAP amounts into the
-        backbilling tab would mislead the reviewer.
-    If a future resource joins the two sources by a higher-fidelity
-    key (e.g. PDF receipt number + SAP Document No. mapping
-    table), wire the intersection through ``run_analysers`` here.
-    """
-    columns = [
-        "Invoice #",
-        "Bill Date",
-        "Period From",
-        "Period To",
-        "Days Billed",
-        "Period Charge (£)",
-        "Value Source",
-        "12-Month Limit (days)",
-        "Excess Days",
-        "Unlawful Charge (£)",
-        "Cancel/Rebill Admitted",
-        "Reason Assessment",
-    ]
-    if df is None or df.empty:
-        return pd.DataFrame(columns=columns)
-    has_admit = "Cancel/Rebill Admitted" in df.columns
-    rows = []
-    for _, r in df.iterrows():
-        pf = _safe_to_datetime(r.get("Period From"))
-        pt = _safe_to_datetime(r.get("Period To"))
-        if pd.isna(pf) or pd.isna(pt):
-            continue
-        bill_date_dt = _safe_to_datetime(r.get("Date"))
-        if pd.isna(bill_date_dt):
-            continue
-        # Legal gate: bill Date must be more than 365 days after Period From.
-        # Any consumption day supplied more than 12 months before the bill
-        # Date is unlawful (SLC 21BA per-unit test). If even the EARLIEST
-        # consumption (Period From) is within 365 days, the whole period is
-        # lawful and we skip.
-        gap_from = int((bill_date_dt - pf).days)
-        if gap_from <= 365:
-            continue
-        days = int((pt - pf).days)
-        # Excess Days: consumption days supplied more than 365 days before bill Date.
-        excess = max(0, int((bill_date_dt - pd.Timedelta(days=365) - pf).days))
-        # Period Charge (£) with Amount (£) fallback.
-        charge, value_source = _pull_period_charge(r)
-        admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
-        bill_date_raw = r.get("Date", "")
-        unlawful_charge = round(charge * (excess / days), 2) if days > 0 else 0.0
-        rows.append(
-            {
-                "Invoice #": r.get("Invoice #", ""),
-                "Bill Date": bill_date_raw,
-                "_bill_date_sort": bill_date_dt,
-                "Period From": pf,
-                "Period To": pt,
-                "Days Billed": days,
-                "Period Charge (£)": charge,
-                "Value Source": value_source,
-                "12-Month Limit (days)": 365,
-                "Excess Days": excess,
-                "Unlawful Charge (£)": unlawful_charge,
-                "Cancel/Rebill Admitted": admitted,
-                "Reason Assessment": _assess_reason(
-                    r.get("Invoice #", ""),
-                    bill_date_dt,
-                    excess,
-                    admitted,
-                    pf,
-                    pt,
-                ),
-            }
-        )
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return pd.DataFrame(columns=columns)
-    sort_key = out["_bill_date_sort"]
-    out = out.drop(columns=["_bill_date_sort"])
-    # Reorder rows by the sort key (parsed Bill Date, ascending).
-    out = out.loc[sort_key.sort_values().index].reset_index(drop=True)
-    return out[columns]
-
 
 # --- write_back_billing_sheet (was writers/__init__.py L2809-3018) ---
 
@@ -429,7 +233,7 @@ def write_back_billing_sheet(
             target_row = evidence_index.get(f"inv:{inv}")
             if target_row is None:
                 try:
-                    amt = float(row.get("Period Charge (£)", 0.0) or 0.0)
+                    amt = float(row.get("Amount (£)", 0.0) or 0.0)
                     days = int(row.get("Days Billed", 0) or 0)
                     key = f"amt_days:{amt:.2f}|{days}"
                     target_row = evidence_index.get(key)
