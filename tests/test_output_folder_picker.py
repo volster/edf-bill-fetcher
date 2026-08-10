@@ -8,12 +8,21 @@ launched but fail unpredictably on developer machines that have actually
 saved GUI state.
 """
 
+import sys
 import tkinter as tk
 from collections.abc import Iterator
 
 import pytest
 
 from edf_bill_fetcher.ui.app import App
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "Windows CI intermittently fails with _tkinter.TclError: "
+        "invalid command name 'tcl_findLibrary'"
+    ),
+)
 
 
 def _walk_children(widget: tk.Misc) -> Iterator[tk.Misc]:
