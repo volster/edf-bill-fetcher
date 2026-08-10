@@ -112,3 +112,50 @@ def test_transitive_domination_non_bb_killer_via_transitive_chain() -> None:
     assert result["B"][1] is False  # R not in period_map -> partial_overlap False
     # R is not a target (not a bb row).
     assert "R" not in result
+
+
+def test_cycle_produces_mutual_domination() -> None:
+    # A kills B AND B kills A — a 2-node cycle. Cycles shouldn't happen in
+    # well-formed kill chains, but the function must handle them gracefully
+    # (mutual supersession) rather than crash or loop forever.
+    rebilling_df = pd.DataFrame(
+        [
+            {"Killer Invoice": "A", "Killed Invoice": "B"},
+            {"Killer Invoice": "B", "Killed Invoice": "A"},
+        ]
+    )
+    back_billing_rows = pd.DataFrame(
+        [
+            {"Invoice #": "A", "Period From": "2020-01-01", "Period To": "2021-06-01"},
+            {"Invoice #": "B", "Period From": "2020-06-01", "Period To": "2021-12-01"},
+        ]
+    )
+    result = compute_transitive_domination(rebilling_df, back_billing_rows)
+    # Does not crash; both nodes are recorded (mutual supersession).
+    assert "A" in result
+    assert "B" in result
+    assert result["A"][0] == "B"
+    assert result["B"][0] == "A"
+
+
+def test_two_disjoint_killers_latest_survives() -> None:
+    # K1 and K2 both kill T, with no edge between the killers. There is no
+    # transitive root here — the tiebreak must pick the LATEST killer
+    # (most recent Period From) as the survivor.
+    rebilling_df = pd.DataFrame(
+        [
+            {"Killer Invoice": "K1", "Killed Invoice": "T"},
+            {"Killer Invoice": "K2", "Killed Invoice": "T"},
+        ]
+    )
+    back_billing_rows = pd.DataFrame(
+        [
+            {"Invoice #": "K1", "Period From": "2020-01-01", "Period To": "2021-06-01"},
+            {"Invoice #": "K2", "Period From": "2021-01-01", "Period To": "2022-06-01"},
+            {"Invoice #": "T", "Period From": "2019-01-01", "Period To": "2020-06-01"},
+        ]
+    )
+    result = compute_transitive_domination(rebilling_df, back_billing_rows)
+    assert "T" in result
+    survivor, _ = result["T"]
+    assert survivor == "K2"  # later Period From survives

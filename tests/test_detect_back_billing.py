@@ -43,6 +43,41 @@ def test_short_period_invoice_not_flagged() -> None:
     assert detect_back_billing(df).empty
 
 
+def test_inverted_period_from_after_to_is_skipped() -> None:
+    # Period From (2023-12-31) is AFTER Period To (2023-01-01) — an inverted
+    # period. The Date - Period From gate alone would pass (bill >365 days
+    # after Period From), but the negative day span must be skipped silently.
+    df = pd.DataFrame(
+        [
+            _row(
+                invoice="INVERTED",
+                date="2025-01-01",
+                period_from="2023-12-31",
+                period_to="2023-01-01",
+                amount=1000.0,
+            )
+        ]
+    )
+    assert detect_back_billing(df).empty
+
+
+def test_zero_day_period_is_skipped() -> None:
+    # Period From == Period To (2024-01-01) — a zero-day period. The row must
+    # be skipped silently rather than emitted with a zero Days Billed span.
+    df = pd.DataFrame(
+        [
+            _row(
+                invoice="ZERO-DAY",
+                date="2025-01-01",
+                period_from="2024-01-01",
+                period_to="2024-01-01",
+                amount=1000.0,
+            )
+        ]
+    )
+    assert detect_back_billing(df).empty
+
+
 def test_exactly_365_days_is_not_flagged_boundary() -> None:
     # Bill date exactly 365 days after Period From is NOT back-billing (boundary).
     # Period 02 Jan 2024 to 31 Dec 2024; bill date 01 Jan 2025 -> 365 days gap

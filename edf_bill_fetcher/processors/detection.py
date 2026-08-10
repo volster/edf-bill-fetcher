@@ -278,6 +278,11 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         if gap_from <= 365:
             continue
         days = int((pt - pf).days)
+        # Skip inverted (Period From > Period To) and zero-day periods: a
+        # negative or zero day span carries no consumption and would otherwise
+        # surface with nonsensical Days Billed / prorated charge values.
+        if days <= 0:
+            continue
         # Excess Days: consumption days supplied more than 365 days before bill Date.
         excess = max(0, int((bill_date_dt - pd.Timedelta(days=365) - pf).days))
         # Period Charge (£) with Amount (£) fallback.
@@ -621,7 +626,7 @@ def compute_transitive_domination(
         # earliest-period-start tiebreak if every candidate is superseded
         # (a cycle, which shouldn't happen in well-formed kill chains).
         roots = [s for s in superseded_by if s not in superseded_sources]
-        survivor = min(roots if roots else superseded_by, key=sort_key)
+        survivor = max(roots if roots else superseded_by, key=sort_key)
         partial_overlap = False
         if survivor in period_map and target in period_map:
             survivor_start, survivor_end = period_map[survivor]
