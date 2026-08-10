@@ -3,13 +3,14 @@
 import pytest
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 class TestEvidenceEngineConfig:
     """Tests for EvidenceEngine configuration handling."""
 
     def test_config_defaults(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -31,7 +32,7 @@ class TestEvidenceEngineConfig:
         assert engine.config["filter_below"] is True
 
     def test_filter_below_min_amount(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -68,7 +69,7 @@ class TestEvidenceEngineConfig:
         assert engine.filtered_records[0]["Reason"] == "Amount magnitude below £1,000.00 threshold"
 
     def test_no_filter_when_disabled(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -101,7 +102,7 @@ class TestEvidenceEngineConfig:
     def test_thread_safety_lock(self):
         import threading
 
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,

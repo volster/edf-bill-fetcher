@@ -21,11 +21,13 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 from openpyxl import load_workbook
 
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 def _read_declared_version() -> str:
@@ -76,17 +78,20 @@ def _sample_df() -> pd.DataFrame:
     )
 
 
-def _config() -> dict:
-    return {
-        "use_dedup": True,
-        "use_back_billing": False,
-        "use_reconciliation": False,
-        "analysis_min": 500.0,
-        "min_amount": 25.0,
-        "save_filtered": True,
-        "use_sap": False,
-        "report_account_ref": "ACC-PROV",
-    }
+def _config() -> ConfigDict:
+    return cast(
+        ConfigDict,
+        {
+            "use_dedup": True,
+            "use_back_billing": False,
+            "use_reconciliation": False,
+            "analysis_min": 500.0,
+            "min_amount": 25.0,
+            "save_filtered": True,
+            "use_sap": False,
+            "report_account_ref": "ACC-PROV",
+        },
+    )
 
 
 def _provenance_sheet_rows(tmp_path: Path) -> dict[str, str]:

@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import pytest
 
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 @pytest.fixture
@@ -174,18 +176,21 @@ class TestCrossSourceDedup:
         # the production dedup walker (rather than a re-
         # implementation with its own off-by-one).
         out = workdir / "out.xlsx"
-        config = {
-            "use_dedup": True,
-            "save_dups": True,
-            "use_anchors": False,
-            "use_large": False,
-            "min_amount": 0.0,
-            "filter_below": False,
-            "use_dedup_period": True,
-            "expanded_columns": True,
-            "include_charts": False,
-            "include_forecast": False,
-        }
+        config = cast(
+            ConfigDict,
+            {
+                "use_dedup": True,
+                "save_dups": True,
+                "use_anchors": False,
+                "use_large": False,
+                "min_amount": 0.0,
+                "filter_below": False,
+                "use_dedup_period": True,
+                "expanded_columns": True,
+                "include_charts": False,
+                "include_forecast": False,
+            },
+        )
         # ``export_to_excel`` returns ``None`` (the function
         # writes the artifact as a side-effect); assert the
         # artifact exists by the time the call returns.
@@ -229,18 +234,21 @@ class TestCrossSourceDedup:
     def test_duplicate_entries_sheet_references_kept_htm(self, workdir: Path) -> None:
         records = _price_records()
         out = workdir / "out.xlsx"
-        config = {
-            "use_dedup": True,
-            "save_dups": True,
-            "use_anchors": False,
-            "use_large": False,
-            "min_amount": 0.0,
-            "filter_below": False,
-            "use_dedup_period": True,
-            "expanded_columns": True,
-            "include_charts": False,
-            "include_forecast": False,
-        }
+        config = cast(
+            ConfigDict,
+            {
+                "use_dedup": True,
+                "save_dups": True,
+                "use_anchors": False,
+                "use_large": False,
+                "min_amount": 0.0,
+                "filter_below": False,
+                "use_dedup_period": True,
+                "expanded_columns": True,
+                "include_charts": False,
+                "include_forecast": False,
+            },
+        )
         export_to_excel(records, str(out), [], config=config)
 
         from openpyxl import load_workbook

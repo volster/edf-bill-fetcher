@@ -2780,10 +2780,16 @@ def generate_ombudsman_pdf(
 # =============================================================================
 
 
-def generate_pdf_from_gui(records, output_path, config: ConfigDict, engine, filtered=None):
+def generate_pdf_from_gui(
+    records: list[dict[str, Any]],
+    output_path: str,
+    config: ConfigDict,
+    engine: Any = None,
+    filtered: list[dict[str, Any]] | None = None,
+) -> tuple[bool, str]:
     """Generate a professional PDF report for GUI integration."""
     try:
-        path = generate_ombudsman_pdf(records, output_path, config, engine, filtered)
+        path = generate_ombudsman_pdf(records, output_path, dict(config), engine, filtered)
         return True, f"Professional PDF report generated:\n{path}"
     except Exception as e:
         return False, f"Failed to generate PDF:\n{e}"

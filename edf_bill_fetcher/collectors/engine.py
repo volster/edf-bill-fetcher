@@ -20,7 +20,9 @@ try:
     HAS_PYPFF = True
 except ImportError:
     HAS_PYPFF = False
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 
 import pdfplumber
 from bs4 import BeautifulSoup
@@ -300,18 +302,24 @@ def _matches_domain_filter(sender_email, filter_str):
 class EvidenceEngine:
     """Orchestrate extraction of EDF billing records from PDF, HTM, and PST sources."""
 
-    def __init__(self, config: ConfigDict, update_ui_cb, progress_cb=None, cancel_event=None):
+    def __init__(
+        self,
+        config: ConfigDict,
+        update_ui_cb: Callable[[str], None],
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ):
         """Initialize the engine with config, a UI callback, and cancellation hooks."""
         self.config = config
-        self.records = []
-        self.filtered_records = []
+        self.records: list[dict[str, Any]] = []
+        self.filtered_records: list[dict[str, Any]] = []
         self.update_ui = update_ui_cb
         self.update_progress = progress_cb
         self.cancel_event = cancel_event or threading.Event()
         self.pdf_count = 0
         self.email_count = 0
-        self.error_log = []
-        self.seen_pdf_hashes = set()
+        self.error_log: list[str] = []
+        self.seen_pdf_hashes: set[str] = set()
         self.lock = threading.Lock()
         # Stream P1: SAP CSV-in-PDF data dumps are detected in
         # ``process_pdf_file`` and routed to three row accumulators

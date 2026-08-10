@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 import openpyxl
@@ -288,7 +289,14 @@ def _prepare_analysis_frame(df_an: pd.DataFrame, config: ConfigDict) -> pd.DataF
 # ---------------------------------------------------------------------------
 
 
-def export_to_excel(data, output_path, error_log, config: ConfigDict, filtered=None, sap_rows=None):
+def export_to_excel(
+    data: list[dict[str, Any]],
+    output_path: str,
+    error_log: list[str],
+    config: ConfigDict,
+    filtered: list[dict[str, Any]] | None = None,
+    sap_rows: dict[str, list[dict]] | None = None,
+) -> None:
     """Build the multi-sheet evidence workbook by orchestrating each writer submodule.
 
     Calls every sheet writer in the canonical order so the workbook opens
@@ -1222,7 +1230,7 @@ def export_to_excel(data, output_path, error_log, config: ConfigDict, filtered=N
         pk = row_y.peak
         av = row_y.avg_bal
         lo = row_y.low
-        yoy_chg_pct = ((av - prev_avg) / prev_avg) if prev_avg else None
+        yoy_chg_pct: float | None = ((av - prev_avg) / prev_avg) if prev_avg else None
 
         yr_rows = dfc[dfc["year"] == yr]
         yr_idx = yr_rows.index.tolist()

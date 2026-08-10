@@ -44,11 +44,12 @@ import pandas as pd
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 def _engine_with_save_dups() -> EvidenceEngine:
     """Engine with dedup + dup-sheet enabled."""
-    cfg = {
+    cfg: ConfigDict = {
         "use_anchors": False,
         "use_large": True,
         "use_reading_classification": False,
@@ -124,7 +125,7 @@ def test_dup_sheet_empty_when_save_dups_disabled(tmp_path: object) -> None:
     carries no rows — duplicates are surfaced only via the kept
     DataFrame.
     """
-    cfg = {
+    cfg: ConfigDict = {
         "use_anchors": False,
         "use_large": True,
         "use_reading_classification": False,

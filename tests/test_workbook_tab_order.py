@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pandas as pd
 from openpyxl import load_workbook
 
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 def test_workbook_tab_order_is_severity_led(tmp_path: object) -> None:
@@ -61,14 +64,17 @@ def test_workbook_tab_order_is_severity_led(tmp_path: object) -> None:
         ]
     )
     out = tmp_path / "order.xlsx"  # type: ignore[operator]
-    config = {
-        "use_dedup": True,
-        "use_back_billing": False,
-        "use_reconciliation": False,
-        "analysis_min": 0,
-        "save_filtered": True,
-        "use_sap": False,
-    }
+    config = cast(
+        ConfigDict,
+        {
+            "use_dedup": True,
+            "use_back_billing": False,
+            "use_reconciliation": False,
+            "analysis_min": 0,
+            "save_filtered": True,
+            "use_sap": False,
+        },
+    )
     export_to_excel(df, str(out), error_log=[], config=config)
     wb = load_workbook(out)
     # Check sheets appear in severity-led order (subset of all sheets).

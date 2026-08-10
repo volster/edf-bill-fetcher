@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 import tempfile
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -41,6 +42,7 @@ from edf_bill_fetcher.io.reporters.pdf_report import (
     severity_color,
     severity_label,
 )
+from edf_bill_fetcher.models.config import ConfigDict
 
 # =============================================================================
 # HELPER: extract searchable text from reportlab platypus elements
@@ -726,7 +728,7 @@ class TestGeneratePDF:
         # engine rather than failing.  Verify the underlying generator
         # accepts the engine=None / filtered=None combination without
         # raising (the old code raised ``ValueError("Engine is required")``).
-        cfg = dict(sample_config)
+        cfg = cast(ConfigDict, dict(sample_config))
         # Pre-fill fields the generator requires so no exception is raised
         cfg.setdefault(
             "report_sections",

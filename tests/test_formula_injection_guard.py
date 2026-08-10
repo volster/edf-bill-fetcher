@@ -30,13 +30,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from openpyxl import Workbook, load_workbook
 
 from edf_bill_fetcher.helpers.excel_utils import text
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 @pytest.fixture
@@ -206,18 +207,21 @@ class TestFormulaInjectionGuardEvidenceSheet:
                 "Sender": "edfenergy.com",
             },
         ]
-        config = {
-            "use_dedup": True,
-            "save_dups": True,
-            "use_anchors": False,
-            "use_large": False,
-            "min_amount": 0.0,
-            "filter_below": False,
-            "use_dedup_period": True,
-            "expanded_columns": True,
-            "include_charts": False,
-            "include_forecast": False,
-        }
+        config = cast(
+            ConfigDict,
+            {
+                "use_dedup": True,
+                "save_dups": True,
+                "use_anchors": False,
+                "use_large": False,
+                "min_amount": 0.0,
+                "filter_below": False,
+                "use_dedup_period": True,
+                "expanded_columns": True,
+                "include_charts": False,
+                "include_forecast": False,
+            },
+        )
         out = workdir / f"tg_{abs(hash(attack_val))}.xlsx"
         export_to_excel(records, str(out), [], config=config)
         wb = load_workbook(str(out))
@@ -285,18 +289,21 @@ class TestFormulaInjectionGuardOpacityRoundtrip:
             "Anomaly Flag": "",
         }
         record.update(attack_payloads)
-        config = {
-            "use_dedup": True,
-            "save_dups": True,
-            "use_anchors": False,
-            "use_large": False,
-            "min_amount": 0.0,
-            "filter_below": False,
-            "use_dedup_period": True,
-            "expanded_columns": True,
-            "include_charts": False,
-            "include_forecast": False,
-        }
+        config = cast(
+            ConfigDict,
+            {
+                "use_dedup": True,
+                "save_dups": True,
+                "use_anchors": False,
+                "use_large": False,
+                "min_amount": 0.0,
+                "filter_below": False,
+                "use_dedup_period": True,
+                "expanded_columns": True,
+                "include_charts": False,
+                "include_forecast": False,
+            },
+        )
         out = workdir / "attack_one.xlsx"
         export_to_excel([record], str(out), [], config=config)
         wb = load_workbook(str(out))

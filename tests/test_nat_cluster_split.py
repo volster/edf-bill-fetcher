@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import cast
 
 import pytest
 from openpyxl import load_workbook
 
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 @pytest.fixture
@@ -99,19 +101,22 @@ def _make_records() -> list[dict]:
     return [rec_a, rec_b]
 
 
-def _config() -> dict:
-    return {
-        "use_dedup": True,
-        "save_dups": False,  # we want both rows kept cleanly
-        "use_anchors": False,
-        "use_large": False,
-        "min_amount": 0.0,
-        "filter_below": False,
-        "use_dedup_period": True,
-        "expanded_columns": True,
-        "include_charts": False,
-        "include_forecast": False,
-    }
+def _config() -> ConfigDict:
+    return cast(
+        ConfigDict,
+        {
+            "use_dedup": True,
+            "save_dups": False,  # we want both rows kept cleanly
+            "use_anchors": False,
+            "use_large": False,
+            "min_amount": 0.0,
+            "filter_below": False,
+            "use_dedup_period": True,
+            "expanded_columns": True,
+            "include_charts": False,
+            "include_forecast": False,
+        },
+    )
 
 
 class TestNatClusterSplit:

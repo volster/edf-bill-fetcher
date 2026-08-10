@@ -1695,10 +1695,16 @@ def generate_ombudsman_docx(
     return output_path
 
 
-def generate_docx_from_gui(records, output_path, config: ConfigDict, engine, filtered=None):
+def generate_docx_from_gui(
+    records: list[dict[str, Any]],
+    output_path: str,
+    config: ConfigDict,
+    engine: Any = None,
+    filtered: list[dict[str, Any]] | None = None,
+) -> tuple[bool, str]:
     """Generate a professional DOCX report for GUI integration."""
     try:
-        path = generate_ombudsman_docx(records, output_path, config, engine, filtered)
+        path = generate_ombudsman_docx(records, output_path, dict(config), engine, filtered)
         return True, f"Professional DOCX report generated:\n{path}"
     except Exception as e:
         return False, f"Failed to generate DOCX:\n{e}"

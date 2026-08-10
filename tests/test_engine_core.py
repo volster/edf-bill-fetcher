@@ -3,13 +3,14 @@
 import pytest
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 class TestEvidenceEngineCore:
     """Tests for EvidenceEngine core processing methods."""
 
     def test_find_billing_period(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -38,7 +39,7 @@ class TestEvidenceEngineCore:
         assert period_to == "N/A"
 
     def test_add_record_with_filter(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -71,7 +72,7 @@ class TestEvidenceEngineCore:
         assert engine.filtered_records[0]["Reason"] == "Amount magnitude below £500.00 threshold"
 
     def test_add_record_above_filter(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -109,7 +110,7 @@ class TestEvidenceEngineCore:
         Pre-fix the comparison was ``amt < min_amount`` so ``-1000 < 500``
         filtered the refund out — losing valuable dispute evidence.
         """
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -145,7 +146,7 @@ class TestEvidenceEngineCore:
         """A small-magnitude negative amount (e.g. ``-£5``) IS filtered when
         ``min_amount=500`` because ``abs(-5) < 500`` — small refunds of
         incidental credit balances aren't dispute evidence."""
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -178,7 +179,7 @@ class TestEvidenceEngineCore:
         assert engine.filtered_records[0]["Reason"] == "Amount magnitude below £500.00 threshold"
 
     def test_is_cancelled(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -204,7 +205,7 @@ class TestEvidenceEngineCore:
         assert engine.is_cancelled()
 
     def test_log_error(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -232,7 +233,7 @@ class TestEvidenceEngineProcessing:
     """Tests for EvidenceEngine process_text and related methods."""
 
     def test_process_text_basic(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -258,7 +259,7 @@ class TestEvidenceEngineProcessing:
         assert engine.records[0]["Logic Used"] == "Smart Context"
 
     def test_process_text_with_account_filter_match(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -283,7 +284,7 @@ class TestEvidenceEngineProcessing:
         assert engine.records[0]["Amount (£)"] == 750.00
 
     def test_process_text_with_account_filter_no_match(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -307,7 +308,7 @@ class TestEvidenceEngineProcessing:
         assert len(engine.records) == 0
 
     def test_process_text_large_fallback(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": False,  # Disable anchors
             "use_large": True,
             "use_reading_classification": True,
@@ -333,7 +334,7 @@ class TestEvidenceEngineProcessing:
         assert engine.records[0]["Logic Used"] == "Large Amount Fallback"
 
     def test_process_text_no_amount_found(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -357,7 +358,7 @@ class TestEvidenceEngineProcessing:
         assert len(engine.records) == 0
 
     def test_process_text_reading_classification(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -382,7 +383,7 @@ class TestEvidenceEngineProcessing:
         assert engine.records[0]["Reading"] == "Estimated"
 
     def test_process_text_pdf_fields_extraction(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -408,7 +409,7 @@ class TestEvidenceEngineProcessing:
         assert engine.records[0]["Standing Chg (p/day)"] == "25.50"
 
     def test_process_text_empty_text(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,

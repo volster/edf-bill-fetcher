@@ -17,12 +17,14 @@ Companion to ``tests/test_save_dups_toggle.py``.
 from __future__ import annotations
 
 import os
+from typing import cast
 
 import pandas as pd
 from openpyxl import load_workbook
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.sap_parsers import (
     parse_sap_contract_history,
     parse_sap_financial_transactions,
@@ -69,7 +71,7 @@ def _engine_with_config(**overrides: object) -> EvidenceEngine:
         "generate_reconciliation_sheet": True,
     }
     cfg.update(overrides)
-    return EvidenceEngine(cfg, lambda *a: None)
+    return EvidenceEngine(cast(ConfigDict, cfg), lambda *a: None)
 
 
 def _sap_rows() -> dict:

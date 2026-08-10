@@ -33,6 +33,7 @@ import openpyxl
 import pandas as pd
 
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 # Colour constants mirrored from the LOCAL block at the top of
 # ``export_to_excel`` (L109-115). They are not module-scope in export
@@ -41,7 +42,7 @@ ORANGE = "FE5716"
 LGREY = "F0F0F0"
 
 
-def _base_config() -> dict[str, Any]:
+def _base_config() -> ConfigDict:
     """Return a config dict that turns on dedup + dup-sheet saving and
     supplies an account reference so the Key Statistics ``Account
     reference`` row renders with a known value.
@@ -106,7 +107,7 @@ def _record(
 def _export(
     records: list[dict[str, Any]],
     tmp_path: object,
-    config: dict[str, Any] | None = None,
+    config: ConfigDict | None = None,
 ) -> Any:
     """Run ``export_to_excel`` into a tmp workbook and return the
     loaded workbook for assertion. Centralises the path-ops ``type:

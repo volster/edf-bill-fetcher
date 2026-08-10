@@ -22,12 +22,13 @@ asserts the on-toggle contract:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 def _engine_with_config(save_dups: bool) -> EvidenceEngine:
@@ -37,7 +38,7 @@ def _engine_with_config(save_dups: bool) -> EvidenceEngine:
     config (no domain filter, no account filter, dedup enabled).  The
     only toggle under test is ``save_dups``.
     """
-    cfg = {
+    cfg: ConfigDict = {
         "use_anchors": False,
         "use_large": True,
         "use_reading_classification": False,
@@ -117,7 +118,7 @@ def test_save_dups_false_retains_all_rows_no_dup_sheet(tmp_path: object) -> None
     # duplicate was still removed from ``data`` even when save_dups=False
     # — so a regression would not show up here unless we compare
     # row-counts.
-    cfg = dict(engine.config)
+    cfg = cast(ConfigDict, dict(engine.config))
 
     out = tmp_path / "out_nodup.xlsx"  # type: ignore[operator]
     export_to_excel(

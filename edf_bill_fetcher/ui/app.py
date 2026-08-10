@@ -12,6 +12,8 @@ from datetime import date
 
 import pandas as pd
 
+from edf_bill_fetcher.models.config import ConfigDict
+
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -902,7 +904,7 @@ class App:
             self.set_status("Generating report…")
             self.load_report_btn.config(state="disabled")
 
-            config = {
+            config: ConfigDict = {
                 "min_amount": self.min_amount.get(),
                 "analysis_min": self.analysis_min.get(),
                 "acc_num": self.acc_num.get(),
@@ -1025,7 +1027,7 @@ class App:
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": self.use_anchors.get(),
             "use_large": self.use_large.get(),
             "use_reading_classification": self.use_reading_class.get(),
@@ -1205,7 +1207,7 @@ class App:
         fmt = ro.get("format", "both")
         sections = ro.get("sections", [s[0] for s in ReportOptionsDialog.SECTIONS])
 
-        config = {
+        config: ConfigDict = {
             "min_amount": self.min_amount.get(),
             "analysis_min": self.analysis_min.get(),
             "acc_num": self.acc_num.get(),

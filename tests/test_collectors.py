@@ -7,6 +7,9 @@ collectors submodule and behaves correctly.
 from __future__ import annotations
 
 import threading
+from typing import cast
+
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 def test_collectors_submodule_importable():
@@ -32,7 +35,7 @@ def test_evidence_engine_initial_state():
     from edf_bill_fetcher.collectors import EvidenceEngine
 
     eng = EvidenceEngine(
-        config={"account": "123"},
+        config=cast(ConfigDict, {"account": "123"}),
         update_ui_cb=lambda *_: None,
         progress_cb=None,
         cancel_event=threading.Event(),
@@ -56,7 +59,7 @@ def test_evidence_engine_pickle_round_trip():
     from edf_bill_fetcher.collectors import EvidenceEngine
 
     eng = EvidenceEngine(
-        config={"account": "456"},
+        config=cast(ConfigDict, {"account": "456"}),
         update_ui_cb=lambda *_: None,
     )
     eng.records.append({"Invoice #": "INV-001"})

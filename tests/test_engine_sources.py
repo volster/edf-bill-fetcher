@@ -6,13 +6,14 @@ from unittest.mock import MagicMock, Mock, mock_open, patch
 import pytest
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 class TestEvidenceEnginePDF:
     """Tests for PDF processing methods."""
 
     def _make_engine(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -118,7 +119,7 @@ class TestEvidenceEnginePST:
     """Tests for PST crawling."""
 
     def _make_engine(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -152,7 +153,7 @@ class TestEvidenceEngineHTM:
     """Tests for HTM file processing."""
 
     def _make_engine(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,
@@ -195,7 +196,7 @@ class TestEvidenceEngineLocalPDFs:
     """Tests for local PDF folder crawling."""
 
     def _make_engine(self):
-        config = {
+        config: ConfigDict = {
             "use_anchors": True,
             "use_large": True,
             "use_reading_classification": True,

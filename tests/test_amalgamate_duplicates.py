@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import cast
 
 import pytest
 from openpyxl import load_workbook
 
 from edf_bill_fetcher.io.writers import export_to_excel
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 @pytest.fixture
@@ -115,20 +117,23 @@ def _make_records() -> list[dict]:
     return [htm, pst, pdf]
 
 
-def _config(amalgamate: bool) -> dict:
-    return {
-        "use_dedup": True,
-        "save_dups": True,
-        "use_anchors": False,
-        "use_large": False,
-        "min_amount": 0.0,
-        "filter_below": False,
-        "use_dedup_period": True,
-        "expanded_columns": True,
-        "include_charts": False,
-        "include_forecast": False,
-        "amalgamate_duplicates": amalgamate,
-    }
+def _config(amalgamate: bool) -> ConfigDict:
+    return cast(
+        ConfigDict,
+        {
+            "use_dedup": True,
+            "save_dups": True,
+            "use_anchors": False,
+            "use_large": False,
+            "min_amount": 0.0,
+            "filter_below": False,
+            "use_dedup_period": True,
+            "expanded_columns": True,
+            "include_charts": False,
+            "include_forecast": False,
+            "amalgamate_duplicates": amalgamate,
+        },
+    )
 
 
 class TestAmalgamateToggle:

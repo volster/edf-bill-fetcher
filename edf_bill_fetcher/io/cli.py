@@ -12,6 +12,8 @@ import sys
 import traceback
 from typing import Any, cast
 
+from edf_bill_fetcher.models.config import ConfigDict
+
 try:
     import pypff
 
@@ -141,11 +143,11 @@ def run_cli_extract(args: list[str]) -> None:
         sys.exit(1)
 
     # Load config from file if provided
-    config = {}
+    config: ConfigDict = {}
     if parsed.config:
         try:
             with open(parsed.config, encoding="utf-8") as f:
-                config = json.load(f)
+                config = cast(ConfigDict, json.load(f))
         except Exception as e:
             sys.stderr.write(f"ERROR: Failed to load config: {e}\n")
             sys.exit(1)
@@ -286,10 +288,10 @@ def run_cli_pdf_report(args: list[str]) -> None:
         else:
             records = loaded
 
-        config = {}
+        config: ConfigDict = {}
         if parsed.config:
             with open(parsed.config, encoding="utf-8") as f:
-                config = json.load(f)
+                config = cast(ConfigDict, json.load(f))
 
         engine = None
         filtered = None
@@ -353,10 +355,10 @@ def run_cli_docx_report(args: list[str]) -> None:
         else:
             records = loaded
 
-        config = {}
+        config: ConfigDict = {}
         if parsed.config:
             with open(parsed.config, encoding="utf-8") as f:
-                config = json.load(f)
+                config = cast(ConfigDict, json.load(f))
 
         engine = None
         filtered = None

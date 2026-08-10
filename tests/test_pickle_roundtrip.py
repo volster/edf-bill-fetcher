@@ -39,6 +39,7 @@ from edf_bill_fetcher.io.cli import (
     _RestrictedUnpickler,
     _safe_pickle_load,
 )
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 @pytest.fixture
@@ -147,7 +148,7 @@ def _noop(*args, **kwargs):
 
 def _build_engine() -> EvidenceEngine:
     """A minimal EvidenceEngine whose ``update_ui`` callback is harmless."""
-    cfg = {
+    cfg: ConfigDict = {
         "use_anchors": True,
         "use_large": True,
         "use_reading_classification": True,

@@ -30,6 +30,7 @@ DEFECTS PINNED
 from __future__ import annotations
 
 from edf_bill_fetcher.io.reporters.pdf_report import fmt_money
+from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.sap_parsers import (
     extract_new_credit_fields,
     extract_new_invoice_fields,
@@ -236,7 +237,7 @@ class TestAccountNumberFilter:
         from edf_bill_fetcher.collectors.engine import EvidenceEngine
 
         def _build_engine(legacy_anchor=True):
-            cfg = {
+            cfg: ConfigDict = {
                 "use_anchors": legacy_anchor,
                 # Use the large fallback so even a "weak" anchor still
                 # produces a record — the assertion target is whether

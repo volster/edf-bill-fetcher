@@ -24,10 +24,11 @@ Each of these is now asserted to populate the column.
 from __future__ import annotations
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 def _engine() -> EvidenceEngine:
-    cfg = {
+    cfg: ConfigDict = {
         "use_anchors": True,
         "use_large": True,
         "use_reading_classification": True,

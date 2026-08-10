@@ -32,6 +32,7 @@ from openpyxl import load_workbook
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
 from edf_bill_fetcher.io.writers import export_to_excel
 from edf_bill_fetcher.io.writers.analysis import run_analysers
+from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.sap_parsers import (
     parse_sap_contract_history,
     parse_sap_financial_transactions,
@@ -74,7 +75,7 @@ def _write_text_pdf(path: Path, text: str) -> None:
 
 @pytest.fixture
 def engine(tmp_path: Path) -> EvidenceEngine:
-    cfg = {"use_dedup": False, "acc_num": "0123456789"}
+    cfg: ConfigDict = {"use_dedup": False, "acc_num": "0123456789"}
     e = EvidenceEngine(cfg, update_ui_cb=lambda *a, **k: None)
     return e
 

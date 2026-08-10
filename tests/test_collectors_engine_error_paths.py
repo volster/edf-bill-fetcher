@@ -24,18 +24,21 @@ from __future__ import annotations
 import builtins
 import importlib
 import sys
+import threading
 import types
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pdfplumber
 import pytest
 
 from edf_bill_fetcher.collectors import engine as engine_mod
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
+from edf_bill_fetcher.models.config import ConfigDict
 
-BASE_CONFIG: dict = {
+BASE_CONFIG: ConfigDict = {
     "use_anchors": True,
     "use_large": True,
     "use_reading_classification": True,
@@ -51,11 +54,11 @@ BASE_CONFIG: dict = {
 
 def _make_engine(
     config: dict | None = None,
-    progress_cb: object = None,
-    cancel_event: object = None,
+    progress_cb: Callable[[int, int, str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> EvidenceEngine:
     return EvidenceEngine(
-        config=config or dict(BASE_CONFIG),
+        config=cast(ConfigDict, config or dict(BASE_CONFIG)),
         update_ui_cb=lambda *_a, **_kw: None,
         progress_cb=progress_cb,
         cancel_event=cancel_event,

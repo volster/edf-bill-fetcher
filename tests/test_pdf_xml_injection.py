@@ -32,6 +32,7 @@ from edf_bill_fetcher.io.reporters.pdf_report import (
     create_executive_summary,
     create_key_findings_table,
 )
+from edf_bill_fetcher.models.config import ConfigDict
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -198,7 +199,7 @@ class TestMethodologyBulletsEscaped:
     """
 
     def test_a5_bullets_escaped(self) -> None:
-        config = {
+        config: ConfigDict = {
             "min_amount": 500,
             "analysis_min": 500,
             "use_acc_filter": True,

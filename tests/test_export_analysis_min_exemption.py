@@ -2,6 +2,7 @@
 import pandas as pd
 
 from edf_bill_fetcher.io.writers.export import _prepare_analysis_frame
+from edf_bill_fetcher.models.config import ConfigDict
 
 
 def test_prepare_analysis_frame_exists():
@@ -24,7 +25,7 @@ def test_analysis_min_exempt_for_span_over_365_days():
             }
         ]
     )
-    config = {"analysis_min": 500.0}
+    config: ConfigDict = {"analysis_min": 500.0}
     dfc = _prepare_analysis_frame(df_an, config)
 
     # KI-0014 should NOT be dropped (legal-candidate handling overrides the amount gate)
@@ -47,6 +48,6 @@ def test_analysis_min_still_filters_short_period_low_amount():
             }
         ]
     )
-    config = {"analysis_min": 500.0}
+    config: ConfigDict = {"analysis_min": 500.0}
     dfc = _prepare_analysis_frame(df_an, config)
     assert len(dfc) == 0
