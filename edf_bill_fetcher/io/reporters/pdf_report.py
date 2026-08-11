@@ -1732,7 +1732,9 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
         payments = payments.sort_values("_dt")
 
         elements.append(Paragraph("<b>Payment Summary</b>", STYLES["SubSectionHeader"]))
-        pay_amounts = payments["Amount (£)"].astype(float)
+        from edf_bill_fetcher.helpers.payment_figures import payment_amounts
+
+        pay_amounts = payment_amounts(payments)
 
         pay_data = [
             ["Metric", "Value"],
@@ -1765,7 +1767,7 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
                 [
                     fmt_date(row["Date"]),
                     xml_escape(str(row["Entry Type"])),
-                    fmt_money(row["Amount (£)"]),
+                    fmt_money(payment_amounts(pd.DataFrame([row])).iloc[0]),
                     fmt_money(row["Amount (£)"]),
                     xml_escape(str(row.get("Details", "")))[:80],
                 ]
