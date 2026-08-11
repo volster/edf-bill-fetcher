@@ -1,4 +1,17 @@
-"""Date and time helpers for parsing, formatting, and comparing EDF billing dates."""
+"""Date and time helpers for parsing, formatting, and comparing EDF billing dates.
+
+Dayfirst parsing assumption
+---------------------------
+Date parsing in this module defaults to ``dayfirst=True`` because EDF's
+billing documents are UK-format dates (``DD/MM/YYYY``).  ``_safe_to_datetime``
+additionally has a best-effort ``dayfirst=False`` fallback for the handful of
+EDF date strings that only parse in US ordering — this fallback is a
+heuristic, NOT a correctness guarantee: ambiguous dates like ``05/06/2024``
+may be misparsed under it (here as 6 May instead of 5 June).  A warning is
+emitted whenever the fallback is triggered so downstream consumers can audit
+any affected dates; prefer ISO ``YYYY-MM-DD`` input to avoid the ambiguity
+entirely.
+"""
 
 from __future__ import annotations  # noqa: I001
 
@@ -116,9 +129,17 @@ def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp |
         try:
             with _w.catch_warnings():
                 _w.simplefilter("ignore", UserWarning)
-                dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
+                fallback_dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
         except (TypeError, ValueError):
             return pd.NaT
+        if not pd.isna(fallback_dt):
+            _w.warn(
+                f"_safe_to_datetime: dayfirst parse failed for {value!r}; "
+                "falling back to dayfirst=False (best-effort heuristic for EDF "
+                "date formats — ambiguous dates may be misparsed; prefer ISO input).",
+                stacklevel=2,
+            )
+            dt = fallback_dt
     return dt
 
 
