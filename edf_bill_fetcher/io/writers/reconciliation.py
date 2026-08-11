@@ -16,6 +16,13 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from edf_bill_fetcher.writers._helpers import _recon_hyperlink
 
+# Row offset shared by every sheet in the Reconciliation pair AND the SAP /
+# inferred source sheets its drill-down hyperlinks point at: banner row 1,
+# subtitle row 2, column-header row 3, first data row 4.  Hyperlink target
+# rows computed as ``<data index> + RECON_ROW_OFFSET`` stay valid because
+# all referenced sheets use the same 4-row lead-in.
+RECON_ROW_OFFSET = 4
+
 # ---- _recon_parse_iso_date (was writers/__init__.py L1822-1833) ----
 
 
@@ -122,7 +129,7 @@ def write_reconciliation_sheet(
     # Pre-compute detail row counters; each closure below mutates
     # these so the summary can read the tallies after all three
     # sections are built.
-    detail_row = 3  # header row will be written here first
+    detail_row = RECON_ROW_OFFSET - 1  # header row will be written here first
     contract_counts: dict[str, int] = {}
     meter_counts: dict[str, int] = {}
     financial_counts: dict[str, int] = {}
@@ -193,7 +200,7 @@ def write_reconciliation_sheet(
                 counts["matched"] += 1
                 break
             if not matched:
-                sap_idx = sap_items.index(sap) + 4
+                sap_idx = sap_items.index(sap) + RECON_ROW_OFFSET
                 ws.cell(row=detail_row, column=1, value="Missing in Inferred")
                 ws.cell(row=detail_row, column=2, value=sap.get(sap_date_key, ""))
                 ws.cell(
@@ -214,7 +221,7 @@ def write_reconciliation_sheet(
                 counts["unmatched_sap"] += 1
         for i in unmatched_inferred:
             inf = inferred_rows[i]
-            inf_target = i + 4
+            inf_target = i + RECON_ROW_OFFSET
             ws.cell(row=detail_row, column=1, value="Missing in SAP")
             for col in (2, 3):
                 ws.cell(row=detail_row, column=col, value="—")
@@ -338,7 +345,7 @@ def write_reconciliation_sheet(
                 financial_counts["matched"] += 1
                 break
         if not matched:
-            sap_idx = sap_financial.index(sap) + 4
+            sap_idx = sap_financial.index(sap) + RECON_ROW_OFFSET
             ws_detail.cell(row=detail_row, column=1, value="Missing in Evidence")
             ws_detail.cell(row=detail_row, column=2, value=sap.get("Document No.", ""))
             ws_detail.cell(row=detail_row, column=3, value=sap.get("Posting Date", ""))
@@ -373,7 +380,7 @@ def write_reconciliation_sheet(
     # ---- AutoFilter + freeze on detail sheet ----
     if detail_row > 3:
         ws_detail.auto_filter.ref = f"A3:H{detail_row}"
-    ws_detail.freeze_panes = "A4"
+    ws_detail.freeze_panes = f"A{RECON_ROW_OFFSET}"
 
     # ---- Build summary rows (3 entities) ----
     section_starts = {
@@ -399,7 +406,7 @@ def write_reconciliation_sheet(
         ("Meter Read", len(sap_meter), len(inferred_meter), meter_counts),
         ("Financial", len(sap_financial), len(evidence_rows_list), financial_counts),
     ]
-    for i, (entity, sap_cnt, edf_cnt, counts) in enumerate(summary_rows, start=4):
+    for i, (entity, sap_cnt, edf_cnt, counts) in enumerate(summary_rows, start=RECON_ROW_OFFSET):
         ws_summary.cell(row=i, column=1, value=entity)
         ws_summary.cell(row=i, column=2, value=sap_cnt)
         ws_summary.cell(row=i, column=3, value=edf_cnt)
@@ -417,7 +424,7 @@ def write_reconciliation_sheet(
         )
         cell.font = Font(color="0563C1", underline="single")
 
-    ws_summary.freeze_panes = "A4"
+    ws_summary.freeze_panes = f"A{RECON_ROW_OFFSET}"
 
 
 # ---------------------------------------------------------------------------
