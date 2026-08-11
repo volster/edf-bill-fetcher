@@ -15,6 +15,7 @@ except ImportError:
     HAS_STATSMODELS = False
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.helpers.theme import EDF_NAVY, EDF_OFFWHITE, EDF_ORANGE  # noqa: F401
 from edf_bill_fetcher.models.events import SapBackBillingEvent
 
 # Re-export the canonical SAP<->EDF matcher from processors.matching so
@@ -22,10 +23,6 @@ from edf_bill_fetcher.models.events import SapBackBillingEvent
 # importers (writers/__init__.py, io/writers/export.py) keep working.
 from edf_bill_fetcher.processors.matching import match_sap_events_to_edf  # noqa: F401
 
-# Colour constants used across the writer functions.
-EDF_ORANGE = "#FE5716"
-EDF_NAVY = "#10367A"
-EDF_OFFWHITE = "#F5F5F5"
 EST_YELLOW = "FFFF99"
 JUMP_RED = "FF9999"
 DUP_GREY = "E0E0E0"
