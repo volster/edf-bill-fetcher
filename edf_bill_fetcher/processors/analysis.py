@@ -242,12 +242,9 @@ def _detect_payment_patterns(df):
     # payment / credit), fall back to Amount (£) when Period Charge is
     # missing or non-numeric (legacy rows that never populated it, or
     # older callers passing a DataFrame without the column).
-    if "Period Charge (£)" in payments.columns:
-        pc_numeric = pd.to_numeric(payments["Period Charge (£)"], errors="coerce")
-    else:
-        pc_numeric = pd.Series([float("nan")] * len(payments), index=payments.index)
-    amt_numeric = pd.to_numeric(payments["Amount (£)"], errors="coerce")
-    pay_amounts = pc_numeric.where(pc_numeric.notna() & (pc_numeric > 0), amt_numeric)
+    from edf_bill_fetcher.helpers.payment_figures import payment_amounts
+
+    pay_amounts = payment_amounts(payments)
 
     return {
         "count": len(payments),
