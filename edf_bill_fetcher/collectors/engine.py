@@ -33,6 +33,7 @@ from openpyxl.styles import Side as _Side
 from edf_bill_fetcher.helpers.date_utils import (
     parse_to_display_date,
 )
+from edf_bill_fetcher.helpers.domain_filter import matches_domain_filter
 from edf_bill_fetcher.helpers.formatting import account_number_matches
 from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
 from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pages
@@ -272,31 +273,7 @@ def _extract_sender_email(msg):
     return sender or ""
 
 
-# --- _matches_domain_filter ---
-def _matches_domain_filter(sender_email, filter_str):
-    """Check if sender_email matches the domain filter string.
-
-    filter_str is comma-separated, supporting:
-      - domain names: "edf.com" matches *@edf.com and *@*.edf.com
-      - full addresses: "billing@edf.com" matches exactly
-      - wildcard domains: "*.edf.com" matches subdomains
-    """
-    if not sender_email or not filter_str:
-        return False
-    sender_email = sender_email.lower().strip()
-    parts = [p.strip().lower() for p in filter_str.split(",") if p.strip()]
-    for pattern in parts:
-        if "@" in pattern:
-            # Full email address match
-            if sender_email == pattern:
-                return True
-        else:
-            # Domain match — check exact domain or subdomain
-            domain = pattern.lstrip("*").lstrip(".")
-            sender_domain = sender_email.split("@")[-1] if "@" in sender_email else ""
-            if sender_domain == domain or sender_domain.endswith("." + domain):
-                return True
-    return False
+_matches_domain_filter = matches_domain_filter
 
 
 # --- EvidenceEngine ---
