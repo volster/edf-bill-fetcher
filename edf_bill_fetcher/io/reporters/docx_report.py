@@ -662,12 +662,12 @@ def create_ofgem_comparison(
     same table, same row labels as the PDF report.
 
     Quarters beyond the hard-coded OFGEM cap table are benchmarked
-    against the most recent published cap (``_LATEST_KNOWN``)
+    against the most recent published cap (the carry-forward value
+    returned alongside the caps dict by ``_load_ofgem_caps(auto_carry=True)``)
     rather than marked ``CAP DATA UNAVAILABLE`` — same carry-forward
-    contract the PDF report exposes via ``_load_ofgem_caps(auto_carry=True)``
-    plus the ``CAP CARRIED FORWARD`` status. ``config`` is accepted for
-    signature symmetry with the PDF; the comparison logic itself does
-    not currently consult ``config``.
+    contract the PDF report exposes, plus the ``CAP CARRIED FORWARD``
+    status. ``config`` is accepted for signature symmetry with the PDF;
+    the comparison logic itself does not currently consult ``config``.
     """
     if ctx is None:
         ctx = RenderContext()
@@ -722,8 +722,7 @@ def create_ofgem_comparison(
         doc.add_page_break()
         return
 
-    ofgem_caps = _load_ofgem_caps(auto_carry=True)
-    latest_known_cap = ofgem_caps.get("_LATEST_KNOWN")
+    ofgem_caps, latest_known_cap = _load_ofgem_caps(auto_carry=True)
 
     # Average bill unit rate per quarter; compare to OFGEM cap.
     # Rows are tuples ``(quarter, avg_rate, cap_rate_or_MISSING,
@@ -745,6 +744,17 @@ def create_ofgem_comparison(
         quarter_bills = bills[bills["_quarter"] == quarter]
         avg_rate = quarter_bills["_unit_rate"].mean()
         if pd.isna(avg_rate):
+            # Quarter exists in the data but no computable unit rate
+            # (e.g. zero/zero or all-missing charges in that window).
+            # Show an "N/A" row so the reader knows the quarter was
+            # present instead of silently dropping it from the table.
+            if quarter in ofgem_caps:
+                cap_rate = ofgem_caps[quarter]["unit_rate"]
+            elif latest_known_cap:
+                cap_rate = latest_known_cap["unit_rate"]
+            else:
+                cap_rate = MISSING
+            cap_rows.append((quarter, "N/A", cap_rate, "N/A", "N/A"))
             continue
         if quarter not in ofgem_caps:
             # Quarter beyond hard-coded table — use auto-carry if
@@ -808,7 +818,10 @@ def create_ofgem_comparison(
     for i, row in enumerate(cap_rows, 1):
         quarter, avg_rate, cap_rate, diff, status = row
         table.rows[i].cells[0].text = str(quarter)
-        table.rows[i].cells[1].text = fmt_number(avg_rate, 2)
+        # ``avg_rate`` may be the "N/A" sentinel for NaN-rate quarters.
+        table.rows[i].cells[1].text = (
+            fmt_number(avg_rate, 2) if isinstance(avg_rate, float) else str(avg_rate)
+        )
         # ``cap_rate`` and ``diff`` may be ``MISSING`` sentinels when a
         # quarter landed outside the published OFGEM cap window.
         table.rows[i].cells[2].text = (
@@ -857,9 +870,8 @@ def create_ofgem_comparison(
     # generators always show the same values.  The old code hard-coded
     # a 7-row table that diverged from the PDF (e.g. "34.0" here vs
     # the correct 28.34 for Oct–Dec 2022).
-    # Filter out the ``_LATEST_KNOWN`` carry-forward sentinel — it's
-    # not a real cap quarter and would crash the ``int(k[:4])`` parse
-    # below AND pollute the published-cap reference table.
+    # ``ofgem_caps`` holds only real quarters (the carry-forward cap is
+    # a separate return value), so this filter just picks 2022+ quarters.
     recent_caps = {k: v for k, v in ofgem_caps.items() if k.startswith("20") and int(k[:4]) >= 2022}
     # Human-readable quarter labels, e.g. "2022-Q4" → "Oct 2022 – Dec 2022"
     _q_start = {1: "Jan", 2: "Apr", 3: "Jul", 4: "Oct"}

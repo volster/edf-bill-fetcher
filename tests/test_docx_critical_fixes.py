@@ -179,12 +179,12 @@ class TestGlossaryHeaderRowPopulated:
 
 def _install_minimal_caps(monkeypatch: pytest.MonkeyPatch, *, with_latest: bool) -> None:
     """Install a deterministic one-quarter OFGEM cap table for the test
-    plus, optionally, the ``_LATEST_KNOWN`` carry-forward sentinel.
+    plus, optionally, a carry-forward cap as the tuple's second element.
 
     ``_load_ofgem_caps`` is bound into ``docx_report``'s module
     namespace at import time (via ``from edf_bill_fetcher.io.reporters.pdf_report import _load_ofgem_caps``
-    on line 34 of ``docx_report.py``) and the call site
-    ``docx_report:743`` resolves it locally — patching
+    on line 34 of ``docx_report.py``) and the call site resolves it
+    locally — patching
     ``sys.modules["edf_bill_fetcher.io.reporters.pdf_report"]._load_ofgem_caps`` alone is therefore
     insufficient; we must patch the symbol in the ``docx_report``
     namespace too, which is what this helper does.
@@ -192,12 +192,11 @@ def _install_minimal_caps(monkeypatch: pytest.MonkeyPatch, *, with_latest: bool)
     minimal_caps: dict[str, dict[str, float]] = {
         "2026-Q3": {"unit_rate": 25.0},
     }
-    if with_latest:
-        minimal_caps["_LATEST_KNOWN"] = {"unit_rate": 25.0}
+    latest = {"unit_rate": 25.0} if with_latest else None
     monkeypatch.setattr(
         sys.modules["edf_bill_fetcher.io.reporters.docx_report"],
         "_load_ofgem_caps",
-        lambda auto_carry=False: minimal_caps,
+        lambda auto_carry=False: (minimal_caps, latest),
     )
 
 
@@ -229,18 +228,18 @@ class TestOFGEMAutoCarryForward:
     """Pins the CRITICAL DOCX bug: quarters beyond the published OFGEM cap
     table were silently marked ``CAP DATA UNAVAILABLE`` and produced an
     ``INCOMPLETE`` overall verdict in the DOCX, even though the PDF surfaces
-    the ``_LATEST_KNOWN`` carry-forward path with a ``COMPLIANT (CARRIED)``
+    the carry-forward cap path with a ``COMPLIANT (CARRIED)``
     verdict.
     """
 
     def test_quarter_beyond_table_routes_to_carry_forward(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With ``_LATEST_KNOWN`` installed, a quarter BEYOND the hard-coded
-        table (we manufacture one) must be presented as a carried-forward
-        row (``EXCEEDS CAP (CAP CARRIED FORWARD)`` / ``AT CAP (CAP
-        CARRIED FORWARD)`` / ``BELOW CAP (CAP CARRIED FORWARD)``) and the
-        summary row must read ``COMPLIANT (CARRIED)``.
+        """With the carry-forward cap installed, a quarter BEYOND the
+        hard-coded table (we manufacture one) must be presented as a
+        carried-forward row (``EXCEEDS CAP (CAP CARRIED FORWARD)`` / ``AT
+        CAP (CAP CARRIED FORWARD)`` / ``BELOW CAP (CAP CARRIED FORWARD)``)
+        and the summary row must read ``COMPLIANT (CARRIED)``.
         """
         _install_minimal_caps(monkeypatch, with_latest=True)
         d = Document()
@@ -286,7 +285,7 @@ class TestOFGEMAutoCarryForward:
     def test_quarter_beyond_table_without_latest_known_still_incomplete(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When the cap table is installed WITHOUT ``_LATEST_KNOWN`` (i.e.
+        """When the cap table is installed WITHOUT a carry-forward cap (i.e.
         a future-quarter fallback would fail) the DOCX must still fall
         back to ``INCOMPLETE`` — the carry-forward pin above does not
         silently invent a cap.
@@ -323,6 +322,58 @@ class TestOFGEMAutoCarryForward:
         summary = comp_table.rows[2]
         assert summary.cells[0].text.strip() == "OVERALL"
         assert "INCOMPLETE" in summary.cells[4].text
+
+    def test_quarter_with_nan_unit_rate_shows_na_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A quarter whose unit rate is NaN (0/0) must render an "N/A" row
+        rather than silently disappearing from the comparison table (L-12),
+        so the reader knows the quarter existed in the data.
+        """
+        _install_minimal_caps(monkeypatch, with_latest=True)
+        d = Document()
+        styles = _get_or_create_styles(d)
+        df = pd.DataFrame(
+            [
+                {
+                    "Date": "15 Oct 2026",  # 2026-Q4, beyond the cap table
+                    "Source": "Local PDF Folder",
+                    "Entry Type": "New Bill",
+                    "Amount (£)": 200.0,
+                    "Period Charge (£)": 0.0,
+                    "Units (kWh)": 0.0,  # 0/0 → NaN unit rate
+                    "Period From": "01 Oct 2026",
+                    "Period To": "30 Oct 2026",
+                    "Invoice #": "TEST-002",
+                    "Reading": "Actual",
+                }
+            ]
+        )
+        create_ofgem_comparison(d, styles, df, config={})
+
+        comp_table = None
+        for t in d.tables:
+            if len(t.rows) >= 2 and len(t.columns) == 5:
+                hdr = [t.rows[0].cells[j].text.strip() for j in range(5)]
+                if hdr == [
+                    "Period",
+                    "Bill Unit Rate (p/kWh)",
+                    "OFGEM Cap (p/kWh)",
+                    "Difference",
+                    "Status",
+                ]:
+                    comp_table = t
+                    break
+        assert comp_table is not None, "comparison table not found"
+
+        # The quarter must still appear, with the bill rate as "N/A".
+        body = comp_table.rows[1]
+        assert body.cells[0].text.strip() == "2026-Q4"
+        assert body.cells[1].text.strip() == "N/A"
+        # The carried-forward cap is still shown; difference is unknown.
+        assert body.cells[2].text.strip() == "25.00"
+        assert body.cells[3].text.strip() == "N/A"
+        assert body.cells[4].text.strip() == "N/A"
 
     def test_signature_accepts_config(self) -> None:
         """Regression-pin: ``create_ofgem_comparison`` must accept a

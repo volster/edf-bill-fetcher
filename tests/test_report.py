@@ -16,6 +16,7 @@ from reportlab.platypus import TableStyle
 
 from edf_bill_fetcher.io.reporters.pdf_report import (
     Colors,
+    _load_ofgem_caps,
     build_styles,
     create_anomaly_detail_section,
     create_appendix_glossary,
@@ -230,16 +231,37 @@ class TestFormatters:
         assert fmt_money("N/A", blank_if_na=False) == "N/A"
 
     def test_fmt_number_valid(self):
-        assert fmt_number(1000) == "1,000"
-        assert fmt_number(1000.5) == "1,000"  # truncates to int
-        assert fmt_number("1,000") == "1,000"
-        assert fmt_number(1234567) == "1,234,567"
+        assert fmt_number(1000) == "1,000.00"
+        assert fmt_number(1000.5) == "1,000.50"
+        assert fmt_number("1,000") == "1,000.00"
+        assert fmt_number(1234567) == "1,234,567.00"
         assert fmt_number(100.45, decimals=2) == "100.45"
+        assert fmt_number(100, decimals=0) == "100"
 
     def test_fmt_number_na(self):
         assert fmt_number("N/A") == ""
         assert fmt_number(None) == ""
         assert fmt_number("N/A", blank_if_na=False) == "N/A"
+
+    def test_pdf_docx_formatters_align_precision(self):
+        """PDF and DOCX reporters render the same value at the same precision.
+
+        Regression guard for the C-3/L-15 divergence where the PDF
+        ``fmt_number`` defaulted to ``decimals=0`` (rendering £46) while
+        the DOCX defaulted to ``decimals=2`` (rendering £45.67).  Both
+        must now default to 2 decimal places.
+        """
+        from edf_bill_fetcher.io.reporters.docx_report import (
+            fmt_money as docx_fmt_money,
+        )
+        from edf_bill_fetcher.io.reporters.docx_report import (
+            fmt_number as docx_fmt_number,
+        )
+
+        assert fmt_number(45.67) == docx_fmt_number(45.67) == "45.67"
+        assert fmt_number(45.6) == docx_fmt_number(45.6) == "45.60"
+        assert fmt_number(46, decimals=0) == docx_fmt_number(46, decimals=0) == "46"
+        assert fmt_money(45.67) == docx_fmt_money(45.67) == "£45.67"
 
     def test_fmt_pct_valid(self):
         assert fmt_pct(0.15) == "15.0%"
@@ -514,7 +536,7 @@ class TestOFGEMComparison:
         monkeypatch.setattr(
             sys.modules["edf_bill_fetcher.io.reporters.pdf_report"],
             "_load_ofgem_caps",
-            lambda auto_carry=False: minimal_caps,
+            lambda auto_carry=False: (minimal_caps, None),
         )
 
         # One bill per quarter in our minimal cap set, plus a bill
@@ -568,6 +590,18 @@ class TestOFGEMComparison:
         # "—" missing-sentinel so the table never pretends to know.
         assert q3_row[2] == "—"
         assert q3_row[3] == "—"
+
+    def test_load_ofgem_caps_has_no_sentinel_key(self) -> None:
+        """The caps dict must not carry the carry-forward metadata as a key
+        (L-11): iterating ``caps.items()`` must yield only real quarters.
+        The carry-forward cap is returned as a separate tuple element.
+        """
+        caps, latest = _load_ofgem_caps(auto_carry=True)
+        assert "_LATEST_KNOWN" not in caps
+        assert latest == caps["2026-Q3"]
+        caps_exact, latest_exact = _load_ofgem_caps(auto_carry=False)
+        assert "_LATEST_KNOWN" not in caps_exact
+        assert latest_exact is None
 
 
 class TestStatisticalAnalysis:

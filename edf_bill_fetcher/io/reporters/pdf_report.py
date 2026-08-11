@@ -267,7 +267,7 @@ def fmt_money(val: Any, blank_if_na: bool = True) -> str:
         return str(val) if not blank_if_na else ""
 
 
-def fmt_number(val: Any, decimals: int = 0, blank_if_na: bool = True) -> str:
+def fmt_number(val: Any, decimals: int = 2, blank_if_na: bool = True) -> str:
     """Format a number with commas."""
     if val is None or (isinstance(val, str) and val.upper() in ("N/A", "NA", "")):
         return "" if blank_if_na else "N/A"
@@ -1323,11 +1323,18 @@ def create_timeline_section(
 # =============================================================================
 
 
-def _load_ofgem_caps(auto_carry: bool = True) -> dict[str, dict]:
+def _load_ofgem_caps(auto_carry: bool = True) -> tuple[dict[str, dict], dict | None]:
     """Load OFGEM Default Tariff Cap data.
 
-    Returns a dictionary mapping period string (e.g., '2023-Q4') to cap values:
-    {'unit_rate': p_per_kwh, 'standing_charge': p_per_day}
+    Returns a ``(caps, latest_known)`` tuple:
+    * ``caps`` maps period string (e.g., '2023-Q4') to cap values:
+      ``{'unit_rate': p_per_kwh, 'standing_charge': p_per_day}``.
+      The dict never carries sentinel keys — iterating ``caps.items()``
+      yields only real quarters.
+    * ``latest_known`` is the most recent published cap (the 2026-Q3
+      entry) when ``auto_carry`` is True, else ``None``.  Callers that
+      want carry-forward semantics use this value; it is kept separate
+      from ``caps`` so no sentinel pollutes the quarter dict.
 
     Provenance
     ----------
@@ -1396,17 +1403,11 @@ def _load_ofgem_caps(auto_carry: bool = True) -> dict[str, dict]:
     }
 
     if not auto_carry:
-        return caps
+        return caps, None
 
-    # Auto-carry: if a quarter is requested that isn't in the table,
-    # return the most recent known quarter's cap.
-    # This is a convenience wrapper; callers should use the returned
-    # dict via `.get(quarter)` and handle missing keys themselves.
-    # The reporter call sites pass auto_carry=True so `_LATEST_KNOWN`
-    # is injected here and the quarter-loop carries the last published
-    # cap forward (marking the row "CAP CARRIED FORWARD").
-    caps["_LATEST_KNOWN"] = caps["2026-Q3"]
-    return caps
+    # Carry-forward cap as a separate return value (not a ``_LATEST_KNOWN``
+    # dict key) so iterating ``caps.items()`` only yields real quarters.
+    return caps, caps["2026-Q3"]
 
 
 def _period_to_ofgem_quarter(dt: datetime | None) -> str | None:
@@ -1443,8 +1444,7 @@ def create_ofgem_comparison(
     elements.append(Spacer(1, 0.3 * cm))
 
     # Load OFGEM cap data (with auto-carry for future quarters)
-    ofgem_caps = _load_ofgem_caps(auto_carry=True)
-    latest_known_cap = ofgem_caps.get("_LATEST_KNOWN")
+    ofgem_caps, latest_known_cap = _load_ofgem_caps(auto_carry=True)
 
     # Compute unit rates from bills
     df = df.copy()
@@ -1665,7 +1665,7 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
 
     stats_data = [
         ["Statistic", "Value"],
-        ["Count", fmt_number(n)],
+        ["Count", fmt_number(n, 0)],
         ["Mean (£)", fmt_money(mean_amt)],
         ["Median (£)", fmt_money(amounts_series.median())],
         ["Std Deviation (£)", fmt_money(std_amt)],
