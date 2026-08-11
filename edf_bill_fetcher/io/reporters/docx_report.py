@@ -964,7 +964,9 @@ def create_payment_analysis(
     # DOCX side must match so credit notes appear in the totals.
     payments = df[df["Entry Type"].isin(["Payment", "Credit"])].copy()
     if not payments.empty and "Amount (£)" in payments.columns:
-        pay_amounts = pd.to_numeric(payments["Amount (£)"], errors="coerce").dropna()
+        from edf_bill_fetcher.helpers.payment_figures import payment_amounts
+
+        pay_amounts = payment_amounts(payments).dropna()
         if not pay_amounts.empty:
             doc.add_paragraph(f"Number of payments: {len(pay_amounts)}", style=styles["BodyText"])
             doc.add_paragraph(
