@@ -25,6 +25,7 @@ from edf_bill_fetcher.helpers.excel_utils import (
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
+from edf_bill_fetcher.helpers.payment_figures import payment_amount
 from edf_bill_fetcher.helpers.theme import CELL_BORDER
 from edf_bill_fetcher.writers._helpers import _detect_payment_patterns
 
@@ -138,11 +139,7 @@ def write_payment_analysis_sheet(ws, dfc):
         # payment or EDF credit). HTM Payment/Credit rows carry this
         # in Period Charge (£); legacy rows that only populated
         # Amount (£) use that instead.
-        pc_val = row.get("Period Charge (£)")
-        try:
-            amount_to_show = float(pc_val)
-        except (TypeError, ValueError):
-            amount_to_show = float(row["Amount (£)"])
+        amount_to_show, _ = payment_amount(row)
         _money(ws, r, 3, amount_to_show, fill_hex=bg)
         # Balance After (£) -- the running balance stored in
         # ``Amount (£)`` for HTM rows. For legacy rows where Amount
@@ -210,11 +207,7 @@ def write_payment_analysis_sheet(ws, dfc):
             # Same preference logic as the detail table above:
             # the per-row transaction value (Period Charge (£))
             # over the running balance (Amount (£)).
-            pc_val = row.get("Period Charge (£)")
-            try:
-                amount_for_chart = float(pc_val)
-            except (TypeError, ValueError):
-                amount_for_chart = float(row["Amount (£)"])
+            amount_for_chart, _ = payment_amount(row)
             _money(ws, payload_row, 2, amount_for_chart)
 
         # Step 2: build the chart from the labelled mini-table so
