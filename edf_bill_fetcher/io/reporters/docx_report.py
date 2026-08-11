@@ -25,6 +25,12 @@ from docx.shared import (
 
 # Import from main module
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.helpers.formatting import (
+    fmt_money as _fmt_money,
+)
+from edf_bill_fetcher.helpers.formatting import (
+    fmt_number as _fmt_number,
+)
 from edf_bill_fetcher.io.reporters.pdf_report import (
     REPORT_SECTIONS,
     RenderContext,
@@ -60,10 +66,13 @@ MARGIN_CM = 2.5
 
 
 def fmt_number(val: Any, decimals: int = 2) -> str:
-    """Format number with commas."""
-    if val is None or pd.isna(val):
-        return "N/A"
-    return f"{float(val):,.{decimals}f}"
+    """Format number with commas.
+
+    DOCX contract: missing values render as ``"N/A"`` (the PDF surface
+    leaves the cell blank).  Delegates to the shared implementation in
+    ``helpers.formatting`` so the two surfaces cannot drift apart.
+    """
+    return _fmt_number(val, decimals=decimals, blank_if_na=False)
 
 
 def fmt_money(val: Any) -> str:
@@ -73,16 +82,12 @@ def fmt_money(val: Any) -> str:
     ``£-0.00``, which looks wrong on a report.  Any value whose absolute
     value rounds to zero at 2 decimal places is coerced to plain ``0.0``
     before formatting, matching the PDF generator (edf_report.py:254).
+
+    DOCX contract: missing values render as ``"N/A"`` (the PDF surface
+    leaves the cell blank).  Delegates to the shared implementation in
+    ``helpers.formatting`` so the two surfaces cannot drift apart.
     """
-    if val is None or pd.isna(val):
-        return "N/A"
-    try:
-        f = float(val)
-        if abs(f) < 0.005:  # rounds to 0.00 at 2-dp display
-            f = 0.0
-        return f"£{f:,.2f}"
-    except (ValueError, TypeError):
-        return str(val)
+    return _fmt_money(val, blank_if_na=False)
 
 
 # =============================================================================

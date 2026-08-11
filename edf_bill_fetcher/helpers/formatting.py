@@ -14,6 +14,7 @@ modularization refactor (Task 3).  They cover:
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import openpyxl.cell
 import pandas as pd
@@ -92,6 +93,66 @@ def account_number_matches(acc_filter: str, text: str) -> bool:
     token_digits = [re.sub(r"\D", "", t) for t in tokens]
 
     return digits_only in token_digits
+
+
+def _is_na(val: Any) -> bool:
+    """Return True for the "missing value" sentinels shared by the reporters.
+
+    Matches None, the ``"N/A"`` / ``"NA"`` / ``""`` strings, and pandas
+    NaN/NaT.  ``None`` is checked first so we never call ``pd.isna`` on a
+    bare ``None`` (some pandas versions warn on that combination).
+    """
+    if val is None or (isinstance(val, str) and val.upper() in ("N/A", "NA", "")):
+        return True
+    try:
+        return bool(pd.isna(val))
+    except (TypeError, ValueError):
+        return False
+
+
+def fmt_money(val: Any, blank_if_na: bool = True) -> str:
+    """Format a value as GBP currency.
+
+    Single source of truth for the currency string shape used by every
+    PDF and DOCX call site in the project — extracted from
+    ``pdf_report.py`` so the two report surfaces cannot drift apart.
+
+    Signed-zero guard: a value like ``-0.001`` rounds in f-strings to
+    ``£-0.00``, which is jarring on a Financial Summary page. We
+    coerce any rounded-near-zero to plain zero before formatting so
+    the rendered total always shows ``£0.00``.
+    """
+    if _is_na(val):
+        return "" if blank_if_na else "N/A"
+    try:
+        if isinstance(val, str):
+            val = val.replace(",", "").replace("£", "")
+        f = float(val)
+        if abs(f) < 0.005:  # rounds to 0.00 at the 2-dp display
+            f = 0.0
+        return f"£{f:,.2f}"
+    except (ValueError, TypeError):
+        return str(val) if not blank_if_na else ""
+
+
+def fmt_number(val: Any, decimals: int = 2, blank_if_na: bool = True) -> str:
+    """Format a number with commas.
+
+    Single source of truth for the number string shape used by every
+    PDF and DOCX call site in the project — extracted from
+    ``pdf_report.py`` so the two report surfaces cannot drift apart.
+    """
+    if _is_na(val):
+        return "" if blank_if_na else "N/A"
+    try:
+        if isinstance(val, str):
+            val = val.replace(",", "")
+        f = float(val)
+        if decimals == 0:
+            return f"{int(f):,}"
+        return f"{f:,.{decimals}f}"
+    except (ValueError, TypeError):
+        return str(val) if not blank_if_na else ""
 
 
 __all__ = [

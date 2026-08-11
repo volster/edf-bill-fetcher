@@ -40,6 +40,10 @@ from edf_bill_fetcher.helpers.date_utils import (
     parse_to_display_date,
     parse_to_sort_date,
 )
+from edf_bill_fetcher.helpers.formatting import (
+    fmt_money,
+    fmt_number,
+)
 
 # Import from main module
 from edf_bill_fetcher.io.writers import HAS_SCIPY
@@ -244,42 +248,6 @@ STYLES = build_styles()
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
-
-
-def fmt_money(val: Any, blank_if_na: bool = True) -> str:
-    """Format a value as GBP currency.
-
-    Signed-zero guard: a value like ``-0.001`` rounds in f-strings to
-    ``£-0.00``, which is jarring on a Financial Summary page. We
-    coerce any rounded-near-zero to plain zero before formatting so
-    the rendered total always shows ``£0.00``.
-    """
-    if val is None or (isinstance(val, str) and val.upper() in ("N/A", "NA", "")):
-        return "" if blank_if_na else "N/A"
-    try:
-        if isinstance(val, str):
-            val = val.replace(",", "").replace("£", "")
-        f = float(val)
-        if abs(f) < 0.005:  # rounds to 0.00 at the 2-dp display
-            f = 0.0
-        return f"£{f:,.2f}"
-    except (ValueError, TypeError):
-        return str(val) if not blank_if_na else ""
-
-
-def fmt_number(val: Any, decimals: int = 2, blank_if_na: bool = True) -> str:
-    """Format a number with commas."""
-    if val is None or (isinstance(val, str) and val.upper() in ("N/A", "NA", "")):
-        return "" if blank_if_na else "N/A"
-    try:
-        if isinstance(val, str):
-            val = val.replace(",", "")
-        f = float(val)
-        if decimals == 0:
-            return f"{int(f):,}"
-        return f"{f:,.{decimals}f}"
-    except (ValueError, TypeError):
-        return str(val) if not blank_if_na else ""
 
 
 def fmt_pct(val: Any, blank_if_na: bool = True) -> str:

@@ -263,6 +263,34 @@ class TestFormatters:
         assert fmt_number(46, decimals=0) == docx_fmt_number(46, decimals=0) == "46"
         assert fmt_money(45.67) == docx_fmt_money(45.67) == "£45.67"
 
+    def test_fmt_helpers_single_source_of_truth(self):
+        """fmt_money/fmt_number live once in helpers.formatting (C-1/C-4).
+
+        The PDF surface imports the shared implementation directly; the
+        DOCX surface keeps a thin adapter that only overrides the
+        missing-value rendering (``"N/A"`` here vs blank on the PDF).
+        Neither reporter may define its own copy again.
+        """
+        from edf_bill_fetcher.helpers import formatting
+        from edf_bill_fetcher.io.reporters.docx_report import (
+            fmt_money as docx_fmt_money,
+        )
+        from edf_bill_fetcher.io.reporters.docx_report import (
+            fmt_number as docx_fmt_number,
+        )
+
+        assert fmt_money is formatting.fmt_money
+        assert fmt_number is formatting.fmt_number
+        assert docx_fmt_money(None) == "N/A"
+        assert docx_fmt_number(None) == "N/A"
+        assert docx_fmt_money("N/A") == "N/A"
+        assert fmt_money(None) == ""
+        assert fmt_number(None) == ""
+        assert docx_fmt_money(float("nan")) == "N/A"
+        assert docx_fmt_number(float("nan")) == "N/A"
+        assert fmt_money(float("nan")) == ""
+        assert fmt_number(float("nan")) == ""
+
     def test_fmt_pct_valid(self):
         assert fmt_pct(0.15) == "15.0%"
         assert fmt_pct(1.0) == "100.0%"
