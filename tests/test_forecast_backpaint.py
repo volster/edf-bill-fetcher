@@ -73,18 +73,17 @@ def _synthetic_records() -> list[dict]:
 def _read_forecast_table(xlsx_path: Path) -> pd.DataFrame:
     """Read the Forecast & Projection tab back as a DataFrame.
 
-    ``write_forecast_sheet`` puts the merged banner text in cell
-    (1, 1) of row 1 with the column headers in cells (1, 2..7),
-    so ``openpyxl.iter_rows(values_only=True)`` yields row 1 as
-    a 7-element tuple whose first element is the banner text.
-    Data rows have cell (N, 1) blank (the merge doesn't extend
-    past the anchor) and the actual values in cells (N, 1..7),
-    so they also yield 7-element tuples — but with the date as
-    the first element, not the banner.
+    ``write_forecast_sheet`` puts the orange banner title in cell
+    (1, 1) of row 1, the column headers in cells (2, 1..7), and the
+    data rows from row 3 down.  The banner row is *not* a header row
+    — its only populated cell is A1 — so we locate the header row by
+    scanning for the row whose first cell is ``"Date"`` (the first
+    column header) and treat everything beneath it as data.
 
-    We rename the first column on row 0 from the banner text
-    to ``Date`` so the dataframe columns line up with what an
-    Excel reader sees.
+    We fall back to the legacy single-row layout (banner on row 1
+    doubling as the header row, headers at cells (1, 2..7)) if no
+    ``"Date"`` row is found, renaming the banner text to ``Date`` so
+    the dataframe columns line up with what an Excel reader sees.
     """
     from openpyxl import load_workbook
 
@@ -96,13 +95,16 @@ def _read_forecast_table(xlsx_path: Path) -> pd.DataFrame:
         wb.close()
     if not rows:
         return pd.DataFrame()
-    # The banner is the leftmost cell on row 1 only.  We replace
-    # it with the canonical column header name so the Date column
-    # lines up at index 0 of every successive data row.
-    header_row = list(rows[0])
+    # The banner is the leftmost cell on row 1 only.  In the current
+    # layout the real column headers live on row 2 (first cell
+    # ``"Date"``); the legacy layout had them merged into row 1.
+    header_idx = next((i for i, r in enumerate(rows) if r and r[0] == "Date"), None)
+    if header_idx is None:
+        header_idx = 0
+    header_row = list(rows[header_idx])
     if header_row and header_row[0] == "EDF ENERGY DISPUTE  —  BALANCE FORECAST":
         header_row[0] = "Date"
-    data = rows[1:]
+    data = rows[header_idx + 1 :]
     # Drop trailing empty rows that the function adds below the
     # model-comparison summary.
     while data and all(v in ("", None) for v in data[-1]):

@@ -11,6 +11,7 @@ import openpyxl
 import pandas as pd
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 # Re-export shared helpers / theme constants used by these two functions.
 from edf_bill_fetcher.helpers.date_utils import to_excel_date
@@ -18,51 +19,53 @@ from edf_bill_fetcher.helpers.excel_utils import hcell as _hcell
 from edf_bill_fetcher.helpers.theme import CELL_BORDER, DUP_GREY
 from edf_bill_fetcher.writers._helpers import EST_YELLOW, JUMP_RED
 
+# Column letter map for the evidence sheet (matches ``EVIDENCE_HEADERS`` below):
+# A=Source B=Sender C=Date D=PeriodFrom E=PeriodTo F=Invoice#
+# G=Amount H=PeriodCharge I=UnitRate J=%Change K=EntryType
+# L=Reading M=Units N=StandingChg O=Tariff P=AttachmentName
+# Q=Details R=LogicUsed S=AnomalyFlag
+# (Duplicate-of-link cells are rendered in a post-loop pass for
+# the ``is_duplicate=True`` branch and don't appear in this
+# header list.)
+#
+# F1 (SEV-1):  every COL_* is derived from the headers list, not
+# hard-coded.  Inserting a new column at any position requires
+# updating exactly one place (the headers list) — the conditional
+# formatting range, formula references, column widths and the
+# dedup hyperlink pass all read the same index.  Verified by
+# ``tests/test_evidence_sheet_columns.py``.
+EVIDENCE_HEADERS: list[str] = [
+    "Source",
+    "Sender",
+    "Date",
+    "Period From",
+    "Period To",
+    "Invoice #",
+    "Amount (£)",
+    "Period Charge (£)",
+    "Unit Rate (p/kWh)",
+    "% Change",
+    "Entry Type",
+    "Reading",
+    "Units (kWh)",
+    "Standing Chg (p/day)",
+    # Tariff price-plan name (e.g. "Freedom", "Standard");
+    # extracted by ``extract_new_invoice_fields`` on KI-style
+    # bills. See ``_process_new_invoice``.
+    "Tariff",
+    "Attachment Name",
+    "Details",
+    "Logic Used",
+    "Anomaly Flag",
+]
+COL_AMOUNT = EVIDENCE_HEADERS.index("Amount (£)") + 1
+
 # --- function body 1: write_evidence_sheet (was writers/__init__.py L182-422) ---
 
 
 def write_evidence_sheet(ws, df, is_duplicate=False):
     """Render the EDF Evidence Report (or Duplicate Entries) worksheet."""
-    # Pin the column letter map (matches ``headers`` below):
-    # A=Source B=Sender C=Date D=PeriodFrom E=PeriodTo F=Invoice#
-    # G=Amount H=PeriodCharge I=UnitRate J=%Change K=EntryType
-    # L=Reading M=Units N=StandingChg O=Tariff P=AttachmentName
-    # Q=Details R=LogicUsed S=AnomalyFlag
-    # (Duplicate-of-link cells are rendered in a post-loop pass for
-    # the ``is_duplicate=True`` branch and don't appear in this
-    # header list.)
-    #
-    # F1 (SEV-1):  every COL_* is derived from the headers list, not
-    # hard-coded.  Inserting a new column at any position requires
-    # updating exactly one place (the headers list) — the conditional
-    # formatting range, formula references, column widths and the
-    # dedup hyperlink pass all read the same index.  Verified by
-    # ``tests/test_evidence_sheet_columns.py``.
-    headers = [
-        "Source",
-        "Sender",
-        "Date",
-        "Period From",
-        "Period To",
-        "Invoice #",
-        "Amount (£)",
-        "Period Charge (£)",
-        "Unit Rate (p/kWh)",
-        "% Change",
-        "Entry Type",
-        "Reading",
-        "Units (kWh)",
-        "Standing Chg (p/day)",
-        # Tariff price-plan name (e.g. "Freedom", "Standard");
-        # extracted by ``extract_new_invoice_fields`` on KI-style
-        # bills. See ``_process_new_invoice``.
-        "Tariff",
-        "Attachment Name",
-        "Details",
-        "Logic Used",
-        "Anomaly Flag",
-    ]
-    COL_AMOUNT = headers.index("Amount (£)") + 1
+    headers = EVIDENCE_HEADERS
     COL_PERIOD_CHG = headers.index("Period Charge (£)") + 1
     COL_UNIT_RATE = headers.index("Unit Rate (p/kWh)") + 1
     COL_PCT_CHANGE = headers.index("% Change") + 1
@@ -101,11 +104,17 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
 
         for c_idx, val in enumerate(row, 1):
             if c_idx == COL_PCT_CHANGE and not is_duplicate:
-                # % Change as live formula — Amount is col E
+                # % Change as live formula — Amount is col G (derived
+                # from COL_AMOUNT), not col E (Period To serials).
+                amt_col_letter = get_column_letter(COL_AMOUNT)
                 c = ws.cell(
                     row=r_idx,
                     column=COL_PCT_CHANGE,
-                    value=f'=IFERROR((E{r_idx}-E{r_idx - 1})/E{r_idx - 1},"")',
+                    value=(
+                        f"=IFERROR(({amt_col_letter}{r_idx}-"
+                        f"{amt_col_letter}{r_idx - 1})/"
+                        f'{amt_col_letter}{r_idx - 1},"")'
+                    ),
                 )
                 c.number_format = "0.0%"
                 c.alignment = Alignment(horizontal="right", vertical="top")
@@ -161,15 +170,20 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             ):
                 c.fill = PatternFill("solid", start_color=EST_YELLOW)
 
-        # Anomaly flag col S (19) — Amount is col E — Amount is col G
-        # (Anomaly Flag shifted right by one when the Tariff column
-        # was inserted at column O; see the column-letter map at the
-        # top of this function.)
+        # Anomaly flag col S (19) — Amount is col G (derived from
+        # COL_AMOUNT), not col E (Period To serials).  Anomaly Flag
+        # shifted right by one when the Tariff column was inserted at
+        # column O; see the column-letter map at the top of this module.
         if not is_duplicate and r_idx > 2:
+            amt_col_letter = get_column_letter(COL_AMOUNT)
             ca = ws.cell(
                 row=r_idx,
                 column=COL_ANOMALY,
-                value=f'=IF(AND(E{r_idx - 1}>0,E{r_idx}>E{r_idx - 1}*2),"⚠ >100% INCREASE","")',
+                value=(
+                    f"=IF(AND({amt_col_letter}{r_idx - 1}>0,"
+                    f"{amt_col_letter}{r_idx}>{amt_col_letter}{r_idx - 1}*2),"
+                    '"⚠ >100% INCREASE","")'
+                ),
             )
             ca.font = Font(name="Calibri", size=10, bold=True)
             ca.border = CELL_BORDER
@@ -177,10 +191,11 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
 
     # Conditional formatting: only colour anomaly column red when non-empty
     if not is_duplicate and last_data_row > 2:
+        anomaly_col_letter = get_column_letter(COL_ANOMALY)
         ws.conditional_formatting.add(
-            f"S2:S{last_data_row}",
+            f"{anomaly_col_letter}2:{anomaly_col_letter}{last_data_row}",
             FormulaRule(
-                formula=['$S2<>""'],
+                formula=[f'${anomaly_col_letter}2<>""'],
                 fill=PatternFill("solid", start_color=JUMP_RED),
                 font=Font(name="Calibri", size=10, bold=True),
             ),
@@ -294,7 +309,10 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
     esn = evidence_sheet_name
 
     date_col = f"'{esn}'!$C$2:$C${last_data_row}"
-    amt_col = f"'{esn}'!$E$2:$E${last_data_row}"
+    # Amount lives in col G of the evidence sheet (not col E, which is
+    # Period To); derive it from the shared COL_AMOUNT constant.
+    amt_col_letter = get_column_letter(COL_AMOUNT)
+    amt_col = f"'{esn}'!${amt_col_letter}$2:${amt_col_letter}${last_data_row}"
 
     for r_idx, year_val in enumerate(years, 2):
         row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()

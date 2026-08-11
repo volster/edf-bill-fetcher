@@ -327,10 +327,9 @@ def _data_quality_report(df):
     amt_complete = df["Amount (£)"].notna().sum()
     amt_missing = total_records - amt_complete
 
-    # Period info completeness
-    period_from_complete = (df["Period From"] != "N/A").sum()
-    _ = (df["Period To"] != "N/A").sum()  # Not used, but computed for completeness
-    period_complete = period_from_complete  # At least from date
+    # Period info completeness — a row counts as period-complete only
+    # when BOTH Period From and Period To are present.
+    period_complete = ((df["Period From"] != "N/A") & (df["Period To"] != "N/A")).sum()
 
     # Reading classification
     # Reading classification — "N/A" is the sentinel for unclassified readings

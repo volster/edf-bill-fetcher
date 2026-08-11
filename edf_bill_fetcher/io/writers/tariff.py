@@ -55,8 +55,8 @@ def write_tariff_analysis_sheet(ws, dfc):
         "Avg Period Charge (£)",
     ]
     for col, h in enumerate(headers, 1):
-        _hcell(ws, 1, col, h, bg=NAVY)
-    ws.row_dimensions[1].height = 28
+        _hcell(ws, 2, col, h, bg=NAVY)
+    ws.row_dimensions[2].height = 28
 
     tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  TARIFF IMPACT ANALYSIS")
     tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
@@ -72,7 +72,7 @@ def write_tariff_analysis_sheet(ws, dfc):
     if tariff_stats is not None:
         assert isinstance(tariff_stats, pd.DataFrame)
         if not tariff_stats.empty:
-            r = 2
+            r = 3
             for _, row in tariff_stats.iterrows():
                 bg = LGREY if r % 2 == 0 else None
                 _text(ws, r, 1, str(row["Tariff"]), fill_hex=bg)
@@ -98,7 +98,7 @@ def write_tariff_analysis_sheet(ws, dfc):
         ["A", "B", "C", "D", "E", "F", "G"], [28, 10, 22, 18, 16, 16, 20], strict=False
     ):
         ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = "A3"
 
 
 __all__ = ["write_tariff_analysis_sheet"]

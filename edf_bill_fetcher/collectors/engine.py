@@ -432,7 +432,7 @@ class EvidenceEngine:
                         "Amount (£)": amt,
                         "Details": rec.get("Details", "")[:60],
                         "Logic Used": rec.get("Logic Used", ""),
-                        "Reason": f"Amount magnitude below £{self.config['min_amount']:,.2f} threshold",
+                        "Reason": f"Amount magnitude below £{self.config.get('min_amount', 50.0):,.2f} threshold",
                     }
                 )
             return

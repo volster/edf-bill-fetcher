@@ -161,7 +161,7 @@ PERIOD_RE = re.compile(
 
 # Used by the "large amount" fallback in `extract_amount`.  Pre-compiled
 # once at module load; this hot-path is hit once per analysed chunk.
-_POUND_AMOUNT_FALLBACK_RE = re.compile(r"£\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)")
+_POUND_AMOUNT_FALLBACK_RE = re.compile(r"£\s?(\d+(?:,\d{3})*(?:\.\d{2})?)")
 
 # =============================================================================
 # KI / KCR invoice field regexes — pre-compiled at module load so

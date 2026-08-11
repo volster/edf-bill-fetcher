@@ -22,14 +22,20 @@ import pandas as pd
 def apply_currency_format(cell: openpyxl.cell.Cell) -> None:
     """Coerce cell value to float and apply a currency number format."""
     if isinstance(cell.value, str):
-        cell.value = float(cell.value)
+        try:
+            cell.value = float(cell.value)
+        except (TypeError, ValueError):
+            pass  # leave non-numeric values (e.g. "N/A") as-is
     cell.number_format = "\u00a3#,##0.00"
 
 
 def apply_int_format(cell: openpyxl.cell.Cell) -> None:
     """Coerce cell value to int and apply an integer number format."""
     if isinstance(cell.value, str):
-        cell.value = int(float(cell.value))
+        try:
+            cell.value = int(float(cell.value))
+        except (TypeError, ValueError):
+            pass  # leave non-numeric values (e.g. "N/A") as-is
     cell.number_format = "#,##0"
 
 

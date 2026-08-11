@@ -471,7 +471,7 @@ def create_key_findings_table(
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
         # Header
-        headers = ["Severity", "Category", "Description", "Records Affected"]
+        headers = ["Severity", "Category", "Description", "Date"]
         for i, h in enumerate(headers):
             table.rows[0].cells[i].text = h
 
@@ -481,9 +481,7 @@ def create_key_findings_table(
             row.cells[0].text = flag[4] if len(flag) > 4 else ""  # Severity
             row.cells[1].text = flag[0] if len(flag) > 0 else ""  # Category (type)
             row.cells[2].text = flag[3] if len(flag) > 3 else ""  # Description (detail)
-            row.cells[3].text = (
-                fmt_date(flag[1]) if len(flag) > 1 else ""
-            )  # Records Affected (date)
+            row.cells[3].text = fmt_date(flag[1]) if len(flag) > 1 else ""  # Date (flag date)
 
         _format_table(table)
 
@@ -666,8 +664,8 @@ def create_ofgem_comparison(
     Quarters beyond the hard-coded OFGEM cap table are benchmarked
     against the most recent published cap (``_LATEST_KNOWN``)
     rather than marked ``CAP DATA UNAVAILABLE`` — same carry-forward
-    contract the PDF report exposes via ``_load_ofgem_caps(auto_carry=False)``
-    plus the ``CAR CARRIED FORWARD`` status. ``config`` is accepted for
+    contract the PDF report exposes via ``_load_ofgem_caps(auto_carry=True)``
+    plus the ``CAP CARRIED FORWARD`` status. ``config`` is accepted for
     signature symmetry with the PDF; the comparison logic itself does
     not currently consult ``config``.
     """
@@ -724,7 +722,7 @@ def create_ofgem_comparison(
         doc.add_page_break()
         return
 
-    ofgem_caps = _load_ofgem_caps(auto_carry=False)
+    ofgem_caps = _load_ofgem_caps(auto_carry=True)
     latest_known_cap = ofgem_caps.get("_LATEST_KNOWN")
 
     # Average bill unit rate per quarter; compare to OFGEM cap.
@@ -1145,7 +1143,15 @@ def create_appendix_methodology(
     doc.add_paragraph(
         "Amount extraction uses a tiered anchor-based approach with fallback to "
         "large-amount detection. Date extraction prioritizes bill/invoice date markers. "
-        "Deduplication uses SHA-256 hashing of PDF content.",
+        "Record deduplication uses Period To + Amount matching and a ±60-day amount "
+        "bucket. SHA-256 hashing is used for file-level duplicate PDF detection.",
+        style=styles["BodyText"],
+    )
+
+    doc.add_paragraph(
+        "Key Findings flags are structured as tuples of "
+        "(type, date, amount, detail, severity); the Date column in the "
+        "Key Findings table displays the flag's date.",
         style=styles["BodyText"],
     )
 

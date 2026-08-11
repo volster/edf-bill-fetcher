@@ -122,7 +122,7 @@ def run_cli_extract(args: list[str]) -> None:
         default="edfenergy.com",
         help="Comma-separated sender domains for PST filtering",
     )
-    parser.add_argument("--min-amount", type=float, default=500.0, help="Minimum amount threshold")
+    parser.add_argument("--min-amount", type=float, default=50.0, help="Minimum amount threshold")
     parser.add_argument("--no-dedup", action="store_true", help="Disable deduplication")
     parser.add_argument("--no-anchors", action="store_true", help="Disable smart context search")
     parser.add_argument("--no-large", action="store_true", help="Disable large amount fallback")

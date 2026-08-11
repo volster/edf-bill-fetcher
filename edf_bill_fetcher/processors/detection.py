@@ -210,8 +210,11 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
 
     ``Unlawful Charge (£)`` is the prorated share of the Period Charge
     attributable to the Excess Days — i.e.
-    ``round(charge * (excess / days), 2)`` where ``days`` is the full
-    Days Billed span. A reviewer seeing the full Period Charge might
+    ``round(charge * (min(excess, days) / days), 2)`` where ``days`` is
+    the full Days Billed span. The ratio is capped at 1.0: when the bill
+    date falls more than 365 days after Period To (excess > days) the
+    whole period is unlawful, so the unlawful charge never exceeds the
+    Period Charge. A reviewer seeing the full Period Charge might
     otherwise mistake the entire amount as at issue, when only the
     Excess Days portion is unlawful.
 
@@ -289,7 +292,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         charge, value_source = _pull_period_charge(r)
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
-        unlawful_charge = round(charge * (excess / days), 2) if days > 0 else 0.0
+        unlawful_charge = round(charge * (min(excess, days) / days), 2) if days > 0 else 0.0
         rows.append(
             {
                 "Invoice #": r.get("Invoice #", ""),

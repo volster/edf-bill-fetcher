@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from edf_bill_fetcher.io.adapters.pdf import slice_pdf_pages
+import logging
+
+from edf_bill_fetcher.io.adapters.pdf import PAGE1_BOUNDARY_RE, slice_pdf_pages
 
 
 def test_empty_input_returns_single_empty_chunk():
@@ -147,3 +149,53 @@ def test_realistic_d2_merged_pdf_yields_8_invoices():
     assert len(result) == 8
     for chunk in result:
         assert len(chunk) == 4
+
+
+def test_page1_boundary_re_matches_all_variants():
+    for variant in ["Page 1/4", "1/4", "Page 1 / 4", "1 of 4", "one of four"]:
+        assert PAGE1_BOUNDARY_RE.search(variant), f"expected {variant!r} to match"
+    for non_match in ["Page 2/4", "Page 1", "of 4", "Page 1 of"]:
+        assert not PAGE1_BOUNDARY_RE.search(non_match), f"expected {non_match!r} not to match"
+
+
+def test_slash_page_marker_without_spaces_splits_bundle():
+    pages = []
+    for _ in range(3):
+        pages.append("Page 1/4")
+        pages.append("Page 2/4")
+        pages.append("Page 3/4")
+        pages.append("Page 4/4")
+    result = slice_pdf_pages(pages)
+    assert len(result) == 3
+    for chunk in result:
+        assert len(chunk) == 4
+
+
+def test_pages_before_first_boundary_fold_into_first_slice():
+    pages = [
+        "Bundle cover sheet",
+        "Invoice number: T1\nPage 1 of 4",
+        "Page 2 of 4",
+        "Invoice number: T2\nPage 1 of 4",
+        "Page 2 of 4",
+    ]
+    result = slice_pdf_pages(pages)
+    assert len(result) == 2
+    assert result[0] == pages[0:3]
+    assert result[1] == pages[3:5]
+
+
+def test_substantial_preamble_before_first_boundary_logs_warning(caplog):
+    preamble = ["Cover paragraph " * 20 for _ in range(3)]
+    pages = preamble + [
+        "Invoice number: T1\nPage 1 of 4",
+        "Page 2 of 4",
+        "Invoice number: T2\nPage 1 of 4",
+        "Page 2 of 4",
+    ]
+    with caplog.at_level(logging.WARNING, logger="edf_bill_fetcher.io.adapters.pdf"):
+        result = slice_pdf_pages(pages)
+    assert len(result) == 2
+    assert result[0] == pages[:5]
+    assert result[1] == pages[5:]
+    assert "before the first invoice boundary" in caplog.text

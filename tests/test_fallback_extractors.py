@@ -120,6 +120,23 @@ def test_fallback_amount_picks_first_amount_for_kcr_credit() -> None:
     assert label == "_POUND_AMOUNT_FALLBACK_RE"
 
 
+def test_fallback_amount_does_not_truncate_large_uncommaed_amount() -> None:
+    # Regression: £1234.56 (4 digits, no comma) was previously truncated
+    # to 123.0 because the fallback regex only matched 1-3 digits before
+    # the optional comma group. It must parse as the full amount.
+    val, label = _fallback_amount("Amount: £1234.56")
+    assert val == 1234.56
+    assert label == "_POUND_AMOUNT_FALLBACK_RE"
+
+
+def test_fallback_amount_still_handles_commaed_amounts() -> None:
+    # Comma-grouped amounts must keep working after the \d{1,3} -> \d+
+    # widening: "£12,345.67" -> 12345.67.
+    val, label = _fallback_amount("Amount: £12,345.67")
+    assert val == 12345.67
+    assert label == "_POUND_AMOUNT_FALLBACK_RE"
+
+
 def test_fallback_amount_returns_none_when_no_money() -> None:
     val, label = _fallback_amount(_TEXT_NO_HINTS)
     assert val is None

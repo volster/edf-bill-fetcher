@@ -889,9 +889,7 @@ class App:
             if fmt in ("pdf", "both") and HAS_PDF_REPORT:
                 output_paths["pdf"] = self._resolve_output_path(stem, "pdf", is_report=True)
             if fmt in ("docx", "both") and HAS_DOCX_REPORT:
-                output_paths["docx"] = self._resolve_output_path(
-                    stem, "docx", batch_n=1, is_report=True
-                )
+                output_paths["docx"] = self._resolve_output_path(stem, "docx", is_report=True)
 
             if not output_paths:
                 self._show(

@@ -249,10 +249,10 @@ def test_output_columns_match_spec() -> None:
 def test_unlawful_charge_is_prorated_share() -> None:
     # Period 01 Jan 2022 to 31 Dec 2023 = 729 days; bill date 01 Jan 2025.
     # Excess Days = (01 Jan 2025 - 365 days - 01 Jan 2022).days = 731 days.
-    # Unlawful Charge = round(charge * (excess / days), 2).
+    # Unlawful Charge = round(charge * (min(excess, days) / days), 2).
     # Note: excess (731) > days (729) here because the bill date is far
-    # enough out that the entire period plus some pre-period days are
-    # unlawful — so the unlawful charge can exceed the period charge.
+    # enough out that the entire period is unlawful — the ratio is capped
+    # at 1.0 so the unlawful charge equals the full period charge.
     df = pd.DataFrame(
         [
             _row(
@@ -270,11 +270,33 @@ def test_unlawful_charge_is_prorated_share() -> None:
     days = int(row["Days Billed"])
     excess = int(row["Excess Days"])
     charge = float(row["Period Charge (£)"])
-    expected_unlawful = round(charge * (excess / days), 2)
+    expected_unlawful = round(charge * (min(excess, days) / days), 2)
     assert float(row["Unlawful Charge (£)"]) == expected_unlawful
     # Sanity: unlawful charge is prorated by the excess/days ratio.
     assert excess > 0
     assert days > 0
+
+
+def test_unlawful_charge_capped_at_full_charge_when_excess_exceeds_days() -> None:
+    # Regression: excess (731) > days (729) previously inflated the
+    # unlawful charge above 100% of the Period Charge (1002.74). The
+    # proration ratio is capped at 1.0, so the unlawful charge must
+    # never exceed the full Period Charge.
+    df = pd.DataFrame(
+        [
+            _row(
+                invoice="UC-CAP",
+                date="01 Jan 2025",
+                period_from="01 Jan 2022",
+                period_to="31 Dec 2023",
+                amount=1000.0,
+            )
+        ]
+    )
+    out = detect_back_billing(df)
+    row = out.iloc[0]
+    assert int(row["Excess Days"]) > int(row["Days Billed"])
+    assert float(row["Unlawful Charge (£)"]) == 1000.0
 
 
 # ---------------------------------------------------------------------------

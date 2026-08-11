@@ -1402,10 +1402,9 @@ def _load_ofgem_caps(auto_carry: bool = True) -> dict[str, dict]:
     # return the most recent known quarter's cap.
     # This is a convenience wrapper; callers should use the returned
     # dict via `.get(quarter)` and handle missing keys themselves.
-    # The actual carry logic lives in the caller (create_ofgem_comparison)
-    # which calls this with auto_carry=False and then applies carry
-    # explicitly for transparency.  This function just exposes the
-    # raw table plus a helper to get the latest known cap.
+    # The reporter call sites pass auto_carry=True so `_LATEST_KNOWN`
+    # is injected here and the quarter-loop carries the last published
+    # cap forward (marking the row "CAP CARRIED FORWARD").
     caps["_LATEST_KNOWN"] = caps["2026-Q3"]
     return caps
 
@@ -1444,7 +1443,7 @@ def create_ofgem_comparison(
     elements.append(Spacer(1, 0.3 * cm))
 
     # Load OFGEM cap data (with auto-carry for future quarters)
-    ofgem_caps = _load_ofgem_caps(auto_carry=False)
+    ofgem_caps = _load_ofgem_caps(auto_carry=True)
     latest_known_cap = ofgem_caps.get("_LATEST_KNOWN")
 
     # Compute unit rates from bills
@@ -1660,16 +1659,20 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
     # Descriptive stats
     amounts_series = pd.Series(amounts)
 
+    mean_amt = amounts_series.mean()
+    std_amt = amounts_series.std()
+    cv = fmt_pct(std_amt / mean_amt) if mean_amt and mean_amt > 0 else "N/A"
+
     stats_data = [
         ["Statistic", "Value"],
         ["Count", fmt_number(n)],
-        ["Mean (£)", fmt_money(amounts_series.mean())],
+        ["Mean (£)", fmt_money(mean_amt)],
         ["Median (£)", fmt_money(amounts_series.median())],
-        ["Std Deviation (£)", fmt_money(amounts_series.std())],
+        ["Std Deviation (£)", fmt_money(std_amt)],
         ["Min (£)", fmt_money(amounts_series.min())],
         ["Max (£)", fmt_money(amounts_series.max())],
         ["Range (£)", fmt_money(amounts_series.max() - amounts_series.min())],
-        ["Coefficient of Variation", fmt_pct(amounts_series.std() / amounts_series.mean())],
+        ["Coefficient of Variation", cv],
     ]
 
     t = Table(stats_data, colWidths=[10 * cm, 5 * cm])

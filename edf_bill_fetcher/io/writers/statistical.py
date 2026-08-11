@@ -70,8 +70,8 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         "Notes",
     ]
     for col, h in enumerate(headers, 1):
-        _hcell(ws, 1, col, h, bg=NAVY)
-    ws.row_dimensions[1].height = 28
+        _hcell(ws, 2, col, h, bg=NAVY)
+    ws.row_dimensions[2].height = 28
 
     # Title
     tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  STATISTICAL ANALYSIS")
@@ -85,7 +85,7 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         x.border = CELL_BORDER
 
     # Summary stats
-    r = 2
+    r = 3
     _section_hdr(ws, r, "DESCRIPTIVE STATISTICS")
 
     amounts_series = pd.Series(amounts)
@@ -275,7 +275,7 @@ def write_statistical_analysis_sheet(ws, dfc, config):
     # Column widths
     for col_letter, width in zip(["A", "B", "C"], [45, 22, 80], strict=False):
         ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = "A3"
 
 
 __all__ = ["write_statistical_analysis_sheet"]

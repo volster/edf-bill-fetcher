@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import xml.etree.ElementTree as ET
 import zipfile
 from typing import Any
 
@@ -143,6 +144,45 @@ def suppress_text_warning(
     _TEXT_SUPPRESSION_QUEUE.setdefault(key, []).append((col_letter, start_row, end_row))
 
 
+def _sheet_title_by_xml_path(zin: zipfile.ZipFile) -> dict[str, str]:
+    """Map ``xl/worksheets/sheetN.xml`` paths to their sheet titles.
+
+    Worksheet XML parts carry no title of their own; the mapping lives in
+    ``xl/workbook.xml`` (``<sheet name="..." r:id="..."/>``) joined with
+    ``xl/_rels/workbook.xml.rels`` (``rId`` -> ``Target``).  Returns an
+    empty dict when either part is missing or unparseable.
+    """
+    try:
+        workbook = ET.fromstring(zin.read("xl/workbook.xml"))
+        rels = ET.fromstring(zin.read("xl/_rels/workbook.xml.rels"))
+    except (KeyError, ET.ParseError):
+        return {}
+
+    rid_to_target: dict[str, str] = {}
+    for rel in rels:
+        if not rel.tag.endswith("}Relationship") and rel.tag != "Relationship":
+            continue
+        rid = rel.attrib.get("Id")
+        target = rel.attrib.get("Target")
+        if rid and target:
+            target = target.lstrip("/")
+            if not target.startswith("xl/"):
+                target = "xl/" + target
+            rid_to_target[rid] = target
+
+    title_by_path: dict[str, str] = {}
+    for sheet in workbook.iter():
+        if not sheet.tag.endswith("}sheet") and sheet.tag != "sheet":
+            continue
+        name = sheet.attrib.get("name")
+        rid = sheet.attrib.get(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+        )
+        if name and rid and rid in rid_to_target:
+            title_by_path[rid_to_target[rid]] = name
+    return title_by_path
+
+
 def suppress_text_warnings_post_save(output_path: str) -> None:
     """Post-save zip injection for ``<ignoredErrors>`` blocks.
 
@@ -156,12 +196,15 @@ def suppress_text_warnings_post_save(output_path: str) -> None:
     os.replace(output_path, tmp.name)
 
     with zipfile.ZipFile(tmp.name, "r") as zin:
+        title_by_path = _sheet_title_by_xml_path(zin)
         with zipfile.ZipFile(output_path, "w") as zout:
             for item in zin.namelist():
                 data = zin.read(item)
                 if item.startswith("xl/worksheets/sheet") and item.endswith(".xml"):
                     xml = data.decode("utf-8", errors="replace")
-                    for _sheet_title, suppressions in _TEXT_SUPPRESSION_QUEUE.items():
+                    sheet_title = title_by_path.get(item)
+                    suppressions = _TEXT_SUPPRESSION_QUEUE.get(sheet_title) if sheet_title else None
+                    if suppressions:
                         for col_letter, start_row, end_row in suppressions:
                             sqref = f"{col_letter}{start_row}:{col_letter}{end_row}"
                             block = (
@@ -172,6 +215,7 @@ def suppress_text_warnings_post_save(output_path: str) -> None:
                     data = xml.encode("utf-8")
                 zout.writestr(item, data)
 
+    _TEXT_SUPPRESSION_QUEUE.clear()
     os.unlink(tmp.name)
 
 

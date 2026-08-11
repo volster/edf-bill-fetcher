@@ -508,7 +508,7 @@ class TestRunCliExtract:
         assert call["config"]["custom_key"] == "custom_value"
         # CLI overrides still apply on top of the loaded config.
         assert call["config"]["use_dedup"] is True
-        assert call["config"]["min_amount"] == 500.0
+        assert call["config"]["min_amount"] == 50.0
 
     def test_cli_flags_propagate_into_config(
         self,

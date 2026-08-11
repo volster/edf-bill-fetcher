@@ -76,7 +76,7 @@ def build_evidence_trail(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "No rows"
     f = rows[0]
-    return f"{len(rows)} rows from {f.get('Source', '')} totalling {f.get('Amount (£)', '')}"
+    return f"{len(rows)} rows from {f.get('Source', '')}"
 
 
 _ISO_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")

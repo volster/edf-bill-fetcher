@@ -51,8 +51,8 @@ def write_payment_analysis_sheet(ws, dfc):
 
     headers = ["Metric", "Value", "Notes"]
     for col, h in enumerate(headers, 1):
-        _hcell(ws, 1, col, h, bg=NAVY)
-    ws.row_dimensions[1].height = 28
+        _hcell(ws, 2, col, h, bg=NAVY)
+    ws.row_dimensions[2].height = 28
 
     tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  PAYMENT & CREDIT ANALYSIS")
     tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
@@ -66,7 +66,7 @@ def write_payment_analysis_sheet(ws, dfc):
 
     pat = _detect_payment_patterns(dfc)
 
-    r = 2
+    r = 3
     _section_hdr(ws, r, "PAYMENT SUMMARY")
 
     payment_items = [

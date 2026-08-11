@@ -20,7 +20,6 @@ from edf_bill_fetcher.io.adapters.html import (
 from edf_bill_fetcher.io.adapters.pdf import (
     ADMIT_RE,
     INV_BOUNDARY_RE,
-    LEGAL_CONTEXT,
     PAGE1_BOUNDARY_RE,
     extract_admit_phrase,
     legal_context,
@@ -41,7 +40,6 @@ __all__ = [
     "EMAIL_ADDR_RE",
     "FROM_HEADER_RE",
     "INV_BOUNDARY_RE",
-    "LEGAL_CONTEXT",
     "PAGE1_BOUNDARY_RE",
     "PST_PR_ATTACH_FILENAME",
     "PST_PR_ATTACH_LONG_FILENAME",

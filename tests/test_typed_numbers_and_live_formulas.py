@@ -99,3 +99,58 @@ def test_suppress_text_warnings_post_save_rewrites_zip_with_block() -> None:
             return
 
     raise AssertionError("no worksheet XML found in zipped xlsx")
+
+
+def test_suppress_text_warnings_post_save_does_not_leak_between_sheets() -> None:
+    """Suppressions queued for one sheet must not be injected into another sheet's XML."""
+    from edf_bill_fetcher.helpers.excel_utils import _TEXT_SUPPRESSION_QUEUE
+
+    _TEXT_SUPPRESSION_QUEUE.clear()
+
+    out = "/tmp/opencode/test_post_save_two_sheets.xlsx"
+    os.makedirs("/tmp/opencode", exist_ok=True)
+    if os.path.exists(out):
+        os.remove(out)
+
+    wb = Workbook()
+    ws1 = wb.active
+    ws1.title = "SheetOne"
+    ws2 = wb.create_sheet("SheetTwo")
+    for r in range(1, 4):
+        ws1.cell(row=r, column=1, value=f"INV-00{r}")
+        ws2.cell(row=r, column=1, value=f"ROW-00{r}")
+    _TEXT_SUPPRESSION_QUEUE["SheetOne"] = [("A", 1, 3)]
+    wb.save(out)
+    suppress_text_warnings_post_save(out)
+
+    with zipfile.ZipFile(out, "r") as z:
+        injected = [
+            n
+            for n in z.namelist()
+            if n.startswith("xl/worksheets/sheet")
+            and n.endswith(".xml")
+            and "numberStoredAsText" in z.read(n).decode("utf-8", errors="replace")
+        ]
+    assert len(injected) == 1, f"expected exactly one injected worksheet, got {injected}"
+
+
+def test_suppress_text_warnings_post_save_clears_queue() -> None:
+    """The suppression queue must not persist into the next run."""
+    from edf_bill_fetcher.helpers.excel_utils import _TEXT_SUPPRESSION_QUEUE
+
+    _TEXT_SUPPRESSION_QUEUE.clear()
+
+    out = "/tmp/opencode/test_post_save_clear_queue.xlsx"
+    os.makedirs("/tmp/opencode", exist_ok=True)
+    if os.path.exists(out):
+        os.remove(out)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "TestSheet"
+    ws.cell(row=1, column=1, value="INV-0001")
+    _TEXT_SUPPRESSION_QUEUE["TestSheet"] = [("A", 1, 1)]
+    wb.save(out)
+    suppress_text_warnings_post_save(out)
+
+    assert _TEXT_SUPPRESSION_QUEUE == {}

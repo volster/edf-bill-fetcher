@@ -9,12 +9,14 @@ compat module was removed in the modularization).
 
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ADMIT_RE",
     "INV_BOUNDARY_RE",
-    "LEGAL_CONTEXT",
     "PAGE1_BOUNDARY_RE",
     "extract_admit_phrase",
     "legal_context",
@@ -27,7 +29,7 @@ PAGE1_BOUNDARY_RE = re.compile(
     r"(?ix)\b"
     r"(?:page\s+)?"
     r"(?:1|one)"
-    r"\s*(?:of|/)\s+"
+    r"\s*(?:of|/)\s*"
     r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
     r"\b"
 )
@@ -84,6 +86,19 @@ def slice_pdf_pages(page_texts: list[str]) -> list[list[str]]:
     for j, start in enumerate(boundaries):
         end = boundaries[j + 1] if j + 1 < len(boundaries) else len(page_texts)
         slices.append(page_texts[start:end])
+
+    first = boundaries[0]
+    if first > 0:
+        preamble = page_texts[:first]
+        preamble_size = sum(len(p.strip()) for p in preamble)
+        if preamble_size > 200:
+            logger.warning(
+                "slice_pdf_pages: %d page(s) before the first invoice boundary "
+                "folded into the first slice (%d chars of content)",
+                first,
+                preamble_size,
+            )
+        slices[0] = preamble + slices[0]
     return slices
 
 
@@ -112,6 +127,3 @@ def legal_context() -> str:
     call-sites.
     """
     return _LEGAL_CONTEXT
-
-
-LEGAL_CONTEXT = _LEGAL_CONTEXT

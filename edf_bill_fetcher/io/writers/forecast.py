@@ -78,8 +78,8 @@ def write_forecast_sheet(ws, dfc):
         "Forecast Δ (Actual − Linear)",
     ]
     for col, h in enumerate(headers, 1):
-        _hcell(ws, 1, col, h, bg=NAVY)
-    ws.row_dimensions[1].height = 28
+        _hcell(ws, 2, col, h, bg=NAVY)
+    ws.row_dimensions[2].height = 28
 
     tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  BALANCE FORECAST")
     tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
@@ -145,7 +145,7 @@ def write_forecast_sheet(ws, dfc):
     # row) shows 6 forward projection rows.  Together they answer
     # "given what you've paid historically, what should you have
     # paid each month, and where did the bill diverge?".
-    r = 2
+    r = 3
     for i in range(n):
         bg = LGREY if i % 2 == 0 else None
         _text(ws, r, 1, dates[i], fill_hex=bg)
@@ -283,7 +283,7 @@ def write_forecast_sheet(ws, dfc):
         ["A", "B", "C", "D", "E", "F", "G"], [14, 16, 18, 18, 18, 16, 22], strict=False
     ):
         ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = "A3"
 
 
 __all__ = ["write_forecast_sheet"]

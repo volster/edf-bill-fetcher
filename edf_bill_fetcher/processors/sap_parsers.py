@@ -38,23 +38,6 @@ from edf_bill_fetcher.processors.patterns import (
 )
 
 # ---------------------------------------------------------------------------
-# SAP dump header detection regexes — used by ``detect_sap_dump``.
-# Compile once at module load; the dump-type decision is a cheap presence
-# test against the first 600–1500 chars of the PDF text.
-# ---------------------------------------------------------------------------
-_SAP_HEADER_RE = re.compile(r'"Kraken ID"\s*,\s*"SAP Account [Nn]umber"', re.IGNORECASE)
-_SAP_CONTRACT_COLS = re.compile(
-    r'"Contract [Tt]ariff [Cc]ode"|"Contract [Ss]tatus"|"Start [Dd]ate"|"End [Dd]ate"'
-)
-_SAP_METER_COLS = re.compile(
-    r'"Meter [Ss]erial [Nn]umber"|"Register [Nn]umber"|"Meter [Rr]ead [Tt]ype"'
-)
-_SAP_FINANCIAL_COLS = re.compile(
-    r'"Posting [Dd]ate"|"Document [Nn]umber"|"Clearing [Dd]ocument"|"Amount"'
-)
-
-
-# ---------------------------------------------------------------------------
 # Invoice / credit-note field regexes — used by ``extract_new_invoice_fields``
 # and ``extract_new_credit_fields``.  These stayed in ``edf_collector`` for
 # years; the moved extractors need them too, so we copy the canonical
