@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import re
 
+from edf_bill_fetcher.helpers.domain_filter import matches_domain_filter
+
 __all__ = [
     "EMAIL_ADDR_RE",
     "FROM_HEADER_RE",
@@ -123,28 +125,3 @@ def extract_sender_email(msg: object) -> str:
         except Exception:
             pass
     return sender or ""
-
-
-def matches_domain_filter(sender_email: str, filter_str: str) -> bool:
-    """Check if *sender_email* matches the domain *filter_str*.
-
-    ``filter_str`` is comma-separated, supporting:
-
-    * domain names: ``"edf.com"`` matches ``*@edf.com`` and ``*@*.edf.com``
-    * full addresses: ``"billing@edf.com"`` matches exactly
-    * wildcard domains: ``"*.edf.com"`` matches subdomains
-    """
-    if not sender_email or not filter_str:
-        return False
-    sender_email = sender_email.lower().strip()
-    parts = [p.strip().lower() for p in filter_str.split(",") if p.strip()]
-    for pattern in parts:
-        if "@" in pattern:
-            if sender_email == pattern:
-                return True
-        else:
-            domain = pattern.lstrip("*").lstrip(".")
-            sender_domain = sender_email.split("@")[-1] if "@" in sender_email else ""
-            if sender_domain == domain or sender_domain.endswith("." + domain):
-                return True
-    return False
