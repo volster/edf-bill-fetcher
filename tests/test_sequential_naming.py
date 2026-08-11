@@ -86,3 +86,19 @@ class TestResolveOutputPath:
             mock_date.today.return_value.isoformat.return_value = "2026-07-10"
             path = app._resolve_output_path("EDF_Dispute_Evidence", "xlsx")
         assert "_1.xlsx" in path
+
+    def test_glob_metachars_in_stem_treated_literally(self, app_with_tmp_folder):
+        """A stem containing glob metacharacters (e.g. ``[test]``) must not
+        be interpreted as a pattern by the counter's glob scan.
+
+        Without ``glob.escape`` the ``[test]`` character class would match
+        unrelated single-char filenames and miss the existing file, so the
+        counter would restart at 1 and collide with it.  The escaped stem
+        finds the existing ``_1`` file and returns ``_2``.
+        """
+        app, tmp = app_with_tmp_folder
+        (tmp / "EDF_[test]_2026-07-10_1.xlsx").touch()
+        with patch("edf_bill_fetcher.ui.app.date") as mock_date:
+            mock_date.today.return_value.isoformat.return_value = "2026-07-10"
+            path = app._resolve_output_path("EDF_[test]", "xlsx")
+        assert path == str(tmp / "EDF_[test]_2026-07-10_2.xlsx")

@@ -461,7 +461,7 @@ class App:
         if batch_n is not None:
             n = batch_n
         else:
-            pattern = os.path.join(folder, f"{stem}_{date_stamp}_*{suffix}.{ext}")
+            pattern = os.path.join(folder, f"{glob.escape(stem)}_{date_stamp}_*{suffix}.{ext}")
             existing = glob.glob(pattern)
             max_n = 0
             for f in existing:
