@@ -155,6 +155,36 @@ class TestBalanceReductionAndReconciliation:
         assert br[0][4] == "INFO"
         assert counts["INFO"] == 1
 
+    def test_large_jump_stores_delta_as_amount(self):
+        """C-6: LARGE JUMP's amount field must be the jump delta, not the balance."""
+        df = _df([("2024-01-01", 100.0), ("2024-02-01", 600.0)])
+        flags, _ = compute_dispute_flags(df)
+        lj = [f for f in flags if f[0] == "LARGE JUMP"]
+        assert len(lj) == 1
+        assert lj[0][2] == pytest.approx(500.0)  # 600 - 100, positive jump
+
+    def test_balance_reduction_stores_delta_as_amount(self):
+        """C-6: BALANCE REDUCTION's amount field must be the reduction size."""
+        df = _df([("2024-01-01", 1000.0), ("2024-02-01", 300.0)])
+        flags, _ = compute_dispute_flags(df)
+        br = [f for f in flags if f[0] == "BALANCE REDUCTION"]
+        assert len(br) == 1
+        assert br[0][2] == pytest.approx(700.0)  # 1000 - 300, positive reduction
+
+    def test_non_delta_flags_keep_balance_as_amount(self):
+        """C-6: non-delta flags (e.g. RECONCILIATION MISMATCH) keep the balance."""
+        df = _df(
+            [("2024-01-01", 100.0), ("2024-02-01", 500.0)],
+            extra_cols={
+                "Entry Type": ["Ongoing Balance", "New Bill"],
+                "Period Charge (£)": [None, 100.0],
+            },
+        )
+        flags, _ = compute_dispute_flags(df)
+        rm = [f for f in flags if f[0] == "RECONCILIATION MISMATCH"]
+        assert len(rm) == 1
+        assert rm[0][2] == pytest.approx(500.0)  # running balance, not the 400 delta
+
     def test_reconciliation_mismatch_flagged(self):
         df = _df(
             [("2024-01-01", 100.0), ("2024-02-01", 500.0)],

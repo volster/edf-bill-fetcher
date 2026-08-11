@@ -68,7 +68,7 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                     (
                         "LARGE JUMP",
                         c_["Date"],
-                        c_["Amount (£)"],
+                        chg,  # delta (jump size), not the running balance
                         f"+£{chg:,.2f} (+{pct * 100:.1f}%) in {days} days (from {p['Date']}: £{p['Amount (£)']:,.2f})",
                         "HIGH" if pct > 0.5 else "MEDIUM",
                     )
@@ -163,7 +163,7 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                     (
                         "BALANCE REDUCTION",
                         c_["Date"],
-                        c_["Amount (£)"],
+                        abs(chg),  # reduction size, not the running balance
                         f"Balance fell £{abs(chg):,.2f} (from £{p['Amount (£)']:,.2f} to £{c_['Amount (£)']:,.2f}).",
                         "INFO",
                     )
