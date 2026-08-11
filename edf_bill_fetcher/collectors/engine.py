@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 import tempfile
 import threading
 
@@ -421,9 +422,22 @@ class EvidenceEngine:
         refunds (e.g. ``-£1000``) are KEPT in the main records — only
         records whose absolute amount is below the threshold are shelved
         to ``filtered_records``.
+
+        The amount field accepts both numeric and string values: strings
+        are coerced to float where possible, and an uncoercible sentinel
+        (e.g. ``"N/A"``) becomes ``None`` so the filter check is skipped
+        and the record is kept rather than crashing the run.
         """
-        amt = rec.get("Amount (£)", 0) or 0
-        if self.config.get("filter_below", True) and abs(amt) < self.config.get("min_amount", 50.0):
+        raw_amt = rec.get("Amount (£)", 0) or 0
+        try:
+            amt = float(raw_amt)
+        except (TypeError, ValueError):
+            amt = None
+        if (
+            amt is not None
+            and self.config.get("filter_below", True)
+            and abs(amt) < self.config.get("min_amount", 50.0)
+        ):
             with self.lock:
                 self.filtered_records.append(
                     {
@@ -989,6 +1003,12 @@ class EvidenceEngine:
             self.update_ui(f"HTM: extracted {len(recs)} account history entries")
         except Exception as e:
             self.log_error(f"HTM: {path}", str(e))
+            # Pre-fix the bare except swallowed failures silently; surface
+            # them via update_ui, falling back to stderr if that's unusable.
+            try:
+                self.update_ui(f"Warning: failed to process HTM file {path}: {e}")
+            except Exception:
+                sys.stderr.write(f"Warning: failed to process HTM file {path}: {e}\n")
 
     def process_pst_file(self, path):
         """Open a PST file at ``path`` and crawl its root folder.

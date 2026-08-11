@@ -103,6 +103,77 @@ class TestEvidenceEngineCore:
         assert len(engine.records) == 1
         assert len(engine.filtered_records) == 0
 
+    def test_add_record_with_na_amount_does_not_crash(self):
+        """M-1 regression: an uncoercible string amount (e.g. ``"N/A"``) must not
+        crash ``_add_record``.  The amount becomes ``None``, the filter check is
+        skipped, and the record is kept in main records."""
+        config: ConfigDict = {
+            "use_anchors": True,
+            "use_large": True,
+            "use_reading_classification": True,
+            "use_pdf_fields": True,
+            "use_acc_filter": False,
+            "acc_num": "",
+            "min_amount": 500.0,
+            "analysis_min": 500.0,
+            "filter_below": True,
+            "save_filtered": True,
+            "use_dedup": True,
+            "save_dups": True,
+            "use_domain_filter": True,
+            "domain_filter": "edfenergy.com",
+        }
+        engine = EvidenceEngine(config, lambda x: None)
+
+        engine._add_record(
+            {
+                "Source": "Test",
+                "Date": "01/01/2024",
+                "Amount (£)": "N/A",
+                "Details": "Test record",
+                "Logic Used": "Test",
+            }
+        )
+
+        assert len(engine.records) == 1
+        assert len(engine.filtered_records) == 0
+        assert engine.records[0]["Amount (£)"] == "N/A"
+
+    def test_add_record_coerces_numeric_string_amount(self):
+        """M-1: a numeric string amount is coerced to float for the filter check,
+        so a below-threshold numeric string is still filtered."""
+        config: ConfigDict = {
+            "use_anchors": True,
+            "use_large": True,
+            "use_reading_classification": True,
+            "use_pdf_fields": True,
+            "use_acc_filter": False,
+            "acc_num": "",
+            "min_amount": 500.0,
+            "analysis_min": 500.0,
+            "filter_below": True,
+            "save_filtered": True,
+            "use_dedup": True,
+            "save_dups": True,
+            "use_domain_filter": True,
+            "domain_filter": "edfenergy.com",
+        }
+        engine = EvidenceEngine(config, lambda x: None)
+
+        engine._add_record(
+            {
+                "Source": "Test",
+                "Date": "01/01/2024",
+                "Amount (£)": "100",  # below min_amount, but string-typed
+                "Details": "Test record",
+                "Logic Used": "Test",
+            }
+        )
+
+        assert len(engine.records) == 0
+        assert len(engine.filtered_records) == 1
+        assert engine.filtered_records[0]["Amount (£)"] == 100.0
+
     def test_add_record_negative_amount_above_threshold_kept(self):
         """Regression test: a high-magnitude refund (e.g. ``-£1000``) must stay in
         main records when ``min_amount=500`` because ``abs(-1000) >= 500``.

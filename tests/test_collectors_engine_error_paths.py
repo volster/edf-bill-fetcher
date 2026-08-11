@@ -696,6 +696,38 @@ def test_process_htm_file_utf8_fallback(tmp_path: Path) -> None:
     assert "UTF-8 decode error" in engine.error_log[0]
 
 
+def test_process_htm_file_failure_warns_user() -> None:
+    """A failing HTM file must surface a user-facing warning through the
+    update_ui callback, not just sit silently in the error log (M-13).
+    """
+    messages: list[str] = []
+    engine = EvidenceEngine(
+        config=cast(ConfigDict, dict(BASE_CONFIG)),
+        update_ui_cb=messages.append,
+    )
+    engine.process_htm_file("/nonexistent/path/does-not-exist.htm")
+    assert any(m.startswith("Warning: failed to process HTM file") for m in messages)
+    assert len(engine.error_log) == 1
+
+
+def test_process_htm_file_failure_stderr_fallback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """If the update_ui callback itself raises, the HTM failure warning
+    must still reach the user via stderr (M-13 fallback) — the bare
+    except must never swallow the failure entirely.
+    """
+    monkeypatch.setattr(engine_mod.sys, "stderr", sys.stderr)
+    engine = EvidenceEngine(
+        config=cast(ConfigDict, dict(BASE_CONFIG)),
+        update_ui_cb=lambda _m: (_ for _ in ()).throw(RuntimeError("callback broken")),
+    )
+    engine.process_htm_file("/nonexistent/path/does-not-exist.htm")
+    captured = capsys.readouterr()
+    assert "Warning: failed to process HTM file" in captured.err
+    assert len(engine.error_log) == 1
+
+
 # ===========================================================================
 # process_pst_file / process_ost_file — pypff guards and fake PST
 # ===========================================================================
