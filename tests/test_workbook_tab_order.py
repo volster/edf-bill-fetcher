@@ -89,3 +89,43 @@ def test_workbook_tab_order_is_severity_led(tmp_path: object) -> None:
         n for n in actual if n in ("Annual Summary", "EDF Evidence Report", "Key Statistics")
     ]
     assert first_three == ["Annual Summary", "EDF Evidence Report", "Key Statistics"], actual
+
+
+def test_single_row_workbook_sheets_are_reordered(tmp_path: object) -> None:
+    """A single-record workbook takes the fewer-than-2-analysis-rows early-exit
+    path; its sheets must still be reordered into severity-led order
+    (pre-fix the early save skipped the reorder step entirely)."""
+    df = pd.DataFrame(
+        [
+            {
+                "Date": "2024-05-14",
+                "Amount (£)": 1200.00,
+                "Entry Type": "New Bill",
+                "Invoice #": "INV-001",
+                "Period From": "01/04/2024",
+                "Period To": "30/04/2024",
+                "Source": "HTM Account History",
+                "Period Charge (£)": 100.00,
+                "Units (kWh)": 500,
+            }
+        ]
+    )
+    out = tmp_path / "single.xlsx"  # type: ignore[operator]
+    config = cast(
+        ConfigDict,
+        {
+            "use_dedup": True,
+            "analysis_min": 0,
+            "save_filtered": True,
+            "use_sap": False,
+        },
+    )
+    export_to_excel(df, str(out), error_log=[], config=config)
+    wb = load_workbook(out)
+    # Raw creation order would be ["Annual Summary", "Provenance",
+    # "EDF Evidence Report"]; the reorder must put Provenance first.
+    assert wb.sheetnames[:3] == [
+        "Provenance",
+        "Annual Summary",
+        "EDF Evidence Report",
+    ], wb.sheetnames

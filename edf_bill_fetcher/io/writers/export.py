@@ -218,8 +218,8 @@ def _write_provenance_sheet(wb, config, n_records, n_filtered, n_errors):
     thresholds that produced the evidence — so a filed submission is
     self-documenting without reverse-engineering the run.
 
-    Must be listed first in ``_SEVERITY_LED_ORDER``: the final sheet
-    reorder rebuilds ``wb._sheets`` from that list, so an unlisted tab
+    Must be listed first in the ``_reorder_sheets`` severity-led order: the
+    final reorder rebuilds ``wb._sheets`` from that list, so an unlisted tab
     is silently dropped from the saved workbook.
     """
     from datetime import datetime, timezone
@@ -290,6 +290,46 @@ def _prepare_analysis_frame(df_an: pd.DataFrame, config: ConfigDict) -> pd.DataF
 
     dfc = df_an[(payment_credit_mask) | (bill_mask & (amount_mask | legal_candidate))]
     return dfc.copy().reset_index(drop=True)
+
+
+def _reorder_sheets(wb: openpyxl.Workbook) -> None:
+    """Rebuild ``wb._sheets`` in severity-led tab order.
+
+    Runs before EVERY save — including the fewer-than-2-analysis-rows
+    early-exit path — so a single-row workbook opens with the same tab
+    order as a full run instead of the raw creation order.
+    """
+    _SEVERITY_LED_ORDER = [
+        "Provenance",
+        "Annual Summary",
+        "EDF Evidence Report",
+        "SAP Financial Transactions",
+        "SAP Back-billing Events",
+        "SAP ↔ EDF Matched Events",
+        "SAP Meter Readings",
+        "SAP Contract History",
+        "Back-billing Analysis",
+        "Rebilling & Corrections",
+        "Meter Readings",
+        "Contract History",
+        "Reconciliation",
+        "Reconciliation Drill-down",
+        "Dispute Flags",
+        "Dispute Timeline",
+        "Period Charges",
+        "Payment Analysis",
+        "Balance Trend",
+        "Year-on-Year",
+        "Key Statistics",
+        "Statistical Analysis",
+        "Forecast & Projection",
+        "Tariff Analysis",
+        "Data Quality Report",
+        "Duplicate Entries",
+        "Filtered (Below Min)",
+        "Parse Errors",
+    ]
+    wb._sheets = [wb[name] for name in _SEVERITY_LED_ORDER if name in wb.sheetnames]
 
 
 # ---------------------------------------------------------------------------
@@ -860,6 +900,7 @@ def export_to_excel(
     if len(dfc) < 2:
         # Not enough data for analysis sheets; save the workbook with what
         # we have (evidence, summary, duplicates, etc. are already written).
+        _reorder_sheets(wb)
         wb.save(output_path)
         return
 
@@ -1646,7 +1687,10 @@ def export_to_excel(
     account_label = str(config.get("acc_num", "") or "")
     from edf_bill_fetcher.io.writers.analysis import run_analysers
 
-    analyses = run_analysers(dfc)
+    # Evidence index must be built on the FULL evidence frame `df`, not
+    # the filtered `dfc`: the index maps signatures to Excel rows on the
+    # EDF Evidence Report sheet, whose layout follows the full frame.
+    analyses = run_analysers(dfc, evidence_index_df=df)
     rb = analyses["rebilling"]
     overlapping_invoices: set[str] = (
         {str(x) for x in rb["Killer Invoice"].tolist()} if not rb.empty else set()
@@ -1785,37 +1829,7 @@ def export_to_excel(
                 account=account_label,
             )
 
-    _SEVERITY_LED_ORDER = [
-        "Provenance",
-        "Annual Summary",
-        "EDF Evidence Report",
-        "SAP Financial Transactions",
-        "SAP Back-billing Events",
-        "SAP ↔ EDF Matched Events",
-        "SAP Meter Readings",
-        "SAP Contract History",
-        "Back-billing Analysis",
-        "Rebilling & Corrections",
-        "Meter Readings",
-        "Contract History",
-        "Reconciliation",
-        "Reconciliation Drill-down",
-        "Dispute Flags",
-        "Dispute Timeline",
-        "Period Charges",
-        "Payment Analysis",
-        "Balance Trend",
-        "Year-on-Year",
-        "Key Statistics",
-        "Statistical Analysis",
-        "Forecast & Projection",
-        "Tariff Analysis",
-        "Data Quality Report",
-        "Duplicate Entries",
-        "Filtered (Below Min)",
-        "Parse Errors",
-    ]
-    wb._sheets = [wb[name] for name in _SEVERITY_LED_ORDER if name in wb.sheetnames]
+    _reorder_sheets(wb)
 
     try:
         wb.save(output_path)

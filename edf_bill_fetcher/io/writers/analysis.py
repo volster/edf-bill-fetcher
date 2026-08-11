@@ -12,7 +12,9 @@ from typing import Any
 import pandas as pd
 
 
-def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
+def run_analysers(
+    df: pd.DataFrame, evidence_index_df: pd.DataFrame | None = None
+) -> dict[str, Any]:
     """Run all Phase-2 detection analyses on the deduplicated.
 
     DataFrame and return their outputs in a dict.
@@ -30,6 +32,16 @@ def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
     ``tests/test_integration_sap_and_recon.py::test_run_analysers_passes_evidence_df_to_detect_rebilling``
     for the contract.
 
+    Args:
+        df: The (possibly filtered) analysis frame the four detectors run on.
+        evidence_index_df: Optional — the frame to build the
+            ``evidence_index`` from.  The evidence hotlinks target rows on
+            the ``EDF Evidence Report`` sheet, whose layout follows the
+            *full* evidence frame, so callers that filter ``df`` (e.g.
+            ``_prepare_analysis_frame``) MUST pass the unfiltered frame
+            here or the hotlinks drift to the wrong rows.  Defaults to
+            ``df`` for standalone callers.
+
     Returns:
         dict with keys ``back_billing``, ``rebilling``,
         ``meter_rollover``, ``contracts``, ``evidence_index``. The
@@ -46,10 +58,11 @@ def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
     import edf_bill_fetcher.processors.detection as _det
     import edf_bill_fetcher.processors.matching as _matching
 
+    index_df = df if evidence_index_df is None else evidence_index_df
     return {
         "back_billing": _det.detect_back_billing(df),
         "rebilling": _det.detect_rebilling(df, evidence_df=df),
         "meter_rollover": _det.detect_meter_rollover(df),
         "contracts": _matching.infer_contracts(df),
-        "evidence_index": _matching.build_evidence_index(df, header_row_offset=1),
+        "evidence_index": _matching.build_evidence_index(index_df, header_row_offset=1),
     }
