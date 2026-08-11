@@ -374,17 +374,17 @@ class TestRunCliExtract:
         assert exc.value.code == 1
         assert "Failed to load config" in capsys.readouterr().err
 
-    def test_no_records_found_exits_1(
+    def test_no_records_found_exits_0_by_default(
         self,
         monkeypatch: pytest.MonkeyPatch,
         stub_export_to_excel: dict[str, list[Any]],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """An engine that finds no records writes a warning and exits 1.
+        """An engine that finds no records warns on stderr and exits 0 by default.
 
-        Covers lines 210-212 — the ``if not engine.records`` guard,
-        stderr warning, and ``sys.exit(1)``.
+        Covers the ``if not engine.records`` guard — without ``--strict``
+        a clean-empty run is not a failure, so the exit code is 0.
         """
         empty_engine = _StubEngine(records=[])
         _install_stub_engine(monkeypatch, empty_engine)
@@ -393,6 +393,26 @@ class TestRunCliExtract:
 
         with pytest.raises(SystemExit) as exc:
             run_cli_extract(["--pdf-dir", str(pdf_dir), "-o", str(tmp_path / "o.xlsx")])
+        assert exc.value.code == 0
+        assert "No billing records found" in capsys.readouterr().err
+
+    def test_no_records_found_strict_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_export_to_excel: dict[str, list[Any]],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """With ``--strict`` an empty extraction exits 1 for CI use."""
+        empty_engine = _StubEngine(records=[])
+        _install_stub_engine(monkeypatch, empty_engine)
+        pdf_dir = tmp_path / "pdfs"
+        pdf_dir.mkdir()
+
+        with pytest.raises(SystemExit) as exc:
+            run_cli_extract(
+                ["--pdf-dir", str(pdf_dir), "-o", str(tmp_path / "o.xlsx"), "--strict"]
+            )
         assert exc.value.code == 1
         assert "No billing records found" in capsys.readouterr().err
 

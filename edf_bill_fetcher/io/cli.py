@@ -135,6 +135,12 @@ def run_cli_extract(args: list[str]) -> None:
     parser.add_argument(
         "--no-filter-below", action="store_true", help="Don't filter records below minimum amount"
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit with code 1 when no billing records are found (for CI use). "
+        "Without this flag a clean-empty run exits 0.",
+    )
     parsed = parser.parse_args(args)
 
     # Check at least one source
@@ -208,7 +214,7 @@ def run_cli_extract(args: list[str]) -> None:
 
         if not engine.records:
             sys.stderr.write("WARNING: No billing records found\n")
-            sys.exit(1)
+            sys.exit(1 if parsed.strict else 0)
 
         # Export to Excel
         print(f"Writing Excel report: {parsed.output}")
