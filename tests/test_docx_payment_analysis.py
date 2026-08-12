@@ -30,7 +30,9 @@ def _doc_text(doc: DocumentType) -> str:
     return "\n".join(p.text for p in doc.paragraphs)
 
 
-def test_two_payments_render_summary_and_interval(doc_styles) -> None:
+def test_two_payments_render_summary_and_interval(
+    doc_styles: tuple[DocumentType, object],
+) -> None:
     doc, styles = doc_styles
     df = pd.DataFrame(
         [
@@ -60,7 +62,9 @@ def test_two_payments_render_summary_and_interval(doc_styles) -> None:
     assert "Average days between payments: 30.0" in text
 
 
-def test_empty_frame_renders_only_page_break(doc_styles) -> None:
+def test_empty_frame_renders_only_page_break(
+    doc_styles: tuple[DocumentType, object],
+) -> None:
     doc, styles = doc_styles
     create_payment_analysis(doc, styles, pd.DataFrame(columns=RECORD_KEYS))
 
