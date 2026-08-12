@@ -1,0 +1,10 @@
+{
+  "source": "test fixture",
+  "as_of": "2024-Q3",
+  "note": "minimal fixture for loader tests",
+  "quarters": {
+    "2024-Q1": {"unit_rate": 28.62, "standing_charge": 53.35},
+    "2024-Q2": {"unit_rate": 24.50, "standing_charge": 60.10},
+    "2024-Q3": {"unit_rate": 24.50, "standing_charge": 60.10, "is_carry": true}
+  }
+}
