@@ -962,30 +962,20 @@ def create_payment_analysis(
     # Include both "Payment" and "Credit" entries — the PDF generator
     # (edf_report.py:1416) uses .isin(["Payment", "Credit"]) and the
     # DOCX side must match so credit notes appear in the totals.
-    payments = df[df["Entry Type"].isin(["Payment", "Credit"])].copy()
-    if not payments.empty and "Amount (£)" in payments.columns:
-        from edf_bill_fetcher.helpers.payment_figures import payment_amounts
+    from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
-        pay_amounts = payment_amounts(payments).dropna()
-        if not pay_amounts.empty:
-            doc.add_paragraph(f"Number of payments: {len(pay_amounts)}", style=styles["BodyText"])
-            doc.add_paragraph(
-                f"Total paid: {fmt_money(abs(pay_amounts.sum()))}", style=styles["BodyText"]
-            )
-            doc.add_paragraph(
-                f"Average payment: {fmt_money(abs(pay_amounts.mean()))}", style=styles["BodyText"]
-            )
+    pa = compute_payment_analysis(df)
+    if pa.count > 0:
+        doc.add_paragraph(f"Number of payments: {pa.count}", style=styles["BodyText"])
+        doc.add_paragraph(f"Total paid: {fmt_money(pa.total_paid)}", style=styles["BodyText"])
+        doc.add_paragraph(f"Average payment: {fmt_money(pa.avg_payment)}", style=styles["BodyText"])
 
-            # Payment frequency
-            if "Date" in payments.columns:
-                pay_dates = payments["Date"].apply(parse_to_sort_date).dropna()
-                if len(pay_dates) > 1:
-                    diffs = pay_dates.sort_values().diff().dt.days.dropna()
-                    if not diffs.empty:
-                        doc.add_paragraph(
-                            f"Average days between payments: {diffs.mean():.1f}",
-                            style=styles["BodyText"],
-                        )
+        # Payment frequency
+        if pa.avg_interval_days is not None:
+            doc.add_paragraph(
+                f"Average days between payments: {pa.avg_interval_days:.1f}",
+                style=styles["BodyText"],
+            )
 
     doc.add_page_break()
 
