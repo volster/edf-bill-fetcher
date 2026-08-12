@@ -28,6 +28,7 @@ from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
 from edf_bill_fetcher.helpers.theme import CELL_BORDER
+from edf_bill_fetcher.processors.detection import detect_rebilling  # noqa: F401
 
 # --- _reversal_match (was writers/__init__.py L3021-3059) ---
 
@@ -72,141 +73,7 @@ def _reversal_match(
     return False
 
 
-# --- detect_rebilling (was writers/__init__.py L3062-3198) ---
-
-
-def detect_rebilling(
-    df: pd.DataFrame,
-    *,
-    evidence_df: pd.DataFrame | None = None,
-) -> pd.DataFrame:
-    """Return cancel-and-repost pairs identified by the rebilling heuristic (spec §11, tightened gate).
-
-    For each ordered pair ``(Killer, Killed)`` where ``Killer.Date``
-    is strictly later than ``Killed.Date``, emit a row IFF ALL hold:
-
-    1. ``Killer.Period From ≤ Killed.Period From AND Killer.Period To ≥
-       Killed.Period To`` -- the killer's billing window fully contains
-       the killed's billing window.
-    2. ANY of these signals also fires:
-       - ``Killer.Days Billed ≥ 365`` (wholesale cancel-and-repost of a
-         long period),
-       - the killer invoice has ``Cancel/Rebill Admitted = True``
-         (an admission phrase like ``corrected`` / ``amended`` was
-         detected on the source PDF), OR
-       - a reversal credit row in ``evidence_df`` matches the killed
-         invoice's amount within ±£0.50 and period overlap ≥ 30 days
-         (or its period is unparseable, in which case amount alone
-         suffices).
-
-    Output columns:
-        Killer Invoice, Killed Invoice, Killer Date, Killed Date,
-        Period Overlap (days), Jump-back (days), Trigger Reason,
-        Cancel/Rebill Admitted (Killer).
-
-    ``Cancel/Rebill Admitted (Killer)`` is the admit-phrase flag
-    lifted from the killer invoice.
-
-    ``evidence_df`` is optional -- when omitted, the reversal-credit
-    check is skipped and only the long-period / admit-phrase signals
-    fire. ``run_analysers`` passes the evidence DataFrame so the
-    reversal signal participates in normal pipeline use.
-    """
-    columns = [
-        "Killer Invoice",
-        "Killed Invoice",
-        "Killer Date",
-        "Killed Date",
-        "Period Overlap (days)",
-        "Jump-back (days)",
-        "Trigger Reason",
-        "Cancel/Rebill Admitted (Killer)",
-    ]
-    if df is None or df.empty:
-        return pd.DataFrame(columns=columns)
-    has_admit = "Cancel/Rebill Admitted" in df.columns
-    rows = []
-    parsed = []
-    for _, r in df.iterrows():
-        pf = _safe_to_datetime(r.get("Period From"))
-        pt = _safe_to_datetime(r.get("Period To"))
-        bd = _safe_to_datetime(r.get("Date"))
-        if pd.isna(pf) or pd.isna(pt) or pd.isna(bd):
-            continue
-        try:
-            amount = float(r.get("Amount (£)", 0) or 0)
-        except (TypeError, ValueError):
-            amount = None
-        admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
-        parsed.append(
-            {
-                "Invoice #": r.get("Invoice #", ""),
-                "Date_raw": r.get("Date", ""),
-                "Date": bd,
-                "Period From": pf,
-                "Period To": pt,
-                "Days Billed": int((pt - pf).days),
-                "Amount": amount,
-                "Admitted": admitted,
-            }
-        )
-    if len(parsed) < 2:
-        return pd.DataFrame(columns=columns)
-    parsed.sort(key=lambda x: x["Date"])
-    for i, killer in enumerate(parsed):
-        for killed in parsed[:i]:
-            # Containment -- the only structural requirement.
-            if not (
-                killer["Period From"] <= killed["Period From"]
-                and killer["Period To"] >= killed["Period To"]
-            ):
-                continue
-            triggers: list[str] = []
-            if killer["Days Billed"] >= 365:
-                triggers.append("killer period \u2265 365d")
-            admitted = killer["Admitted"]
-            if admitted:
-                triggers.append("admit-phrase on killer")
-            reversal_match = _reversal_match(
-                evidence_df,
-                killed["Invoice #"],
-                killed["Amount"],
-                killed["Period From"],
-                killed["Period To"],
-            )
-            if reversal_match:
-                triggers.append("reversal credit row matches killed")
-            if not triggers:
-                continue
-            trigger_reason = "; ".join(triggers)
-            overlap_d = max(
-                0,
-                (
-                    min(killer["Period To"], killed["Period To"])
-                    - max(killer["Period From"], killed["Period From"])
-                ).days,
-            )
-            jumpback_d = (killed["Period From"] - killer["Period From"]).days
-            rows.append(
-                {
-                    "Killer Invoice": killer["Invoice #"],
-                    "Killed Invoice": killed["Invoice #"],
-                    "Killer Date": killer["Date_raw"],
-                    "Killed Date": killed["Date_raw"],
-                    "Period Overlap (days)": overlap_d,
-                    "Jump-back (days)": max(0, jumpback_d),
-                    "Trigger Reason": trigger_reason,
-                    "Cancel/Rebill Admitted (Killer)": admitted,
-                }
-            )
-    if not rows:
-        return pd.DataFrame(columns=columns)
-    out = pd.DataFrame(rows, columns=columns)
-    out["_k_sort"] = _safe_to_datetime(out["Killer Date"])
-    out["_d_sort"] = _safe_to_datetime(out["Killed Date"])
-    sort_idx = out.sort_values(["_k_sort", "_d_sort"]).index
-    out = out.loc[sort_idx].drop(columns=["_k_sort", "_d_sort"]).reset_index(drop=True)
-    return out[columns]
+# --- detect_rebilling (re-exported from processors.detection) ---
 
 
 # --- write_rebilling_sheet (was writers/__init__.py L3375-3500) ---
