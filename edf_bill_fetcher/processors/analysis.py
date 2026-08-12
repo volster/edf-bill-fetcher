@@ -15,10 +15,9 @@ import warnings
 
 import pandas as pd
 
-from edf_bill_fetcher.helpers.date_utils import (
-    _safe_to_datetime,
-    parse_to_sort_date,
-)
+from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.processors.detection import _reversal_match
+from edf_bill_fetcher.writers._helpers import _disclosed_label
 
 
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
@@ -373,67 +372,6 @@ def _data_quality_report(df):
 # ---------------------------------------------------------------------------
 # NEW ANALYSIS TAB WRITERS
 # ---------------------------------------------------------------------------
-
-
-def _disclosed_label(
-    admitted: bool,
-    overlaps: bool,
-) -> str:
-    """Return the human-readable value of the 'Cancel/Rebill Disclosed' cell used on the Back-billing and Rebilling tabs.
-
-    The disclosed column joins two independent signals:
-      * admit-phrase (the cover-page wording 'we've recently
-        cancelled some charges for you'), captured as a bool on the
-        record; and
-      * period overlap, flagged by :func:`detect_rebilling`.
-    """
-    if admitted and overlaps:
-        return "Admitted + overlap"
-    if admitted:
-        return "Admitted phrase"
-    if overlaps:
-        return "Period overlap"
-    return ""
-
-
-def _reversal_match(
-    evidence_df: pd.DataFrame | None,
-    killed_inv: str,
-    killed_amount: float | None,
-    killed_pf: pd.Timestamp,
-    killed_pt: pd.Timestamp,
-) -> bool:
-    """Return whether a reversal-credit row in *evidence_df* matches the killed invoice well enough to count as rebilling evidence.
-
-    Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
-    invoice when its amount is within ±£0.50 AND either its period
-    overlaps the killed period by ≥ 30 days OR its period is
-    unparseable (so we accept on amount alone, Entry Type == Credit).
-    """
-    if evidence_df is None or evidence_df.empty:
-        return False
-    if "Entry Type" not in evidence_df.columns:
-        return False
-    try:
-        amount = abs(float(killed_amount or 0.0))
-    except (TypeError, ValueError):
-        return False
-    matching = evidence_df[evidence_df["Entry Type"].isin(["Credit", "Payment"])]
-    for _, row in matching.iterrows():
-        try:
-            row_amt = abs(float(row.get("Amount (£)", 0) or 0))
-        except (TypeError, ValueError):
-            continue
-        if abs(row_amt - amount) > 0.50:
-            continue
-        rpf = _safe_to_datetime(row.get("Period From"))
-        rpt = _safe_to_datetime(row.get("Period To"))
-        if pd.isna(rpf) or pd.isna(rpt):
-            return True
-        overlap = (min(killed_pt, rpt) - max(killed_pf, rpf)).days
-        if overlap >= 30:
-            return True
-    return False
 
 
 def _reading_type_to_aem(reading_value: str) -> str:

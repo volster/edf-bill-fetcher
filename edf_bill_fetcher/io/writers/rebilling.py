@@ -2,9 +2,8 @@
 
 Contains: detect_rebilling (pure-pandas detector for cancel-and-repost
 invoice pairs), write_rebilling_sheet (renders the "Rebilling &
-Corrections" worksheet), and the private _reversal_match helper that
-checks whether a reversal-credit row in the evidence DataFrame matches
-a killed invoice well enough to count as rebilling evidence.
+Corrections" worksheet), and the re-exported _reversal_match helper
+from processors.detection.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
-from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime
 from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
@@ -28,50 +26,10 @@ from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
 from edf_bill_fetcher.helpers.theme import CELL_BORDER
-from edf_bill_fetcher.processors.detection import detect_rebilling  # noqa: F401
-
-# --- _reversal_match (was writers/__init__.py L3021-3059) ---
-
-
-def _reversal_match(
-    evidence_df: pd.DataFrame | None,
-    killed_inv: str,
-    killed_amount: float | None,
-    killed_pf: pd.Timestamp,
-    killed_pt: pd.Timestamp,
-) -> bool:
-    """Return whether a reversal-credit row in *evidence_df* matches the killed invoice well enough to count as rebilling evidence.
-
-    Spec ref: 2026-07-16 §11. A reversal credit accepts the killed
-    invoice when its amount is within ±£0.50 AND either its period
-    overlaps the killed period by ≥ 30 days OR its period is
-    unparseable (so we accept on amount alone, Entry Type == Credit).
-    """
-    if evidence_df is None or evidence_df.empty:
-        return False
-    if "Entry Type" not in evidence_df.columns:
-        return False
-    try:
-        amount = abs(float(killed_amount or 0.0))
-    except (TypeError, ValueError):
-        return False
-    matching = evidence_df[evidence_df["Entry Type"].isin(["Credit", "Payment"])]
-    for _, row in matching.iterrows():
-        try:
-            row_amt = abs(float(row.get("Amount (£)", 0) or 0))
-        except (TypeError, ValueError):
-            continue
-        if abs(row_amt - amount) > 0.50:
-            continue
-        rpf = _safe_to_datetime(row.get("Period From"))
-        rpt = _safe_to_datetime(row.get("Period To"))
-        if pd.isna(rpf) or pd.isna(rpt):
-            return True
-        overlap = (min(killed_pt, rpt) - max(killed_pf, rpf)).days
-        if overlap >= 30:
-            return True
-    return False
-
+from edf_bill_fetcher.processors.detection import (  # noqa: F401
+    _reversal_match,
+    detect_rebilling,
+)
 
 # --- detect_rebilling (re-exported from processors.detection) ---
 

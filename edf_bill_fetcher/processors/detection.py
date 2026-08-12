@@ -18,6 +18,7 @@ import pandas as pd
 
 from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime, parse_to_display_date
 from edf_bill_fetcher.io.adapters.pdf import legal_context as legal_context_fn  # noqa: E402,F401
+from edf_bill_fetcher.writers._helpers import _disclosed_label  # noqa: F401
 
 # KI / KCR invoice-format presence regexes (still defined in edf_collector.py
 # for backward compat).  Re-declare locally so detection.py is self-contained.
@@ -325,27 +326,6 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     # Reorder rows by the sort key (parsed Bill Date, ascending).
     out = out.loc[sort_key.sort_values().index].reset_index(drop=True)
     return out[columns]
-
-
-def _disclosed_label(
-    admitted: bool,
-    overlaps: bool,
-) -> str:
-    """Return the human-readable value of the 'Cancel/Rebill Disclosed' cell used on the Back-billing and Rebilling tabs.
-
-    The disclosed column joins two independent signals:
-      * admit-phrase (the cover-page wording 'we've recently
-        cancelled some charges for you'), captured as a bool on the
-        record; and
-      * period overlap, flagged by :func:`detect_rebilling`.
-    """
-    if admitted and overlaps:
-        return "Admitted + overlap"
-    if admitted:
-        return "Admitted phrase"
-    if overlaps:
-        return "Period overlap"
-    return ""
 
 
 def _reversal_match(
