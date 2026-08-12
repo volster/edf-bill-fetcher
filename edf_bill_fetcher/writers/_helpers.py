@@ -15,6 +15,7 @@ except ImportError:
     HAS_STATSMODELS = False
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.helpers.excel_utils import build_evidence_index  # noqa: F401
 from edf_bill_fetcher.helpers.formatting import parse_amount
 from edf_bill_fetcher.helpers.theme import EDF_NAVY, EDF_OFFWHITE, EDF_ORANGE  # noqa: F401
 from edf_bill_fetcher.models.events import SapBackBillingEvent
@@ -176,32 +177,6 @@ def _reading_type_to_aem(reading_value: str) -> str:
     if reading_value == "Smart":
         return "A"
     return "E"
-
-
-def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[str, int]:
-    """Map match-key signatures to the Excel row on the Evidence Report."""
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return {}
-    index: dict[str, int] = {}
-    rows_iter = df.iterrows()
-    for i, r in rows_iter:
-        row_no = header_row_offset + 1 + i  # Excel row (header row + i + 1)
-        inv = r.get("Invoice #", "")
-        if isinstance(inv, str) and inv and inv != "N/A":
-            key = f"inv:{inv}"
-            index.setdefault(key, row_no)
-        amt = r.get("Amount (£)", "")
-        pf = pd.to_datetime(r.get("Period From"), dayfirst=True, errors="coerce")
-        pt = pd.to_datetime(r.get("Period To"), dayfirst=True, errors="coerce")
-        if pd.isna(pf) or pd.isna(pt):
-            continue
-        try:
-            amt_f = float(amt)
-        except (TypeError, ValueError):
-            continue
-        days = str((pt - pf).days)
-        index.setdefault(f"amt_days:{amt_f:.2f}|{days}", row_no)
-    return index
 
 
 def _recon_hyperlink(

@@ -231,6 +231,32 @@ def build_sap_row_index_map(sap_financial: list[dict]) -> dict[int, int]:
     return out
 
 
+def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[str, int]:
+    """Map match-key signatures to the Excel row on the Evidence Report."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return {}
+    index: dict[str, int] = {}
+    rows_iter = df.iterrows()
+    for i, r in rows_iter:
+        row_no = header_row_offset + 1 + i  # Excel row (header row + i + 1)
+        inv = r.get("Invoice #", "")
+        if isinstance(inv, str) and inv and inv != "N/A":
+            key = f"inv:{inv}"
+            index.setdefault(key, row_no)
+        amt = r.get("Amount (£)", "")
+        pf = pd.to_datetime(r.get("Period From"), dayfirst=True, errors="coerce")
+        pt = pd.to_datetime(r.get("Period To"), dayfirst=True, errors="coerce")
+        if pd.isna(pf) or pd.isna(pt):
+            continue
+        try:
+            amt_f = float(amt)
+        except (TypeError, ValueError):
+            continue
+        days = str((pt - pf).days)
+        index.setdefault(f"amt_days:{amt_f:.2f}|{days}", row_no)
+    return index
+
+
 def open_pdf_hyperlink_cell(
     ws: openpyxl.worksheet.worksheet.Worksheet,
     row: int,
