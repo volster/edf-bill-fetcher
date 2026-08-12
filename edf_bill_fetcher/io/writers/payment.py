@@ -9,7 +9,6 @@ from __future__ import annotations
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
@@ -25,9 +24,8 @@ from edf_bill_fetcher.helpers.excel_utils import (
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
-from edf_bill_fetcher.helpers.payment_figures import payment_amount
 from edf_bill_fetcher.helpers.theme import CELL_BORDER
-from edf_bill_fetcher.writers._helpers import _detect_payment_patterns
+from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
 # --- write_payment_analysis_sheet (was writers/__init__.py L1959-2172) ---
 
@@ -47,9 +45,6 @@ def write_payment_analysis_sheet(ws, dfc):
         ws.column_dimensions["A"].width = 50
         return
 
-    payments["_dt"] = payments["Date"].apply(parse_to_sort_date)
-    payments = payments.sort_values("_dt").reset_index(drop=True)
-
     headers = ["Metric", "Value", "Notes"]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 2, col, h, bg=NAVY)
@@ -65,18 +60,18 @@ def write_payment_analysis_sheet(ws, dfc):
         x.fill = PatternFill("solid", start_color=ORANGE)
         x.border = CELL_BORDER
 
-    pat = _detect_payment_patterns(dfc)
+    pat = compute_payment_analysis(dfc)
 
     r = 3
     _section_hdr(ws, r, "PAYMENT SUMMARY")
 
     payment_items = [
-        ("Total Payments/Credits", pat["count"], "#,##0", "Number of payment events"),
-        ("Total Amount Paid (£)", pat["total_paid"], "£#,##0.00", "Sum of all payments/credits"),
-        ("Average Payment (£)", pat["avg_payment"], "£#,##0.00", "Mean payment amount"),
-        ("Median Payment (£)", pat["median_payment"], "£#,##0.00", "Median payment amount"),
-        ("Largest Payment (£)", pat["max_payment"], "£#,##0.00", "Maximum single payment"),
-        ("Smallest Payment (£)", pat["min_payment"], "£#,##0.00", "Minimum single payment"),
+        ("Total Payments/Credits", pat.count, "#,##0", "Number of payment events"),
+        ("Total Amount Paid (£)", pat.total_paid, "£#,##0.00", "Sum of all payments/credits"),
+        ("Average Payment (£)", pat.avg_payment, "£#,##0.00", "Mean payment amount"),
+        ("Median Payment (£)", pat.median_payment, "£#,##0.00", "Median payment amount"),
+        ("Largest Payment (£)", pat.largest_payment, "£#,##0.00", "Maximum single payment"),
+        ("Smallest Payment (£)", pat.smallest_payment, "£#,##0.00", "Minimum single payment"),
     ]
 
     for label, value, fmt, note in payment_items:
@@ -93,20 +88,20 @@ def write_payment_analysis_sheet(ws, dfc):
     r += 1
     _section_hdr(ws, r, "PAYMENT TIMING")
     interval_items = [
-        ("Avg Interval (days)", pat["avg_interval_days"], "#,##0.0", "Mean days between payments"),
+        ("Avg Interval (days)", pat.avg_interval_days, "#,##0.0", "Mean days between payments"),
         (
             "Median Interval (days)",
-            pat["median_interval_days"],
+            pat.median_interval_days,
             "#,##0.0",
             "Median days between payments",
         ),
     ]
-    for label, value, fmt, note in interval_items:
+    for label, ival, fmt, note in interval_items:
         r += 1
         bg = LGREY if r % 2 == 0 else None
         _text(ws, r, 1, label, fill_hex=bg)
-        if value is not None:
-            _num(ws, r, 2, value, fmt=fmt, fill_hex=bg)
+        if ival is not None:
+            _num(ws, r, 2, ival, fmt=fmt, fill_hex=bg)
         else:
             _text(ws, r, 2, "N/A", fill_hex=bg)
         _text(ws, r, 3, note, fill_hex=bg, color=DGREY)
@@ -116,11 +111,11 @@ def write_payment_analysis_sheet(ws, dfc):
     _section_hdr(ws, r, "LAST PAYMENT")
     r += 1
     _text(ws, r, 1, "Last Payment Date", bold=True)
-    _text(ws, r, 2, pat["last_payment_date"] or "N/A")
+    _text(ws, r, 2, pat.last_payment_date or "N/A")
 
     r += 1
     _text(ws, r, 1, "Last Payment Amount (£)", bold=True)
-    _money(ws, r, 2, pat["last_payment_amount"] or 0)
+    _money(ws, r, 2, pat.last_payment_amount or 0)
 
     # Payment detail table
     r += 2
@@ -130,16 +125,15 @@ def write_payment_analysis_sheet(ws, dfc):
     for ci, h in enumerate(pay_headers, 1):
         _hcell(ws, r, ci, h, bg=NAVY)
 
-    for i, (_, row) in enumerate(payments.iterrows()):
+    for i, (_, row) in enumerate(pat.chronology.iterrows()):
         r += 1
         bg = LGREY if i % 2 == 0 else None
         _text(ws, r, 1, row["Date"], fill_hex=bg)
         _text(ws, r, 2, row["Entry Type"], fill_hex=bg, bold=True)
         # Amount (£) column: the actual transaction amount (customer
-        # payment or EDF credit). HTM Payment/Credit rows carry this
-        # in Period Charge (£); legacy rows that only populated
-        # Amount (£) use that instead.
-        amount_to_show, _ = payment_amount(row)
+        # payment or EDF credit), the RAW signed per-row figure from
+        # the shared chronology (see models/report_models.py).
+        amount_to_show = row["_amount"]
         _money(ws, r, 3, amount_to_show, fill_hex=bg)
         # Balance After (£) -- the running balance stored in
         # ``Amount (£)`` for HTM rows. For legacy rows where Amount
@@ -176,7 +170,7 @@ def write_payment_analysis_sheet(ws, dfc):
     #    series — the existing colour — so a reviewer with
     #    deuteranopia can still trace payment size to date via
     #    the data labels).
-    if len(payments) > 1:
+    if len(pat.chronology) > 1:
         bc = BarChart()
         bc.type = "col"
         bc.title = "Payment/Credit Amounts Over Time"
@@ -201,13 +195,13 @@ def write_payment_analysis_sheet(ws, dfc):
             "Payment Amount (£)",
             bg=NAVY,
         )
-        for i, (_, row) in enumerate(payments.iterrows(), 1):
+        for i, (_, row) in enumerate(pat.chronology.iterrows(), 1):
             payload_row = chart_data_start_row + i
             _text(ws, payload_row, 1, row["Date"])
             # Same preference logic as the detail table above:
             # the per-row transaction value (Period Charge (£))
             # over the running balance (Amount (£)).
-            amount_for_chart, _ = payment_amount(row)
+            amount_for_chart = row["_amount"]
             _money(ws, payload_row, 2, amount_for_chart)
 
         # Step 2: build the chart from the labelled mini-table so
@@ -217,13 +211,13 @@ def write_payment_analysis_sheet(ws, dfc):
             ws,
             min_col=2,
             min_row=chart_data_start_row,
-            max_row=chart_data_start_row + len(payments),
+            max_row=chart_data_start_row + len(pat.chronology),
         )
         date_ref = Reference(
             ws,
             min_col=1,
             min_row=chart_data_start_row + 1,
-            max_row=chart_data_start_row + len(payments),
+            max_row=chart_data_start_row + len(pat.chronology),
         )
         bc.add_data(chg_ref, titles_from_data=True)
         bc.set_categories(date_ref)
@@ -232,12 +226,12 @@ def write_payment_analysis_sheet(ws, dfc):
         # reader's eye flows from raw rows to chart without
         # panning across the spreadsheet.  Row offset 2 gives the
         # chart a small breathing-room gap below the helper rows.
-        anchor_row = chart_data_start_row + len(payments) + 2
+        anchor_row = chart_data_start_row + len(pat.chronology) + 2
         ws.add_chart(bc, f"B{anchor_row}")
 
     for col_letter, width in zip(["A", "B", "C", "D", "E"], [14, 16, 16, 16, 60], strict=False):
         ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = f"A{r - len(payments)}"
+    ws.freeze_panes = f"A{r - len(pat.chronology)}"
 
 
 __all__ = ["write_payment_analysis_sheet"]

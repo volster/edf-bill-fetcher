@@ -214,48 +214,23 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
 
 
 def _detect_payment_patterns(df):
-    """Analyze payment/credit patterns in the data.
+    """Compat alias for the shared compute (see models/report_models.py)."""
+    from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
-    The per-row transaction amount (the customer's actual payment or
-    EDF's actual credit) lives in ``Period Charge (£)`` for HTM
-    Payment/Credit rows. ``Amount (£)`` on those rows carries the
-    *running balance after the transaction* -- using it as the
-    "payment amount" used to flood the Payment Analysis sheet with
-    huge balance figures masquerading as payments. Prefer
-    ``Period Charge (£)`` when the row has a numeric value there,
-    falling back to ``Amount (£)`` for legacy / PST-only rows that
-    never populated ``Period Charge (£)``.
-    """
-    payments = df[df["Entry Type"].isin(["Payment", "Credit"])].copy()
-    if payments.empty:
+    pa = compute_payment_analysis(df)
+    if pa.count == 0:
         return {}
-
-    payments["_dt"] = payments["Date"].apply(parse_to_sort_date)
-    payments = payments.sort_values("_dt")
-
-    # Calculate days between payments
-    pay_dates = payments["_dt"].dropna()
-    intervals = pay_dates.diff().dt.days.dropna()
-
-    # Per-row transaction amount: prefer Period Charge (£) (the actual
-    # payment / credit), fall back to Amount (£) when Period Charge is
-    # missing or non-numeric (legacy rows that never populated it, or
-    # older callers passing a DataFrame without the column).
-    from edf_bill_fetcher.helpers.payment_figures import payment_amounts
-
-    pay_amounts = payment_amounts(payments)
-
     return {
-        "count": len(payments),
-        "total_paid": abs(pay_amounts.sum()),
-        "avg_payment": abs(pay_amounts.mean()),
-        "median_payment": abs(pay_amounts.median()),
-        "max_payment": abs(pay_amounts.max()),
-        "min_payment": abs(pay_amounts.min()),
-        "avg_interval_days": float(intervals.mean()) if len(intervals) > 0 else None,
-        "median_interval_days": float(intervals.median()) if len(intervals) > 0 else None,
-        "last_payment_date": payments.iloc[-1]["Date"] if len(payments) > 0 else None,
-        "last_payment_amount": abs(pay_amounts.iloc[-1]) if len(pay_amounts) > 0 else None,
+        "count": pa.count,
+        "total_paid": pa.total_paid,
+        "avg_payment": pa.avg_payment,
+        "median_payment": pa.median_payment,
+        "max_payment": pa.largest_payment,
+        "min_payment": pa.smallest_payment,
+        "avg_interval_days": pa.avg_interval_days,
+        "median_interval_days": pa.median_interval_days,
+        "last_payment_date": pa.last_payment_date,
+        "last_payment_amount": pa.last_payment_amount,
     }
 
 

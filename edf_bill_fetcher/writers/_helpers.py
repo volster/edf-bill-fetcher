@@ -14,7 +14,6 @@ try:
 except ImportError:
     HAS_STATSMODELS = False
 
-from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.excel_utils import build_evidence_index  # noqa: F401
 from edf_bill_fetcher.helpers.formatting import parse_amount
 from edf_bill_fetcher.helpers.theme import EDF_NAVY, EDF_OFFWHITE, EDF_ORANGE  # noqa: F401
@@ -289,32 +288,23 @@ def _holt_winters_forecast(series, steps=6, seasonal_periods=None):
 
 
 def _detect_payment_patterns(df):
-    """Analyze payment/credit patterns in the data."""
-    payments = df[df["Entry Type"].isin(["Payment", "Credit"])].copy()
-    if payments.empty:
+    """Compat alias for the shared compute (see models/report_models.py)."""
+    from edf_bill_fetcher.models.report_models import compute_payment_analysis
+
+    pa = compute_payment_analysis(df)
+    if pa.count == 0:
         return {}
-
-    payments["_dt"] = payments["Date"].apply(parse_to_sort_date)
-    payments = payments.sort_values("_dt")
-
-    pay_dates = payments["_dt"].dropna()
-    intervals = pay_dates.diff().dt.days.dropna()
-
-    from edf_bill_fetcher.helpers.payment_figures import payment_amounts
-
-    pay_amounts = payment_amounts(payments)
-
     return {
-        "count": len(payments),
-        "total_paid": abs(pay_amounts.sum()),
-        "avg_payment": abs(pay_amounts.mean()),
-        "median_payment": abs(pay_amounts.median()),
-        "max_payment": abs(pay_amounts.max()),
-        "min_payment": abs(pay_amounts.min()),
-        "avg_interval_days": float(intervals.mean()) if len(intervals) > 0 else None,
-        "median_interval_days": float(intervals.median()) if len(intervals) > 0 else None,
-        "last_payment_date": payments.iloc[-1]["Date"] if len(payments) > 0 else None,
-        "last_payment_amount": (abs(pay_amounts.iloc[-1]) if len(pay_amounts) > 0 else None),
+        "count": pa.count,
+        "total_paid": pa.total_paid,
+        "avg_payment": pa.avg_payment,
+        "median_payment": pa.median_payment,
+        "max_payment": pa.largest_payment,
+        "min_payment": pa.smallest_payment,
+        "avg_interval_days": pa.avg_interval_days,
+        "median_interval_days": pa.median_interval_days,
+        "last_payment_date": pa.last_payment_date,
+        "last_payment_amount": pa.last_payment_amount,
     }
 
 
