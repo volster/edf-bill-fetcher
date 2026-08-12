@@ -84,6 +84,9 @@ edf-collector = "main:main"
 where = ["."]
 include = ["*"]
 
+[tool.setuptools.package-data]
+"edf_bill_fetcher.data" = ["*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

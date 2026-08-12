@@ -62,7 +62,9 @@ coverage.xml
 # Local data
 *.pst
 *.ost
-data/
+# Root-level data/ holds local exports; edf_bill_fetcher/data/ is a
+# packaged resource and must stay tracked.
+/data/
 
 # Scratch / debug scripts moved out of the source tree during
 # cleanup.  These are one-off investigation scripts that the
