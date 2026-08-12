@@ -14,6 +14,7 @@ import re
 from typing import Any
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
+from edf_bill_fetcher.models.records import BillingRecord
 
 __all__ = [
     "htm_excerpt",
@@ -64,26 +65,26 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
         balance = float(m.group(6).replace(",", ""))
         excerpt = htm_excerpt(text, m)
         records.append(
-            {
-                "Source": "HTM Account History",
-                "Sender": "",
-                "Date": date_str,
-                "Period From": period_from,
-                "Period To": period_to,
-                "Invoice #": "N/A",
-                "Amount (£)": balance,
-                "Period Charge (£)": charge_amt,
-                "Entry Type": "Ongoing Balance",
-                "Reading": "N/A",
-                "Units (kWh)": units,
-                "Standing Chg (p/day)": "N/A",
-                "Tariff": "N/A",
-                "Attachment Name": "N/A",
-                "Details": "HTM: charged account",
-                "Logic Used": "HTM Charge",
-                "Source PDF Text": excerpt,
-                "_regex_trace": "HTM charge_re",
-            }
+            BillingRecord(
+                source="HTM Account History",
+                sender="",
+                date=date_str,
+                period_from=period_from,
+                period_to=period_to,
+                invoice_num="N/A",
+                amount=balance,
+                period_charge=charge_amt,
+                entry_type="Ongoing Balance",
+                reading="N/A",
+                units_kwh=units,
+                standing_charge="N/A",
+                tariff="N/A",
+                attachment_name="N/A",
+                details="HTM: charged account",
+                logic_used="HTM Charge",
+                source_pdf_text=excerpt,
+                regex_trace="HTM charge_re",
+            ).to_dict()
         )
 
     pay_re = re.compile(
@@ -98,26 +99,26 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
         balance = float(m.group(3).replace(",", ""))
         excerpt = htm_excerpt(text, m)
         records.append(
-            {
-                "Source": "HTM Account History",
-                "Sender": "",
-                "Date": date_str,
-                "Period From": "N/A",
-                "Period To": "N/A",
-                "Invoice #": "N/A",
-                "Amount (£)": balance,
-                "Period Charge (£)": payment_amt,
-                "Entry Type": "Payment",
-                "Reading": "N/A",
-                "Units (kWh)": "N/A",
-                "Standing Chg (p/day)": "N/A",
-                "Tariff": "N/A",
-                "Attachment Name": "N/A",
-                "Details": "HTM: payment received",
-                "Logic Used": "HTM Payment",
-                "Source PDF Text": excerpt,
-                "_regex_trace": "HTM pay_re",
-            }
+            BillingRecord(
+                source="HTM Account History",
+                sender="",
+                date=date_str,
+                period_from="N/A",
+                period_to="N/A",
+                invoice_num="N/A",
+                amount=balance,
+                period_charge=payment_amt,
+                entry_type="Payment",
+                reading="N/A",
+                units_kwh="N/A",
+                standing_charge="N/A",
+                tariff="N/A",
+                attachment_name="N/A",
+                details="HTM: payment received",
+                logic_used="HTM Payment",
+                source_pdf_text=excerpt,
+                regex_trace="HTM pay_re",
+            ).to_dict()
         )
 
     rev_re = re.compile(
@@ -132,26 +133,26 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
         balance = float(m.group(3).replace(",", ""))
         excerpt = htm_excerpt(text, m)
         records.append(
-            {
-                "Source": "HTM Account History",
-                "Sender": "",
-                "Date": date_str,
-                "Period From": "N/A",
-                "Period To": "N/A",
-                "Invoice #": "N/A",
-                "Amount (£)": balance,
-                "Period Charge (£)": credit_amt,
-                "Entry Type": "Credit",
-                "Reading": "N/A",
-                "Units (kWh)": "N/A",
-                "Standing Chg (p/day)": "N/A",
-                "Tariff": "N/A",
-                "Attachment Name": "N/A",
-                "Details": "HTM: reversed account charge",
-                "Logic Used": "HTM Reversal",
-                "Source PDF Text": excerpt,
-                "_regex_trace": "HTM rev_re",
-            }
+            BillingRecord(
+                source="HTM Account History",
+                sender="",
+                date=date_str,
+                period_from="N/A",
+                period_to="N/A",
+                invoice_num="N/A",
+                amount=balance,
+                period_charge=credit_amt,
+                entry_type="Credit",
+                reading="N/A",
+                units_kwh="N/A",
+                standing_charge="N/A",
+                tariff="N/A",
+                attachment_name="N/A",
+                details="HTM: reversed account charge",
+                logic_used="HTM Reversal",
+                source_pdf_text=excerpt,
+                regex_trace="HTM rev_re",
+            ).to_dict()
         )
 
     def _inside_covered(start: int, end: int) -> bool:
@@ -171,26 +172,26 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
         date_str = parse_to_display_date(m.group(1))
         balance = float(m.group(2).replace(",", ""))
         records.append(
-            {
-                "Source": "HTM Account History",
-                "Sender": "",
-                "Date": date_str,
-                "Period From": "N/A",
-                "Period To": "N/A",
-                "Invoice #": "N/A",
-                "Amount (£)": balance,
-                "Period Charge (£)": "N/A",
-                "Entry Type": "Credit",
-                "Reading": "N/A",
-                "Units (kWh)": "N/A",
-                "Standing Chg (p/day)": "N/A",
-                "Tariff": "N/A",
-                "Attachment Name": "N/A",
-                "Details": "HTM: standalone credit balance",
-                "Logic Used": "HTM StandaloneBalance",
-                "Source PDF Text": htm_excerpt(text, m),
-                "_regex_trace": "HTM bal_re (standalone)",
-            }
+            BillingRecord(
+                source="HTM Account History",
+                sender="",
+                date=date_str,
+                period_from="N/A",
+                period_to="N/A",
+                invoice_num="N/A",
+                amount=balance,
+                period_charge="N/A",
+                entry_type="Credit",
+                reading="N/A",
+                units_kwh="N/A",
+                standing_charge="N/A",
+                tariff="N/A",
+                attachment_name="N/A",
+                details="HTM: standalone credit balance",
+                logic_used="HTM StandaloneBalance",
+                source_pdf_text=htm_excerpt(text, m),
+                regex_trace="HTM bal_re (standalone)",
+            ).to_dict()
         )
 
     return records

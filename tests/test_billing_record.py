@@ -125,3 +125,28 @@ def test_field_passthrough_to_display_keys():
     )
     assert record.to_dict()["Amount (£)"] == "1.0"
     assert record.to_dict()["Period Charge (£)"] == "N/A"
+
+
+def test_htm_record_emits_cancel_rebill_admitted_false():
+    """HTM drift fix: adapter-built records now carry the key as False.
+
+    Before the ``BillingRecord`` migration the four HTM construction
+    sites emitted a dict without ``Cancel/Rebill Admitted`` at all.
+    ``to_dict()`` maps the ``None`` default to ``False``, so an
+    adapter-shaped record must both carry the key and equal the
+    canonical 19-key set.
+    """
+    record = BillingRecord(
+        source="HTM Account History",
+        sender="",
+        date="01 Aug 2025",
+        amount=1.23,
+        entry_type="Credit",
+        details="HTM: standalone credit balance",
+        logic_used="HTM StandaloneBalance",
+        source_pdf_text="...",
+        regex_trace="HTM bal_re (standalone)",
+    )
+    result = record.to_dict()
+    assert result["Cancel/Rebill Admitted"] is False
+    assert set(result) == set(CANONICAL_KEYS)
