@@ -15,8 +15,17 @@ from openpyxl.utils import get_column_letter
 
 # Re-export shared helpers / theme constants used by these two functions.
 from edf_bill_fetcher.helpers.date_utils import to_excel_date
-from edf_bill_fetcher.helpers.excel_utils import hcell as _hcell
+from edf_bill_fetcher.helpers.excel_utils import (
+    hcell as _hcell,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
+    set_column_widths_from_spec,
+)
 from edf_bill_fetcher.helpers.theme import CELL_BORDER, DUP_GREY
+from edf_bill_fetcher.io.writers.sheet_layout import (
+    freeze_at,
+    write_header_row,
+)
 from edf_bill_fetcher.writers._helpers import EST_YELLOW, JUMP_RED
 
 # Column letter map for the evidence sheet (matches ``EVIDENCE_HEADERS`` below):
@@ -92,9 +101,7 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         match_positions_series = None
     df = df.drop(columns=["_matches_kept_idx"], errors="ignore")
     bg = "888888" if is_duplicate else "FE5716"
-    for col, h in enumerate(headers, 1):
-        _hcell(ws, 1, col, h, bg=bg)
-    ws.row_dimensions[1].height = 28
+    write_header_row(ws, 1, headers, bg=bg, height=28)
 
     alt_fill = PatternFill("solid", start_color="FFF3EE")
 
@@ -252,7 +259,7 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         # Tariff insertion, "Duplicate Of" lives at column T (was S).
         ws.column_dimensions["T"].width = 50
 
-    widths = {
+    widths: dict[str, float] = {
         "A": 18,
         "B": 26,
         "C": 13,
@@ -275,9 +282,8 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         "R": 18,
         "S": 20,
     }
-    for col_letter, width in widths.items():
-        ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = "A2"
+    set_column_widths_from_spec(ws, widths)
+    freeze_at(ws, "A2")
 
 
 # ---------------------------------------------------------------------------
