@@ -84,7 +84,9 @@ def test_full_shape_record_emits_canonical_engine_dict():
 
 
 def test_minimal_record_emits_canonical_key_set():
-    record = BillingRecord(source="HTM Account History", entry_type="Charge", logic_used="HTM Regex")
+    record = BillingRecord(
+        source="HTM Account History", entry_type="Charge", logic_used="HTM Regex"
+    )
     assert set(record.to_dict()) == set(CANONICAL_KEYS)
 
 
