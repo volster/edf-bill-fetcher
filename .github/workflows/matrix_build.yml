@@ -99,6 +99,7 @@ jobs:
             --hidden-import=statsmodels \
             --hidden-import=statsmodels.tsa.holtwinters \
             --hidden-import=pypff \
+            --collect-data edf_bill_fetcher \
             main.py
 
       - name: Code-sign macOS bundle (ad-hoc)
