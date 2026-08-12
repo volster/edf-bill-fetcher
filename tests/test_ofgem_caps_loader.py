@@ -1,4 +1,5 @@
 """Tests for the canonical OFGEM caps loader (helpers/ofgem_caps.py)."""
+
 import json
 
 import pytest
