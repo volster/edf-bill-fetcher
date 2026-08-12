@@ -11,7 +11,7 @@ import json
 import os
 import warnings
 from importlib import resources
-from typing import Any
+from typing import Any, cast
 
 
 def _load_file(path: str | os.PathLike | None) -> dict[str, Any]:
@@ -19,9 +19,9 @@ def _load_file(path: str | os.PathLike | None) -> dict[str, Any]:
     if path is None:
         resource = resources.files("edf_bill_fetcher.data") / "ofgem_caps.json"
         with resource.open("r", encoding="utf-8") as fh:
-            return json.load(fh)
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+            return cast(dict[str, Any], json.load(fh))
+    with open(path, encoding="utf-8") as fh:
+        return cast(dict[str, Any], json.load(fh))
 
 
 def load_ofgem_caps(
@@ -53,7 +53,11 @@ def load_ofgem_caps(
     sorted_keys = sorted(quarters)
     for i, key in enumerate(sorted_keys):
         entry = quarters[key]
-        if not isinstance(entry, dict) or "unit_rate" not in entry or "standing_charge" not in entry:
+        if (
+            not isinstance(entry, dict)
+            or "unit_rate" not in entry
+            or "standing_charge" not in entry
+        ):
             raise ValueError(f"OFGEM quarter {key!r} missing 'unit_rate'/'standing_charge'")
         unit_rate = float(entry["unit_rate"])
         standing_charge = float(entry["standing_charge"])
