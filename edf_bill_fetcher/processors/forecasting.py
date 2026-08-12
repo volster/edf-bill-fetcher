@@ -28,24 +28,13 @@ from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,I001
 from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,I001
     compute_rolling_stats as _compute_rolling_stats,
 )
+from edf_bill_fetcher.writers._helpers import _zscore_anomalies  # noqa: E402,I001
 
 
 def _compute_volatility(series, window=6):
     """Compute rolling volatility (std of returns)."""
     returns = series.pct_change()
     return returns.rolling(window=window, min_periods=1).std()
-
-
-def _zscore_anomalies(series, threshold=2.5):
-    """Detect anomalies using z-score method."""
-    if len(series) < 3:
-        return pd.Series(False, index=series.index)
-    mean = series.mean()
-    std = series.std()
-    if std == 0:
-        return pd.Series(False, index=series.index)
-    z_scores = np.abs((series - mean) / std)
-    return z_scores > threshold
 
 
 def _iqr_anomalies(series, multiplier=1.5):

@@ -17,7 +17,7 @@ import pandas as pd
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.processors.detection import _reversal_match
-from edf_bill_fetcher.writers._helpers import _disclosed_label
+from edf_bill_fetcher.writers._helpers import _disclosed_label, _reading_type_to_aem
 
 
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
@@ -372,17 +372,6 @@ def _data_quality_report(df):
 # ---------------------------------------------------------------------------
 # NEW ANALYSIS TAB WRITERS
 # ---------------------------------------------------------------------------
-
-
-def _reading_type_to_aem(reading_value: str) -> str:
-    """Map the Reading column's value (Actual/Estimated/Smart/Unknown) to the single-letter A/E/M code used on the Meter Readings tab."""
-    if reading_value == "Actual":
-        return "A"
-    if reading_value == "Estimated":
-        return "E"
-    if reading_value == "Smart":
-        return "A"
-    return "E"
 
 
 __all__ = [
