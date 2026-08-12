@@ -410,9 +410,7 @@ class TestRunCliExtract:
         pdf_dir.mkdir()
 
         with pytest.raises(SystemExit) as exc:
-            run_cli_extract(
-                ["--pdf-dir", str(pdf_dir), "-o", str(tmp_path / "o.xlsx"), "--strict"]
-            )
+            run_cli_extract(["--pdf-dir", str(pdf_dir), "-o", str(tmp_path / "o.xlsx"), "--strict"])
         assert exc.value.code == 1
         assert "No billing records found" in capsys.readouterr().err
 

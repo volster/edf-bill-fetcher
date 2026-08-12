@@ -323,9 +323,7 @@ class TestOFGEMAutoCarryForward:
         assert summary.cells[0].text.strip() == "OVERALL"
         assert "INCOMPLETE" in summary.cells[4].text
 
-    def test_quarter_with_nan_unit_rate_shows_na_row(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_quarter_with_nan_unit_rate_shows_na_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A quarter whose unit rate is NaN (0/0) must render an "N/A" row
         rather than silently disappearing from the comparison table (L-12),
         so the reader knows the quarter existed in the data.
