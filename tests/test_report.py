@@ -681,6 +681,37 @@ class TestPaymentAnalysis:
         assert isinstance(elements, list)
         assert len(elements) > 0
 
+    def test_create_payment_analysis_abs_unifies_signed_totals(self):
+        """Signed payment rows render an abs-unified "Total Amount Paid".
+
+        Regression pin for the migration to the shared
+        ``compute_payment_analysis``: two signed payments of -£100 and
+        -£50 must sum to "£150.00" (abs at the stat level), not the
+        pre-migration "£-150.00" that the inline ``pay_amounts.sum()``
+        produced.  Positive-only inputs already agree between the two
+        paths; signed inputs are what distinguish them.
+        """
+        df = pd.DataFrame(
+            [
+                {
+                    "Date": "01/01/2023",
+                    "Entry Type": "Payment",
+                    "Amount (£)": -100.0,
+                    "Details": "debit",
+                },
+                {
+                    "Date": "01/02/2023",
+                    "Entry Type": "Payment",
+                    "Amount (£)": -50.0,
+                    "Details": "debit",
+                },
+            ]
+        )
+        elements = create_payment_analysis(df)
+        text = _elements_to_text(elements)
+        assert "£150.00" in text
+        assert "£-150.00" not in text
+
 
 class TestForecast:
     """Tests for forecast section."""

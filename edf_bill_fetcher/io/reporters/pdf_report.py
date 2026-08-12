@@ -1640,33 +1640,24 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    payments = dfc[dfc["Entry Type"].isin(["Payment", "Credit"])].copy()
-    if not payments.empty:
-        payments["_dt"] = payments["Date"].apply(parse_to_sort_date)
-        payments = payments.sort_values("_dt")
+    from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
+    pa = compute_payment_analysis(dfc)
+    if not pa.chronology.empty:
         elements.append(Paragraph("<b>Payment Summary</b>", STYLES["SubSectionHeader"]))
-        from edf_bill_fetcher.helpers.payment_figures import payment_amounts
-
-        pay_amounts = payment_amounts(payments)
 
         pay_data = [
             ["Metric", "Value"],
-            ["Total Payments/Credits", str(len(payments))],
-            ["Total Amount Paid", fmt_money(pay_amounts.sum())],
-            ["Average Payment", fmt_money(pay_amounts.mean())],
-            ["Median Payment", fmt_money(pay_amounts.median())],
-            ["Largest Payment", fmt_money(pay_amounts.max())],
-            ["Smallest Payment", fmt_money(pay_amounts.min())],
+            ["Total Payments/Credits", str(len(pa.chronology))],
+            ["Total Amount Paid", fmt_money(pa.total_paid)],
+            ["Average Payment", fmt_money(pa.avg_payment)],
+            ["Median Payment", fmt_money(pa.median_payment)],
+            ["Largest Payment", fmt_money(pa.largest_payment)],
+            ["Smallest Payment", fmt_money(pa.smallest_payment)],
         ]
-        if len(payments) > 1:
-            pay_dates = payments["_dt"].dropna()
-            intervals = pay_dates.diff().dt.days.dropna()
-            if len(intervals) > 0:
-                pay_data.append(["Avg Interval (days)", fmt_number(float(intervals.mean()), 1)])
-                pay_data.append(
-                    ["Median Interval (days)", fmt_number(float(intervals.median()), 1)]
-                )
+        if pa.avg_interval_days is not None:
+            pay_data.append(["Avg Interval (days)", fmt_number(pa.avg_interval_days, 1)])
+            pay_data.append(["Median Interval (days)", fmt_number(pa.median_interval_days, 1)])
 
         t = Table(pay_data, colWidths=[10 * cm, 5 * cm])
         t.setStyle(make_table_style(num_rows=len(pay_data)))
@@ -1676,12 +1667,12 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
         # Payment detail table
         elements.append(Paragraph("<b>Payment Chronology</b>", STYLES["SubSectionHeader"]))
         pay_detail = [["Date", "Type", "Amount (£)", "Balance After", "Details"]]
-        for _, row in payments.iterrows():
+        for _, row in pa.chronology.iterrows():
             pay_detail.append(
                 [
                     fmt_date(row["Date"]),
                     xml_escape(str(row["Entry Type"])),
-                    fmt_money(payment_amounts(pd.DataFrame([row])).iloc[0]),
+                    fmt_money(row["_amount"]),
                     fmt_money(row["Amount (£)"]),
                     xml_escape(str(row.get("Details", "")))[:80],
                 ]
