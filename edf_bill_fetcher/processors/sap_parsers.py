@@ -29,6 +29,7 @@ import io as _io
 import re
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
+from edf_bill_fetcher.helpers.formatting import parse_amount
 from edf_bill_fetcher.processors.patterns import (
     _BILLING_PERIOD_RE,
     _CREDIT_NUMBER_RE,
@@ -316,15 +317,7 @@ _SAP_CONFIDENCE_BANDS = (("High", 75), ("Medium", 40), ("Low", 10))
 
 def _parse_amount_for_event(v: object) -> float:
     """Parse the SAP ``Amount`` field (often a string with commas)."""
-    if v is None:
-        return 0.0
-    try:
-        s = str(v).strip().lstrip("£").replace(",", "")
-        if not s:
-            return 0.0
-        return float(s)
-    except ValueError:
-        return 0.0
+    return parse_amount(v)
 
 
 def extract_new_invoice_fields(text):

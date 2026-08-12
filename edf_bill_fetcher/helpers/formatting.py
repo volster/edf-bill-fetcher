@@ -6,6 +6,8 @@ modularization refactor (Task 3).  They cover:
 - ``apply_currency_format`` / ``apply_int_format`` — coerce a cell's
   value to a numeric type and pin its ``number_format`` so Excel
   renders it as currency / integer.
+- ``parse_amount`` — tolerant monetary-value parser (None/empty/unparseable
+  values coerce to 0.0).
 - ``account_number_matches`` — token-aware account-number filter
   predicate (Phase 1.3) that replaces the naive "digits substring"
   check.
@@ -38,6 +40,22 @@ def apply_int_format(cell: openpyxl.cell.Cell) -> None:
         except (TypeError, ValueError):
             pass  # leave non-numeric values (e.g. "N/A") as-is
     cell.number_format = "#,##0"
+
+
+def parse_amount(v: object) -> float:
+    """Parse a monetary value, tolerating currency symbols and commas.
+
+    ``None``, empty strings and unparseable values all coerce to ``0.0``.
+    """
+    if v is None:
+        return 0.0
+    try:
+        s = str(v).strip().lstrip("£").replace(",", "")
+        if not s:
+            return 0.0
+        return float(s)
+    except ValueError:
+        return 0.0
 
 
 def account_number_matches(acc_filter: str, text: str) -> bool:

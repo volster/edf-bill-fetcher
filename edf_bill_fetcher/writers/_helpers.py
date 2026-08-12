@@ -15,6 +15,7 @@ except ImportError:
     HAS_STATSMODELS = False
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.helpers.formatting import parse_amount
 from edf_bill_fetcher.helpers.theme import EDF_NAVY, EDF_OFFWHITE, EDF_ORANGE  # noqa: F401
 from edf_bill_fetcher.models.events import SapBackBillingEvent
 
@@ -350,17 +351,7 @@ _SAP_MATCH_AMOUNT_BANDS = ((0.05, 40), (0.25, 20), (0.50, 5))
 _SAP_CONFIDENCE_BANDS = (("High", 75), ("Medium", 40), ("Low", 10))
 
 
-def _parse_amount_for_event(v: object) -> float:
-    """Parse the SAP ``Amount`` field (often a string with commas)."""
-    if v is None:
-        return 0.0
-    try:
-        s = str(v).strip().lstrip("£").replace(",", "")
-        if not s:
-            return 0.0
-        return float(s)
-    except ValueError:
-        return 0.0
+_parse_amount_for_event = parse_amount
 
 
 def _confidence_band(score: int) -> str | None:
