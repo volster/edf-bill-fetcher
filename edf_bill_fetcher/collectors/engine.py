@@ -35,6 +35,10 @@ from edf_bill_fetcher.helpers.date_utils import (
 )
 from edf_bill_fetcher.helpers.domain_filter import matches_domain_filter
 from edf_bill_fetcher.helpers.formatting import account_number_matches
+from edf_bill_fetcher.helpers.pst_resources import (
+    extract_sender_email,
+    pst_attachment_filename,
+)
 from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
 from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pages
 from edf_bill_fetcher.models.config import ConfigDict
@@ -47,13 +51,10 @@ from edf_bill_fetcher.processors.patterns import (
     _COVER_BLOCK_PERIOD_RE,
     _CREDIT_NUMBER_RE,
     _CREDIT_TOTAL_RE,
-    _EMAIL_ADDR_RE,
     _FALLBACK_INV_RE,
-    _FROM_HEADER_RE,
     _INV_NUMBER_RE,
     _PERIOD_CHARGE_RE,
     _POUND_AMOUNT_FALLBACK_RE,
-    _PST_PR_ATTACH_LONG_FILENAME,
     AMOUNT_PATTERNS,
     PERIOD_RE,
     READING_PATTERNS,
@@ -172,105 +173,12 @@ _BILL_INDICATORS_RE = re.compile(r"(?:kwh|standing charge|tariff)")
 # _parse_amount_for_event helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
 
 
-# --- _pst_attachment_filename ---
-def _pst_attachment_filename(att: object) -> str | None:
-    """Walk the MAPI record-sets of a ``pypff.attachment`` and return its filename.
-
-    Returns the filename string (``str``) when the ``PR_ATTACH_LONG_FILENAME``
-    entry is found, else ``None``.  The caller is expected to fall back to
-    ``Attachment_N.pdf`` (or whatever synthetic name) when this returns
-    ``None``.
-
-    Designed to tolerate malformed record-sets: a missing record entry,
-    broken record collection, or zero-record attachment produce a clean
-    ``None`` rather than propagating ``AttributeError`` / ``IndexError``
-    out to the caller.
-    """
-    if att is None:
-        return None
-    # ``get_number_of_record_sets`` / ``get_record_set`` are the public methods
-    # on ``pypff.attachment``; the legacy code never reached them.
-    getter_count = getattr(att, "get_number_of_record_sets", None)
-    if getter_count is None:
-        return None
-    try:
-        n = int(getter_count())
-    except Exception:
-        return None
-    for i in range(n):
-        try:
-            rs = att.get_record_set(i)  # type: ignore[attr-defined]
-        except Exception:
-            continue
-        entries_getter = getattr(rs, "get_number_of_entries", None)
-        if entries_getter is None:
-            continue
-        try:
-            m = int(entries_getter())
-        except Exception:
-            continue
-        for j in range(m):
-            try:
-                entry = rs.get_entry(j)  # type: ignore[attr-defined]
-            except Exception:
-                continue
-            try:
-                entry_type = int(entry.entry_type)  # type: ignore[attr-defined]
-            except Exception:
-                continue
-            if entry_type != _PST_PR_ATTACH_LONG_FILENAME:
-                continue
-            # ``get_data_as_string()`` returns an already-decoded Python
-            # str (verified on the real PST). Keep a fallback to manual
-            # UTF-16LE decode for the rare PT_UNICODE raw-bytes edge case
-            # so the helper never crashes on a pypff version mismatch.
-            try:
-                val = entry.get_data_as_string()  # type: ignore[attr-defined]
-            except Exception:
-                continue
-            if isinstance(val, str) and val:
-                return val
-            # Some legacy builds return raw bytes; decode them safely.
-            try:
-                raw_data = entry.get_data()  # type: ignore[attr-defined]
-            except Exception:
-                continue
-            if isinstance(raw_data, bytes | bytearray) and raw_data:
-                try:
-                    decoded = bytes(raw_data).decode("utf-16-le", errors="replace")
-                except Exception:
-                    continue
-                if decoded.strip("\x00"):
-                    return decoded.strip("\x00")
-    return None
-
-
-# --- _extract_sender_email ---
-def _extract_sender_email(msg):
-    """Extract sender email address from a pypff message, trying multiple methods."""
-    sender = None
-    # Try transport headers first (most reliable for SMTP email address)
-    try:
-        headers = msg.get_transport_headers()
-        if headers:
-            headers_str = (
-                headers if isinstance(headers, str) else headers.decode("utf-8", errors="replace")
-            )
-            m = _FROM_HEADER_RE.search(headers_str)
-            if m:
-                sender = m.group(1).lower()
-    except Exception:
-        pass
-    # Fallback: try sender name field (sometimes contains email)
-    if not sender:
-        try:
-            name = msg.get_sender_name() or ""
-            m = _EMAIL_ADDR_RE.search(name)
-            if m:
-                sender = m.group(1).lower()
-        except Exception:
-            pass
-    return sender or ""
+# --- PST/OST helpers ---
+# ``_pst_attachment_filename`` / ``_extract_sender_email`` live in
+# ``edf_bill_fetcher.helpers.pst_resources`` (single source of truth); the
+# underscore aliases preserve the names the engine's internal callers use.
+_pst_attachment_filename = pst_attachment_filename
+_extract_sender_email = extract_sender_email
 
 
 _matches_domain_filter = matches_domain_filter

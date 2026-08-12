@@ -2,6 +2,7 @@
 
 Submodules:
 - ``formatting`` — number/text formatting helpers (currency, integer, account matching).
+- ``pst_resources`` — PST attachment-filename walking and sender-email extraction.
 - ``date_utils`` — pandas time-series statistics and evidence-trail builder.
 - ``excel_utils`` — openpyxl cell primitives, SAP row index map, text-warning suppression.
 - ``pdf_utils`` — placeholder for future PDF-specific helpers.
@@ -14,6 +15,7 @@ from edf_bill_fetcher.helpers import (
     excel_utils,
     formatting,
     pdf_utils,
+    pst_resources,
     theme,
 )
 from edf_bill_fetcher.helpers.theme import (
@@ -46,5 +48,6 @@ __all__ = [
     "excel_utils",
     "formatting",
     "pdf_utils",
+    "pst_resources",
     "theme",
 ]
