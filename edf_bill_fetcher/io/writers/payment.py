@@ -7,7 +7,6 @@ with bar charts of payment amounts over time and pattern-detection callouts.
 from __future__ import annotations
 
 from openpyxl.chart import BarChart, Reference
-from openpyxl.styles import Alignment, Font, PatternFill
 
 from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
@@ -22,9 +21,16 @@ from edf_bill_fetcher.helpers.excel_utils import (
     section_hdr as _section_hdr,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
+    set_column_widths_from_spec,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
-from edf_bill_fetcher.helpers.theme import CELL_BORDER
+from edf_bill_fetcher.io.writers.sheet_layout import (
+    freeze_at,
+    write_banner,
+    write_header_row,
+)
 from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
 # --- write_payment_analysis_sheet (was writers/__init__.py L1959-2172) ---
@@ -46,19 +52,9 @@ def write_payment_analysis_sheet(ws, dfc):
         return
 
     headers = ["Metric", "Value", "Notes"]
-    for col, h in enumerate(headers, 1):
-        _hcell(ws, 2, col, h, bg=NAVY)
-    ws.row_dimensions[2].height = 28
+    write_header_row(ws, 2, headers, bg=NAVY, height=28)
 
-    tc = ws.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  PAYMENT & CREDIT ANALYSIS")
-    tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-    tc.fill = PatternFill("solid", start_color=ORANGE)
-    tc.border = CELL_BORDER
-    tc.alignment = Alignment(horizontal="left", vertical="center")
-    for c in [2, 3]:
-        x = ws.cell(row=1, column=c)
-        x.fill = PatternFill("solid", start_color=ORANGE)
-        x.border = CELL_BORDER
+    write_banner(ws, "EDF ENERGY DISPUTE  —  PAYMENT & CREDIT ANALYSIS", 3, color=ORANGE, row=1)
 
     pat = compute_payment_analysis(dfc)
 
@@ -229,9 +225,15 @@ def write_payment_analysis_sheet(ws, dfc):
         anchor_row = chart_data_start_row + len(pat.chronology) + 2
         ws.add_chart(bc, f"B{anchor_row}")
 
-    for col_letter, width in zip(["A", "B", "C", "D", "E"], [14, 16, 16, 16, 60], strict=False):
-        ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = f"A{r - len(pat.chronology)}"
+    widths: dict[str, float] = {
+        "A": 14,
+        "B": 16,
+        "C": 16,
+        "D": 16,
+        "E": 60,
+    }
+    set_column_widths_from_spec(ws, widths)
+    freeze_at(ws, f"A{r - len(pat.chronology)}")
 
 
 __all__ = ["write_payment_analysis_sheet"]
