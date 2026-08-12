@@ -44,6 +44,7 @@ from edf_bill_fetcher.helpers.formatting import (
     fmt_money,
     fmt_number,
 )
+from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps as _load_ofgem_caps
 
 # Import from main module
 from edf_bill_fetcher.io.writers import HAS_SCIPY
@@ -1289,93 +1290,6 @@ def create_timeline_section(
 
 # OFGEM PRICE CAP COMPARISON
 # =============================================================================
-
-
-def _load_ofgem_caps(auto_carry: bool = True) -> tuple[dict[str, dict], dict | None]:
-    """Load OFGEM Default Tariff Cap data.
-
-    Returns a ``(caps, latest_known)`` tuple:
-    * ``caps`` maps period string (e.g., '2023-Q4') to cap values:
-      ``{'unit_rate': p_per_kwh, 'standing_charge': p_per_day}``.
-      The dict never carries sentinel keys — iterating ``caps.items()``
-      yields only real quarters.
-    * ``latest_known`` is the most recent published cap (the 2026-Q3
-      entry) when ``auto_carry`` is True, else ``None``.  Callers that
-      want carry-forward semantics use this value; it is kept separate
-      from ``caps`` so no sentinel pollutes the quarter dict.
-
-    Provenance
-    ----------
-    All figures are the **Direct Debit GB-average** figures published by OFGEM
-    each quarter (the headline tariff cap most bills are benchmarked against).
-    Source: electricityprices.org.uk's history chart; that chart cites the
-    OFGEM "Default tariff cap" announcements directly. Re-verify against
-    https://www.ofgem.gov.uk/information-consumers/energy-advice-households/
-    energy-price-cap-unit-rates-and-standing-charges before any tribunal or
-    ombudsman submission that quotes these numbers.
-
-    Values flagged ``# carry`` repeat the previous quarter's cap, which is
-    the OFGEM convention when a quarterly announcement is delayed or falls
-    in a quarter where no new figure is published.  Carries are clearly
-    labelled so a maintainer can tell a real number from a repeated one.
-
-    Future-quarter auto-carry
-    -------------------------
-    If ``auto_carry`` is True (default) and a requested quarter is not in the
-    hard-coded table, the function returns the most recent known cap (carried
-    forward).  This prevents the OFGEM comparison from silently returning
-    "CAP DATA UNAVAILABLE" for quarters after the table's last entry (2026-Q3
-    at time of writing).  Set ``auto_carry=False`` to get the exact table
-    only (used by tests that pin specific values).
-    """
-    caps = {
-        # 2019
-        "2019-Q1": {"unit_rate": 16.52, "standing_charge": 22.77},
-        "2019-Q2": {"unit_rate": 18.56, "standing_charge": 23.42},
-        "2019-Q3": {"unit_rate": 18.56, "standing_charge": 23.42},  # carry
-        "2019-Q4": {"unit_rate": 17.85, "standing_charge": 23.51},
-        # 2020
-        "2020-Q1": {"unit_rate": 17.85, "standing_charge": 23.51},  # carry
-        "2020-Q2": {"unit_rate": 17.81, "standing_charge": 24.38},
-        "2020-Q3": {"unit_rate": 17.81, "standing_charge": 24.38},  # carry
-        "2020-Q4": {"unit_rate": 17.19, "standing_charge": 24.38},
-        # 2021
-        "2021-Q1": {"unit_rate": 17.19, "standing_charge": 24.38},  # carry
-        "2021-Q2": {"unit_rate": 18.95, "standing_charge": 24.89},
-        "2021-Q3": {"unit_rate": 18.95, "standing_charge": 24.89},  # carry
-        "2021-Q4": {"unit_rate": 20.80, "standing_charge": 24.89},
-        # 2022
-        "2022-Q1": {"unit_rate": 20.80, "standing_charge": 24.89},  # carry
-        "2022-Q2": {"unit_rate": 28.34, "standing_charge": 45.34},
-        "2022-Q3": {"unit_rate": 28.34, "standing_charge": 45.34},  # carry
-        "2022-Q4": {"unit_rate": 51.89, "standing_charge": 46.36},
-        # 2023
-        "2023-Q1": {"unit_rate": 67.47, "standing_charge": 46.36},
-        "2023-Q2": {"unit_rate": 50.60, "standing_charge": 52.97},
-        "2023-Q3": {"unit_rate": 30.11, "standing_charge": 52.97},
-        "2023-Q4": {"unit_rate": 27.35, "standing_charge": 53.37},
-        # 2024
-        "2024-Q1": {"unit_rate": 28.62, "standing_charge": 53.35},
-        "2024-Q2": {"unit_rate": 24.50, "standing_charge": 60.10},
-        "2024-Q3": {"unit_rate": 22.36, "standing_charge": 60.12},
-        "2024-Q4": {"unit_rate": 24.50, "standing_charge": 60.99},
-        # 2025
-        "2025-Q1": {"unit_rate": 24.86, "standing_charge": 60.97},
-        "2025-Q2": {"unit_rate": 27.03, "standing_charge": 53.80},
-        "2025-Q3": {"unit_rate": 25.73, "standing_charge": 51.37},
-        "2025-Q4": {"unit_rate": 26.35, "standing_charge": 53.68},
-        # 2026
-        "2026-Q1": {"unit_rate": 27.69, "standing_charge": 54.75},
-        "2026-Q2": {"unit_rate": 24.67, "standing_charge": 57.21},
-        "2026-Q3": {"unit_rate": 26.11, "standing_charge": 57.19},
-    }
-
-    if not auto_carry:
-        return caps, None
-
-    # Carry-forward cap as a separate return value (not a ``_LATEST_KNOWN``
-    # dict key) so iterating ``caps.items()`` only yields real quarters.
-    return caps, caps["2026-Q3"]
 
 
 def _period_to_ofgem_quarter(dt: datetime | None) -> str | None:
