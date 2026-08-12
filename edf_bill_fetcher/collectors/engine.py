@@ -48,6 +48,7 @@ from edf_bill_fetcher.helpers.pst_resources import (
 from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
 from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pages
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.records import BillingRecord
 from edf_bill_fetcher.processors.detection import detect_pdf_format
 from edf_bill_fetcher.processors.patterns import (
     _AMOUNT_PATTERN_NEW_BILL,
@@ -356,45 +357,27 @@ class EvidenceEngine:
         )
 
         self._add_record(
-            {
-                "Source": source_label,
-                "Sender": sender,
-                "Date": fields.get("date", fallback_date),
-                "Period From": fields.get("period_from", "N/A"),
-                "Period To": fields.get("period_to", "N/A"),
-                "Invoice #": fields.get("inv_num", "N/A"),
-                "Amount (£)": fields["amount"],
-                "Period Charge (£)": fields.get("period_charge", "N/A"),
-                "Entry Type": entry_type,
-                "Reading": r_type,
-                "Units (kWh)": fields.get("units_used", "N/A"),
-                "Standing Chg (p/day)": fields.get("standing_charge", "N/A"),
-                # Tariff name is extracted by ``extract_new_invoice_fields``
-                # into ``fields["tariff"]`` (regex _TARIFF_NAME_RE on
-                # the invoice body). Copy it into the record so the
-                # downstream Tariff Analysis feature sees it; it was
-                # previously silently discarded here, which left the
-                # "Tariff Analysis" Excel/PDF/DOCX tabs permanently
-                # empty.  This is one of four record-building paths
-                # (the other three — HTM charged/paid/reversed and
-                # process_text — append "Tariff": "N/A" so the column
-                # has a consistent shape across all sources).
-                "Tariff": fields.get("tariff", "N/A"),
-                "Attachment Name": attachment_name or "N/A",
-                "Details": (detail_label or "New invoice")[:60],
-                "Logic Used": "New Invoice Format",
-                "Source PDF Text": text[:4000],
-                "_regex_trace": "; ".join(regex_trace) if regex_trace else "",
-                # Stream P5 (Cancel/Rebill Admitted) -- surface the
-                # cover-page admit-phrase flag via extract_admit_phrase
-                # so the Back-billing / Rebilling analysers'
-                # 'Cancel/Rebill Disclosed' indicator is meaningful
-                # in production.  Previously the column was never
-                # populated by record builders, so the user-facing
-                # indicator was always FALSE regardless of how many
-                # admit phrases were actually on the cover page.
-                "Cancel/Rebill Admitted": bool(extract_admit_phrase(text)),
-            }
+            BillingRecord(
+                source=source_label,
+                sender=sender,
+                date=fields.get("date", fallback_date),
+                period_from=fields.get("period_from", "N/A"),
+                period_to=fields.get("period_to", "N/A"),
+                invoice_num=fields.get("inv_num", "N/A"),
+                amount=fields["amount"],
+                period_charge=fields.get("period_charge", "N/A"),
+                entry_type=entry_type,
+                reading=r_type,
+                units_kwh=fields.get("units_used", "N/A"),
+                standing_charge=fields.get("standing_charge", "N/A"),
+                tariff=fields.get("tariff", "N/A"),
+                attachment_name=attachment_name or "N/A",
+                details=(detail_label or "New invoice")[:60],
+                logic_used="New Invoice Format",
+                source_pdf_text=text[:4000],
+                regex_trace="; ".join(regex_trace) if regex_trace else "",
+                cancel_rebill_admitted=bool(extract_admit_phrase(text)),
+            ).to_dict()
         )
         return True
 
@@ -433,35 +416,27 @@ class EvidenceEngine:
             regex_trace.append(f"period_to via {pt_label}")
 
         self._add_record(
-            {
-                "Source": source_label,
-                "Sender": sender,
-                "Date": fields.get("date", fallback_date),
-                "Period From": period_from,
-                "Period To": period_to,
-                "Invoice #": fields.get("inv_num", "N/A"),
-                "Amount (£)": fields["amount"],
-                "Period Charge (£)": "N/A",
-                "Entry Type": "Credit",
-                "Reading": "N/A",
-                "Units (kWh)": "N/A",
-                "Standing Chg (p/day)": "N/A",
-                # KCR credit-note letters do not carry a tariff name
-                # (the ``extract_new_credit_fields`` handler does not
-                # populate ``fields["tariff"]``). "N/A" is the schema
-                # sentinel — see the Tariff Analysis upgrade note in
-                # ``_process_new_invoice`` for why this key is present
-                # on every record dict, not just invoice rows.
-                "Tariff": "N/A",
-                "Attachment Name": attachment_name or "N/A",
-                "Details": (detail_label or "Credit note")[:60],
-                "Logic Used": "New Credit Note Format",
-                "Source PDF Text": text[:4000],
-                "_regex_trace": "; ".join(regex_trace) if regex_trace else "",
-                # See _process_new_invoice -- wires the cover-page
-                # admit phrase into the user-facing indicator.
-                "Cancel/Rebill Admitted": bool(extract_admit_phrase(text)),
-            }
+            BillingRecord(
+                source=source_label,
+                sender=sender,
+                date=fields.get("date", fallback_date),
+                period_from=period_from,
+                period_to=period_to,
+                invoice_num=fields.get("inv_num", "N/A"),
+                amount=fields["amount"],
+                period_charge="N/A",
+                entry_type="Credit",
+                reading="N/A",
+                units_kwh="N/A",
+                standing_charge="N/A",
+                tariff="N/A",
+                attachment_name=attachment_name or "N/A",
+                details=(detail_label or "Credit note")[:60],
+                logic_used="New Credit Note Format",
+                source_pdf_text=text[:4000],
+                regex_trace="; ".join(regex_trace) if regex_trace else "",
+                cancel_rebill_admitted=bool(extract_admit_phrase(text)),
+            ).to_dict()
         )
         return True
 
@@ -554,43 +529,27 @@ class EvidenceEngine:
         )
 
         self._add_record(
-            {
-                "Source": source_type,
-                "Sender": sender,
-                "Date": date_to_use,
-                "Period From": period_from,
-                "Period To": period_to,
-                "Invoice #": inv_num,
-                "Amount (£)": found_amt,
-                "Period Charge (£)": period_charge,
-                "Entry Type": entry_type,
-                "Reading": r_type,
-                "Units (kWh)": units_used,
-                "Standing Chg (p/day)": standing_charge,
-                # Old/email-body bills have no "Tariff name" line in
-                # the standard heuristic pattern set, so this column
-                # is ``"N/A"`` for them.  Treated as schema
-                # sentinel so the column exists for every source.
-                "Tariff": "N/A",
-                "Attachment Name": attachment_name or "N/A",
-                "Details": detail[:60],
-                "Logic Used": strategy,
-                # Stream P3 (Source Excerpt): ``process_text`` is the
-                # fallback path used when ``detect_pdf_format`` does not
-                # classify the slice as new_invoice/new_credit (i.e. the
-                # "Smart Context" / "Large Amount Fallback" strategy
-                # rows shown on the Back-billing / Rebilling analyser
-                # tabs). Capture the cleaned bill body so the analyser's
-                # Source Excerpt column can show the regex-source text
-                # for these rows -- the previous absence left every
-                # analyser row reading "Source text unavailable".
-                "Source PDF Text": clean_text[:4000],
-                "_regex_trace": "",
-                # See note on _process_new_invoice -- wires the
-                # cover-page admit phrase into the user-facing
-                # 'Cancel/Rebill Disclosed' indicator.
-                "Cancel/Rebill Admitted": bool(extract_admit_phrase(clean_text)),
-            }
+            BillingRecord(
+                source=source_type,
+                sender=sender,
+                date=date_to_use,
+                period_from=period_from,
+                period_to=period_to,
+                invoice_num=inv_num,
+                amount=found_amt,
+                period_charge=period_charge,
+                entry_type=entry_type,
+                reading=r_type,
+                units_kwh=units_used,
+                standing_charge=standing_charge,
+                tariff="N/A",
+                attachment_name=attachment_name or "N/A",
+                details=detail[:60],
+                logic_used=strategy,
+                source_pdf_text=clean_text[:4000],
+                regex_trace="",
+                cancel_rebill_admitted=bool(extract_admit_phrase(clean_text)),
+            ).to_dict()
         )
 
     def _classify_entry_type(
