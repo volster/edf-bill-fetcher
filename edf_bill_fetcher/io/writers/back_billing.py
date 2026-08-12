@@ -13,12 +13,9 @@ from datetime import datetime
 
 import openpyxl
 import pandas as pd
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
-from edf_bill_fetcher.helpers.excel_utils import (
-    hcell as _hcell,
-)
 from edf_bill_fetcher.helpers.excel_utils import (
     money as _money,
 )
@@ -29,10 +26,20 @@ from edf_bill_fetcher.helpers.excel_utils import (
     open_pdf_hyperlink_cell as _open_pdf_hyperlink_cell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
+    set_column_widths_from_spec,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
 )
-from edf_bill_fetcher.helpers.theme import CELL_BORDER
 from edf_bill_fetcher.io.adapters.pdf import legal_context
+from edf_bill_fetcher.io.writers.sheet_layout import (
+    freeze_at,
+    write_banner,
+    write_header_row,
+    write_merged_text,
+    write_section_label,
+    write_trailing_total,
+)
 
 # Re-exported from processors.detection (canonical home) for backwards
 # compatibility — existing imports of these names from this module keep
@@ -104,36 +111,15 @@ def write_back_billing_sheet(
     title = "BACK-BILLING EVENTS ANALYSIS"
     if account:
         title = f"{title}  |  Account {account}"
-    t1 = ws.cell(row=1, column=1, value=title)
-    t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-    t1.fill = PatternFill("solid", start_color=ORANGE)
-    t1.border = CELL_BORDER
-    t1.alignment = Alignment(horizontal="left", vertical="center")
-    for c in range(2, 18):
-        x = ws.cell(row=1, column=c)
-        x.fill = PatternFill("solid", start_color=ORANGE)
-        x.border = CELL_BORDER
-    ws.row_dimensions[1].height = 22
+    write_banner(ws, title, 17, color=ORANGE, row=1, height=22)
 
     # Row 2: 'LEGAL CONTEXT' label
-    lc_hdr = ws.cell(row=2, column=1, value="LEGAL CONTEXT")
-    lc_hdr.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-    lc_hdr.fill = PatternFill("solid", start_color=NAVY)
-    lc_hdr.border = CELL_BORDER
-    for c in range(2, 18):
-        x = ws.cell(row=2, column=c)
-        x.fill = PatternFill("solid", start_color=NAVY)
-        x.border = CELL_BORDER
+    write_section_label(ws, 2, "LEGAL CONTEXT", 17)
 
     # Row 3: legal_context body (merged across the whole width so the
     # paragraph is readable in one cell).
     lc_text = legal_context()
-    lc_cell = ws.cell(row=3, column=1, value=lc_text)
-    lc_cell.font = Font(name="Calibri", size=10)
-    lc_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    lc_cell.border = CELL_BORDER
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=17)
-    ws.row_dimensions[3].height = 90
+    write_merged_text(ws, 3, lc_text, 17, height=90)
 
     # Row 5: instruction
     inst = (
@@ -142,11 +128,7 @@ def write_back_billing_sheet(
         "many days beyond the Standard Licence Condition 7A (SLC 7A) "
         "12-month limit the invoice went."
     )
-    inst_cell = ws.cell(row=5, column=1, value=inst)
-    inst_cell.font = Font(name="Calibri", size=10, italic=True)
-    inst_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=17)
-    ws.row_dimensions[5].height = 45
+    write_merged_text(ws, 5, inst, 17, height=45, italic=True, border=False)
 
     # Row 7: headers
     headers = [
@@ -168,9 +150,7 @@ def write_back_billing_sheet(
         "Superseded By",
         "Partial Overlap",
     ]
-    for col, h in enumerate(headers, 1):
-        _hcell(ws, 7, col, h, bg=NAVY)
-    ws.row_dimensions[7].height = 28
+    write_header_row(ws, 7, headers, bg=NAVY, height=28)
 
     # Data rows + running total
     r = 8
@@ -266,21 +246,6 @@ def write_back_billing_sheet(
     # Trailing totals row
     if not bb.empty:
         total_label = "TOTAL RETROSPECTIVE CHARGES IN BACK-BILLED INVOICES"
-        label_cell = ws.cell(row=r, column=1, value=total_label)
-        label_cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        label_cell.fill = PatternFill("solid", start_color=NAVY)
-        label_cell.border = CELL_BORDER
-        label_cell.alignment = Alignment(horizontal="left", vertical="center")
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
-        for c in range(2, 6):
-            x = ws.cell(row=r, column=c)
-            x.fill = PatternFill("solid", start_color=NAVY)
-            x.border = CELL_BORDER
-        total_cell = ws.cell(row=r, column=6, value=total)
-        total_cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        total_cell.fill = PatternFill("solid", start_color=NAVY)
-        total_cell.border = CELL_BORDER
-        total_cell.number_format = "#,##0.00"
         # Unlawful Charge total (col 10): sum of Unlawful Charge (£) across
         # Live rows only (Superseded rows are excluded, mirroring the Period
         # Charge total). Separate from the Period Charge total so a reviewer
@@ -291,20 +256,17 @@ def write_back_billing_sheet(
             if domination_map is not None and _inv in domination_map:
                 continue
             unlawful_total += float(_row.get("Unlawful Charge (£)", 0.0) or 0.0)
-        unlawful_total_cell = ws.cell(row=r, column=10, value=round(unlawful_total, 2))
-        unlawful_total_cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        unlawful_total_cell.fill = PatternFill("solid", start_color=NAVY)
-        unlawful_total_cell.border = CELL_BORDER
-        unlawful_total_cell.number_format = "#,##0.00"
-        for c in range(7, 18):
-            x = ws.cell(row=r, column=c)
-            x.fill = PatternFill("solid", start_color=NAVY)
-            x.border = CELL_BORDER
-        ws.row_dimensions[r].height = 22
-        r += 1
+        write_trailing_total(
+            ws,
+            r,
+            total_label,
+            [(6, total), (10, round(unlawful_total, 2))],
+            5,
+            17,
+        )
 
     # Column widths
-    widths = {
+    widths: dict[str, float] = {
         "A": 18,
         "B": 14,
         "C": 14,
@@ -323,6 +285,5 @@ def write_back_billing_sheet(
         "P": 16,  # Superseded By
         "Q": 16,  # Partial Overlap
     }
-    for col_letter, width in widths.items():
-        ws.column_dimensions[col_letter].width = width
-    ws.freeze_panes = "A8"
+    set_column_widths_from_spec(ws, widths)
+    freeze_at(ws, "A8")

@@ -58,8 +58,9 @@ def test_write_section_label_spans_and_fills() -> None:
     assert ws.cell(row=2, column=1).font.size == 11
     assert _rgb(ws.cell(row=2, column=1)) == "0010367A"
     for c in range(2, 6):
-        assert ws.cell(row=2, column=c).value == ""
+        assert ws.cell(row=2, column=c).value is None
         assert _rgb(ws.cell(row=2, column=c)) == "0010367A"
+        assert ws.cell(row=2, column=c).border.left.style == "thin"
 
 
 def test_write_merged_text_merges_and_wraps() -> None:
@@ -68,6 +69,7 @@ def test_write_merged_text_merges_and_wraps() -> None:
     assert ws.cell(row=3, column=1).value == "some paragraph"
     assert ws.cell(row=3, column=1).alignment.wrap_text is True
     assert ws.cell(row=3, column=1).font.italic is False
+    assert ws.cell(row=3, column=1).border.left.style == "thin"
     assert _merged(ws) == ["A3:F3"]
     assert ws.row_dimensions[3].height == 90
 
@@ -76,6 +78,14 @@ def test_write_merged_text_italic_flag() -> None:
     ws = _open_ws()
     write_merged_text(ws, row=5, text_value="instruction", ncols=4, italic=True)
     assert ws.cell(row=5, column=1).font.italic is True
+    assert _merged(ws) == ["A5:D5"]
+
+
+def test_write_merged_text_border_false_leaves_no_border() -> None:
+    ws = _open_ws()
+    write_merged_text(ws, row=5, text_value="instruction", ncols=4, border=False)
+    assert ws.cell(row=5, column=1).border.left.style is None
+    assert ws.cell(row=5, column=1).border.top.style is None
     assert _merged(ws) == ["A5:D5"]
 
 

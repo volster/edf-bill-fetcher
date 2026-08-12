@@ -64,12 +64,15 @@ def write_section_label(
     used by the payment writer) — the two sheet families genuinely
     differ, so both helpers stay.
     """
-    for c in range(1, ncols + 1):
-        cell = ws.cell(row=row, column=c, value=label if c == 1 else "")
-        cell.font = Font(name="Calibri", size=size, bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", start_color=bg)
-        cell.border = CELL_BORDER
-        cell.alignment = Alignment(horizontal="left", vertical="center")
+    cell = ws.cell(row=row, column=1, value=label)
+    cell.font = Font(name="Calibri", size=size, bold=True, color="FFFFFF")
+    cell.fill = PatternFill("solid", start_color=bg)
+    cell.border = CELL_BORDER
+    cell.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(2, ncols + 1):
+        x = ws.cell(row=row, column=c)
+        x.fill = PatternFill("solid", start_color=bg)
+        x.border = CELL_BORDER
 
 
 def write_merged_text(
@@ -79,6 +82,7 @@ def write_merged_text(
     ncols: int,
     height: int | None = None,
     italic: bool = False,
+    border: bool = True,
 ) -> None:
     """Write a merged, wrapped text cell spanning ``ncols`` at ``row``.
 
@@ -88,7 +92,8 @@ def write_merged_text(
     cell = ws.cell(row=row, column=1, value=text_value)
     cell.font = Font(name="Calibri", size=10, italic=italic)
     cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    cell.border = CELL_BORDER
+    if border:
+        cell.border = CELL_BORDER
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncols)
     if height is not None:
         ws.row_dimensions[row].height = height
