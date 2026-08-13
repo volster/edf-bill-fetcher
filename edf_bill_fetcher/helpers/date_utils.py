@@ -17,12 +17,20 @@ from __future__ import annotations  # noqa: I001
 
 import re as _re
 import warnings as _w
+from typing import Any, TypeAlias
 
 import pandas as pd
-from typing import Any
 
 """Date helpers extracted from edf_collector.py for the modularization refactor.
 """
+
+
+# pandas exposes no public NaTType; ``pd.NaT`` (the "not a time" sentinel) is
+# the runtime value produced by the parsers here, and consumers guard with
+# ``pd.isna()``.  Historically the annotation referenced the private
+# ``pandas._libs.tslibs.nattype.NaTType`` path, which can move between pandas
+# versions; ``TimestampOrNaT`` is the stable, public replacement.
+TimestampOrNaT: TypeAlias = "pd.Timestamp | Any"
 
 
 COMPLETENESS_FIELDS: tuple[str, ...] = (

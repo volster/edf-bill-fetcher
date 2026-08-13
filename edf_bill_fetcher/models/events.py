@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from edf_bill_fetcher.helpers.date_utils import TimestampOrNaT
+
 
 @dataclass
 class SapBackBillingEvent:
@@ -19,7 +21,7 @@ class SapBackBillingEvent:
     """
 
     clearing_doc: str
-    clearing_date: pd.Timestamp | pd._libs.tslibs.nattype.NaTType
+    clearing_date: TimestampOrNaT
     clearing_reason: str
     rows: list[dict[str, Any]] = field(default_factory=list)
     net_amount: float = 0.0

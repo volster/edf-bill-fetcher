@@ -15,7 +15,7 @@ import re as _re
 
 import pandas as pd
 
-from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime
+from edf_bill_fetcher.helpers.date_utils import TimestampOrNaT, _safe_to_datetime
 from edf_bill_fetcher.helpers.excel_utils import build_evidence_index as _build_evidence_index
 from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
 from edf_bill_fetcher.processors.sap_parsers import _parse_amount_for_event
@@ -153,8 +153,8 @@ def match_sap_events_to_edf(
     parsed_edf: list[
         tuple[
             int,
-            pd.Timestamp | pd._libs.tslibs.nattype.NaTType,
-            pd.Timestamp | pd._libs.tslibs.nattype.NaTType,
+            TimestampOrNaT,
+            TimestampOrNaT,
             float,
             str,
         ]

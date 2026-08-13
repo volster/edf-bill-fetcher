@@ -14,6 +14,7 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
+from edf_bill_fetcher.helpers.date_utils import TimestampOrNaT
 from edf_bill_fetcher.writers._helpers import _recon_hyperlink
 
 # Row offset shared by every sheet in the Reconciliation pair AND the SAP /
@@ -26,7 +27,7 @@ RECON_ROW_OFFSET = 4
 # ---- _recon_parse_iso_date (was writers/__init__.py L1822-1833) ----
 
 
-def _recon_parse_iso_date(s: str) -> pd.Timestamp | pd._libs.tslibs.nattype.NaTType:
+def _recon_parse_iso_date(s: str) -> TimestampOrNaT:
     if not s:
         return pd.NaT
     s = str(s).strip()

@@ -19,6 +19,21 @@ from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.processors.detection import _reversal_match
 from edf_bill_fetcher.writers._helpers import _disclosed_label, _reading_type_to_aem
 
+from edf_bill_fetcher.helpers.dispute_flags import (
+    BALANCE_REDUCTION_AMOUNT,
+    BILLING_GAP_HIGH_DAYS,
+    BILLING_GAP_MIN_DAYS,
+    ESTIMATED_RUN_MIN,
+    HIGH_DAILY_RATE_HIGH_RATIO,
+    HIGH_DAILY_RATE_RATIO,
+    LARGE_JUMP_HIGH_PCT,
+    LARGE_JUMP_MAX_DAYS,
+    LARGE_JUMP_PCT,
+    RECON_HIGH_PCT,
+    RECON_MIN_TOLERANCE,
+    RECON_PCT_TOLERANCE,
+)
+
 
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
     """Compute dispute flags from a sorted DataFrame.
@@ -62,14 +77,14 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
             chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
             pct = chg / float(p["Amount (£)"]) if float(p["Amount (£)"]) > 0 else 0
             days = (c_["_dt"] - p["_dt"]).days
-            if pct > 0.25 and 0 < days <= 90:
+            if pct > LARGE_JUMP_PCT and 0 < days <= LARGE_JUMP_MAX_DAYS:
                 flags.append(
                     (
                         "LARGE JUMP",
                         c_["Date"],
                         chg,  # delta (jump size), not the running balance
                         f"+£{chg:,.2f} (+{pct * 100:.1f}%) in {days} days (from {p['Date']}: £{p['Amount (£)']:,.2f})",
-                        "HIGH" if pct > 0.5 else "MEDIUM",
+                        "HIGH" if pct > LARGE_JUMP_HIGH_PCT else "MEDIUM",
                     )
                 )
         except (ValueError, TypeError, KeyError) as exc:
@@ -81,14 +96,14 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
         c_ = dfc.iloc[i]
         try:
             days = (c_["_dt"] - p["_dt"]).days
-            if days > 60:
+            if days > BILLING_GAP_MIN_DAYS:
                 flags.append(
                     (
                         "BILLING GAP",
                         c_["Date"],
                         c_["Amount (£)"],
                         f"{days} days without a bill (previous: {p['Date']}). Balance accumulated unchecked.",
-                        "HIGH" if days > 120 else "MEDIUM",
+                        "HIGH" if days > BILLING_GAP_HIGH_DAYS else "MEDIUM",
                     )
                 )
         except (ValueError, TypeError, KeyError) as exc:
@@ -104,7 +119,7 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                 if run == 1:
                     run_start = dfc.iloc[i]["Date"]
             else:
-                if run >= 3:
+                if run >= ESTIMATED_RUN_MIN:
                     flags.append(
                         (
                             "ESTIMATED RUN",
@@ -116,7 +131,7 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                     )
                 run = 0
                 run_start = None
-        if run >= 3:
+        if run >= ESTIMATED_RUN_MIN:
             flags.append(
                 (
                     "ESTIMATED RUN",
@@ -138,14 +153,14 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                 if days > 0 and charge > 0:
                     daily = charge / days
                     ratio = daily / mean_daily
-                    if ratio > 2.5:
+                    if ratio > HIGH_DAILY_RATE_RATIO:
                         flags.append(
                             (
                                 "HIGH DAILY RATE",
                                 c_["Date"],
                                 c_["Amount (£)"],
                                 f"£{daily:,.2f}/day ({ratio:.1f}× avg £{mean_daily:,.2f}/day) over {days} days",
-                                "HIGH" if ratio > 4 else "MEDIUM",
+                                "HIGH" if ratio > HIGH_DAILY_RATE_HIGH_RATIO else "MEDIUM",
                             )
                         )
             except (ValueError, TypeError, KeyError, ZeroDivisionError) as exc:
@@ -157,7 +172,7 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
         c_ = dfc.iloc[i]
         try:
             chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-            if chg < -500:
+            if chg < -BALANCE_REDUCTION_AMOUNT:
                 flags.append(
                     (
                         "BALANCE REDUCTION",
@@ -187,7 +202,11 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                         continue
                     balance_delta = float(c_["Amount (£)"]) - float(p["Amount (£)"])
                     diff = abs(balance_delta - pc_val)
-                    threshold = max(pc_val * 0.10, 50.0) if pc_val > 0 else 50.0
+                    threshold = (
+                        max(pc_val * RECON_PCT_TOLERANCE, RECON_MIN_TOLERANCE)
+                        if pc_val > 0
+                        else RECON_MIN_TOLERANCE
+                    )
                     if diff > threshold:
                         flags.append(
                             (
@@ -197,7 +216,7 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
                                 f"Balance delta £{balance_delta:,.2f} vs period charge £{pc_val:,.2f} "
                                 f"(difference: £{diff:,.2f}). Possible payment, credit, or billing error "
                                 f"between {p['Date']} and {c_['Date']}.",
-                                "HIGH" if diff > pc_val * 0.5 else "MEDIUM",
+                                "HIGH" if diff > pc_val * RECON_HIGH_PCT else "MEDIUM",
                             )
                         )
             except (ValueError, TypeError, KeyError) as exc:
