@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import pandas as pd
-
 from edf_bill_fetcher.helpers.date_utils import TimestampOrNaT
 
 

@@ -14,16 +14,6 @@ try:
 except ImportError:
     HAS_STATSMODELS = False
 
-from edf_bill_fetcher.helpers.excel_utils import build_evidence_index  # noqa: F401
-from edf_bill_fetcher.helpers.formatting import parse_amount
-from edf_bill_fetcher.helpers.theme import EDF_NAVY, EDF_OFFWHITE, EDF_ORANGE  # noqa: F401
-from edf_bill_fetcher.models.events import SapBackBillingEvent
-
-# Re-export the canonical SAP<->EDF matcher from processors.matching so
-# the two copies are unified into a single implementation.  Existing
-# importers (writers/__init__.py, io/writers/export.py) keep working.
-from edf_bill_fetcher.processors.matching import match_sap_events_to_edf  # noqa: F401
-
 from edf_bill_fetcher.helpers.dispute_flags import (
     BALANCE_REDUCTION_AMOUNT,
     BILLING_GAP_HIGH_DAYS,
@@ -38,6 +28,15 @@ from edf_bill_fetcher.helpers.dispute_flags import (
     RECON_MIN_TOLERANCE,
     RECON_PCT_TOLERANCE,
 )
+from edf_bill_fetcher.helpers.excel_utils import build_evidence_index  # noqa: F401
+from edf_bill_fetcher.helpers.formatting import parse_amount
+from edf_bill_fetcher.helpers.theme import EDF_NAVY, EDF_OFFWHITE, EDF_ORANGE  # noqa: F401
+from edf_bill_fetcher.models.events import SapBackBillingEvent
+
+# Re-export the canonical SAP<->EDF matcher from processors.matching so
+# the two copies are unified into a single implementation.  Existing
+# importers (writers/__init__.py, io/writers/export.py) keep working.
+from edf_bill_fetcher.processors.matching import match_sap_events_to_edf  # noqa: F401
 
 EST_YELLOW = "FFFF99"
 JUMP_RED = "FF9999"

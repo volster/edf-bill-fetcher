@@ -1,5 +1,4 @@
-"""Dispute-flag detection thresholds shared by every consumer of
-``compute_dispute_flags``.
+"""Shared dispute-flag detection thresholds for compute_dispute_flags.
 
 The heuristics (Ombudsman evidence criteria) historically hardcoded these
 magic numbers inside the per-row loops of ``compute_dispute_flags`` — which

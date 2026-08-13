@@ -16,9 +16,6 @@ import warnings
 import pandas as pd
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
-from edf_bill_fetcher.processors.detection import _reversal_match
-from edf_bill_fetcher.writers._helpers import _disclosed_label, _reading_type_to_aem
-
 from edf_bill_fetcher.helpers.dispute_flags import (
     BALANCE_REDUCTION_AMOUNT,
     BILLING_GAP_HIGH_DAYS,
@@ -33,6 +30,8 @@ from edf_bill_fetcher.helpers.dispute_flags import (
     RECON_MIN_TOLERANCE,
     RECON_PCT_TOLERANCE,
 )
+from edf_bill_fetcher.processors.detection import _reversal_match
+from edf_bill_fetcher.writers._helpers import _disclosed_label, _reading_type_to_aem
 
 
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
