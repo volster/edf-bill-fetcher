@@ -510,17 +510,33 @@ def _sub_period_unlawful(
         span_days = (pt - pf).days
         if span_days < 0:
             continue
+        # A span-0 (1-day, pt == pf) sub-period is a single unlawful day
+        # whenever the cutoff is at or after that day.  Without this
+        # special case ``unlawful_to = min(pt, cutoff) <= pf`` always holds
+        # for pt == pf, so the row would be silently dropped from both the
+        # per-invoice charge and the union (latent correctness bug; T34's
+        # £18.55 one-day row is lawful in the current data, but the
+        # semantics must be correct).
+        if span_days == 0:
+            if cutoff < pf:
+                continue
+            rate = s["rate_p"]
+            units = s["units_kwh"]
+            charge = rate / 100.0 * units
+            slices.append((pf, pf + pd.Timedelta(days=1), rate, units))
+            total += charge
+            continue
         unlawful_to = min(pt, cutoff)
         if unlawful_to <= pf:
             continue
         rate = s["rate_p"]
         units = s["units_kwh"]
-        kwh_per_day = units / max(1, span_days)
+        kwh_per_day = units / span_days
         if unlawful_to >= pt:
             charge = rate / 100.0 * units
             slices.append((pf, pt, rate, kwh_per_day))
         else:
-            frac = (unlawful_to - pf).days / max(1, span_days)
+            frac = (unlawful_to - pf).days / span_days
             charge = rate / 100.0 * units * frac
             slices.append((pf, unlawful_to, rate, kwh_per_day))
         total += charge
@@ -919,12 +935,25 @@ def test_sap_bb_reconciliation_verdicts() -> None:
     out = analyse_sap_back_billing(fx["events"], fx["evidence"], fx["bb"])
     by_event = {r["SAP Event"]: r for r in out["reconciliation"]}
     # Matched + both amounts non-zero but differing -> Δ row.
+    # CLR-100 has a single -436 credit-for-consum-billing row -> reversal
+    # magnitude 436.0, compared against our 200.0 -> Δ.
     assert by_event["CLR-100"]["EDF Invoice #"] == "T-001"
     assert by_event["CLR-100"]["EDF Unlawful Charge (£)"] == 200.0
+    assert by_event["CLR-100"]["SAP Net (£)"] == 436.0
     assert "Δ £" in by_event["CLR-100"]["Verdict"]
     # Unmatched credit event -> SAP-only (money with no matching invoice).
     assert by_event["CLR-200"]["EDF Invoice #"] == "—"
     assert by_event["CLR-200"]["Verdict"] == "SAP-only"
+
+
+def test_sap_bb_reconciliation_reversal_magnitude_reconciles() -> None:
+    fx = _fixture()
+    # Match our unlawful charge to the reversal magnitude exactly (436.0).
+    fx["bb"].loc[0, "Unlawful Charge (£)"] = 436.0
+    out = analyse_sap_back_billing(fx["events"], fx["evidence"], fx["bb"])
+    by_event = {r["SAP Event"]: r for r in out["reconciliation"]}
+    assert by_event["CLR-100"]["Verdict"] == "Reconciled"
+    assert out["summary"]["reconciled"] == 1
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -994,6 +1023,20 @@ def analyse_sap_back_billing(
             continue
         matched_inv = ev.matched_edf_invoice or ""
         periods = recon_periods_by_invoice.get(matched_inv, [])
+        # The reconciliation comparison uses the REVERSAL MAGNITUDE (sum of
+        # the ``Cr- Credit for Consum Billing`` rows) rather than the cluster
+        # net.  A real reversal cluster is cancel-credit + rebill-debit that
+        # nets to ~£0, so comparing against the net makes "Reconciled"
+        # unreachable even when SAP's reversal exactly equals our figure.
+        # ``sap_amount`` is the total back-billed money the cluster moved.
+        sap_amount = round(
+            -sum(
+                float(r.get("Amount", 0.0) or 0.0)
+                for r in ev.rows
+                if "Credit for Consum Billing" in str(r.get("Transaction Text", ""))
+            ),
+            2,
+        )
         events_out.append(
             {
                 "Clearing Doc #": ev.clearing_doc,
@@ -1017,22 +1060,22 @@ def analyse_sap_back_billing(
         )
         if match is not None:
             ours = float(match.get("Unlawful Charge (£)", 0.0) or 0.0)
-            if abs(ev.net_amount) < 0.01 and ours < 0.01:
+            if abs(sap_amount) < 0.01 and ours < 0.01:
                 verdict = "Reconciled"
-            elif abs(ours - ev.net_amount) < 0.01:
+            elif abs(ours - sap_amount) < 0.01:
                 verdict = "Reconciled"
             elif abs(ours) < 0.01:
                 verdict = "SAP-only"
-            elif abs(ev.net_amount) < 0.01:
+            elif abs(sap_amount) < 0.01:
                 verdict = "Ours-only"
             else:
-                verdict = f"Δ £{ours - ev.net_amount:,.2f}"
+                verdict = f"Δ £{ours - sap_amount:,.2f}"
             reconciliation.append(
                 {
                     "SAP Event": ev.clearing_doc,
                     "EDF Invoice #": match.get("Invoice #", ""),
                     "EDF Unlawful Charge (£)": ours,
-                    "SAP Net (£)": ev.net_amount,
+                    "SAP Net (£)": sap_amount,
                     "Verdict": verdict,
                 }
             )
@@ -1043,7 +1086,7 @@ def analyse_sap_back_billing(
                     "SAP Event": ev.clearing_doc,
                     "EDF Invoice #": matched_inv or "—",
                     "EDF Unlawful Charge (£)": 0.0,
-                    "SAP Net (£)": ev.net_amount,
+                    "SAP Net (£)": sap_amount,
                     "Verdict": "SAP-only" if not matched_inv else "Partial",
                 }
             )
