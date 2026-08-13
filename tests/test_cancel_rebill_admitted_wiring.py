@@ -150,3 +150,21 @@ def test_process_new_invoice_carries_sub_periods() -> None:
     assert engine.records
     rec = engine.records[-1]
     assert "02/10/2020|24/03/2021|19743.0|16.42|3241.8" in rec["Sub Periods"]
+
+
+def test_process_text_carries_sub_periods() -> None:
+    """The old-format ``process_text`` path (used for the real T-series
+    cancel-and-rebill invoices, which never classify as new_invoice /
+    new_credit) must also mine the per-sub-period "About your charges"
+    rows so the ``Sub Periods`` column reaches the Option C detector.
+    """
+    engine = _engine()
+    body = (
+        "Current balance £3,241.80 in debit\n"
+        "About your charges\n"
+        "02 Oct 20 - 24 Mar 21 39386YOUR READ 59129 ESTIMATED 19743 kWh 16.42p £3,241.80\n"
+    )
+    engine.process_text(body, "PDF", "Test invoice", "09 Aug 2023", attachment_name="t68.pdf")
+    assert engine.records, "process_text did not append a record"
+    rec = engine.records[-1]
+    assert "02/10/2020|24/03/2021|19743.0|16.42|3241.8" in rec["Sub Periods"]

@@ -527,6 +527,13 @@ class EvidenceEngine:
             except (ValueError, AttributeError):
                 pass
 
+        # Mine per-sub-period rows ("About your charges") from old-format
+        # cancel-and-rebill invoices too.  The T-series bills are OLD-format
+        # and arrive via this generic path (never ``_process_new_invoice``),
+        # so without this the ``Sub Periods`` column stays empty and the
+        # Option C sub-period unlawful-charge computation never activates.
+        sub_periods = extract_sub_periods(clean_text)
+
         # Classify Entry Type based on content
         entry_type = self._classify_entry_type(
             clean_text, matched_pattern_name, period_from, period_to, strategy
@@ -553,6 +560,7 @@ class EvidenceEngine:
                 source_pdf_text=clean_text[:4000],
                 regex_trace="",
                 cancel_rebill_admitted=bool(extract_admit_phrase(clean_text)),
+                sub_periods=sub_periods,
             ).to_dict()
         )
 
