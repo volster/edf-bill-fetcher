@@ -296,6 +296,8 @@ def write_back_billing_sheet(
 
     # Trailing totals row
     if not bb.empty:
+        from edf_bill_fetcher.processors.detection import compute_unlawful_union_total
+
         total_label = "TOTAL RETROSPECTIVE CHARGES — SURVIVING INVOICES"
         # Unlawful Charge total (col 10): sum of Unlawful Charge (£) across
         # Live rows only (Superseded rows are excluded, mirroring the Period
@@ -312,6 +314,17 @@ def write_back_billing_sheet(
             r,
             total_label,
             [(6, total), (10, round(unlawful_total, 2))],
+            5,
+            17,
+        )
+        r += 1
+        union_label = "TOTAL UNLAWFUL CHARGES — UNION OF CONSUMPTION DAYS (no double count)"
+        union_total = compute_unlawful_union_total(bb)
+        write_trailing_total(
+            ws,
+            r,
+            union_label,
+            [(10, round(union_total, 2))],
             5,
             17,
         )

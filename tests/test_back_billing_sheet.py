@@ -99,8 +99,12 @@ def test_write_back_billing_sheet_one_row_per_backbilled_invoice() -> None:
     a9 = ws.cell(row=9, column=1).value
     assert isinstance(a9, str)
     assert "TOTAL" in a9.upper()
-    # No data rows beyond the totals row.
-    assert ws.cell(row=10, column=1).value in (None, "")
+    # Row 10 carries the union no-double-count footer; nothing beyond it.
+    a10 = ws.cell(row=10, column=1).value
+    assert isinstance(a10, str)
+    assert "UNION OF CONSUMPTION DAYS" in a10
+    # No data rows beyond the totals rows.
+    assert ws.cell(row=11, column=1).value in (None, "")
 
 
 def test_write_back_billing_sheet_total_charges_footer() -> None:
@@ -284,3 +288,28 @@ def test_write_back_billing_sheet_no_domination_map_all_live() -> None:
         if inv_num in ("A", "B"):
             assert ws.cell(row=row_idx, column=status_col).value == "Live"
             assert ws.row_dimensions[row_idx].outline_level == 0
+
+
+def test_trailing_union_total_row_written() -> None:
+    from edf_bill_fetcher.io.writers.back_billing import write_back_billing_sheet
+    from edf_bill_fetcher.processors.detection import detect_back_billing
+
+    ws = _open_ws()
+    df = _sample_df()
+    # Give both rows real sub-period slices so the union is non-zero.
+    df = df.copy()
+    df["Sub Periods"] = ""
+    df.loc[0, "Sub Periods"] = (
+        "02/10/2020|24/03/2021|19743.0|16.42|3241.8; "
+        "25/03/2021|06/04/2021|1454.0|16.42|238.75; "
+        "07/04/2021|31/03/2022|37184.0|16.42|6105.61; "
+        "01/04/2022|12/05/2022|3736.0|52.00|1942.72; "
+        "13/05/2022|31/03/2023|30675.0|52.00|15951.0; "
+        "01/04/2023|09/08/2023|10607.0|45.92|4870.73"
+    )
+    bb = detect_back_billing(df)
+    write_back_billing_sheet(ws, bb, evidence_df=df)
+    labels = [ws.cell(row=r, column=1).value for r in range(1, ws.max_row + 1)]
+    assert any(
+        l is not None and "UNION OF CONSUMPTION DAYS" in str(l) for l in labels
+    )
