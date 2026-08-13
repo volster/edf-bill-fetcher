@@ -683,12 +683,92 @@ def write_sap_contract_history_sheet(
     return _write_sap_contract_history_sheet_impl(ws, rows, account)
 
 
+# ---- write_sap_back_billing_position_sheet (Task 8) ----
+def write_sap_back_billing_position_sheet(
+    wb: openpyxl.Workbook,
+    result: dict,
+    account: str = "",
+) -> Worksheet:
+    """Render the 'Backbilling According to SAP' cross-referenced position.
+
+    Three sections: title banner (with event-count summary), the SAP
+    back-billing events table (reversal-containing clusters), and the
+    reconciliation table against our PDF-derived Back-billing Analysis.
+    """
+    ws = wb.create_sheet(title="Backbilling According to SAP")
+    ORANGE = "FE5716"
+    NAVY = "10367A"
+
+    summary = result.get("summary", {})
+    title = (
+        "BACKBILLING ACCORDING TO SAP  |  Account {acc}  |  "
+        "{n} event(s)  |  SAP net total £{net:,.2f}  |  "
+        "{rec} reconciled"
+    ).format(
+        acc=account or "(no account)",
+        n=summary.get("sap_events", 0),
+        net=summary.get("sap_net_total", 0.0),
+        rec=summary.get("reconciled", 0),
+    )
+    _write_sap_header_row(ws, 1, [title])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    c1 = ws.cell(row=1, column=1)
+    c1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    c1.fill = PatternFill("solid", start_color=ORANGE)
+
+    events = result.get("events", [])
+    ev_cols = [
+        "Clearing Doc #",
+        "Clearing Date",
+        "Clearing Reason",
+        "# Rows",
+        "Net Amount (£)",
+        "Has Credit for Consum Billing",
+        "Period(s)",
+        "Matched EDF Invoice #",
+    ]
+    _write_sap_header_row(ws, 3, ev_cols)
+    r = 4
+    for i, ev in enumerate(events):
+        for j, col in enumerate(ev_cols, start=1):
+            cell = ws.cell(row=r, column=j, value=ev.get(col, ""))
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = CELL_BORDER
+            if i % 2 == 0:
+                cell.fill = PatternFill("solid", start_color=SAP_BB_SUMMARY_FILL_PAIR[0])
+        r += 1
+
+    r += 1
+    rec_cols = [
+        "SAP Event",
+        "EDF Invoice #",
+        "EDF Unlawful Charge (£)",
+        "SAP Net (£)",
+        "Verdict",
+    ]
+    _write_sap_header_row(ws, r, rec_cols)
+    r += 1
+    for i, rec in enumerate(result.get("reconciliation", [])):
+        for j, col in enumerate(rec_cols, start=1):
+            cell = ws.cell(row=r, column=j, value=rec.get(col, ""))
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = CELL_BORDER
+            if i % 2 == 0:
+                cell.fill = PatternFill("solid", start_color=SAP_BB_DETAIL_FILL_PAIR[0])
+        r += 1
+
+    for idx, width in enumerate((18, 14, 22, 10, 16, 26, 40, 20), start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = width
+    return ws
+
+
 __all__ = [
     "_bb_invoice_value",
     "_write_sap_bb_events_sheet",
     "_write_sap_bb_matches_sheet",
     "_write_sap_header_row",
     "_write_sap_contract_history_sheet_impl",
+    "write_sap_back_billing_position_sheet",
     "write_sap_back_billing_sheets",
     "write_sap_contract_history_sheet",
     "write_sap_financial_transactions_sheet",

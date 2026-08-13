@@ -622,3 +622,49 @@ def test_export_tags_unmatched_event_as_cluster_internal_mechanism(
     assert "internal mechanism" in str(tagged_value), (
         f"expected 'internal mechanism' tag, got {tagged_value!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — cross-referenced 'Backbilling According to SAP' position sheet
+# ---------------------------------------------------------------------------
+
+
+def test_write_sap_back_billing_position_sheet() -> None:
+    from edf_bill_fetcher.io.writers.sap import write_sap_back_billing_position_sheet
+
+    wb = Workbook()
+    result = {
+        "events": [
+            {
+                "Clearing Doc #": "CLR-100",
+                "Clearing Date": "2023-08-01",
+                "Clearing Reason": "Reversal",
+                "# Rows": 2,
+                "Net Amount (£)": 0.0,
+                "Has Credit for Consum Billing": "Yes",
+                "Period(s)": "—",
+                "Matched EDF Invoice #": "T-001",
+            }
+        ],
+        "reconciliation": [
+            {
+                "SAP Event": "CLR-100",
+                "EDF Invoice #": "T-001",
+                "EDF Unlawful Charge (£)": 0.0,
+                "SAP Net (£)": 0.0,
+                "Verdict": "Reconciled",
+            }
+        ],
+        "summary": {"sap_events": 1, "sap_net_total": 0.0, "reconciled": 1},
+    }
+    ws = write_sap_back_billing_position_sheet(wb, result)
+    assert ws.title == "Backbilling According to SAP"
+    # The brief's col-a-only scan cannot see the "Reconciled" Verdict (col 5),
+    # so scan the full used grid for both sentinel values.
+    grid = [
+        ws.cell(row=r, column=c).value
+        for r in range(1, ws.max_row + 1)
+        for c in range(1, ws.max_column + 1)
+    ]
+    assert any("CLR-100" in str(v) for v in grid)
+    assert any("Reconciled" in str(v) for v in grid)
