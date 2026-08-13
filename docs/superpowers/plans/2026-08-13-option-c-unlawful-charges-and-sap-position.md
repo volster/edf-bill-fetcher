@@ -528,7 +528,13 @@ In `detect_back_billing`, replace the `unlawful_charge` line with:
             sub_basis = "Day-ratio fallback"
 ```
 
-Add `"Sub-Period Basis"` to the output `columns` list and to each row dict; add `"_unlawful_slices": unlawful_slices` to each row dict (internal column; do NOT add to `columns`, keep it as an extra key on the rows so `pd.DataFrame(rows)` carries it).
+Add `"Sub-Period Basis"` to the output `columns` list and to each row dict; add `"_unlawful_slices": unlawful_slices` to each row dict (internal column; do NOT add to `columns`).
+
+IMPORTANT — the function's final line is currently `return out[columns]` (detection.py:332), which would DROP `_unlawful_slices`. Change it to preserve the internal column for the downstream union-total consumers:
+
+```python
+    return out[columns + ["_unlawful_slices"]]
+```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
