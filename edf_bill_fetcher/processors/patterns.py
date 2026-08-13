@@ -209,6 +209,50 @@ _EMAIL_ADDR_RE = re.compile(r"([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})
 # MAPI tag constants from [MS-OXPROPS].
 _PST_PR_ATTACH_LONG_FILENAME = 0x3707
 
+# Per-sub-period "About your charges" rows on new-format invoice PDFs.
+# The middle reading tokens vary in length ("38535 OUR READ 64543 ESTIMATED"
+# vs "98875YOUR READ 33348 ESTIMATED"), so the middle is captured non-greedily
+# up to the trailing "<units> kWh <rate>p £<charge>" anchor.
+SUB_PERIOD_RE = re.compile(
+    r"(?P<pf>\d{1,2}\s+\w{3}\s+\d{2,4})\s+-\s+"
+    r"(?P<pt>\d{1,2}\s+\w{3}\s+\d{2,4})\s+"
+    r"(?P<mid>.*?)\s+"
+    r"(?P<units>[\d,]+)\s*kWh\s+"
+    r"(?P<rate>[\d.]+)p\s+"
+    r"£(?P<charge>[\d,]+\.\d{2})",
+    re.IGNORECASE,
+)
+
+
+def extract_sub_periods(text: str) -> list[dict]:
+    """Return the per-sub-period charge rows from a new-format invoice body.
+
+    Each dict carries ``period_from`` / ``period_to`` (DD/MM/YYYY display
+    strings), ``units_kwh``, ``rate_p``, and ``charge`` (floats).  Rows whose
+    dates fail to parse are skipped individually; returns ``[]`` when no
+    rows match.
+    """
+    from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
+
+    out: list[dict] = []
+    if not text:
+        return out
+    for m in SUB_PERIOD_RE.finditer(text):
+        pf = parse_to_display_date(m.group("pf"))
+        pt = parse_to_display_date(m.group("pt"))
+        if pf == m.group("pf") or pt == m.group("pt"):
+            continue  # unparseable date — skip the row
+        out.append(
+            {
+                "period_from": pf,
+                "period_to": pt,
+                "units_kwh": float(m.group("units").replace(",", "")),
+                "rate_p": float(m.group("rate")),
+                "charge": float(m.group("charge").replace(",", "")),
+            }
+        )
+    return out
+
 
 __all__ = [
     "AMOUNT_PATTERNS",
@@ -230,4 +274,6 @@ __all__ = [
     "_FROM_HEADER_RE",
     "_EMAIL_ADDR_RE",
     "_PST_PR_ATTACH_LONG_FILENAME",
+    "SUB_PERIOD_RE",
+    "extract_sub_periods",
 ]
