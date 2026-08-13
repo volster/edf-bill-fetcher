@@ -15,10 +15,7 @@ from edf_bill_fetcher.ui.app import App
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
-    reason=(
-        "Windows CI intermittently fails with _tkinter.TclError: "
-        "Can't find a usable tk.tcl"
-    ),
+    reason=("Windows CI intermittently fails with _tkinter.TclError: Can't find a usable tk.tcl"),
 )
 
 
