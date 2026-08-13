@@ -181,13 +181,10 @@ def test_sub_periods_serialized_in_to_dict() -> None:
     )
     out = rec.to_dict()
     assert out["Sub Periods"] == (
-        "02/10/2020|24/03/2021|19743.0|16.42|3241.8; "
-        "25/03/2021|06/04/2021|1454.0|16.42|238.75"
+        "02/10/2020|24/03/2021|19743.0|16.42|3241.8; 25/03/2021|06/04/2021|1454.0|16.42|238.75"
     )
 
 
 def test_sub_periods_default_empty_serialized() -> None:
-    rec = BillingRecord(
-        source="PDF", entry_type="New Bill", logic_used="New Invoice Format"
-    )
+    rec = BillingRecord(source="PDF", entry_type="New Bill", logic_used="New Invoice Format")
     assert rec.to_dict()["Sub Periods"] == ""

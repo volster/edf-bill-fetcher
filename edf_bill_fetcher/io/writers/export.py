@@ -1823,9 +1823,7 @@ def export_to_excel(
                 sap_bb_position = analyse_sap_back_billing(
                     bb_events, dfc, analyses.get("back_billing")
                 )
-                write_sap_back_billing_position_sheet(
-                    wb, sap_bb_position, account=account_label
-                )
+                write_sap_back_billing_position_sheet(wb, sap_bb_position, account=account_label)
         if config.get("generate_reconciliation_sheet", True):
             ws_recon_summary = wb.create_sheet(title="Reconciliation")
             ws_recon_detail = wb.create_sheet(title="Reconciliation Drill-down")

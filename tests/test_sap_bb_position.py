@@ -29,8 +29,18 @@ def _fixture() -> dict:
         _event(
             "CLR-100",
             [
-                {"Document No.": "DOC-1", "Posting Date": "2023-07-13", "Amount": -436.0, "Transaction Text": "Cr- Credit for Consum Billing"},
-                {"Document No.": "DOC-2", "Posting Date": "2023-07-13", "Amount": 436.0, "Transaction Text": "Dr- Consum Billing Receivable"},
+                {
+                    "Document No.": "DOC-1",
+                    "Posting Date": "2023-07-13",
+                    "Amount": -436.0,
+                    "Transaction Text": "Cr- Credit for Consum Billing",
+                },
+                {
+                    "Document No.": "DOC-2",
+                    "Posting Date": "2023-07-13",
+                    "Amount": 436.0,
+                    "Transaction Text": "Dr- Consum Billing Receivable",
+                },
             ],
             matched_edf_invoice="T-001",
         ),
@@ -39,16 +49,36 @@ def _fixture() -> dict:
         _event(
             "CLR-999",
             [
-                {"Document No.": "DOC-3", "Posting Date": "2023-07-13", "Amount": 565.0, "Transaction Text": "Dr- Installment Receivable"},
-                {"Document No.": "DOC-4", "Posting Date": "2023-07-13", "Amount": 12.0, "Transaction Text": "Dr- Late Payment Charge"},
+                {
+                    "Document No.": "DOC-3",
+                    "Posting Date": "2023-07-13",
+                    "Amount": 565.0,
+                    "Transaction Text": "Dr- Installment Receivable",
+                },
+                {
+                    "Document No.": "DOC-4",
+                    "Posting Date": "2023-07-13",
+                    "Amount": 12.0,
+                    "Transaction Text": "Dr- Late Payment Charge",
+                },
             ],
         ),
         # A credit-containing event with no matched invoice — must be SAP-only.
         _event(
             "CLR-200",
             [
-                {"Document No.": "DOC-5", "Posting Date": "2023-07-13", "Amount": -100.0, "Transaction Text": "Cr- Credit for Consum Billing"},
-                {"Document No.": "DOC-6", "Posting Date": "2023-07-13", "Amount": 100.0, "Transaction Text": "Dr- Consum Billing Receivable"},
+                {
+                    "Document No.": "DOC-5",
+                    "Posting Date": "2023-07-13",
+                    "Amount": -100.0,
+                    "Transaction Text": "Cr- Credit for Consum Billing",
+                },
+                {
+                    "Document No.": "DOC-6",
+                    "Posting Date": "2023-07-13",
+                    "Amount": 100.0,
+                    "Transaction Text": "Dr- Consum Billing Receivable",
+                },
             ],
         ),
     ]

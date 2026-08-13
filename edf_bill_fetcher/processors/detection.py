@@ -278,7 +278,7 @@ def compute_unlawful_union_total(bb: pd.DataFrame) -> float:
         return 0.0
     claimed: dict[pd.Timestamp, tuple[float, float]] = {}  # day -> (rate_p, kwh/day)
     for _, row in bb.iterrows():
-        for (slice_from, slice_to, rate_p, kwh_per_day) in row.get("_unlawful_slices", []):
+        for slice_from, slice_to, rate_p, kwh_per_day in row.get("_unlawful_slices", []):
             if not isinstance(slice_from, pd.Timestamp):
                 continue
             day = slice_from

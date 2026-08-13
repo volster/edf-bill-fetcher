@@ -558,7 +558,9 @@ def analyse_sap_back_billing(
                 "Clearing Reason": ev.clearing_reason,
                 "# Rows": len(ev.rows),
                 "Net Amount (£)": ev.net_amount,
-                "Has Credit for Consum Billing": "Yes" if ev.has_credit_for_consum_billing else "No",
+                "Has Credit for Consum Billing": "Yes"
+                if ev.has_credit_for_consum_billing
+                else "No",
                 "Period(s)": "; ".join(dict.fromkeys(periods)) if periods else "—",
                 "Matched EDF Invoice #": matched_inv or "—",
             }
