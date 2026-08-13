@@ -1,6 +1,6 @@
 """Typed ``BillingRecord`` for EDF billing evidence records.
 
-``BillingRecord`` is the single typed producer of the 19-column evidence
+``BillingRecord`` is the single typed producer of the 20-column evidence
 schema shared by every record builder (``collectors/engine.py`` and
 ``io/adapters/html.py``). Snake-case fields default to ``None`` for unset
 values; ``to_dict()`` is the display-key boundary, mapping ``None`` string
@@ -10,7 +10,7 @@ sentinel never lives inside the dataclass.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -22,7 +22,7 @@ def _na(value: str | float | None) -> str | float:
 class BillingRecord:
     """One row of billing evidence.
 
-    Fields use snake_case names; ``to_dict()`` emits the 19 display keys.
+    Fields use snake_case names; ``to_dict()`` emits the 20 display keys.
     """
 
     source: str
@@ -44,10 +44,19 @@ class BillingRecord:
     amount: str | float | None = None
     period_charge: str | float | None = None
     cancel_rebill_admitted: bool | None = None
+    sub_periods: list[dict[str, Any]] = field(default_factory=list)
+
+    def _serialize_sub_periods(self) -> str:
+        return "; ".join(
+            f"{s.get('period_from', '')}|{s.get('period_to', '')}|"
+            f"{s.get('units_kwh', '')}|{s.get('rate_p', '')}|"
+            f"{s.get('charge', '')}"
+            for s in self.sub_periods
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        """Return the 19-key display dict, mapping None to "N/A" / False."""
-        return {
+        """Return the 20-key display dict, mapping None to "N/A" / False."""
+        d = {
             "Source": _na(self.source),
             "Sender": _na(self.sender),
             "Date": _na(self.date),
@@ -70,3 +79,5 @@ class BillingRecord:
                 self.cancel_rebill_admitted if self.cancel_rebill_admitted is not None else False
             ),
         }
+        d["Sub Periods"] = self._serialize_sub_periods()
+        return d

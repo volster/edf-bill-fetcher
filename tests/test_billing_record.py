@@ -30,6 +30,7 @@ CANONICAL_KEYS = [
     "Source PDF Text",
     "_regex_trace",
     "Cancel/Rebill Admitted",
+    "Sub Periods",
 ]
 
 
@@ -79,6 +80,7 @@ def test_full_shape_record_emits_canonical_engine_dict():
         "Source PDF Text": "Invoice body text",
         "_regex_trace": "inv_num via _INV_NUMBER_RE; period_from via _BILLING_PERIOD_RE",
         "Cancel/Rebill Admitted": True,
+        "Sub Periods": "",
     }
     assert list(record.to_dict()) == CANONICAL_KEYS
 
@@ -96,7 +98,7 @@ def test_none_fields_map_to_sentinels():
     assert result["Source"] == "src"
     assert result["Entry Type"] == "Charge"
     assert result["Logic Used"] == "HTM Regex"
-    for key in CANONICAL_KEYS[:-1]:
+    for key in CANONICAL_KEYS[:-2]:
         if key not in ("Source", "Entry Type", "Logic Used"):
             assert result[key] == "N/A"
     assert result["Cancel/Rebill Admitted"] is False
@@ -152,3 +154,40 @@ def test_htm_record_emits_cancel_rebill_admitted_false():
     result = record.to_dict()
     assert result["Cancel/Rebill Admitted"] is False
     assert set(result) == set(CANONICAL_KEYS)
+
+
+def test_sub_periods_serialized_in_to_dict() -> None:
+    rec = BillingRecord(
+        source="PDF",
+        entry_type="New Bill",
+        logic_used="New Invoice Format",
+        invoice_num="T-68",
+        sub_periods=[
+            {
+                "period_from": "02/10/2020",
+                "period_to": "24/03/2021",
+                "units_kwh": 19743.0,
+                "rate_p": 16.42,
+                "charge": 3241.80,
+            },
+            {
+                "period_from": "25/03/2021",
+                "period_to": "06/04/2021",
+                "units_kwh": 1454.0,
+                "rate_p": 16.42,
+                "charge": 238.75,
+            },
+        ],
+    )
+    out = rec.to_dict()
+    assert out["Sub Periods"] == (
+        "02/10/2020|24/03/2021|19743.0|16.42|3241.8; "
+        "25/03/2021|06/04/2021|1454.0|16.42|238.75"
+    )
+
+
+def test_sub_periods_default_empty_serialized() -> None:
+    rec = BillingRecord(
+        source="PDF", entry_type="New Bill", logic_used="New Invoice Format"
+    )
+    assert rec.to_dict()["Sub Periods"] == ""
