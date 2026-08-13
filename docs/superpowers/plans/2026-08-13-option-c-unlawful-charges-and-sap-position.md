@@ -783,9 +783,9 @@ git commit -m "feat: add union no-double-count total row to Back-billing Analysi
 - Create: `tests/test_sap_bb_position.py`
 
 **Interfaces:**
-- Consumes: `parse_sap_financial_transactions` rows (list of dicts), evidence dataframe (contains `Source == "Statement Reconciliation"` rows), and the Back-billing Analysis output df.
+- Consumes: `list[SapBackBillingEvent]` (already detected AND matched by the export pipeline — `ev.matched_edf_invoice` populated), the evidence dataframe (contains `Source == "Statement Reconciliation"` rows), and the Back-billing Analysis output df.
 - Produces:
-  - `analyse_sap_back_billing(sap_financial: list[dict], evidence_df: pd.DataFrame, back_billing_df: pd.DataFrame) -> dict`
+  - `analyse_sap_back_billing(events: list, evidence_df: pd.DataFrame, back_billing_df: pd.DataFrame) -> dict`
   - Returns `{"events": list[dict], "reconciliation": list[dict], "summary": dict}`.
   - `events` items: `Clearing Doc #`, `Clearing Date`, `Clearing Reason`, `Net Amount (£)`, `# Rows`, `Has Credit for Consum Billing`, `Period(s)`, `Matched EDF Invoice #`.
   - `reconciliation` items: `SAP Event`, `EDF Invoice #`, `EDF Unlawful Charge (£)`, `SAP Net (£)`, `Verdict` (`Reconciled` | `Partial` | `SAP-only` | `Ours-only` | `Δ £X.XX`).
@@ -797,32 +797,57 @@ from __future__ import annotations
 
 import pandas as pd
 
+from edf_bill_fetcher.models.events import SapBackBillingEvent
 from edf_bill_fetcher.processors.matching import analyse_sap_back_billing
 
 
-def _sap_row(doc, cd, reason, amount, txt) -> dict:
-    return {
-        "Document No.": doc,
-        "Posting Date": "2023-07-13",
-        "Amount": amount,
-        "Transaction Text": txt,
-        "Clearing Document": cd,
-        "Clearing Date": "2023-08-01",
-        "Clearing Reason": reason,
-        "Clearing Status": "Cleared Item",
-        "Statistical Key Flag": "",
-    }
+def _event(cd, rows, matched_edf_invoice=None) -> SapBackBillingEvent:
+    net = round(sum(float(r["Amount"]) for r in rows), 2)
+    has_credit = any("Credit for Consum Billing" in r["Transaction Text"] for r in rows)
+    return SapBackBillingEvent(
+        clearing_doc=cd,
+        clearing_date=pd.Timestamp("2023-08-01"),
+        clearing_reason="Reversal",
+        rows=rows,
+        net_amount=net,
+        has_credit_for_consum_billing=has_credit,
+        has_account_maintenance=False,
+        largest_single_posting=net,
+        posting_date_range=("2023-07-13", "2023-07-13"),
+        matched_edf_invoice=matched_edf_invoice,
+    )
 
 
 def _fixture() -> dict:
-    sap = [
-        # A real back-billing cluster: reversal credit + rebill debit.
-        _sap_row("DOC-1", "CLR-100", "Reversal", -436.0, "Cr- Credit for Consum Billing"),
-        _sap_row("DOC-2", "CLR-100", "Reversal", 436.0, "Dr- Consum Billing Receivable"),
-        # An unrelated cluster (installment) — must be excluded.
-        _sap_row("DOC-3", "CLR-999", "Automatic Clearing", 565.0, "Dr- Installment Receivable"),
+    events = [
+        # A real back-billing cluster: reversal credit + rebill debit, matched to T-001.
+        _event(
+            "CLR-100",
+            [
+                {"Document No.": "DOC-1", "Posting Date": "2023-07-13", "Amount": -436.0, "Transaction Text": "Cr- Credit for Consum Billing"},
+                {"Document No.": "DOC-2", "Posting Date": "2023-07-13", "Amount": 436.0, "Transaction Text": "Dr- Consum Billing Receivable"},
+            ],
+            matched_edf_invoice="T-001",
+        ),
+        # A 2-row non-credit cluster (installment + interest) — must be excluded
+        # by the credit filter, NOT by cluster size.
+        _event(
+            "CLR-999",
+            [
+                {"Document No.": "DOC-3", "Posting Date": "2023-07-13", "Amount": 565.0, "Transaction Text": "Dr- Installment Receivable"},
+                {"Document No.": "DOC-4", "Posting Date": "2023-07-13", "Amount": 12.0, "Transaction Text": "Dr- Late Payment Charge"},
+            ],
+        ),
+        # A credit-containing event with no matched invoice — must be SAP-only.
+        _event(
+            "CLR-200",
+            [
+                {"Document No.": "DOC-5", "Posting Date": "2023-07-13", "Amount": -100.0, "Transaction Text": "Cr- Credit for Consum Billing"},
+                {"Document No.": "DOC-6", "Posting Date": "2023-07-13", "Amount": 100.0, "Transaction Text": "Dr- Consum Billing Receivable"},
+            ],
+        ),
     ]
-    ev = pd.DataFrame(
+    bb = pd.DataFrame(
         [
             {
                 "Invoice #": "T-001",
@@ -835,21 +860,34 @@ def _fixture() -> dict:
             }
         ]
     )
-    return {"sap": sap, "evidence": pd.DataFrame(), "bb": ev}
+    return {"events": events, "evidence": pd.DataFrame(), "bb": bb}
 
 
 def test_sap_events_restricted_to_reversal_clusters() -> None:
     fx = _fixture()
-    out = analyse_sap_back_billing(fx["sap"], fx["evidence"], fx["bb"])
+    out = analyse_sap_back_billing(fx["events"], fx["evidence"], fx["bb"])
     docs = {e["Clearing Doc #"] for e in out["events"]}
-    assert docs == {"CLR-100"}  # CLR-999 excluded
+    assert docs == {"CLR-100", "CLR-200"}  # CLR-999 excluded by credit filter
 
 
 def test_sap_bb_summary_totals() -> None:
     fx = _fixture()
-    out = analyse_sap_back_billing(fx["sap"], fx["evidence"], fx["bb"])
-    assert out["summary"]["sap_events"] == 1
-    assert out["summary"]["sap_net_total"] == 0.0  # -436 + 436
+    out = analyse_sap_back_billing(fx["events"], fx["evidence"], fx["bb"])
+    assert out["summary"]["sap_events"] == 2
+    assert out["summary"]["sap_net_total"] == 0.0  # CLR-100 net 0 + CLR-200 net 0
+
+
+def test_sap_bb_reconciliation_verdicts() -> None:
+    fx = _fixture()
+    out = analyse_sap_back_billing(fx["events"], fx["evidence"], fx["bb"])
+    by_event = {r["SAP Event"]: r for r in out["reconciliation"]}
+    # Matched + both amounts non-zero but differing -> Δ row.
+    assert by_event["CLR-100"]["EDF Invoice #"] == "T-001"
+    assert by_event["CLR-100"]["EDF Unlawful Charge (£)"] == 200.0
+    assert "Δ £" in by_event["CLR-100"]["Verdict"]
+    # Unmatched credit event -> SAP-only (money with no matching invoice).
+    assert by_event["CLR-200"]["EDF Invoice #"] == "—"
+    assert by_event["CLR-200"]["Verdict"] == "SAP-only"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -860,43 +898,66 @@ Expected: FAIL (`ImportError`)
 - [ ] **Step 3: Implement** — append to `edf_bill_fetcher/processors/matching.py`:
 
 ```python
+import re as _re
+
+# Matches a parenthetical billing period inside a reconciliation-statement
+# reversal Detail, e.g. "(14 May 2024 - 30 Sept. 2024)".
+_RECON_REVERSAL_PERIOD_RE = _re.compile(
+    r"\(\s*(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s*-\s*"
+    r"(\d{1,2}\s+[A-Za-z\.]{3,9}\.?\s+\d{4})\s*\)",
+    _re.IGNORECASE,
+)
+
+
+def _recon_period(detail: str) -> str:
+    """Extract the parenthetical period from a reconciliation reversal Detail."""
+    m = _RECON_REVERSAL_PERIOD_RE.search(detail)
+    if m:
+        return f"{m.group(1)} - {m.group(2)}"
+    return ""
+
+
 def analyse_sap_back_billing(
-    sap_financial: list[dict],
+    events: list,
     evidence_df: pd.DataFrame,
     back_billing_df: pd.DataFrame,
 ) -> dict:
     """Build the cross-referenced SAP back-billing position.
 
-    SAP events are clearing-doc clusters that contain a
-    ``Cr- Credit for Consum Billing`` reversal (real back-billing money
-    movement).  Periods are recovered from reconciliation-statement rows
-    (Source == "Statement Reconciliation") when present; otherwise blank.
+    ``events`` is the already-detected, already-matched list of
+    ``SapBackBillingEvent`` objects from the export pipeline (their
+    ``matched_edf_invoice`` fields are populated by the existing
+    ``match_sap_events_to_edf`` + ``handle_cluster_unmatched`` wiring).
+    Only events whose cluster contains a ``Cr- Credit for Consum Billing``
+    reversal are kept (real back-billing money movement).  Periods are
+    recovered from reconciliation-statement rows (Source ==
+    "Statement Reconciliation") when present; otherwise blank.
     Reconciliation rows compare each SAP event's net against the matched
     EDF invoice's unlawful charge.
     """
-    from collections import Counter
-    from edf_bill_fetcher.writers._helpers import detect_sap_back_billing_events
-
-    events: list[dict] = []
+    events_out: list[dict] = []
     reconciliation: list[dict] = []
-    all_events = detect_sap_back_billing_events(sap_financial)
     back_billing_rows = (
         back_billing_df.to_dict(orient="records") if back_billing_df is not None else []
     )
 
-    for ev in all_events:
+    recon_periods_by_invoice: dict[str, list[str]] = {}
+    if evidence_df is not None and not evidence_df.empty:
+        recon = evidence_df[evidence_df.get("Source", "") == "Statement Reconciliation"]
+        for _, r in recon.iterrows():
+            det = str(r.get("Details", ""))
+            period = _recon_period(det)
+            if not period:
+                continue
+            inv = str(r.get("Invoice #", ""))
+            recon_periods_by_invoice.setdefault(inv, []).append(period)
+
+    for ev in events:
         if not ev.has_credit_for_consum_billing:
             continue
-        periods: list[str] = []
-        if evidence_df is not None and not evidence_df.empty:
-            recon = evidence_df[
-                evidence_df.get("Source", "") == "Statement Reconciliation"
-            ]
-            for _, r in recon.iterrows():
-                det = str(r.get("Details", ""))
-                if str(r.get("Invoice #", "")) == str(ev.matched_edf_invoice or "") and det:
-                    periods.append(det)
-        events.append(
+        matched_inv = ev.matched_edf_invoice or ""
+        periods = recon_periods_by_invoice.get(matched_inv, [])
+        events_out.append(
             {
                 "Clearing Doc #": ev.clearing_doc,
                 "Clearing Date": (
@@ -909,12 +970,12 @@ def analyse_sap_back_billing(
                 "Net Amount (£)": ev.net_amount,
                 "Has Credit for Consum Billing": "Yes" if ev.has_credit_for_consum_billing else "No",
                 "Period(s)": "; ".join(dict.fromkeys(periods)) if periods else "—",
-                "Matched EDF Invoice #": ev.matched_edf_invoice or "—",
+                "Matched EDF Invoice #": matched_inv or "—",
             }
         )
         # Reconcile against our PDF-derived back-billing row (if any).
         match = next(
-            (r for r in back_billing_rows if str(r.get("Invoice #", "")) == str(ev.matched_edf_invoice or "")),
+            (r for r in back_billing_rows if str(r.get("Invoice #", "")) == matched_inv),
             None,
         )
         if match is not None:
@@ -939,22 +1000,23 @@ def analyse_sap_back_billing(
                 }
             )
         else:
+            # SAP money movement with no matching invoice in our analysis.
             reconciliation.append(
                 {
                     "SAP Event": ev.clearing_doc,
-                    "EDF Invoice #": ev.matched_edf_invoice or "—",
+                    "EDF Invoice #": matched_inv or "—",
                     "EDF Unlawful Charge (£)": 0.0,
                     "SAP Net (£)": ev.net_amount,
-                    "Verdict": "Ours-only" if ev.matched_edf_invoice is None else "Partial",
+                    "Verdict": "SAP-only" if not matched_inv else "Partial",
                 }
             )
 
     summary = {
-        "sap_events": len(events),
-        "sap_net_total": round(sum(e["Net Amount (£)"] for e in events), 2),
+        "sap_events": len(events_out),
+        "sap_net_total": round(sum(e["Net Amount (£)"] for e in events_out), 2),
         "reconciled": sum(1 for r in reconciliation if r["Verdict"] == "Reconciled"),
     }
-    return {"events": events, "reconciliation": reconciliation, "summary": summary}
+    return {"events": events_out, "reconciliation": reconciliation, "summary": summary}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1014,9 +1076,13 @@ def test_write_sap_back_billing_position_sheet() -> None:
     }
     ws = write_sap_back_billing_position_sheet(wb, result)
     assert ws.title == "Backbilling According to SAP"
-    col_a = [ws.cell(row=r, column=1).value for r in range(1, ws.max_row + 1)]
-    assert any("CLR-100" in str(v) for v in col_a)
-    assert any("Reconciled" in str(v) for v in col_a)
+    cells = [
+        ws.cell(row=r, column=c).value
+        for r in range(1, ws.max_row + 1)
+        for c in range(1, ws.max_column + 1)
+    ]
+    assert any("CLR-100" in str(v) for v in cells)
+    assert any("Reconciled" in str(v) for v in cells)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1039,8 +1105,8 @@ def write_sap_back_billing_position_sheet(
     reconciliation table against our PDF-derived Back-billing Analysis.
     """
     ws = wb.create_sheet(title="Backbilling According to SAP")
-    ORANGE = "FE5716"
-    NAVY = "10367A"
+    # Use the module-level constants (sap.py already defines ORANGE and
+    # SAP_BB_* helpers); do NOT redefine them locally.
 
     summary = result.get("summary", {})
     title = (
@@ -1145,7 +1211,7 @@ Expected: FAIL (tab missing)
 
 - [ ] **Step 3: Implement**
 
-In `export.py`, inside the `if sap_financial:` block, after `write_sap_back_billing_sheets(...)`:
+In `export.py`, inside the `if sap_financial:` block, after `write_sap_back_billing_sheets(...)` (note: `bb_events` — the already-detected, already-matched list of `SapBackBillingEvent` objects — is in scope there, created at the top of the block; pass it, NOT `sap_financial`):
 
 ```python
             if config.get("generate_reconciliation_sheet", True):
@@ -1153,7 +1219,7 @@ In `export.py`, inside the `if sap_financial:` block, after `write_sap_back_bill
                 from edf_bill_fetcher.processors.matching import analyse_sap_back_billing
 
                 sap_bb_position = analyse_sap_back_billing(
-                    sap_financial, dfc, analyses.get("back_billing")
+                    bb_events, dfc, analyses.get("back_billing")
                 )
                 write_sap_back_billing_position_sheet(
                     wb, sap_bb_position, account=account_label
