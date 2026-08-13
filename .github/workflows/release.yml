@@ -3,10 +3,10 @@ name: Release
 on:
   push:
     tags:
-      # Minor releases (0.1.0, 0.2.0, ...) trigger a full build +
-      # GitHub Release. Patch tags (0.0.X) skip this workflow —
+      # Minor releases (v0.1.0, v0.2.0, ...) trigger a full build +
+      # GitHub Release. Patch tags (v0.0.X) skip this workflow —
       # they're handled by ci.yml's test-only tag trigger.
-      - '0.*.0'
+      - 'v0.*.0'
     branches: [how-its-going]
 
 jobs:

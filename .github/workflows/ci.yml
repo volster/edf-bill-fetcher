@@ -5,10 +5,10 @@ on:
     branches: [How-it-started, things-got-out-of-hand, how-its-going]
     # Patch-tag CI: runs on every 0.0.X tag (patch releases) on the
     # how-its-going branch only — that's the release line.
-    # 0.X.0 (minor) tags are handled by release.yml (build + GitHub
+    # v0.X.0 (minor) tags are handled by release.yml (build + GitHub
     # Release) instead.
     tags:
-      - '0.0.*'
+      - 'v0.0.*'
   pull_request:
     branches: [How-it-started, things-got-out-of-hand, how-its-going]
 
