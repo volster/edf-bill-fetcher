@@ -66,6 +66,7 @@ EVIDENCE_HEADERS: list[str] = [
     "Details",
     "Logic Used",
     "Anomaly Flag",
+    "Sub Periods",
 ]
 COL_AMOUNT = EVIDENCE_HEADERS.index("Amount (£)") + 1
 

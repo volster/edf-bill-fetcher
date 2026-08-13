@@ -704,6 +704,7 @@ def export_to_excel(
         "Logic Used",
         "Anomaly Flag",
         "Duplicate Of",
+        "Sub Periods",
     ]
     # Diagnostic-only columns that the analyser writers (Back-billing,
     # Rebilling, Meter Readings, Contract History) need for their

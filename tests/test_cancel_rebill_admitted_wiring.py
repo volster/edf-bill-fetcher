@@ -130,3 +130,23 @@ def test_process_text_path_absent_admit_phrase_yields_false() -> None:
     rec = engine.records[-1]
     assert "Cancel/Rebill Admitted" in rec
     assert rec["Cancel/Rebill Admitted"] is False
+
+
+def test_process_new_invoice_carries_sub_periods() -> None:
+    engine = _engine()
+    body = (
+        "About your charges\n"
+        "02 Oct 20 - 24 Mar 21 39386YOUR READ 59129 ESTIMATED 19743 kWh 16.42p £3,241.80\n"
+        "Current balance £3,241.80 in debit\n"
+    )
+    ok = engine._process_new_invoice(
+        body,
+        "PDF",
+        "Test invoice",
+        "09 Aug 2023",
+        attachment_name="t68.pdf",
+    )
+    assert ok
+    assert engine.records
+    rec = engine.records[-1]
+    assert "02/10/2020|24/03/2021|19743.0|16.42|3241.8" in rec["Sub Periods"]

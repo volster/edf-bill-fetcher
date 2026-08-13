@@ -132,3 +132,15 @@ def test_export_writer_importable(tmp_path: object) -> None:
     out = tmp_path / "export_writer.xlsx"  # type: ignore[operator]
     export_to_excel(df.to_dict(orient="records"), str(out), [], {})
     assert out.exists()  # export_to_excel writes to disk; success = file present
+
+
+def test_evidence_sheet_has_sub_periods_column() -> None:
+    from edf_bill_fetcher.io.writers.evidence import write_evidence_sheet
+
+    df = _fixture_df()
+    df["Sub Periods"] = ""
+    df.loc[0, "Sub Periods"] = "02/10/2020|24/03/2021|19743.0|16.42|3241.8"
+    ws = Workbook()
+    write_evidence_sheet(ws.active, df)
+    headers = [ws.active.cell(row=1, column=c).value for c in range(1, ws.active.max_column + 1)]
+    assert "Sub Periods" in headers

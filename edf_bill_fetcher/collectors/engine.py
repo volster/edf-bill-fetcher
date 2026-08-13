@@ -57,6 +57,7 @@ from edf_bill_fetcher.processors.patterns import (
     AMOUNT_PATTERNS,
     PERIOD_RE,
     READING_PATTERNS,
+    extract_sub_periods,
 )
 from edf_bill_fetcher.processors.sap_parsers import (
     detect_reconciliation_statement,
@@ -298,6 +299,8 @@ class EvidenceEngine:
         if "amount" not in fields:
             return False  # didn't match
 
+        sub_periods = extract_sub_periods(text)
+
         # Account filter
         if self.config.get("use_acc_filter"):
             acc = self.config.get("acc_num", "")
@@ -377,6 +380,7 @@ class EvidenceEngine:
                 source_pdf_text=text[:4000],
                 regex_trace="; ".join(regex_trace) if regex_trace else "",
                 cancel_rebill_admitted=bool(extract_admit_phrase(text)),
+                sub_periods=sub_periods,
             ).to_dict()
         )
         return True
