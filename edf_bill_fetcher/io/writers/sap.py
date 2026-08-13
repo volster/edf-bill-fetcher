@@ -19,6 +19,7 @@ from edf_bill_fetcher.helpers.theme import (
     EDF_OFFWHITE,
     MEDIUM_GREY,
 )
+from edf_bill_fetcher.io.writers.sheet_layout import freeze_at, write_header_row
 from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
 
 # ---- SAP color constants (was writers/__init__.py L2003-2009) ----
@@ -39,13 +40,8 @@ def _bb_invoice_value(rec: dict, key: str) -> object:
 
 # ---- _write_sap_header_row (was L1976-2002) ----
 def _write_sap_header_row(ws: Worksheet, row: int, columns: list) -> None:
-    NAVY = "10367A"
-    for j, col in enumerate(columns):
-        cell = ws.cell(row=row, column=j + 1, value=col)
-        cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", start_color=NAVY)
-        cell.border = CELL_BORDER
-        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    """Header row — left-aligned variant of the shared helper."""
+    write_header_row(ws, row, columns, align="left")
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +468,7 @@ def _write_sap_bb_events_sheet(
         ws.column_dimensions[col_letter].width = w
 
     # Freeze top header
-    ws.freeze_panes = "A4"  # was A8 — header moved to row 3 (spec §3.3)
+    freeze_at(ws, "A4")  # was A8 — header moved to row 3 (spec §3.3)
 
 
 # ---- _write_sap_bb_matches_sheet (was L2251-2448) ----
@@ -660,7 +656,7 @@ def _write_sap_bb_matches_sheet(
     for i, w in enumerate(widths, start=1):
         col_letter = openpyxl.utils.get_column_letter(i)
         ws.column_dimensions[col_letter].width = w
-    ws.freeze_panes = "A6"
+    freeze_at(ws, "A6")
 
 
 # ---------------------------------------------------------------------------
