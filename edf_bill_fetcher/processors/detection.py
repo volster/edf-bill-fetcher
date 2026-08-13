@@ -184,6 +184,73 @@ def _pull_period_charge(r: pd.Series) -> tuple[float, str]:
         return 0.0, "Amount (fallback)"
 
 
+def _parse_sub_periods(raw: object) -> list[dict]:
+    """Parse the serialized ``Sub Periods`` column back into row dicts."""
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    rows: list[dict] = []
+    for token in raw.split(";"):
+        token = token.strip()
+        if not token:
+            continue
+        parts = [p.strip() for p in token.split("|")]
+        if len(parts) != 5:
+            continue
+        pf, pt = _safe_to_datetime(parts[0]), _safe_to_datetime(parts[1])
+        if pd.isna(pf) or pd.isna(pt):
+            continue
+        try:
+            rows.append(
+                {
+                    "period_from": pf,
+                    "period_to": pt,
+                    "units_kwh": float(parts[2]),
+                    "rate_p": float(parts[3]),
+                    "charge": float(parts[4]),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    return rows
+
+
+def _sub_period_unlawful(
+    sub_periods: list[dict], cutoff: pd.Timestamp
+) -> tuple[float, list[tuple]]:
+    """Return (unlawful_charge, unlawful_slices).
+
+    Day intervals are HALF-OPEN like the existing Excess Days computation
+    (``(bill_date - 365 - pf).days``): a day at exactly ``cutoff`` is NOT
+    unlawful, so unlawful days = ``(unlawful_to - pf).days``.  Each unlawful
+    slice is ``(slice_from, slice_to, rate_p, kwh_per_day)``.  ``kwh_per_day``
+    uses ``max(1, span_days)`` to survive 1-day sub-periods (e.g. T34's
+    ``04 Sep 19 - 04 Sep 19`` row, span 0).
+    """
+    total = 0.0
+    slices: list[tuple] = []
+    for s in sub_periods:
+        pf: pd.Timestamp = s["period_from"]
+        pt: pd.Timestamp = s["period_to"]
+        span_days = (pt - pf).days
+        if span_days < 0:
+            continue
+        unlawful_to = min(pt, cutoff)
+        if unlawful_to <= pf:
+            continue
+        rate = s["rate_p"]
+        units = s["units_kwh"]
+        kwh_per_day = units / max(1, span_days)
+        if unlawful_to >= pt:
+            charge = rate / 100.0 * units
+            slices.append((pf, pt, rate, kwh_per_day))
+        else:
+            frac = (unlawful_to - pf).days / max(1, span_days)
+            charge = rate / 100.0 * units * frac
+            slices.append((pf, unlawful_to, rate, kwh_per_day))
+        total += charge
+    return round(total, 2), slices
+
+
 def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     """Return invoices that are back-billing under SLC 7A / Electricity Act 1989 s.84B.
 
@@ -211,7 +278,18 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         Invoice #, Bill Date, Period From, Period To, Days Billed,
         Period Charge (£), Value Source, 12-Month Limit (days),
         Excess Days, Unlawful Charge (£), Cancel/Rebill Admitted,
-        Reason Assessment.
+        Reason Assessment, Sub-Period Basis.
+
+    ``Sub-Period Basis`` records how ``Unlawful Charge (£)`` was derived:
+    ``"Sub-period × rate"`` when the invoice carries a ``Sub Periods``
+    table (each unlawful sub-period's rate/units slice is charged
+    directly, straddling slices prorated at the 12-month cutoff) or
+    ``"Day-ratio fallback"`` when no sub-period table is available (the
+    old day-ratio proration of the Period Charge).  An internal
+    ``_unlawful_slices`` column (list of ``(slice_from, slice_to,
+    rate_p, kwh_per_day)`` tuples) is carried on the returned frame for
+    downstream union-total consumers but is not part of the public
+    column set.
 
     ``Unlawful Charge (£)`` is the prorated share of the Period Charge
     attributable to the Excess Days — i.e.
@@ -264,6 +342,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         "Unlawful Charge (£)",
         "Cancel/Rebill Admitted",
         "Reason Assessment",
+        "Sub-Period Basis",
     ]
     if df is None or df.empty:
         return pd.DataFrame(columns=columns)
@@ -297,7 +376,39 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         charge, value_source = _pull_period_charge(r)
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
-        unlawful_charge = round(charge * (min(excess, days) / days), 2) if days > 0 else 0.0
+        sub_periods = _parse_sub_periods(r.get("Sub Periods"))
+        cutoff = bill_date_dt - pd.Timedelta(days=365)
+        if sub_periods:
+            unlawful_charge, unlawful_slices = _sub_period_unlawful(sub_periods, cutoff)
+            sub_basis = "Sub-period × rate"
+        else:
+            # Day-ratio fallback (no sub-period table, e.g. KI-0014).
+            # Synthesize a single unlawful slice spanning the first
+            # ``excess_eff`` days of the period so the union total covers
+            # the fallback row too.  The slice reproduces the day-ratio
+            # unlawful charge exactly:
+            #   * units present: rate = charge/units*100 p/kWh,
+            #     kwh_per_day = units/days
+            #   * units absent:  rate = 100.0 p/kWh (i.e. £1/kWh),
+            #     kwh_per_day = charge/days (money-per-day)
+            # In both cases rate/100 * kwh_per_day * excess == unlawful.
+            excess_eff = min(excess, days)
+            if excess_eff > 0:
+                try:
+                    units_f = float(str(r.get("Units (kWh)", "")).replace(",", "").strip())
+                except (TypeError, ValueError):
+                    units_f = 0.0
+                if units_f > 0 and days > 0:
+                    rate_p = charge / units_f * 100.0 if units_f else 100.0
+                    kwh_per_day = units_f / days if days else 0.0
+                else:
+                    rate_p = 100.0
+                    kwh_per_day = charge / days if days else 0.0
+                unlawful_slices = [(pf, pf + pd.Timedelta(days=excess_eff), rate_p, kwh_per_day)]
+            else:
+                unlawful_slices = []
+            unlawful_charge = round(charge * (excess_eff / days), 2) if days > 0 else 0.0
+            sub_basis = "Day-ratio fallback"
         rows.append(
             {
                 "Invoice #": r.get("Invoice #", ""),
@@ -320,6 +431,8 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
                     pf,
                     pt,
                 ),
+                "Sub-Period Basis": sub_basis,
+                "_unlawful_slices": unlawful_slices,
             }
         )
     out = pd.DataFrame(rows)
@@ -329,7 +442,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     out = out.drop(columns=["_bill_date_sort"])
     # Reorder rows by the sort key (parsed Bill Date, ascending).
     out = out.loc[sort_key.sort_values().index].reset_index(drop=True)
-    return out[columns]
+    return out[columns + ["_unlawful_slices"]]
 
 
 def _reversal_match(

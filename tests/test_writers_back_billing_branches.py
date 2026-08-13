@@ -28,7 +28,10 @@ from edf_bill_fetcher.processors.detection import _assess_reason, detect_back_bi
 from edf_bill_fetcher.processors.matching import build_evidence_index
 
 # Canonical output column set produced by detect_back_billing. Kept here as a
-# module constant so every shape assertion names the same contract.
+# module constant so every shape assertion names the same contract.  The
+# detector's non-empty outputs additionally carry the internal
+# ``_unlawful_slices`` column (preserved for downstream union-total
+# consumers); the empty early-return frames carry only these public columns.
 _EXPECTED_COLUMNS = [
     "Invoice #",
     "Bill Date",
@@ -42,6 +45,7 @@ _EXPECTED_COLUMNS = [
     "Unlawful Charge (£)",
     "Cancel/Rebill Admitted",
     "Reason Assessment",
+    "Sub-Period Basis",
 ]
 
 
@@ -184,7 +188,7 @@ def test_detect_back_billing_single_long_period_with_admit_column() -> None:
     assert bool(row["Cancel/Rebill Admitted"]) is True
     assert isinstance(row["Reason Assessment"], str)
     assert "admits a cancellation/reversal" in row["Reason Assessment"]
-    assert list(out.columns) == _EXPECTED_COLUMNS
+    assert list(out.columns) == _EXPECTED_COLUMNS + ["_unlawful_slices"]
 
 
 def test_detect_back_billing_single_long_period_without_admit_column() -> None:
@@ -231,7 +235,7 @@ def test_detect_back_billing_multiple_long_periods_sorted_by_bill_date() -> None
     out = detect_back_billing(df)
     assert list(out["Invoice #"]) == ["EARLY", "LATE"]
     assert out.index.tolist() == [0, 1]  # reset_index applied
-    assert list(out.columns) == _EXPECTED_COLUMNS
+    assert list(out.columns) == _EXPECTED_COLUMNS + ["_unlawful_slices"]
 
 
 def test_detect_back_billing_unparseable_period_rows_skipped() -> None:

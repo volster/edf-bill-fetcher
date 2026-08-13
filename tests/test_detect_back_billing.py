@@ -242,6 +242,8 @@ def test_output_columns_match_spec() -> None:
         "Unlawful Charge (£)",
         "Cancel/Rebill Admitted",
         "Reason Assessment",
+        "Sub-Period Basis",
+        "_unlawful_slices",
     }
     assert set(out.columns) == expected
 
@@ -387,3 +389,13 @@ def test_long_period_billed_within_year_of_period_to_not_flagged() -> None:
     )
     result = detect_back_billing(df)
     assert result.empty
+
+
+def test_sub_period_basis_column_present() -> None:
+    # Default _row() has exactly a 365-day bill gap (not back-billing), so
+    # pass kwargs that clear the gate and exercise the fallback branch.
+    out = detect_back_billing(
+        pd.DataFrame([_row(date="01 Jan 2025", period_from="01 Jan 2022", period_to="31 Dec 2023")])
+    )
+    assert "Sub-Period Basis" in out.columns
+    assert out.iloc[0]["Sub-Period Basis"] == "Day-ratio fallback"
