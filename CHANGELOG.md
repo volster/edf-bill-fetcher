@@ -6,7 +6,55 @@ project. Dates are YYYY-MM-DD.
 The format is loosely [Keep a Changelog](https://keepachangelog.com),
 semver-friendly.
 
-## [Unreleased] — Back-billing & rebilling detection (2026-07-15)
+## [Unreleased]
+
+## [0.4.0] - 2026-08-13
+
+This release makes the dispute-analysis pipeline substantially more reliable,
+particularly for late billing, cancelled/reissued invoices, and SAP-ledger
+cross-checking. It also improves report consistency, packaging, and CI
+reliability.
+
+### Added
+
+- Legal back-billing analysis based on bill date versus consumption period,
+  including unlawful-slice proration and a documented `Period Charge (£)` to
+  `Amount (£)` fallback.
+- Recursive rebilling supersession analysis with preserved audit rows,
+  `Status`, `Superseded By`, and `Partial Overlap` fields.
+- SAP back-billing matching using posting and clearing dates, period-charge
+  amounts, and internal-mechanism cluster labels.
+- Packaged OFGEM quarterly price-cap data loaded from JSON with validation.
+- Typed `BillingRecord` and shared `PaymentAnalysis` models.
+- Shared sheet-layout helpers for back-billing, evidence, payment, and SAP
+  worksheets.
+
+### Changed
+
+- Shared parsing, matching, reconciliation, formatting, and anomaly helpers
+  now have canonical implementations instead of duplicated copies.
+- PyInstaller builds include packaged data files for one-file bundles.
+
+### Fixed
+
+- Corrected the back-billing eligibility gate to use bill date versus
+  `Period From`, rather than period length or `Period To` alone.
+- Corrected period-charge selection so running account balances are not used
+  as the primary deduction amount.
+- Corrected unlawful-charge proration, recursive supersession, and SAP
+  amount/date matching edge cases.
+- Fixed report payment-analysis divergence between Excel, PDF, and DOCX.
+- Fixed evidence links, sheet ordering, report formatting, carry-forward,
+  non-numeric amounts, date fallbacks, and dispute deltas.
+- Added strict empty-extraction handling through the CLI `--strict` option.
+- Hardened macOS application signing/DMG packaging and Windows Tcl/Tk CI
+  reliability.
+
+### Verification
+
+- CI matrix green across Python 3.10, 3.11, and 3.12 on Linux, macOS, and
+  Windows.
+- 1,411 tests passed, 9 skipped, with 92.55% coverage at release preparation.
 
 Adds four Excel analysis tabs (Back-billing Analysis, Rebilling &
 Corrections, Meter Readings, Contract History) backed by four

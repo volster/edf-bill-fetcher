@@ -1,6 +1,22 @@
 # EDF Energy Billing Evidence Collector
 
-A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, local PDF bills, and HTM account history exports. Produces a multi-sheet Excel evidence workbook and a PDF **or** DOCX report suitable for Energy Ombudsman submission.
+A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, local PDF bills, and HTM account history exports. It produces a self-documenting, multi-sheet Excel evidence workbook and a PDF **or** DOCX report suitable for dispute preparation and Energy Ombudsman submission.
+
+The project is designed for evidence discovery, not legal advice. It preserves
+source material and deterministic analysis outputs so a reviewer can inspect
+how each finding was produced.
+
+## What it does
+
+1. Extracts invoice, payment, meter, tariff, and account-history data from the
+   supported EDF sources.
+2. Deduplicates records while retaining dropped siblings for audit.
+3. Runs deterministic pandas-based analysis for balances, payments, disputes,
+   forecasts, tariffs, meter rollovers, contracts, back-billing, and rebilling.
+4. Optionally parses EDF SAP contract-history, meter-reading, and
+   financial-transaction PDFs and reconciles them against EDF invoice evidence.
+5. Writes Excel, PDF, and DOCX outputs with provenance, hyperlinks, and
+   configuration details captured for later review.
 
 ## Features
 
@@ -15,7 +31,7 @@ A personal desktop application that collects and analyses EDF Energy billing dat
   - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
   - **Sequential file naming**: `<stem>_<YYYY-MM-DD>_<N>.xlsx` (and `_Report.pdf` / `_Report.docx` variants). Counter is per-day per-folder and shared across all outputs in one batch.
   - **Auto-generate report**: a checkbox in Section 2 to produce xlsx + PDF + DOCX from a single EXTRACT run, sharing the same batch counter.
-  - **Three-state EXTRACT button**: `EXTRACT TO EXCEL → Cancel → Cancelling... → EXTRACT TO EXCEL` — theEXTRACT and Cancel buttons are now collapsed into one.
+  - **Three-state EXTRACT button**: `EXTRACT TO EXCEL → Cancel → Cancelling... → EXTRACT TO EXCEL` — the EXTRACT and Cancel buttons are collapsed into one.
   - **Config persistence**: GUI state and report options stored at `~/.edf_collector/config.json` (atomic write, `0o600`); deleting the file resets state cleanly.
   - **Amalgamate toggle**: the `amalgamate_duplicates` checkbox surfaces as a nested child under Deduplication (enabled only when both *Drop duplicates* and *Record dropped duplicates* are on; default OFF).
 - **CLI mode**: Headless batch/report generation for automation.
@@ -58,6 +74,17 @@ pip install -e .
 #   [build]  PyInstaller for one-file Windows / macOS / Linux executables
 pip install -e ".[dev,build]"   # recommended for contributors
 ```
+
+### Platform notes
+
+- Python 3.10, 3.11, and 3.12 are tested in CI on Linux, macOS, and Windows.
+- PST/OST parsing requires `libpff-python`. The application records a clear
+  error and continues with other sources if that optional parser cannot load
+  in a particular environment.
+- GUI use requires a desktop display. Headless Linux test runs use Xvfb; use
+  CLI mode for servers and automation.
+- macOS and Windows packaged builds are produced by CI. Local PyInstaller
+  builds require the `[build]` extra.
 
 What `pip install -e .` actually pulls in (current version):
 
@@ -122,6 +149,25 @@ python main.py --docx-report -i records.json -o report.docx
 ```
 
 Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records state. The CLI dispatch logic lives in `edf_bill_fetcher.io.cli`; the `main()` entry point at the repo root is a one-line re-export of `edf_bill_fetcher.io.cli.main`.
+
+For automation, add `--strict` to return a non-zero exit status when the
+extraction produces no usable records. Without `--strict`, an empty result is
+still a valid run and produces the available error/provenance output.
+
+## Data handling and limitations
+
+- Input files are processed locally. The application does not require an EDF
+  API account or a cloud processing service.
+- Source PDFs, email archives, and generated workbooks may contain personal
+  and financial information. Store them securely and remove them before
+  sharing diagnostics or bug reports.
+- The parser is tailored to EDF formats observed in the project fixtures and
+  real exports. Unrecognised layouts are logged as parse errors rather than
+  silently treated as valid evidence.
+- Analysis is deterministic and intentionally conservative, but extracted
+  fields still require human review against the original bill or ledger.
+- SAP analysis only runs when the expected SAP dump PDFs are available and
+  `scan_sap_dumps` is enabled.
 
 ### Programmatic Usage
 
@@ -254,7 +300,7 @@ Sheets are written in roughly this order; conditional sheets only appear when th
 | **Forecast & Projection** | always (≥2 records) | Linear regression, Holt-Winters exponential smoothing, EMA projection, confidence intervals, accuracy metrics |
 | **Data Quality Report** | always | Completeness and read-quality metrics |
 | **Tariff Analysis** | always (≥2 records) | Tariff impact analysis |
-| **Back-billing Analysis** | always (≥2 records) | Invoices whose `Period From` → `Period To` window exceeds the SLC 7A 12-month limit (365 days), with the cancel/rebill admission disclosed as `Admitted phrase`, `Period overlap`, `Admitted + overlap`, or blank. Legal context block cites Electricity Act 1989 s.84B and Ofgem's back-billing rule. |
+| **Back-billing Analysis** | always (≥2 records) | Invoices with consumption older than 365 days when the bill was issued, assessed per consumption day against the bill date. Shows the unlawful slice, prorated charge, period-charge source, and recursive supersession status. |
 | **Rebilling & Corrections** | always (≥2 records) | Killer/killed invoice pairs identified by period overlap > 30 days OR jump-back > 30 days OR long-period killer ≥ 60 days reaching back into a prior invoice's window. Trigger Reason lists every matching heuristic. |
 | **Meter Readings** | always (≥2 records) | Actual vs Estimated timeline with meter-rollover candidates flagged `M`. Estimated Source mirrors the row's `Details` column (e.g. `Automatic estimate`). |
 | **Contract History** | always (≥2 records) | Contract periods inferred from tariff transitions, with ≤ 30-day gaps merging across same-tariff runs. |
@@ -269,7 +315,7 @@ Sheets are written in roughly this order; conditional sheets only appear when th
 
 The workbook carries four analysis tabs after the existing sheet set:
 
-- **Back-billing Analysis**: surfaces any single invoice whose `Period From` → `Period To` window exceeds the 12-month SLC 7A back-billing limit (>365 days). Each row shows the excess days and a deterministic Reason Assessment narrative. The `Cancel/Rebill Disclosed` column flags invoices whose cover page contains an admit phrase (e.g. *"we've recently cancelled some charges for you"*) — matched case-insensitively against EDF's wording — or that overlap a prior invoice's period (`Period overlap`), or both.
+- **Back-billing Analysis**: applies the per-consumption-day 12-month test: a charge is potentially back-billed when the bill `Date` is more than 365 days after the relevant consumption day. A short period billed years late can therefore qualify, while a long period billed promptly does not qualify merely because its span exceeds 365 days. The sheet shows `Period Charge (£)` as the canonical charge, an `Amount (£)` fallback only when needed, the unlawful slice and prorated `Unlawful Charge (£)`, plus recursive live/superseded status. Cancel-and-reissue evidence is considered alongside slow billing, not as a substitute for the legal timing test.
 - **Rebilling & Corrections**: pairs of invoices where a "killer" later-issued bill effectively cancels and reposts a "killed" earlier bill. Heuristics — period overlap > 30 days, jump-back > 30 days, or long-period (≥60 days) killer reaching back into the killed's start. Trigger Reason lists every trigger that fired.
 - **Meter Readings**: A/E/M timeline (`A`=Actual, `E`=Estimated, `M`=Meter rollover candidate). Actual/Smart readings only count toward rollover detection; a negative kWh delta within 94,999 of the 5-digit cap flags the row.
 - **Contract History**: one row per inferred tariff run. Adjacent same-tariff runs merge when their gap is ≤30 days (default).
@@ -278,7 +324,7 @@ The four detectors are pure-pandas functions keyed off the deduplicated evidence
 
 | Detector | Output columns |
 | --- | --- |
-| `detect_back_billing(df)` | Invoice #, Bill Date, Period From, Period To, Days Billed, Net Charge (£), 12-Month Limit (days), Excess Days, Cancel/Rebill Admitted, Reason Assessment |
+| `detect_back_billing(df)` | Invoice #, Bill Date, Period From, Period To, Days Billed, Period Charge (£), Value Source, 12-Month Limit (days), Excess Days, Unlawful Charge (£), Cancel/Rebill Admitted, Reason Assessment |
 | `detect_rebilling(df)` | Killer Invoice, Killed Invoice, Killer Date, Killed Date, Period Overlap (days), Jump-back (days), Trigger Reason, Cancel/Rebill Admitted (Killer) |
 | `detect_meter_rollover(df, rollover_threshold=94999)` | Date, Invoice #, Prev Units (kWh), Curr Units (kWh), Delta, Reading Type, Notes |
 | `infer_contracts(df, merge_gap_days=30)` | Contract From, Contract To, Tariff, Days, # Invoices |
@@ -314,9 +360,7 @@ The Financial-Transactions parser surfaces **26 columns** per row (16 historical
 Two analyser sheets sit adjacent to `SAP Financial Transactions`, deriving their data from it:
 
 - **SAP Back-billing Events** — one summary row per Clearing Document cluster of ≥4 underlying rows. Each cluster's net amount, evidence trail narrative, and link back to its underlying rows on `SAP Financial Transactions`. Sub-rows are hidden under collapsible outline groups (default collapsed) so the sheet opens at a readable ~62 rows. Debt-management rows whose `Statistical Key Flag == 'Installment Plan Item'` are excluded from clustering up-front.
-- **SAP ↔ EDF Matched Events** — fuzzy-join Sheet 1 events to EDF invoice records. Each matched pair lists the date delta vs EDF `Period To`, the SAP event's net amount and the EDF invoice's amount, a confidence band, and bidirectional hyperlinks to Sheet 1 and `EDF Evidence Report` rows. Per spec §3.3 the algorithm scores on two axes:
-  - **date** — Clearing Date inside EDF `[Period From, Period To]` = 50, within 3 days = 25, within 14 days = 5
-  - **amount** — for net-£0 clusters, the closest cluster row's gross within 5% of EDF amount = 40 / within 25% = 20 / within 50% = 5; for non-zero net clusters, the same bands applied to `event.net / edf.amount`
+- **SAP ↔ EDF Matched Events** — fuzzy-joins SAP events to EDF invoice records using SAP posting and clearing dates against EDF `[Period From, Period To]`, plus SAP net amount against the EDF `Period Charge (£)`. Each matched pair includes a confidence band and bidirectional hyperlinks. Events inside a known back-billing cluster that do not match an invoice within the amount bands are labelled as internal cluster mechanisms rather than being forced onto a nearby invoice.
 
   Bands: **High** ≥ 75, **Medium** ≥ 40, **Low** ≥ 10. SAP events that produce no candidate at Low-or-above are omitted from Sheet 2 (but remain on Sheet 1).
 
