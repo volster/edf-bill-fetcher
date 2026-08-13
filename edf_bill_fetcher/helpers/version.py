@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_DEFAULT_VERSION = "0.1.0"
+_DEFAULT_VERSION = "0.2.0"
 _MODULE_DIR = Path(__file__).resolve().parent
 
 
