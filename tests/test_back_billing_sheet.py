@@ -225,9 +225,12 @@ def test_write_back_billing_sheet_status_columns() -> None:
             assert ws.cell(row=row_idx, column=status_col).value == "Superseded"
             assert ws.cell(row=row_idx, column=superseded_by_col).value == "A"
             assert ws.cell(row=row_idx, column=partial_overlap_col).value in ("", None)
-            # Superseded rows are outline-collapsed sub-rows.
-            assert ws.row_dimensions[row_idx].outline_level == 1
-            assert ws.row_dimensions[row_idx].hidden is True
+            # Superseded rows stay fully visible (not outline-collapsed)
+            # so a reviewer can follow the chain to the survivor.
+            assert ws.row_dimensions[row_idx].outline_level == 0
+            assert ws.row_dimensions[row_idx].hidden is False
+            assert ws.cell(row=row_idx, column=superseded_by_col).hyperlink is not None
+            assert "A8" in ws.cell(row=row_idx, column=superseded_by_col).hyperlink.location
 
 
 def test_write_back_billing_sheet_status_partial_overlap_yes() -> None:
