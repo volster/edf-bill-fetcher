@@ -30,6 +30,58 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5.0.1
 
+      - name: Disable Windows Defender early (Windows)
+        # Defender real-time scanning corrupts the Tcl/Tk tree non-
+        # deterministically: it deletes individual .tcl files (icons.tcl,
+        # ttk/sizegrip.tcl, tcl_findLibrary init.tcl) during or after
+        # conda env creation, so each 3.10/3.11/3.12 leg fails on a
+        # DIFFERENT missing file.  Disabling it at the very start of the
+        # job — BEFORE the conda env is created and the Tcl/Tk mirror is
+        # copied — lets the whole job run with Defender off.  Best-effort:
+        # Tamper Protection can make Set-MpPreference no-op, so also stop
+        # the service and add explicit path exclusions.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $disableAttempts = 0
+          $maxAttempts = 3
+          $verified = $false
+          while ($disableAttempts -lt $maxAttempts -and -not $verified) {
+            $disableAttempts++
+            try {
+              Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+              Set-MpPreference -DisableIOAVProtection $true -ErrorAction Stop
+            } catch {
+              Write-Host "Set-MpPreference attempt $disableAttempts failed: $_"
+            }
+            Start-Sleep -Seconds 1
+            $status = Get-MpPreference | Select-Object -ExpandProperty DisableRealtimeMonitoring
+            if ($status -eq $true) {
+              $verified = $true
+              Write-Host "Defender real-time monitoring disabled (verified after $disableAttempts attempt(s))"
+            } else {
+              Write-Host "Defender real-time monitoring still enabled after attempt $disableAttempts"
+            }
+          }
+          if (-not $verified) {
+            try {
+              Set-Service -Name WinDefend -StartupType Disabled -ErrorAction Stop
+              Stop-Service -Name WinDefend -Force -ErrorAction Stop
+              SchTasks.exe /Change /TN "Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan" /Disable 2>$null
+              Write-Host "Defender services disabled outright (WinDefend stopped + disabled)"
+              $verified = $true
+            } catch {
+              Write-Host "Outright Defender disable failed (expected if not elevated): $_"
+            }
+          }
+          foreach ($excl in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)) {
+            try {
+              Add-MpPreference -ExclusionPath $excl -ErrorAction Stop
+            } catch {
+              Write-Host "Add-MpPreference exclusion failed for $excl (best-effort): $_"
+            }
+          }
+
       - name: Set up Python ${{ matrix.python-version }}
         # Linux + macOS: setup-python@v6 builds CPython from source,
         # Tcl/Tk is intact.
@@ -85,7 +137,7 @@ jobs:
           & "C:\Miniconda\Scripts\conda.exe" run -n edfci `
             python -c "import tkinter; r=tkinter.Tk(); print('Tk', tkinter.TkVersion, 'OK'); r.destroy()"
 
-      - name: Prepend conda env to PATH + disable Defender (Windows)
+      - name: Prepend conda env to PATH + mirror Tcl/Tk libs (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -182,63 +234,6 @@ jobs:
 
           "TCL_LIBRARY=$tclLib" | Out-File -Append -FilePath $env:GITHUB_ENV
           "TK_LIBRARY=$tkLib"   | Out-File -Append -FilePath $env:GITHUB_ENV
-
-          # Best-effort disable of Defender real-time monitoring as a
-          # belt-and-braces measure even though the Tcl/Tk files now
-          # live in the Defender-excluded temp dir. Tamper Protection
-          # can make Set-MpPreference silently no-op or revert.  Retry
-          # up to 3 times with a short sleep, then VERIFY the disable
-          # actually took. Don't fail the job if verification fails —
-          # the temp-mirror is the primary fix.
-          $disableAttempts = 0
-          $maxAttempts = 3
-          $verified = $false
-          while ($disableAttempts -lt $maxAttempts -and -not $verified) {
-            $disableAttempts++
-            try {
-              Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
-              Set-MpPreference -DisableIOAVProtection $true -ErrorAction Stop
-            } catch {
-              Write-Host "Set-MpPreference attempt $disableAttempts failed: $_"
-            }
-            Start-Sleep -Seconds 1
-            $status = Get-MpPreference | Select-Object -ExpandProperty DisableRealtimeMonitoring
-            if ($status -eq $true) {
-              $verified = $true
-              Write-Host "Defender real-time monitoring disabled (verified after $disableAttempts attempt(s))"
-            } else {
-              Write-Host "Defender real-time monitoring still enabled after attempt $disableAttempts"
-            }
-          }
-          if (-not $verified) {
-            Write-Host "WARNING: Could not verify Defender disable — relying on Tcl/Tk temp mirror"
-          }
-          # Outright disable fallback: if Set-MpPreference was reverted
-          # (Tamper Protection), nuke the Defender services and schedule
-          # so no scanner process can re-arm mid-test. Only reached when
-          # the graceful disable did not verify.
-          if (-not $verified) {
-            try {
-              Set-Service -Name WinDefend -StartupType Disabled -ErrorAction Stop
-              Stop-Service -Name WinDefend -Force -ErrorAction Stop
-              SchTasks.exe /Change /TN "Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan" /Disable 2>$null
-              Write-Host "Defender services disabled outright (WinDefend stopped + disabled, scheduled scan off)"
-              $verified = $true
-            } catch {
-              Write-Host "Outright Defender disable failed (expected if not elevated): $_"
-            }
-          }
-          # Explicit exclusions for the paths Tk will read at test time,
-          # in case the runner's built-in temp exclusion list does not
-          # cover the workspace checkout (D:\a\edf-bill-fetcher).
-          try {
-            Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction Stop
-            Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction Stop
-            Add-MpPreference -ExclusionPath (Join-Path $env:RUNNER_TEMP "tklibs") -ErrorAction Stop
-            Write-Host "Defender exclusions added: workspace + runner temp + tklibs mirror"
-          } catch {
-            Write-Host "Add-MpPreference exclusions failed (best-effort): $_"
-          }
 
           # Pre-read every Tcl/Tk script AND the tclIndex autoload
           # manifest in the mirror so the file-system cache is warm
