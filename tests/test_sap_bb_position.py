@@ -6,7 +6,9 @@ from edf_bill_fetcher.models.events import SapBackBillingEvent
 from edf_bill_fetcher.processors.matching import analyse_sap_back_billing
 
 
-def _event(cd, rows, matched_edf_invoice=None) -> SapBackBillingEvent:
+def _event(
+    cd: str, rows: list[dict], matched_edf_invoice: str | None = None
+) -> SapBackBillingEvent:
     net = round(sum(float(r["Amount"]) for r in rows), 2)
     has_credit = any("Credit for Consum Billing" in r["Transaction Text"] for r in rows)
     return SapBackBillingEvent(

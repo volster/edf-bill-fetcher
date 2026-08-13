@@ -17,7 +17,7 @@ T67_SUB = (
 )
 
 
-def _df(invoice, date, pf, pt, sub_periods) -> pd.DataFrame:
+def _df(invoice: str, date: str, pf: str, pt: str, sub_periods: str) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
