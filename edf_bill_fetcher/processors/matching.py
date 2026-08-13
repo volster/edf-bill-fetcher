@@ -472,6 +472,103 @@ def _build_bb_clusters(back_billing_df: pd.DataFrame) -> list[dict]:
     return clusters
 
 
+def analyse_sap_back_billing(
+    sap_financial: list[dict],
+    evidence_df: pd.DataFrame,
+    back_billing_df: pd.DataFrame,
+) -> dict:
+    """Build the cross-referenced SAP back-billing position.
+
+    SAP events are clearing-doc clusters that contain a
+    ``Cr- Credit for Consum Billing`` reversal (real back-billing money
+    movement).  Periods are recovered from reconciliation-statement rows
+    (Source == "Statement Reconciliation") when present; otherwise blank.
+    Reconciliation rows compare each SAP event's net against the matched
+    EDF invoice's unlawful charge.
+    """
+    from collections import Counter
+    from edf_bill_fetcher.writers._helpers import detect_sap_back_billing_events
+
+    events: list[dict] = []
+    reconciliation: list[dict] = []
+    all_events = detect_sap_back_billing_events(sap_financial, min_cluster_size=2)
+    back_billing_rows = (
+        back_billing_df.to_dict(orient="records") if back_billing_df is not None else []
+    )
+
+    for ev in all_events:
+        if not ev.has_credit_for_consum_billing:
+            continue
+        periods: list[str] = []
+        if evidence_df is not None and not evidence_df.empty:
+            recon = evidence_df[
+                evidence_df.get("Source", "") == "Statement Reconciliation"
+            ]
+            for _, r in recon.iterrows():
+                det = str(r.get("Details", ""))
+                if str(r.get("Invoice #", "")) == str(ev.matched_edf_invoice or "") and det:
+                    periods.append(det)
+        events.append(
+            {
+                "Clearing Doc #": ev.clearing_doc,
+                "Clearing Date": (
+                    pd.Timestamp(ev.clearing_date).strftime("%Y-%m-%d")
+                    if not pd.isna(ev.clearing_date)
+                    else ""
+                ),
+                "Clearing Reason": ev.clearing_reason,
+                "# Rows": len(ev.rows),
+                "Net Amount (£)": ev.net_amount,
+                "Has Credit for Consum Billing": "Yes" if ev.has_credit_for_consum_billing else "No",
+                "Period(s)": "; ".join(dict.fromkeys(periods)) if periods else "—",
+                "Matched EDF Invoice #": ev.matched_edf_invoice or "—",
+            }
+        )
+        # Reconcile against our PDF-derived back-billing row (if any).
+        match = next(
+            (r for r in back_billing_rows if str(r.get("Invoice #", "")) == str(ev.matched_edf_invoice or "")),
+            None,
+        )
+        if match is not None:
+            ours = float(match.get("Unlawful Charge (£)", 0.0) or 0.0)
+            if abs(ev.net_amount) < 0.01 and ours < 0.01:
+                verdict = "Reconciled"
+            elif abs(ours - ev.net_amount) < 0.01:
+                verdict = "Reconciled"
+            elif abs(ours) < 0.01:
+                verdict = "SAP-only"
+            elif abs(ev.net_amount) < 0.01:
+                verdict = "Ours-only"
+            else:
+                verdict = f"Δ £{ours - ev.net_amount:,.2f}"
+            reconciliation.append(
+                {
+                    "SAP Event": ev.clearing_doc,
+                    "EDF Invoice #": match.get("Invoice #", ""),
+                    "EDF Unlawful Charge (£)": ours,
+                    "SAP Net (£)": ev.net_amount,
+                    "Verdict": verdict,
+                }
+            )
+        else:
+            reconciliation.append(
+                {
+                    "SAP Event": ev.clearing_doc,
+                    "EDF Invoice #": ev.matched_edf_invoice or "—",
+                    "EDF Unlawful Charge (£)": 0.0,
+                    "SAP Net (£)": ev.net_amount,
+                    "Verdict": "Ours-only" if ev.matched_edf_invoice is None else "Partial",
+                }
+            )
+
+    summary = {
+        "sap_events": len(events),
+        "sap_net_total": round(sum(e["Net Amount (£)"] for e in events), 2),
+        "reconciled": sum(1 for r in reconciliation if r["Verdict"] == "Reconciled"),
+    }
+    return {"events": events, "reconciliation": reconciliation, "summary": summary}
+
+
 __all__ = [
     "build_evidence_index",
     "infer_contracts",
