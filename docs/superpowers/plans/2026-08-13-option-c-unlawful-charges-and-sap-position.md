@@ -249,16 +249,18 @@ git commit -m "feat: add sub_periods field and serialized Sub Periods column to 
 
 ---
 
-### Task 3: Wire sub-period extraction into `_process_new_invoice` + evidence frame
+### Task 3: Wire sub-period extraction into `_process_new_invoice` + `process_text` + evidence frame
 
 **Files:**
-- Modify: `edf_bill_fetcher/collectors/engine.py:294-382`
+- Modify: `edf_bill_fetcher/collectors/engine.py:294-382` (`_process_new_invoice`) and `edf_bill_fetcher/collectors/engine.py:447-553` (`process_text`)
 - Modify: `edf_bill_fetcher/io/writers/export.py:681` (col_order), `edf_bill_fetcher/io/writers/evidence.py:46` (EVIDENCE_HEADERS)
-- Test: `tests/test_cancel_rebill_admitted_wiring.py` (add a case), `tests/test_io_writers_extraction.py`
+- Test: `tests/test_cancel_rebill_admitted_wiring.py` (add cases for BOTH paths), `tests/test_io_writers_extraction.py`
 
 **Interfaces:**
 - Consumes: `extract_sub_periods` (Task 1), `BillingRecord(sub_periods=...)` (Task 2).
-- Produces: new-format invoice records carry a non-empty `Sub Periods` value; the evidence frame and EDF Evidence Report sheet expose a `Sub Periods` column.
+- Produces: BOTH new-format (`_process_new_invoice`) AND old-format (`process_text`) invoice records carry a non-empty `Sub Periods` value when the body contains an "About your charges" table; the evidence frame and EDF Evidence Report sheet expose a `Sub Periods` column.
+
+CRITICAL (learned in Task 10 verification): the real cancel-and-rebill T-series invoices are OLD-FORMAT and flow through `process_text` (Logic Used "Smart Context"), NOT `_process_new_invoice`. Wiring sub-period extraction only into `_process_new_invoice` leaves the `Sub Periods` column empty on every production record, so Option C never activates. BOTH paths must call `extract_sub_periods` and pass `sub_periods=...` to their `BillingRecord` constructor.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -318,6 +320,14 @@ from edf_bill_fetcher.processors.patterns import extract_sub_periods  # extend e
 
 and pass `sub_periods=sub_periods` to the `BillingRecord(...)` constructor (before `.to_dict()`).
 
+In `edf_bill_fetcher/collectors/engine.py` `process_text` (the old-format path, ~line 447-553), after the `period_charge` extraction and before the `BillingRecord(...)` constructor:
+
+```python
+        sub_periods = extract_sub_periods(clean_text)
+```
+
+and pass `sub_periods=sub_periods` to the `BillingRecord(...)` constructor in `process_text` (before `.to_dict()`). The `extract_sub_periods` name is already imported in the module's patterns import block (added above).
+
 In `edf_bill_fetcher/io/writers/evidence.py`, add `"Sub Periods"` at the end of `EVIDENCE_HEADERS`.
 
 In `edf_bill_fetcher/io/writers/export.py`, add `"Sub Periods"` at the end of `col_order` (line ~681). Do NOT add it to `_allowed_extras` — it is a real column.
@@ -332,6 +342,33 @@ Expected: PASS
 ```bash
 git add edf_bill_fetcher/collectors/engine.py edf_bill_fetcher/io/writers/evidence.py edf_bill_fetcher/io/writers/export.py tests/
 git commit -m "feat: wire sub-period extraction into new-invoice pipeline and evidence report"
+```
+
+- [ ] **Step 6: Old-format regression test (Task 10 finding)** — append to `tests/test_cancel_rebill_admitted_wiring.py` (mirror `test_process_text_path_populates_cancel_rebill_admitted` at line 96; `process_text(text, source_type, detail, fallback_date, sender="", attachment_name="")`):
+
+```python
+def test_process_text_carries_sub_periods() -> None:
+    engine = _engine()
+    body = (
+        "Your new account balance £3,241.80 in debit\n"
+        "Current balance £3,241.80 in debit\n"
+        "About your charges\n"
+        "02 Oct 20 - 24 Mar 21 39386YOUR READ 59129 ESTIMATED 19743 kWh 16.42p £3,241.80\n"
+    )
+    engine.process_text(body, "PDF", "Test invoice", "09 Aug 2023", attachment_name="t68.pdf")
+    assert engine.records
+    rec = engine.records[-1]
+    assert "02/10/2020|24/03/2021|19743.0|16.42|3241.8" in rec["Sub Periods"]
+```
+
+Run: `/home/matthew/miniconda3/envs/edf-bill-fetcher/bin/python -m pytest tests/test_cancel_rebill_admitted_wiring.py::test_process_text_carries_sub_periods -v`
+Expected: PASS
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add edf_bill_fetcher/collectors/engine.py tests/test_cancel_rebill_admitted_wiring.py
+git commit -m "fix: mine sub-periods on old-format invoices (process_text path)"
 ```
 
 ---
