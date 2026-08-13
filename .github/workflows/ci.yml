@@ -141,6 +141,45 @@ jobs:
           # script — so a successful copy would otherwise mark the
           # step as failed.
           $LASTEXITCODE = 0
+
+          # robocopy can silently drop a file even when it reports
+          # success — a transient Defender lock on a single file makes
+          # it skip that file and continue, leaving a hole in the
+          # mirror (observed: tk.tcl present but icons.tcl missing).
+          # Walk the source trees and re-copy anything the mirror is
+          # missing, then re-verify — fail the step if any file is
+          # still absent after the retry.
+          foreach ($pair in @(@($tclLibSrc, $tclLib), @($tkLibSrc, $tkLib))) {
+            $srcDir = $pair[0]
+            $dstDir = $pair[1]
+            $missing = @()
+            foreach ($srcFile in Get-ChildItem -Path $srcDir -Recurse -File) {
+              $relPath = $srcFile.FullName.Substring($srcDir.Length).TrimStart('\')
+              if (-not (Test-Path -LiteralPath (Join-Path $dstDir $relPath))) {
+                $missing += $relPath
+              }
+            }
+            if ($missing.Count -gt 0) {
+              Write-Host "Mirror incomplete — re-copying $($missing.Count) file(s): $($missing -join ', ')"
+              foreach ($relPath in $missing) {
+                $dstFile = Join-Path $dstDir $relPath
+                New-Item -ItemType Directory -Force -Path (Split-Path $dstFile) | Out-Null
+                Copy-Item -LiteralPath (Join-Path $srcDir $relPath) -Destination $dstFile -Force
+              }
+              $stillMissing = @()
+              foreach ($srcFile in Get-ChildItem -Path $srcDir -Recurse -File) {
+                $relPath = $srcFile.FullName.Substring($srcDir.Length).TrimStart('\')
+                if (-not (Test-Path -LiteralPath (Join-Path $dstDir $relPath))) {
+                  $stillMissing += $relPath
+                }
+              }
+              if ($stillMissing.Count -gt 0) {
+                throw "Tcl/Tk mirror still incomplete after re-copy: $($stillMissing -join ', ')"
+              }
+            }
+          }
+          Write-Host "Tcl/Tk mirror verified complete"
+
           "TCL_LIBRARY=$tclLib" | Out-File -Append -FilePath $env:GITHUB_ENV
           "TK_LIBRARY=$tkLib"   | Out-File -Append -FilePath $env:GITHUB_ENV
 
