@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import Cell
+from openpyxl.worksheet.worksheet import Worksheet
 
 from edf_bill_fetcher.io.writers.sheet_layout import (
     freeze_at,
@@ -14,16 +16,16 @@ from edf_bill_fetcher.io.writers.sheet_layout import (
 )
 
 
-def _open_ws() -> object:
+def _open_ws() -> Worksheet:
     wb = Workbook()
     return wb.active
 
 
-def _rgb(cell) -> str:
-    return cell.fill.start_color.rgb
+def _rgb(cell: Cell) -> str:
+    return str(cell.fill.start_color.rgb)
 
 
-def _merged(ws) -> list[str]:
+def _merged(ws: Worksheet) -> list[str]:
     return [str(r) for r in ws.merged_cells.ranges]
 
 
