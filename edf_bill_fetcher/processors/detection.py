@@ -251,6 +251,29 @@ def _sub_period_unlawful(
     return round(total, 2), slices
 
 
+def compute_unlawful_union_total(bb: pd.DataFrame) -> float:
+    """Sum unlawful consumption across all events without double counting.
+
+    Iterates rows in the detector's bill-date order (ascending).  Each
+    consumption day is claimed once, by the earliest-bill-date invoice that
+    recovers it, at that invoice's rate and kWh/day.  Returns the sum over
+    claimed days of ``rate_p / 100 * kwh_per_day``.
+    """
+    if bb is None or bb.empty:
+        return 0.0
+    claimed: dict[pd.Timestamp, tuple[float, float]] = {}  # day -> (rate_p, kwh/day)
+    for _, row in bb.iterrows():
+        for (slice_from, slice_to, rate_p, kwh_per_day) in row.get("_unlawful_slices", []):
+            if not isinstance(slice_from, pd.Timestamp):
+                continue
+            day = slice_from
+            while day < slice_to:  # half-open, matches _sub_period_unlawful
+                if day not in claimed:
+                    claimed[day] = (rate_p, kwh_per_day)
+                day += pd.Timedelta(days=1)
+    return round(sum(rate_p / 100.0 * kwh for rate_p, kwh in claimed.values()), 2)
+
+
 def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     """Return invoices that are back-billing under SLC 7A / Electricity Act 1989 s.84B.
 
@@ -827,6 +850,7 @@ def detect_meter_rollover(
 __all__ = [
     "detect_pdf_format",
     "detect_back_billing",
+    "compute_unlawful_union_total",
     "detect_rebilling",
     "compute_transitive_domination",
     "detect_meter_rollover",
