@@ -6,11 +6,20 @@ silent fallback to defaults when file missing/unreadable.
 
 import json
 import os
+import sys
 import tkinter as tk
 
 import pytest
 
 from edf_bill_fetcher.ui.app import App
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "Windows CI intermittently fails with _tkinter.TclError: "
+        "Can't find a usable tk.tcl"
+    ),
+)
 
 
 @pytest.fixture

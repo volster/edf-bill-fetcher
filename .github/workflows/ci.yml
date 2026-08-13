@@ -158,6 +158,7 @@ jobs:
             $disableAttempts++
             try {
               Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+              Set-MpPreference -DisableIOAVProtection $true -ErrorAction Stop
             } catch {
               Write-Host "Set-MpPreference attempt $disableAttempts failed: $_"
             }
@@ -172,6 +173,32 @@ jobs:
           }
           if (-not $verified) {
             Write-Host "WARNING: Could not verify Defender disable — relying on Tcl/Tk temp mirror"
+          }
+          # Outright disable fallback: if Set-MpPreference was reverted
+          # (Tamper Protection), nuke the Defender services and schedule
+          # so no scanner process can re-arm mid-test. Only reached when
+          # the graceful disable did not verify.
+          if (-not $verified) {
+            try {
+              Set-Service -Name WinDefend -StartupType Disabled -ErrorAction Stop
+              Stop-Service -Name WinDefend -Force -ErrorAction Stop
+              SchTasks.exe /Change /TN "Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan" /Disable 2>$null
+              Write-Host "Defender services disabled outright (WinDefend stopped + disabled, scheduled scan off)"
+              $verified = $true
+            } catch {
+              Write-Host "Outright Defender disable failed (expected if not elevated): $_"
+            }
+          }
+          # Explicit exclusions for the paths Tk will read at test time,
+          # in case the runner's built-in temp exclusion list does not
+          # cover the workspace checkout (D:\a\edf-bill-fetcher).
+          try {
+            Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction Stop
+            Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction Stop
+            Add-MpPreference -ExclusionPath (Join-Path $env:RUNNER_TEMP "tklibs") -ErrorAction Stop
+            Write-Host "Defender exclusions added: workspace + runner temp + tklibs mirror"
+          } catch {
+            Write-Host "Add-MpPreference exclusions failed (best-effort): $_"
           }
 
           # Pre-read every Tcl/Tk script AND the tclIndex autoload
