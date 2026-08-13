@@ -87,9 +87,25 @@ def test_sap_bb_reconciliation_verdicts() -> None:
     out = analyse_sap_back_billing(fx["events"], fx["evidence"], fx["bb"])
     by_event = {r["SAP Event"]: r for r in out["reconciliation"]}
     # Matched + both amounts non-zero but differing -> Δ row.
+    # CLR-100 has a single -436 credit-for-consum-billing row -> reversal
+    # magnitude 436.0, compared against our 200.0 -> Δ.
     assert by_event["CLR-100"]["EDF Invoice #"] == "T-001"
     assert by_event["CLR-100"]["EDF Unlawful Charge (£)"] == 200.0
+    assert by_event["CLR-100"]["SAP Net (£)"] == 436.0
     assert "Δ £" in by_event["CLR-100"]["Verdict"]
     # Unmatched credit event -> SAP-only (money with no matching invoice).
     assert by_event["CLR-200"]["EDF Invoice #"] == "—"
     assert by_event["CLR-200"]["Verdict"] == "SAP-only"
+
+
+def test_sap_bb_reconciliation_reversal_magnitude_reconciles() -> None:
+    fx = _fixture()
+    # Match our unlawful charge to the reversal magnitude exactly (436.0).
+    # CLR-100 nets to ~£0 (credit + rebill), so this only reconciles
+    # because the verdict compares against the credit magnitude, not net.
+    fx["bb"].loc[0, "Unlawful Charge (£)"] = 436.0
+    out = analyse_sap_back_billing(fx["events"], fx["evidence"], fx["bb"])
+    by_event = {r["SAP Event"]: r for r in out["reconciliation"]}
+    assert by_event["CLR-100"]["Verdict"] == "Reconciled"
+    assert by_event["CLR-100"]["SAP Net (£)"] == 436.0
+    assert out["summary"]["reconciled"] == 1

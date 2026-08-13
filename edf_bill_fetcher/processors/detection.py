@@ -221,10 +221,18 @@ def _sub_period_unlawful(
 
     Day intervals are HALF-OPEN like the existing Excess Days computation
     (``(bill_date - 365 - pf).days``): a day at exactly ``cutoff`` is NOT
-    unlawful, so unlawful days = ``(unlawful_to - pf).days``.  Each unlawful
-    slice is ``(slice_from, slice_to, rate_p, kwh_per_day)``.  ``kwh_per_day``
-    uses ``max(1, span_days)`` to survive 1-day sub-periods (e.g. T34's
-    ``04 Sep 19 - 04 Sep 19`` row, span 0).
+    unlawful for multi-day periods, so unlawful days =
+    ``(unlawful_to - pf).days``.  Each unlawful slice is ``(slice_from,
+    slice_to, rate_p, kwh_per_day)``.
+
+    A span-0 (1-day, ``pt == pf``) sub-period is a single unlawful day
+    whenever the cutoff is at or after that day.  It is special-cased
+    below because ``unlawful_to = min(pt, cutoff) <= pf`` would always
+    hold for ``pt == pf``, silently dropping the row from both the
+    per-invoice charge and the union (latent correctness bug; T34's
+    ``04 Sep 19 - 04 Sep 19`` row, span 0).  ``kwh_per_day`` for the
+    span-0 slice is the row's full ``units`` (the day covers the whole
+    span), so no ``max(1, span_days)`` guard is needed for span > 0.
     """
     total = 0.0
     slices: list[tuple] = []
@@ -234,17 +242,24 @@ def _sub_period_unlawful(
         span_days = (pt - pf).days
         if span_days < 0:
             continue
+        rate = s["rate_p"]
+        units = s["units_kwh"]
+        if span_days == 0:
+            if cutoff < pf:
+                continue
+            charge = rate / 100.0 * units
+            slices.append((pf, pf + pd.Timedelta(days=1), rate, units))
+            total += charge
+            continue
         unlawful_to = min(pt, cutoff)
         if unlawful_to <= pf:
             continue
-        rate = s["rate_p"]
-        units = s["units_kwh"]
-        kwh_per_day = units / max(1, span_days)
+        kwh_per_day = units / span_days
         if unlawful_to >= pt:
             charge = rate / 100.0 * units
             slices.append((pf, pt, rate, kwh_per_day))
         else:
-            frac = (unlawful_to - pf).days / max(1, span_days)
+            frac = (unlawful_to - pf).days / span_days
             charge = rate / 100.0 * units * frac
             slices.append((pf, unlawful_to, rate, kwh_per_day))
         total += charge

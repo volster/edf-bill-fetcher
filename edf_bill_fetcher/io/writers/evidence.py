@@ -101,6 +101,17 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
     else:
         match_positions_series = None
     df = df.drop(columns=["_matches_kept_idx"], errors="ignore")
+    # F1: the caller hands us the canonical ``col_order`` frame
+    # (export.py), which carries 21 columns — the 20 header-schema
+    # columns plus the internal ``Duplicate Of`` marker.  The header
+    # schema has 20.  Capture ``Duplicate Of`` for the post-loop dup
+    # pass, then reindex the frame to the header schema so the
+    # positional row-write below stays aligned.  Without this,
+    # ``Sub Periods`` data lands in an unheaded trailing column (21)
+    # and the ``Sub Periods`` header sits above the ``Duplicate Of``
+    # values.
+    dup_text = df["Duplicate Of"].tolist() if has_match_col else []
+    df = df.reindex(columns=headers)
     bg = "888888" if is_duplicate else "FE5716"
     write_header_row(ws, 1, headers, bg=bg, height=28)
 
@@ -223,8 +234,8 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         # Header cell
         bg = "888888"
         _hcell(ws, 1, col_idx_duplicate_of, "Duplicate Of", bg=bg)
-        # Materialise columns once
-        dup_text = df["Duplicate Of"].tolist()
+        # Use the ``dup_text`` list captured *before* the header-schema
+        # reindex above — the column is no longer on the frame.
         for r_idx, (match_val, summary) in enumerate(
             zip(match_positions_series.tolist(), dup_text, strict=True), 2
         ):

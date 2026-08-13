@@ -48,3 +48,59 @@ def test_no_sub_periods_uses_day_ratio_fallback() -> None:
     row = out.iloc[0]
     assert row["Sub-Period Basis"] == "Day-ratio fallback"
     assert row["Unlawful Charge (£)"] == round(1525.13 * (676 / 1041), 2)
+
+
+def test_span_zero_sub_period_fully_unlawful_charged() -> None:
+    # A 1-day (pt == pf) sub-period is a single unlawful day whenever the
+    # cutoff is at or after that day.  Bill 09 Aug 2023 -> cutoff 09 Aug
+    # 2022; 04 Sep 2019 is >365 days back, so the whole £50.00 charge is
+    # unlawful and must be contributed (previously dropped as span 0, so
+    # this row would have contributed £0).
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "T-SPAN0-UNLAWFUL",
+                "Date": "09 Aug 2023",
+                "Period From": "01 Sep 2019",
+                "Period To": "30 Sep 2019",
+                "Amount (£)": 50.0,
+                "Period Charge (£)": 50.0,
+                "Cancel/Rebill Admitted": True,
+                "Sub Periods": "04 Sep 2019|04 Sep 2019|100.0|50.0|50.0",
+            }
+        ]
+    )
+    out = detect_back_billing(df)
+    row = out.iloc[0]
+    assert row["Unlawful Charge (£)"] == 50.0
+    assert row["Sub-Period Basis"] == "Sub-period × rate"
+    # Slice: the single unlawful day, 100 kWh/day at 50.0 p/kWh.
+    slice_from, slice_to, rate_p, kwh_per_day = row["_unlawful_slices"][0]
+    assert slice_from == pd.Timestamp("2019-09-04")
+    assert slice_to == pd.Timestamp("2019-09-05")
+    assert (rate_p, kwh_per_day) == (50.0, 100.0)
+
+
+def test_span_zero_sub_period_within_365_lawful() -> None:
+    # A 1-day sub-period inside the 365-day window is lawful -> contributes 0.
+    # Period From is still >365 days back so the invoice clears the
+    # back-billing gate; the single span-0 day 01 Sep 2022 is within 365
+    # days of bill 09 Aug 2023 (cutoff 09 Aug 2022).
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "T-SPAN0-LAWFUL",
+                "Date": "09 Aug 2023",
+                "Period From": "01 Sep 2021",
+                "Period To": "31 Aug 2023",
+                "Amount (£)": 50.0,
+                "Period Charge (£)": 50.0,
+                "Cancel/Rebill Admitted": True,
+                "Sub Periods": "01 Sep 2022|01 Sep 2022|100.0|50.0|50.0",
+            }
+        ]
+    )
+    out = detect_back_billing(df)
+    row = out.iloc[0]
+    assert row["Unlawful Charge (£)"] == 0.0
+    assert row["_unlawful_slices"] == []
