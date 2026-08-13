@@ -311,5 +311,6 @@ def test_trailing_union_total_row_written() -> None:
     write_back_billing_sheet(ws, bb, evidence_df=df)
     labels = [ws.cell(row=r, column=1).value for r in range(1, ws.max_row + 1)]
     assert any(
-        l is not None and "UNION OF CONSUMPTION DAYS" in str(l) for l in labels
+        label is not None and "UNION OF CONSUMPTION DAYS" in str(label)
+        for label in labels
     )

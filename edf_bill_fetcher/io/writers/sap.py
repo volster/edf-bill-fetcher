@@ -697,7 +697,6 @@ def write_sap_back_billing_position_sheet(
     """
     ws = wb.create_sheet(title="Backbilling According to SAP")
     ORANGE = "FE5716"
-    NAVY = "10367A"
 
     summary = result.get("summary", {})
     title = (
