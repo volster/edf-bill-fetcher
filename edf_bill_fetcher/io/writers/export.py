@@ -306,6 +306,7 @@ def _reorder_sheets(wb: openpyxl.Workbook) -> None:
         "SAP Financial Transactions",
         "SAP Back-billing Events",
         "SAP ↔ EDF Matched Events",
+        "Backbilling According to SAP",
         "SAP Meter Readings",
         "SAP Contract History",
         "Back-billing Analysis",
@@ -1815,6 +1816,16 @@ def export_to_excel(
                 account=account_label,
                 sap_row_index_map=_build_sap_row_index_map(sap_financial),
             )
+            if config.get("generate_reconciliation_sheet", True):
+                from edf_bill_fetcher.io.writers.sap import write_sap_back_billing_position_sheet
+                from edf_bill_fetcher.processors.matching import analyse_sap_back_billing
+
+                sap_bb_position = analyse_sap_back_billing(
+                    bb_events, dfc, analyses.get("back_billing")
+                )
+                write_sap_back_billing_position_sheet(
+                    wb, sap_bb_position, account=account_label
+                )
         if config.get("generate_reconciliation_sheet", True):
             ws_recon_summary = wb.create_sheet(title="Reconciliation")
             ws_recon_detail = wb.create_sheet(title="Reconciliation Drill-down")

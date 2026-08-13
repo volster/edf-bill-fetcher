@@ -629,6 +629,35 @@ def test_export_tags_unmatched_event_as_cluster_internal_mechanism(
 # ---------------------------------------------------------------------------
 
 
+def test_full_export_includes_sap_bb_position_tab(tmp_path: object) -> None:
+    """Full export_to_excel run must wire the 'Backbilling According to
+    SAP' tab (built from bb_events + analyse_sap_back_billing) into the
+    workbook and place it in severity-led order after the matched-events
+    tab. No `export_fixture` exists in this file, so we build the workbook
+    through the same helper the sibling tests use."""
+    sap_rows = parse_sap_financial_transactions(_sap_csv_with_cluster(), source_file="test.pdf")
+    out = str(tmp_path / "wb.xlsx")  # type: ignore[operator]
+    export_to_excel(
+        data=_sample_data_one_record(),
+        output_path=out,
+        error_log=[],
+        config={
+            "use_dedup": False,
+            "acc_num": "0123456789",
+            "scan_sap_dumps": True,
+            "generate_reconciliation_sheet": True,
+        },
+        sap_rows={"financial": sap_rows, "contract": [], "meter": []},
+    )
+    wb = load_workbook(out, read_only=True)
+    sheets = wb.sheetnames
+    wb.close()
+    assert "Backbilling According to SAP" in sheets
+    assert sheets.index("SAP ↔ EDF Matched Events") < sheets.index(
+        "Backbilling According to SAP"
+    ), sheets
+
+
 def test_write_sap_back_billing_position_sheet() -> None:
     from edf_bill_fetcher.io.writers.sap import write_sap_back_billing_position_sheet
 
