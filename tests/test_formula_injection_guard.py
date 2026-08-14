@@ -321,4 +321,8 @@ class TestFormulaInjectionGuardOpacityRoundtrip:
                 f"{col_name} value missing apostrophe prefix; got value={cell.value!r}"
             )
             # Verbatim preservation of the original payload.
-            assert cell.value.lstrip("'") == payload
+            # Task 3: Attachment Name no longer carries the raw
+            # filename — it displays the (still-guarded) invoice
+            # number as the PDF-hyperlink display.
+            expected = attack_payloads["Invoice #"] if col_name == "Attachment Name" else payload
+            assert cell.value.lstrip("'") == expected

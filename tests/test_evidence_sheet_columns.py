@@ -114,3 +114,25 @@ def test_anomaly_conditional_formatting_uses_derived_column() -> None:
     assert not any(rng.startswith("S2:") and anomaly_col != "S" for rng in ranges), (
         f"hard-coded S range present; got {ranges}"
     )
+
+
+def test_attachment_name_cell_hyperlinks_to_evidence_file() -> None:
+    """Attachment Name cell must link to evidence_files/<Invoice #>.pdf."""
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "T78701920034",
+                "Attachment Name": "671078701920_060241004086_20190416.pdf",
+                "Amount (£)": 100.0,
+                "Date": "01/01/2024",
+                "Period From": "01/01/2023",
+                "Period To": "01/01/2024",
+            }
+        ]
+    )
+    ws = Workbook().active
+    write_evidence_sheet(ws, df)
+    att_col = [c.value for c in ws[1]].index("Attachment Name") + 1
+    c = ws.cell(row=2, column=att_col)
+    assert c.hyperlink is not None
+    assert c.hyperlink.target == "evidence_files/T78701920034.pdf"

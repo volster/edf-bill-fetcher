@@ -19,6 +19,7 @@ from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
+    pdf_hyperlink_cell,
     set_column_widths_from_spec,
 )
 from edf_bill_fetcher.helpers.theme import CELL_BORDER, DUP_GREY
@@ -81,6 +82,14 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
     COL_PCT_CHANGE = headers.index("% Change") + 1
     COL_READING_IDX = headers.index("Reading") + 1
     COL_ANOMALY = headers.index("Anomaly Flag") + 1
+    # Task 3: Attachment Name (col P) becomes a relative PDF hyperlink
+    # pointing at ``evidence_files/<Invoice #>.pdf``.
+    att_col_idx = headers.index("Attachment Name") + 1
+    # ``row`` is the 0-based tuple from ``df.values``, so the invoice
+    # number lives at the *un*+1'd header index — unlike ``att_col_idx``
+    # (and the other ``COL_*``), which compare against the 1-based
+    # ``c_idx``.
+    inv_col_idx = headers.index("Invoice #")
     # Phase 2 follow-on: dup sheets carry a "Duplicate Of"
     # printable summary cell per row plus a clickable hyperlink
     # back to the matched kept record in ``EDF Evidence Report``.
@@ -122,6 +131,21 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
         row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()
 
         for c_idx, val in enumerate(row, 1):
+            # Task 3: the Attachment Name cell links to the saved PDF for
+            # this row's invoice number (display = invoice number).  Dup
+            # sheets and rows without a real invoice number keep the
+            # plain-text rendering below.
+            if c_idx == att_col_idx and not is_duplicate:
+                inv_no = str(row[inv_col_idx]) if len(row) > inv_col_idx else ""
+                if inv_no and inv_no not in ("N/A", "None", "nan"):
+                    pdf_hyperlink_cell(
+                        ws, r_idx, c_idx, f"evidence_files/{inv_no}.pdf", display=inv_no
+                    )
+                    c = ws.cell(row=r_idx, column=c_idx)
+                    c.fill = row_fill
+                    c.border = CELL_BORDER
+                    c.alignment = Alignment(vertical="top")
+                    continue
             if c_idx == COL_PCT_CHANGE and not is_duplicate:
                 # % Change as live formula — Amount is col G (derived
                 # from COL_AMOUNT), not col E (Period To serials).
