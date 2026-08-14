@@ -25,6 +25,7 @@ from edf_bill_fetcher.io.writers.sap import (
     write_sap_meter_readings_sheet,
 )
 from edf_bill_fetcher.io.writers.statistical import write_statistical_analysis_sheet
+from edf_bill_fetcher.io.writers.superseded import write_superseded_reconciliation_sheet
 from edf_bill_fetcher.io.writers.tariff import write_tariff_analysis_sheet
 
 try:
@@ -51,6 +52,7 @@ __all__ = [
     "write_sap_meter_readings_sheet",
     "write_statistical_analysis_sheet",
     "write_summary_sheet",
+    "write_superseded_reconciliation_sheet",
     "write_tariff_analysis_sheet",
     "HAS_SCIPY",
 ]
