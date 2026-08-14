@@ -80,13 +80,13 @@ def write_back_billing_sheet(
               :func:`detect_back_billing`)
       trailing: 'TOTAL UNLAWFUL CHARGES — UNION (no double count)'
 
-    The ``Cancel/Rebill Disclosed`` cell (col 10) is the
+    The ``Cancel/Rebill Disclosed`` cell (col 11) is the
     :func:`_disclosed_label` value taking the row's
     ``Cancel/Rebill Admitted`` bool AND whether this invoice also
     appears in ``overlapping_invoices`` (a set populated by the
     rebilling detector; defaults to empty).
 
-    Open PDF column (col 12) carries hyperlink
+    Open PDF column (col 13) carries hyperlink
     the first ~400 chars of the source PDF text so a reviewer can
     see why N/A entries were N/A and which regex produced which value.
 

@@ -96,6 +96,16 @@ def test_write_superseded_reconciliation_sheet_returns_row_map_with_multiple_gro
     assert recon_row_map == {"A": 8, "C": 10}
 
 
+def test_write_superseded_reconciliation_sheet_chain_note_on_reason_assessment() -> None:
+    ws = openpyxl.Workbook().active
+    domination_map = {"B": ("A", False), "D": ("A", False)}
+    write_superseded_reconciliation_sheet(ws, _bb(), domination_map)
+    b_row = next(r for r in range(1, ws.max_row + 1) if ws.cell(row=r, column=1).value == "B")
+    col_10 = ws.cell(row=b_row, column=10).value
+    assert "Superseded by A" in col_10
+    assert "Superseded" in col_10
+
+
 def test_write_superseded_reconciliation_sheet_total_and_empty() -> None:
     ws = openpyxl.Workbook().active
     domination_map = {"B": ("A", False), "D": ("A", False)}
@@ -113,3 +123,6 @@ def test_write_superseded_reconciliation_sheet_total_and_empty() -> None:
         )
         is False
     )
+    labels2 = [ws2.cell(row=r, column=1).value for r in range(1, ws2.max_row + 1)]
+    total_row2 = next(r for r, v in enumerate(labels2, 1) if v and "TOTAL SUPERSEDED" in str(v))
+    assert ws2.cell(row=total_row2, column=7).value == 0.0

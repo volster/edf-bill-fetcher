@@ -91,7 +91,7 @@ _WS_RUN_RE = re.compile(r"\s+")
 
 
 def sanitise_filename(name: str) -> str:
-    """Return a filesystem-safe basename (no dirs, no illegal chars)."""
+    """Return a filesystem-safe filename (illegal chars and directory separators neutralised)."""
     base = str(name or "").strip()
     base = _WINDOWS_ILLEGAL_RE.sub("_", base)
     base = _WS_RUN_RE.sub("_", base).strip(" .")

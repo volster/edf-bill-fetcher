@@ -137,7 +137,12 @@ def write_superseded_reconciliation_sheet(
             pt = row.get("Period To")
             if isinstance(pt, pd.Timestamp | datetime):
                 pt = pt.strftime("%d %b %Y")
-            reason_assessment = str(row.get("Reason Assessment", ""))
+            reason_assessment = str(row.get("Reason Assessment", "") or "")
+            reason_assessment = (
+                f"{reason_assessment} Superseded by {survivor}, which re-billed the same "
+                "period; this invoice's unlawful charge is absorbed into the survivor's "
+                "total on the Back-billing Analysis sheet."
+            )
 
             _text(ws, r, 1, inv, fill_hex=bg)
             _text(ws, r, 2, bill_date_val, fill_hex=bg)
