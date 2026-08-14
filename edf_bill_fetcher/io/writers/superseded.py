@@ -62,7 +62,7 @@ def write_superseded_reconciliation_sheet(
     evidence_index: dict[str, int] | None = None,
     invoice_pdf_paths: dict[str, str] | None = None,
     live_row_map: dict[str, int] | None = None,
-) -> None:
+) -> dict[str, int]:
     """Render the Superseded Reconciliation worksheet.
 
     One row per superseded back-bill invoice (a key of ``domination_map``),
@@ -73,6 +73,15 @@ def write_superseded_reconciliation_sheet(
     Evidence Report, and ``file://`` links to both saved PDFs. The trailing
     total is the sum of the superseded rows' unlawful charges, labelled as
     absorbed/audit-only and never added to the live union total.
+
+    Returns a ``{survivor_invoice: reconciliation_row}`` map recording the
+    Excel row of each ``KILLER:`` header this writer actually emitted.  The
+    caller (export) feeds that back to :func:`write_back_billing_sheet` as
+    ``view_superseded_row`` so each live survivor's "View superseded" link
+    lands on its own group header.  These header rows are NOT the survivor's
+    Back-billing Analysis row: the reconciliation sheet intersperses a
+    ``KILLER:`` header per group, so row numbers diverge once there is more
+    than one group.
     """
     ws.title = "Superseded Reconciliation"
     NAVY = "10367A"
@@ -97,12 +106,14 @@ def write_superseded_reconciliation_sheet(
     r = 8
     superseded_total = 0.0
     alt_fill = PatternFill("solid", start_color="EEF2FF")
+    survivor_row_map: dict[str, int] = {}
     # group by survivor preserving bb order
     survivors = sorted({s for s, _ in domination_map.values()})
     for survivor in survivors:
         label = ws.cell(row=r, column=1, value=f"KILLER: {survivor}")
         label.font = Font(bold=True, color=NAVY)
         label.alignment = Alignment(horizontal="left", vertical="center")
+        survivor_row_map[survivor] = r
         r += 1
         group = bb[
             bb["Invoice #"]
@@ -222,3 +233,4 @@ def write_superseded_reconciliation_sheet(
     }
     set_column_widths_from_spec(ws, widths)
     freeze_at(ws, "A8")
+    return survivor_row_map

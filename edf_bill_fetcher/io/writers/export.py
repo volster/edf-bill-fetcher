@@ -1715,8 +1715,12 @@ def export_to_excel(
     # Live rows only: map each live invoice to its Excel row on the
     # Back-billing Analysis sheet (header at row 7, data from row 8,
     # +1 per live row). The Superseded Reconciliation writer uses it for
-    # the "Killer on spreadsheet" links, and the back-billing writer uses
-    # it to hyperlink "View superseded" cells to the reconciliation sheet.
+    # the "Killer on spreadsheet" links. NOTE this is a BACK-BILLING row
+    # coordinate and must NOT be handed to the back-billing writer as a
+    # Superseded Reconciliation row target: the reconciliation sheet
+    # intersperses a ``KILLER:`` header row per group, so its row numbers
+    # diverge from the back-billing ones. The correct reconciliation map
+    # is returned by write_superseded_reconciliation_sheet below.
     live_row_map: dict[str, int] = {}
     bb_live = analyses["back_billing"]
     if not bb_live.empty:
@@ -1727,16 +1731,6 @@ def export_to_excel(
                 continue
             live_row_map[_inv] = _bb_row
             _bb_row += 1
-    write_back_billing_sheet(
-        wb.create_sheet(title="Back-billing Analysis"),
-        analyses["back_billing"],
-        account=account_label,
-        overlapping_invoices=overlapping_invoices,
-        evidence_df=dfc,
-        evidence_index=analyses["evidence_index"],
-        domination_map=domination_map,
-        view_superseded_row=live_row_map,
-    )
     # Invoice-keyed relative PDF paths for the Superseded Reconciliation
     # sheet: one entry per superseded invoice and its survivor. Default to
     # deterministic ``evidence_files/<invoice>.pdf``; when the UI supplied
@@ -1762,13 +1756,28 @@ def export_to_excel(
             saved_path = invoice_pdf_paths.get(att_name) if att_name else None
             if saved_path:
                 recon_pdf_paths[inv] = os.path.relpath(os.path.abspath(saved_path), out_dir)
-    write_superseded_reconciliation_sheet(
+    # The reconciliation writer is called FIRST so it can report the
+    # survivor -> KILLER-header row map it actually emitted; that map is
+    # the correct target for the back-billing writer's "View superseded"
+    # links (see comment above). Final tab order is unaffected — the
+    # severity-led reorder runs after all writers.
+    recon_row_map = write_superseded_reconciliation_sheet(
         wb.create_sheet(title="Superseded Reconciliation"),
         analyses["back_billing"],
         domination_map,
         evidence_index=analyses["evidence_index"],
         invoice_pdf_paths=recon_pdf_paths,
         live_row_map=live_row_map,
+    )
+    write_back_billing_sheet(
+        wb.create_sheet(title="Back-billing Analysis"),
+        analyses["back_billing"],
+        account=account_label,
+        overlapping_invoices=overlapping_invoices,
+        evidence_df=dfc,
+        evidence_index=analyses["evidence_index"],
+        domination_map=domination_map,
+        view_superseded_row=recon_row_map,
     )
     write_rebilling_sheet(
         wb.create_sheet(title="Rebilling & Corrections"),

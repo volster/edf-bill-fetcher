@@ -366,8 +366,7 @@ def test_view_superseded_link_wired() -> None:
     hdrs = [c.value for c in ws[7]]
     col = hdrs.index("View Superseded") + 1
     a_row = next(r for r in range(8, ws.max_row + 1) if ws.cell(row=r, column=1).value == "A")
-    assert ws.cell(row=a_row, column=col).hyperlink is not None
-    assert "Superseded Reconciliation" in ws.cell(row=a_row, column=col).hyperlink.location
+    assert ws.cell(row=a_row, column=col).hyperlink.location == "'Superseded Reconciliation'!A8"
 
 
 def test_write_back_billing_sheet_single_union_total() -> None:

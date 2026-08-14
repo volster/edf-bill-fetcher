@@ -81,6 +81,21 @@ def test_write_superseded_reconciliation_sheet_links() -> None:
     )
 
 
+def test_write_superseded_reconciliation_sheet_returns_survivor_row_map() -> None:
+    ws = openpyxl.Workbook().active
+    domination_map = {"B": ("A", False), "D": ("A", False)}
+    recon_row_map = write_superseded_reconciliation_sheet(ws, _bb(), domination_map)
+    assert recon_row_map == {"A": 8}
+
+
+def test_write_superseded_reconciliation_sheet_returns_row_map_with_multiple_groups() -> None:
+    ws = openpyxl.Workbook().active
+    domination_map = {"B": ("A", False), "D": ("C", False)}
+    recon_row_map = write_superseded_reconciliation_sheet(ws, _bb(), domination_map)
+    # Row 8 = KILLER: A, row 9 = B data, row 10 = KILLER: C, row 11 = D data.
+    assert recon_row_map == {"A": 8, "C": 10}
+
+
 def test_write_superseded_reconciliation_sheet_total_and_empty() -> None:
     ws = openpyxl.Workbook().active
     domination_map = {"B": ("A", False), "D": ("A", False)}

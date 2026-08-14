@@ -80,6 +80,125 @@ def test_export_to_excel_emits_four_new_analysis_tabs(tmp_xlsx: str) -> None:
     wb.close()
 
 
+def _two_survivor_group_data() -> list[dict]:
+    """Four invoices forming two independent killer/survivor chains.
+
+    ``K1`` supersedes ``S1`` and ``K2`` supersedes ``S2``. On the
+    Back-billing Analysis sheet the two live rows land on rows 8 (K1) and
+    9 (K2); on the Superseded Reconciliation sheet the ``KILLER:`` header
+    rows land on rows 8 (K1) and 10 (K2) because the interspersed data
+    rows push the second group down.  This deliberately separates the two
+    coordinate systems so a ``View superseded`` link that wrongly reuses
+    back-billing row numbers lands on another group's data row.
+    """
+    base = {
+        "Source": "Local PDF Folder",
+        "Sender": "edf.co.uk",
+        "Unit Rate (p/kWh)": 25.0,
+        "% Change": None,
+        "Entry Type": "New Bill",
+        "Reading": "Actual",
+        "Units (kWh)": 300.0,
+        "Standing Chg (p/day)": 50.0,
+        "Tariff": "Standard",
+        "Details": "Reading was actual",
+        "Logic Used": "PDF new-format",
+        "Anomaly Flag": "",
+    }
+    return [
+        {
+            **base,
+            "Date": "01 Sep 2021",
+            "Period From": "01 Jan 2020",
+            "Period To": "31 Aug 2021",
+            "Invoice #": "S1",
+            "Amount (£)": 1000.0,
+            "Period Charge (£)": 800.0,
+            "Attachment Name": "S1.pdf",
+            "Cancel/Rebill Admitted": False,
+        },
+        {
+            **base,
+            "Date": "01 Nov 2021",
+            "Period From": "01 Jan 2020",
+            "Period To": "31 Oct 2021",
+            "Invoice #": "K1",
+            "Amount (£)": 1500.0,
+            "Period Charge (£)": 1200.0,
+            "Attachment Name": "K1.pdf",
+            "Cancel/Rebill Admitted": True,
+        },
+        {
+            **base,
+            "Date": "01 Sep 2022",
+            "Period From": "01 Jan 2021",
+            "Period To": "31 Aug 2022",
+            "Invoice #": "S2",
+            "Amount (£)": 1100.0,
+            "Period Charge (£)": 900.0,
+            "Attachment Name": "S2.pdf",
+            "Cancel/Rebill Admitted": False,
+        },
+        {
+            **base,
+            "Date": "01 Nov 2022",
+            "Period From": "01 Jan 2021",
+            "Period To": "31 Oct 2022",
+            "Invoice #": "K2",
+            "Amount (£)": 1600.0,
+            "Period Charge (£)": 1300.0,
+            "Attachment Name": "K2.pdf",
+            "Cancel/Rebill Admitted": True,
+        },
+    ]
+
+
+def test_view_superseded_links_point_at_own_killer_header(tmp_xlsx: str) -> None:
+    """Each live survivor's ``View superseded`` link must target ITS OWN
+    ``KILLER:`` header row on the Superseded Reconciliation sheet.
+
+    The reconciliation sheet intersperses a ``KILLER:`` header row per
+    group, so the survivor's row on Back-billing Analysis (8, 9) is NOT its
+    reconciliation header row (8, 10).  Pre-fix the export pipeline reused
+    back-billing row numbers, so K2's link landed on row 9 (S1's data row)
+    instead of row 10 (K2's header).  This regression test would fail on
+    that wiring.
+    """
+    export_to_excel(
+        _two_survivor_group_data(),
+        tmp_xlsx,
+        error_log=[],
+        config={"use_dedup": False, "acc_num": "0123456789", "analysis_min": 0.0},
+    )
+    wb = load_workbook(tmp_xlsx)
+    ws_bb = wb["Back-billing Analysis"]
+    ws_recon = wb["Superseded Reconciliation"]
+    # Map each survivor invoice to the row of its own KILLER: header.
+    killer_rows: dict[str, int] = {}
+    for r in range(1, ws_recon.max_row + 1):
+        label = ws_recon.cell(row=r, column=1).value
+        if isinstance(label, str) and label.startswith("KILLER: "):
+            killer_rows[label.removeprefix("KILLER: ")] = r
+    assert set(killer_rows) == {"K1", "K2"}
+    # Each live survivor row on Back-billing Analysis must link to its own
+    # KILLER: header on the reconciliation sheet.
+    hdrs = [c.value for c in ws_bb[7]]
+    col = hdrs.index("View Superseded") + 1
+    linked = 0
+    for r in range(8, ws_bb.max_row + 1):
+        inv = ws_bb.cell(row=r, column=1).value
+        if inv not in killer_rows:
+            continue
+        cell = ws_bb.cell(row=r, column=col)
+        assert cell.hyperlink is not None, f"{inv} missing View superseded link"
+        assert cell.hyperlink.location == f"'Superseded Reconciliation'!A{killer_rows[inv]}", (
+            f"{inv}: got {cell.hyperlink.location}, want !A{killer_rows[inv]}"
+        )
+        linked += 1
+    assert linked == 2
+    wb.close()
+
+
 def test_export_writes_superseded_reconciliation_sheet(tmp_xlsx: str) -> None:
     export_to_excel(
         _sample_data(),
