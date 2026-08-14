@@ -9,6 +9,7 @@ import pandas as pd
 
 from edf_bill_fetcher.io.writers.evidence_bundle import (
     build_bundle_index,
+    sanitise_filename,
     save_evidence_files,
 )
 
@@ -97,6 +98,52 @@ def test_save_evidence_files_creates_dest_dir(tmp_path: Path) -> None:
     out = save_evidence_files(df, src_paths, str(dest))
     assert os.path.isdir(str(dest))
     assert os.path.exists(out["A1-invoice.pdf"])
+
+
+def test_sanitise_filename_strips_illegal_chars() -> None:
+    assert sanitise_filename("KI:123/4?.pdf") == "KI_123_4_.pdf"
+    assert sanitise_filename("  T78701920034.pdf ") == "T78701920034.pdf"
+    assert sanitise_filename("a  b.pdf") == "a_b.pdf"
+
+
+def test_save_evidence_files_names_by_invoice_number(tmp_path: Path) -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "Invoice #": "T78701920034",
+                "Attachment Name": "671078701920_060241004086_20190416.pdf",
+            },
+            {
+                "Invoice #": "KI-31105244-0014",
+                "Attachment Name": "edf-invoice-KI-31105244-0014-1.pdf",
+            },
+        ]
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    for att in df["Attachment Name"]:
+        (src / att).write_bytes(b"%PDF")
+    out = save_evidence_files(
+        df,
+        {a: str(src / a) for a in df["Attachment Name"]},
+        str(tmp_path / "ev"),
+    )
+    names = sorted(os.path.basename(p) for p in out.values())
+    assert "T78701920034.pdf" in names
+    assert "KI-31105244-0014.pdf" in names
+
+
+def test_save_evidence_files_fallback_when_na_invoice(tmp_path: Path) -> None:
+    df = pd.DataFrame([{"Invoice #": "N/A", "Attachment Name": "A1-invoice.pdf"}])
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "A1-invoice.pdf").write_bytes(b"%PDF")
+    out = save_evidence_files(
+        df,
+        {"A1-invoice.pdf": str(src / "A1-invoice.pdf")},
+        str(tmp_path / "ev"),
+    )
+    assert "A1-invoice.pdf" in os.path.basename(next(iter(out.values())))
 
 
 def test_build_bundle_index_creates_docx(tmp_path: Path) -> None:

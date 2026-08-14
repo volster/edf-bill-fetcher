@@ -86,6 +86,17 @@ def _infer_section(attachment_name: str, fallback: str = "D") -> tuple[str, bool
 # Save referenced files into a flat dest dir
 # ---------------------------------------------------------------------------
 
+_WINDOWS_ILLEGAL_RE = re.compile(r'[<>:"/\\|?*]')
+_WS_RUN_RE = re.compile(r"\s+")
+
+
+def sanitise_filename(name: str) -> str:
+    """Return a filesystem-safe basename (no dirs, no illegal chars)."""
+    base = str(name or "").strip()
+    base = _WINDOWS_ILLEGAL_RE.sub("_", base)
+    base = _WS_RUN_RE.sub("_", base).strip(" .")
+    return base or "attachment"
+
 
 def save_evidence_files(
     evidence_df: pd.DataFrame,
@@ -116,6 +127,23 @@ def save_evidence_files(
     if evidence_df is None or "Attachment Name" not in evidence_df.columns:
         return saved
 
+    invoice_to_att: dict[str, str] = {}
+    multi_att_invoices: set[str] = set()
+    if "Invoice #" in evidence_df.columns:
+        for _, r in evidence_df.iterrows():
+            inv_num = str(r.get("Invoice #", "")).strip()
+            att = str(r.get("Attachment Name", "N/A"))
+            if not inv_num or inv_num in ("N/A", "None", "nan"):
+                continue
+            if att in ("N/A", "", "None", "nan"):
+                continue
+            if inv_num in invoice_to_att and invoice_to_att[inv_num] != att:
+                multi_att_invoices.add(inv_num)
+            else:
+                invoice_to_att.setdefault(inv_num, att)
+        for inv_num in multi_att_invoices:
+            invoice_to_att.pop(inv_num, None)
+
     for _, r in evidence_df.iterrows():
         att = str(r.get("Attachment Name", "N/A"))
         if att in ("N/A", "", "None", "nan"):
@@ -127,6 +155,9 @@ def save_evidence_files(
             log(f"evidence_files: missing source for {att!r}")
             continue
         dest_base = att
+        inv_num = str(r.get("Invoice #", "")).strip()
+        if inv_num and inv_num not in ("N/A", "None", "nan") and invoice_to_att.get(inv_num) == att:
+            dest_base = sanitise_filename(inv_num) + os.path.splitext(att)[1]
         n = 2
         while dest_base in used_names:
             stem, ext = os.path.splitext(att)
