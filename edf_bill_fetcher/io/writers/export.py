@@ -86,6 +86,9 @@ from edf_bill_fetcher.io.writers.sap import (  # noqa: E402,F401,I001
 from edf_bill_fetcher.io.writers.statistical import (  # noqa: E402,F401
     write_statistical_analysis_sheet,
 )
+from edf_bill_fetcher.io.writers.superseded import (  # noqa: E402,F401
+    write_superseded_reconciliation_sheet,
+)
 from edf_bill_fetcher.io.writers.tariff import (  # noqa: E402,F401
     write_tariff_analysis_sheet,
 )
@@ -310,6 +313,7 @@ def _reorder_sheets(wb: openpyxl.Workbook) -> None:
         "SAP Meter Readings",
         "SAP Contract History",
         "Back-billing Analysis",
+        "Superseded Reconciliation",
         "Rebilling & Corrections",
         "Meter Readings",
         "Contract History",
@@ -345,12 +349,19 @@ def export_to_excel(
     config: ConfigDict,
     filtered: list[dict[str, Any]] | None = None,
     sap_rows: dict[str, list[dict]] | None = None,
+    invoice_pdf_paths: dict[str, str] | None = None,
 ) -> None:
     """Build the multi-sheet evidence workbook by orchestrating each writer submodule.
 
     Calls every sheet writer in the canonical order so the workbook opens
     with the Annual Summary, EDF Evidence Report, and analysis tabs in
     the layout documented in the README.
+
+    ``invoice_pdf_paths`` is the ``{attachment_name: destination_path}``
+    mapping returned by :func:`save_evidence_files` (Task 2). It lets the
+    Superseded Reconciliation sheet link to the *actual* saved PDFs; when
+    omitted, relative ``evidence_files/<invoice>.pdf`` paths are derived
+    deterministically from the invoice numbers instead.
     """
     df = pd.DataFrame(data)
     df["_sort"] = df["Date"].apply(parse_to_sort_date)
@@ -1701,6 +1712,21 @@ def export_to_excel(
         rb,
         analyses["back_billing"],
     )
+    # Live rows only: map each live invoice to its Excel row on the
+    # Back-billing Analysis sheet (header at row 7, data from row 8,
+    # +1 per live row). The Superseded Reconciliation writer uses it for
+    # the "Killer on spreadsheet" links, and the back-billing writer uses
+    # it to hyperlink "View superseded" cells to the reconciliation sheet.
+    live_row_map: dict[str, int] = {}
+    bb_live = analyses["back_billing"]
+    if not bb_live.empty:
+        _bb_row = 8
+        for _, _row in bb_live.iterrows():
+            _inv = str(_row.get("Invoice #", ""))
+            if _inv in domination_map:
+                continue
+            live_row_map[_inv] = _bb_row
+            _bb_row += 1
     write_back_billing_sheet(
         wb.create_sheet(title="Back-billing Analysis"),
         analyses["back_billing"],
@@ -1709,6 +1735,40 @@ def export_to_excel(
         evidence_df=dfc,
         evidence_index=analyses["evidence_index"],
         domination_map=domination_map,
+        view_superseded_row=live_row_map,
+    )
+    # Invoice-keyed relative PDF paths for the Superseded Reconciliation
+    # sheet: one entry per superseded invoice and its survivor. Default to
+    # deterministic ``evidence_files/<invoice>.pdf``; when the UI supplied
+    # the actual save_evidence_files mapping (attachment-name -> absolute
+    # destination), prefer the real saved path for invoices whose
+    # attachment resolved to a copied file.
+    superseded_invs = list(domination_map.keys())
+    survivors = sorted({s for s, _ in domination_map.values()})
+    recon_pdf_paths: dict[str, str] = {
+        inv: f"evidence_files/{inv}.pdf" for inv in [*superseded_invs, *survivors]
+    }
+    if invoice_pdf_paths:
+        att_by_inv: dict[str, str] = {}
+        if "Invoice #" in df.columns and "Attachment Name" in df.columns:
+            for _, r in df.iterrows():
+                inv = str(r.get("Invoice #", "")).strip()
+                att = str(r.get("Attachment Name", "")).strip()
+                if inv and att and att not in ("N/A", "None", "nan"):
+                    att_by_inv.setdefault(inv, att)
+        out_dir = os.path.abspath(os.path.dirname(output_path) or ".")
+        for inv in list(recon_pdf_paths):
+            att_name = att_by_inv.get(inv)
+            saved_path = invoice_pdf_paths.get(att_name) if att_name else None
+            if saved_path:
+                recon_pdf_paths[inv] = os.path.relpath(os.path.abspath(saved_path), out_dir)
+    write_superseded_reconciliation_sheet(
+        wb.create_sheet(title="Superseded Reconciliation"),
+        analyses["back_billing"],
+        domination_map,
+        evidence_index=analyses["evidence_index"],
+        invoice_pdf_paths=recon_pdf_paths,
+        live_row_map=live_row_map,
     )
     write_rebilling_sheet(
         wb.create_sheet(title="Rebilling & Corrections"),

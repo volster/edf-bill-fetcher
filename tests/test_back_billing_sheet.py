@@ -353,6 +353,23 @@ def test_write_back_billing_sheet_live_rows_only() -> None:
     assert "C" in invs
 
 
+def test_view_superseded_link_wired() -> None:
+    ws = _open_ws()
+    bb = _three_row_bb()
+    domination_map = {"B": ("A", False)}
+    write_back_billing_sheet(
+        ws,
+        bb,
+        domination_map=domination_map,
+        view_superseded_row={"A": 8},
+    )
+    hdrs = [c.value for c in ws[7]]
+    col = hdrs.index("View Superseded") + 1
+    a_row = next(r for r in range(8, ws.max_row + 1) if ws.cell(row=r, column=1).value == "A")
+    assert ws.cell(row=a_row, column=col).hyperlink is not None
+    assert "Superseded Reconciliation" in ws.cell(row=a_row, column=col).hyperlink.location
+
+
 def test_write_back_billing_sheet_single_union_total() -> None:
     from edf_bill_fetcher.processors.detection import compute_unlawful_union_total
 

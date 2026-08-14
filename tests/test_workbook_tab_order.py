@@ -91,6 +91,55 @@ def test_workbook_tab_order_is_severity_led(tmp_path: object) -> None:
     assert first_three == ["Annual Summary", "EDF Evidence Report", "Key Statistics"], actual
 
 
+def test_superseded_reconciliation_after_back_billing(tmp_path: object) -> None:
+    """The Superseded Reconciliation tab must sit immediately after the
+    Back-billing Analysis tab in severity-led order."""
+    df = pd.DataFrame(
+        [
+            {
+                "Date": "2024-05-14",
+                "Amount (£)": 1200.00,
+                "Entry Type": "New Bill",
+                "Invoice #": "INV-001",
+                "Period From": "01/04/2024",
+                "Period To": "30/04/2024",
+                "Source": "HTM Account History",
+                "Period Charge (£)": 100.00,
+                "Units (kWh)": 500,
+            },
+            {
+                "Date": "2024-05-15",
+                "Amount (£)": 800.00,
+                "Entry Type": "New Bill",
+                "Invoice #": "INV-002",
+                "Period From": "01/04/2023",
+                "Period To": "30/04/2024",
+                "Source": "PST PDF Attachment",
+                "Period Charge (£)": 80.00,
+                "Units (kWh)": 400,
+            },
+        ]
+    )
+    out = tmp_path / "order_sup.xlsx"  # type: ignore[operator]
+    config = cast(
+        ConfigDict,
+        {
+            "use_dedup": True,
+            "analysis_min": 0,
+            "save_filtered": True,
+            "use_sap": False,
+        },
+    )
+    export_to_excel(df, str(out), error_log=[], config=config)
+    wb = load_workbook(out)
+    names = wb.sheetnames
+    assert "Back-billing Analysis" in names
+    assert "Superseded Reconciliation" in names
+    assert names.index("Back-billing Analysis") + 1 == names.index("Superseded Reconciliation"), (
+        names
+    )
+
+
 def test_single_row_workbook_sheets_are_reordered(tmp_path: object) -> None:
     """A single-record workbook takes the fewer-than-2-analysis-rows early-exit
     path; its sheets must still be reordered into severity-led order

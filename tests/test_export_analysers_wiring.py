@@ -80,6 +80,20 @@ def test_export_to_excel_emits_four_new_analysis_tabs(tmp_xlsx: str) -> None:
     wb.close()
 
 
+def test_export_writes_superseded_reconciliation_sheet(tmp_xlsx: str) -> None:
+    export_to_excel(
+        _sample_data(),
+        tmp_xlsx,
+        error_log=[],
+        config={"use_dedup": False, "acc_num": "0123456789"},
+    )
+    assert os.path.exists(tmp_xlsx)
+    wb = load_workbook(tmp_xlsx, read_only=True)
+    names = wb.sheetnames
+    assert "Superseded Reconciliation" in names
+    wb.close()
+
+
 def test_evidence_index_uses_full_df_rows_after_middle_row_filtered(tmp_xlsx: str) -> None:
     """Analyser hotlinks must target rows on the FULL evidence sheet, not the
     filtered analysis frame.

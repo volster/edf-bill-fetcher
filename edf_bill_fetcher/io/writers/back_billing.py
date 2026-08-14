@@ -62,6 +62,7 @@ def write_back_billing_sheet(
     evidence_df: pd.DataFrame | None = None,
     evidence_index: dict[str, int] | None = None,
     domination_map: dict[str, tuple[str, bool]] | None = None,
+    view_superseded_row: dict[str, int] | None = None,
 ) -> None:
     """Render the Back-billing Analysis tab.
 
@@ -96,9 +97,10 @@ def write_back_billing_sheet(
     reconciliation view); every rendered row therefore carries
     ``Status="Live"``.  A live row whose invoice number appears as a
     SURVIVOR value in the map gets a blue-underline ``View superseded``
-    cell (col 18) pointing at its chain; the hyperlink target is wired in
-    a later task, so for now it is a plain styled placeholder.  Rows with
-    no chain leave col 18 blank.
+    cell (col 18) pointing at its chain. ``view_superseded_row`` maps each
+    survivor invoice to the Excel row of its ``KILLER:`` group on the
+    Superseded Reconciliation sheet; when present, the col-18 cell
+    hyperlinks there.  Rows with no chain leave col 18 blank.
 
     The single trailing total covers ONLY the live rows. ``Period Charge
     (£)`` is summed into col 6; col 10 carries the union of the live rows'
@@ -252,11 +254,20 @@ def write_back_billing_sheet(
         _text(ws, r, 16, "", fill_hex=bg)
         _text(ws, r, 17, "", fill_hex=bg)
         # View Superseded (col 18): a blue-underline placeholder on live rows
-        # that are a survivor in domination_map. The hyperlink to the
-        # reconciliation sheet is wired in a later task.
+        # that are a survivor in domination_map. When ``view_superseded_row``
+        # maps this invoice to a row on the Superseded Reconciliation sheet,
+        # the cell hyperlinks there so a reader can jump to the group.
         if inv in survivors:
             cell = _text(ws, r, 18, "View superseded", fill_hex=bg)
             cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+            target_row = (view_superseded_row or {}).get(inv)
+            if target_row:
+                cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                    ref=cell.coordinate,
+                    location=f"'Superseded Reconciliation'!A{target_row}",
+                    display="View superseded",
+                    tooltip=f"Jump to Superseded Reconciliation!A{target_row}",
+                )
         else:
             _text(ws, r, 18, "", fill_hex=bg)
         r += 1

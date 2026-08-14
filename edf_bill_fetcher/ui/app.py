@@ -1109,34 +1109,14 @@ class App:
                     stem = stem[:-5]
                 xlsx_path = self._resolve_output_path(stem, "xlsx")
 
-                from edf_bill_fetcher.io.writers.export import export_to_excel
-
-                export_to_excel(
-                    engine.records,
-                    xlsx_path,
-                    engine.error_log,
-                    config,
-                    filtered=engine.filtered_records,
-                    sap_rows={
-                        "contract": engine.sap_contract_rows,
-                        "meter": engine.sap_meter_rows,
-                        "financial": engine.sap_financial_rows,
-                    },
-                )
-                self._save_config()
-                summary = (
-                    f"Extraction complete.\n\n"
-                    f"  Emails matched: {engine.email_count}\n"
-                    f"  PDFs processed: {engine.pdf_count}\n"
-                    f"  Records found:  {len(engine.records)}\n"
-                )
-                if engine.error_log:
-                    summary += f"\n  Parse errors: {len(engine.error_log)} (see Parse Errors tab)"
-                summary += f"\n\nSaved to:\n{xlsx_path}"
-
                 # Stream P5: save evidence files + themed DOCX bundle index
                 # into a sibling ``evidence_files/`` folder when the toggle is
-                # set on (default True).
+                # set on (default True). Runs BEFORE the workbook export so
+                # the Superseded Reconciliation sheet can link to the actual
+                # saved PDFs (``save_evidence_files`` returns the
+                # attachment-name -> destination-path mapping).
+                saved = None
+                bundle_summary = ""
                 if self.save_evidence_files_var.get():
                     try:
                         import pandas as pd
@@ -1157,8 +1137,10 @@ class App:
                         build_bundle_index(
                             dfc, saved, index_docx, account=str(config.get("acc_num", ""))
                         )
-                        summary += f"\n\nSaved {len(saved)} evidence files to:\n{ev_dir}"
-                        summary += f"\nBundle index:\n{index_docx}"
+                        bundle_summary = (
+                            f"\n\nSaved {len(saved)} evidence files to:\n{ev_dir}"
+                            f"\nBundle index:\n{index_docx}"
+                        )
                     except Exception as bundle_err:
                         # Don't lose the run if the bundle step blows up --
                         # log it loudly but still keep the XLSX.
@@ -1167,9 +1149,37 @@ class App:
                             "Bundle step failed",
                             (
                                 f"Evidence file save failed:\n{bundle_err}"
-                                f"\n\nThe XLSX workbook is still saved at:\n{xlsx_path}"
+                                f"\n\nThe XLSX workbook will still be saved at:\n{xlsx_path}"
                             ),
                         )
+
+                from edf_bill_fetcher.io.writers.export import export_to_excel
+
+                export_to_excel(
+                    engine.records,
+                    xlsx_path,
+                    engine.error_log,
+                    config,
+                    filtered=engine.filtered_records,
+                    sap_rows={
+                        "contract": engine.sap_contract_rows,
+                        "meter": engine.sap_meter_rows,
+                        "financial": engine.sap_financial_rows,
+                    },
+                    invoice_pdf_paths=saved,
+                )
+                self._save_config()
+                summary = (
+                    f"Extraction complete.\n\n"
+                    f"  Emails matched: {engine.email_count}\n"
+                    f"  PDFs processed: {engine.pdf_count}\n"
+                    f"  Records found:  {len(engine.records)}\n"
+                )
+                if engine.error_log:
+                    summary += f"\n  Parse errors: {len(engine.error_log)} (see Parse Errors tab)"
+                summary += f"\n\nSaved to:\n{xlsx_path}"
+                if bundle_summary:
+                    summary += bundle_summary
 
                 if self.auto_generate_report.get():
                     report_paths = self._run_auto_report(engine, stem, 1)
