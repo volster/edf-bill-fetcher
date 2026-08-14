@@ -17,10 +17,10 @@ from edf_bill_fetcher.helpers.date_utils import (
 from edf_bill_fetcher.helpers.excel_utils import (
     _TEXT_SUPPRESSION_QUEUE,
     build_sap_row_index_map,
+    evidence_report_hyperlink_cell,
     hcell,
     money,
     num,
-    open_pdf_hyperlink_cell,
     section_hdr,
     set_column_widths_from_spec,
     suppress_text_warning,
@@ -88,7 +88,7 @@ def test_excel_utils_imports():
     assert section_hdr is not None
     assert set_column_widths_from_spec is not None
     assert suppress_text_warning is not None
-    assert open_pdf_hyperlink_cell is not None
+    assert evidence_report_hyperlink_cell is not None
     assert build_sap_row_index_map is not None
 
 
@@ -107,10 +107,10 @@ def test_excel_text_formula_guard():
     assert cell.value.startswith("'")
 
 
-def test_open_pdf_hyperlink_cell_empty_invoice():
+def test_evidence_report_hyperlink_cell_empty_invoice():
     wb = openpyxl.Workbook()
     ws = wb.active
-    open_pdf_hyperlink_cell(ws, 1, 1, None, "")
+    evidence_report_hyperlink_cell(ws, 1, 1, None, "")
     # Should not raise and no hyperlink should be set
     assert ws.cell(row=1, column=1).value is None or ws.cell(row=1, column=1).hyperlink is None
 

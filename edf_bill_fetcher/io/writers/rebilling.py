@@ -14,13 +14,13 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
 from edf_bill_fetcher.helpers.excel_utils import (
+    evidence_report_hyperlink_cell as _evidence_report_hyperlink_cell,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
     num as _num,
-)
-from edf_bill_fetcher.helpers.excel_utils import (
-    open_pdf_hyperlink_cell as _open_pdf_hyperlink_cell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
@@ -129,7 +129,7 @@ def write_rebilling_sheet(
         )
         if bool(row.get("Cancel/Rebill Admitted (Killer)", False)):
             ws.cell(row=r, column=7).font = Font(name="Calibri", size=10, bold=True, color="C00000")
-        _open_pdf_hyperlink_cell(ws, r, 8, evidence_df, killer)
+        _evidence_report_hyperlink_cell(ws, r, 8, evidence_df, killer)
         # View on Evidence Report (col 9): hotlink on the killer invoice row.
         target_row = None
         if evidence_index is not None:

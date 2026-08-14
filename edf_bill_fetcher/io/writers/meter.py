@@ -20,13 +20,13 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime
 from edf_bill_fetcher.helpers.excel_utils import (
+    evidence_report_hyperlink_cell as _evidence_report_hyperlink_cell,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
     num as _num,
-)
-from edf_bill_fetcher.helpers.excel_utils import (
-    open_pdf_hyperlink_cell as _open_pdf_hyperlink_cell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
@@ -67,7 +67,7 @@ def _write_meter_readings_sheet_impl(
 
     Open PDF column (col 7): hyperlink
     source-PDF-text + regex trace for that invoice, fetched from
-    ``evidence_df`` via :func:`_open_pdf_hyperlink_cell` for hyperlink
+    ``evidence_df`` via :func:`_evidence_report_hyperlink_cell` for hyperlink
     available.
 
     Spec §10.2 adds a "View on Evidence Report" column (col 8): a
@@ -174,7 +174,7 @@ def _write_meter_readings_sheet_impl(
         if excerpt:
             _text(ws, r, 7, excerpt, wrap=True, fill_hex=bg)
         else:
-            _open_pdf_hyperlink_cell(ws, r, 7, evidence_df, inv)
+            _evidence_report_hyperlink_cell(ws, r, 7, evidence_df, inv)
         # View on Evidence Report (col 8): hyperlinked right-arrow
         # that jumps to the matched invoice's row on the Evidence
         # Report sheet.
@@ -323,7 +323,7 @@ def write_contract_history_sheet(
             )
             else ""
         )
-        _open_pdf_hyperlink_cell(ws, r, 6, evidence_df, matched_inv)
+        _evidence_report_hyperlink_cell(ws, r, 6, evidence_df, matched_inv)
         target_row = None
         if evidence_index is not None and matched_inv:
             target_row = evidence_index.get(f"inv:{matched_inv}")

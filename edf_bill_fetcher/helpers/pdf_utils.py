@@ -1,7 +1,7 @@
 """PDF-related helpers.
 
 This module is currently a placeholder for future PDF-specific helpers.
-For now, the only PDF-related helper (``open_pdf_hyperlink_cell``) lives
+For now, the only PDF-related helper (``evidence_report_hyperlink_cell``) lives
 in ``excel_utils.py`` because the function actually creates an openpyxl
 cell, not a PDF-parsing primitive.
 

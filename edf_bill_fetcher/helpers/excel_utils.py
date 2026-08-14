@@ -257,7 +257,7 @@ def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[s
     return index
 
 
-def open_pdf_hyperlink_cell(
+def evidence_report_hyperlink_cell(
     ws: openpyxl.worksheet.worksheet.Worksheet,
     row: int,
     col: int,
@@ -287,6 +287,38 @@ def open_pdf_hyperlink_cell(
         cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
 
 
+def pdf_hyperlink_cell(
+    ws: openpyxl.worksheet.worksheet.Worksheet,
+    row: int,
+    col: int,
+    relative_path: str,
+    tooltip: str | None = None,
+    display: str | None = None,
+) -> None:
+    """Emit a cell hyperlinking to a local file via a relative path.
+
+    ``relative_path`` (e.g. ``evidence_files/T78701920034.pdf``) becomes a
+    ``file://`` link when Excel opens the workbook.  Display defaults to the
+    basename.  Textual leads that would otherwise auto-promote to a formula
+    (``=``/``+``/``-``/``@``) are apostrophe-guarded and pinned to
+    ``data_type="s"``.
+    """
+    if not relative_path:
+        return
+    display = display or os.path.basename(relative_path)
+    cell = ws.cell(row=row, column=col, value=display)
+    if display and display[0] in "+-=@":
+        cell.value = "'" + display
+        cell.data_type = "s"
+    cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+        ref=cell.coordinate,
+        target=relative_path,
+        display=display,
+        tooltip=tooltip or relative_path,
+    )
+    cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
+
+
 __all__ = [
     "hcell",
     "text",
@@ -297,6 +329,7 @@ __all__ = [
     "suppress_text_warning",
     "suppress_text_warnings_post_save",
     "build_sap_row_index_map",
-    "open_pdf_hyperlink_cell",
+    "evidence_report_hyperlink_cell",
+    "pdf_hyperlink_cell",
     "CELL_BORDER",
 ]

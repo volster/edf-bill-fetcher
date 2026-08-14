@@ -21,13 +21,13 @@ from edf_bill_fetcher.helpers.excel_utils import (
     set_column_widths_from_spec,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
+    evidence_report_hyperlink_cell as _evidence_report_hyperlink_cell,
+)
+from edf_bill_fetcher.helpers.excel_utils import (
     money as _money,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
     num as _num,
-)
-from edf_bill_fetcher.helpers.excel_utils import (
-    open_pdf_hyperlink_cell as _open_pdf_hyperlink_cell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
@@ -245,7 +245,7 @@ def write_back_billing_sheet(
         _money(ws, r, 10, unlawful, fill_hex=bg)
         _text(ws, r, 11, disclosed, fill_hex=bg)
         _text(ws, r, 12, reason_assessment, wrap=True, fill_hex=bg)
-        _open_pdf_hyperlink_cell(ws, r, 13, evidence_df, inv)
+        _evidence_report_hyperlink_cell(ws, r, 13, evidence_df, inv)
         # View on Evidence Report (col 14): bidirectional hotlink back to the
         # row on the EDF Evidence Report sheet. Match by Invoice # first,
         # falling back to the amt|days signature.

@@ -662,10 +662,10 @@ def test_write_rebilling_sheet_renders_open_pdf_hyperlink_with_evidence_df() -> 
 
 
 def test_write_rebilling_sheet_renders_no_pdf_hyperlink_when_evidence_df_none() -> None:
-    """When evidence_df is None, col 8 gets no hyperlink cell (open_pdf_hyperlink_cell skips)."""
+    """When evidence_df is None, col 8 gets no hyperlink cell (evidence_report_hyperlink_cell skips)."""
     ws = _open_ws()
     write_rebilling_sheet(ws, _one_pair_df(), account="ACC1", evidence_df=None)
-    # open_pdf_hyperlink_cell returns early when invoice_number is non-empty
+    # evidence_report_hyperlink_cell returns early when invoice_number is non-empty
     # but evidence_df is None -> no cell value set by the helper. The cell
     # may still exist as an empty openpyxl cell.
     cell = ws.cell(row=8, column=8)

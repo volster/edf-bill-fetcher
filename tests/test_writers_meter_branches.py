@@ -518,7 +518,7 @@ def _evidence_df_empty_source_text() -> pd.DataFrame:
 
     Exercises the ``isinstance(source_text, str) and source_text`` false
     branch (348->352): source_text is a str but empty, so excerpt stays
-    '' and the ``_open_pdf_hyperlink_cell`` fallback (354-355) runs.
+    '' and the ``_evidence_report_hyperlink_cell`` fallback (354-355) runs.
     """
     return pd.DataFrame(
         [
@@ -539,13 +539,13 @@ def test_write_meter_readings_sheet_empty_source_text_falls_back_to_hyperlink() 
     """An empty Source PDF Text leaves excerpt empty -> hyperlink fallback.
 
     Covers the 348->352 branch (source_text falsy) and the 354-355
-    ``_open_pdf_hyperlink_cell`` fallback path.
+    ``_evidence_report_hyperlink_cell`` fallback path.
     """
     ws = _open_ws()
     df = _evidence_df_empty_source_text()
     write_meter_readings_sheet(ws, df, pd.DataFrame(), evidence_df=df)
     # With an empty excerpt, col 7 falls through to the hyperlink cell.
-    # The invoice IS present in evidence_df, so open_pdf_hyperlink_cell
+    # The invoice IS present in evidence_df, so evidence_report_hyperlink_cell
     # emits a '->' hyperlink.
     cell_val = ws.cell(row=8, column=7).value
     assert cell_val == "\u2192"
