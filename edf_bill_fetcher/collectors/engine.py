@@ -718,16 +718,26 @@ class EvidenceEngine:
                         source_file = slice_attachment or slice_detail or ""
                         if sap_kind == "contract":
                             self.sap_contract_rows.extend(
-                                parse_sap_contract_history(slice_text, source_file=source_file)
+                                parse_sap_contract_history(
+                                    slice_text,
+                                    source_file=source_file,
+                                    report=lambda msg: self.log_error("SAP dump", msg),
+                                )
                             )
                         elif sap_kind == "meter_read":
                             self.sap_meter_rows.extend(
-                                parse_sap_meter_read_history(slice_text, source_file=source_file)
+                                parse_sap_meter_read_history(
+                                    slice_text,
+                                    source_file=source_file,
+                                    report=lambda msg: self.log_error("SAP dump", msg),
+                                )
                             )
                         elif sap_kind == "financial":
                             self.sap_financial_rows.extend(
                                 parse_sap_financial_transactions(
-                                    slice_text, source_file=source_file
+                                    slice_text,
+                                    source_file=source_file,
+                                    report=lambda msg: self.log_error("SAP dump", msg),
                                 )
                             )
                         continue

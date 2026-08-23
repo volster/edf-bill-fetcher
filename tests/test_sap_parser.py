@@ -286,6 +286,64 @@ class TestParseSapFinancialTransactions:
 
 
 # ---------------------------------------------------------------------------
+# Malformed-row reporting (review #2): _parse_sap_csv counts short/long rows
+# and reports a summary when a `report` callback is supplied.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_sap_csv_reports_short_rows() -> None:
+    from edf_bill_fetcher.processors.sap_parsers import _parse_sap_csv
+
+    csv_text = '"A","B","C"\n"1","2"\n'
+    reports: list[str] = []
+    rows = _parse_sap_csv(csv_text, report=reports.append)
+    assert len(rows) == 1
+    # Short row padded with "" — existing behavior preserved.
+    assert rows[0] == {"A": "1", "B": "2", "C": ""}
+    assert len(reports) == 1
+    assert "1 short row(s)" in reports[0]
+
+
+def test_parse_sap_csv_reports_long_rows() -> None:
+    from edf_bill_fetcher.processors.sap_parsers import _parse_sap_csv
+
+    csv_text = '"A","B","C"\n"1","2","3","4"\n'
+    reports: list[str] = []
+    rows = _parse_sap_csv(csv_text, report=reports.append)
+    assert rows[0] == {"A": "1", "B": "2", "C": "3"}  # extra col dropped
+    assert len(reports) == 1
+    assert "1 long row(s)" in reports[0]
+
+
+def test_parse_sap_csv_no_report_on_clean_input() -> None:
+    from edf_bill_fetcher.processors.sap_parsers import _parse_sap_csv
+
+    csv_text = '"A","B","C"\n"1","2","3"\n'
+    reports: list[str] = []
+    _parse_sap_csv(csv_text, report=reports.append)
+    assert reports == []
+
+
+def test_parse_sap_csv_default_report_is_noop() -> None:
+    from edf_bill_fetcher.processors.sap_parsers import _parse_sap_csv
+
+    csv_text = '"A","B","C"\n"1","2"\n'
+    rows = _parse_sap_csv(csv_text)  # report defaults to None
+    assert len(rows) == 1
+
+
+def test_parse_sap_contract_history_threads_report() -> None:
+    from edf_bill_fetcher.processors.sap_parsers import parse_sap_contract_history
+
+    csv_text = '"Start Date","End Date","Product"\n"03-06-2016"\n'
+    reports: list[str] = []
+    rows = parse_sap_contract_history(csv_text, report=reports.append)
+    assert len(rows) == 1
+    assert rows[0]["Product Code"] == ""
+    assert any("short row" in m for m in reports)
+
+
+# ---------------------------------------------------------------------------
 # Real-world smoke test against the live ombudsman PDFs when available.
 # This test is skipped automatically if the PDF files are missing.
 # ---------------------------------------------------------------------------

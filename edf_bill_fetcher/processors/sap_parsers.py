@@ -27,6 +27,7 @@ from __future__ import annotations
 import csv as _stdcsv
 import io as _io
 import re
+from collections.abc import Callable
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
 from edf_bill_fetcher.helpers.formatting import parse_amount
@@ -129,12 +130,22 @@ def _sap_to_iso_date(s: str) -> str:
     return s
 
 
-def _parse_sap_csv(text: str) -> list[dict]:
+def _parse_sap_csv(
+    text: str,
+    report: Callable[[str], None] | None = None,
+) -> list[dict]:
     """Parse a SAP-data-dump CSV-in-PDF body into a list of dict rows keyed by the CSV header column names.
 
     Empty input -> empty list. Page-break artifacts in pdfplumber output are
     handled transparently by the standard ``csv`` quoting rule that says a
     quoted field may contain newlines.
+
+    Short data rows (fewer fields than the header) are padded with empty
+    strings; long rows (extra fields) are truncated to the header width —
+    both preserve the original parse behavior. When ``report`` is provided,
+    a single summary line is emitted whenever any row is malformed, so an
+    evidence reviewer can see that a PDF-extraction truncation occurred
+    rather than silently accepting padded rows.
     """
     if not text:
         return []
@@ -148,22 +159,37 @@ def _parse_sap_csv(text: str) -> list[dict]:
         return []
     header = rows[0]
     out: list[dict] = []
+    n_short = 0
+    n_long = 0
     for raw_row in rows[1:]:
         if not raw_row or all(not (c or "").strip() for c in raw_row):
             continue
+        if len(raw_row) < len(header):
+            n_short += 1
+        elif len(raw_row) > len(header):
+            n_long += 1
         row = {header[i]: (raw_row[i] if i < len(raw_row) else "") for i in range(len(header))}
         out.append(row)
+    if report is not None and (n_short or n_long):
+        report(f"SAP CSV: {n_short} short row(s), {n_long} long row(s) out of {len(out)} parsed")
     return out
 
 
-def parse_sap_contract_history(text: str, source_file: str = "") -> list[dict]:
+def parse_sap_contract_history(
+    text: str,
+    source_file: str = "",
+    report: Callable[[str], None] | None = None,
+) -> list[dict]:
     """Parse the Contract-and-Product-Change-History CSV-in-PDF.
 
     One dict row per SAP contract record. Output columns:
       Contract From, Contract To, Product Code, Product Description,
       Contract Reason, Set Up By, Notes, Cancelled Flag, Source File.
+
+    ``report`` threads malformed-row summaries to the caller (see
+    :func:`_parse_sap_csv`).
     """
-    rows = _parse_sap_csv(text)
+    rows = _parse_sap_csv(text, report=report)
     out: list[dict] = []
     for r in rows:
         out.append(
@@ -182,7 +208,11 @@ def parse_sap_contract_history(text: str, source_file: str = "") -> list[dict]:
     return out
 
 
-def parse_sap_meter_read_history(text: str, source_file: str = "") -> list[dict]:
+def parse_sap_meter_read_history(
+    text: str,
+    source_file: str = "",
+    report: Callable[[str], None] | None = None,
+) -> list[dict]:
     """Parse the Meter-Read-History CSV-in-PDF.
 
     One dict row per read event. Read Type is derived from the
@@ -190,8 +220,11 @@ def parse_sap_meter_read_history(text: str, source_file: str = "") -> list[dict]
       * ``"Released by Agent"`` -> ``A`` (Actual)
       * Anything with "estimate" in the category or status -> ``E``
       * Otherwise blank (unknown)
+
+    ``report`` threads malformed-row summaries to the caller (see
+    :func:`_parse_sap_csv`).
     """
-    rows = _parse_sap_csv(text)
+    rows = _parse_sap_csv(text, report=report)
     out: list[dict] = []
     for r in rows:
         status = (r.get("Meter Read Status") or "").strip()
@@ -221,7 +254,11 @@ def parse_sap_meter_read_history(text: str, source_file: str = "") -> list[dict]
     return out
 
 
-def parse_sap_financial_transactions(text: str, source_file: str = "") -> list[dict]:
+def parse_sap_financial_transactions(
+    text: str,
+    source_file: str = "",
+    report: Callable[[str], None] | None = None,
+) -> list[dict]:
     """Parse the Financial-Transactions CSV-in-PDF.
 
     One dict row per financial transaction. The real SAP header has a
@@ -238,8 +275,11 @@ def parse_sap_financial_transactions(text: str, source_file: str = "") -> list[d
     Payment Method, Down Payment Flag, Restriction) carry values
     that are either constant per account or not consumed by any
     downstream analyser, and are intentionally dropped.
+
+    ``report`` threads malformed-row summaries to the caller (see
+    :func:`_parse_sap_csv`).
     """
-    rows = _parse_sap_csv(text)
+    rows = _parse_sap_csv(text, report=report)
     out: list[dict] = []
     for r in rows:
         posting_raw = ""
