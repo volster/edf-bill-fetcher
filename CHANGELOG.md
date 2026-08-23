@@ -8,6 +8,54 @@ semver-friendly.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-21
+
+This release adds a Superseded Reconciliation view for the back-billing
+pipeline and a round of evidence-integrity fixes: malformed SAP rows are
+now surfaced instead of silently padded, the pickled engine no longer
+drops its SAP/source-path state, and the workbook renders how each
+unlawful charge was derived.
+
+### Added
+
+- Superseded Reconciliation worksheet recording each superseded
+  back-billing invoice with its `KILLER` group header, jump links to the
+  survivor's Back-billing Analysis row and the original Evidence Report
+  row, and `file://` links to both saved PDFs.
+- Back-billing Analysis now shows only live rows with a single union
+  (no-double-count) unlawful-charge total; superseded invoices move to
+  the reconciliation view.
+- `Sub-Period Basis` provenance column on Back-billing Analysis, showing
+  whether each unlawful charge came from per-sub-period rates or the
+  day-ratio fallback.
+- Evidence Report `Attachment Name` cells link to the saved PDFs; evidence
+  files are named by invoice number (sanitised, deduped).
+- Evidence-bundle `saved`/`missing`/`ambiguous` counts surfaced in the GUI
+  summary when files are missing or an attachment is referenced by
+  multiple invoices.
+
+### Changed
+
+- Extracted the SLC 7A 12-month limit into a named `backbilling_cutoff`
+  helper (a deliberate fixed 365-day interval), with leap-day and
+  month-end boundary tests.
+
+### Fixed
+
+- Malformed SAP CSV rows (fewer/more fields than the header) are counted
+  and reported into the parse-error log instead of silently accepted.
+- `EvidenceEngine` pickle round-trip now persists `sap_*_rows` and
+  `source_paths`, with backwards-compatible defaults for older pickles.
+- `View superseded` links point at the survivor's own `KILLER:` header row
+  on the reconciliation sheet.
+
+### Verification
+
+- CI matrix green across Python 3.10, 3.11, and 3.12 on Linux, macOS, and
+  Windows.
+- 1,470 tests passed, 9 skipped, with 92.39% coverage at release
+  preparation.
+
 ## [0.4.0] - 2026-08-13
 
 This release makes the dispute-analysis pipeline substantially more reliable,
