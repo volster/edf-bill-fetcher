@@ -100,9 +100,7 @@ class TestLegacyPickleRead:
         must route ``.pkl`` to the existing restricted-unpickle path.
         """
         engine = EvidenceEngine({"min_amount": 50.0}, print)
-        engine.filtered_records = [
-            {"Source": "Local PDF", "Date": "15/01/2026", "Amount (£)": 5.0}
-        ]
+        engine.filtered_records = [{"Source": "Local PDF", "Date": "15/01/2026", "Amount (£)": 5.0}]
         engine.error_log = ["synthetic parse warning"]
         path = tmp_path / "legacy.pkl"
         with open(path, "wb") as f:
