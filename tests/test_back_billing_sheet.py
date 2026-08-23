@@ -64,9 +64,10 @@ def test_write_back_billing_sheet_writes_table_headers() -> None:
     ws = _open_ws()
     bb = detect_back_billing(_sample_df())
     write_back_billing_sheet(ws, bb, account="A1")
-    # Per spec, row 7 = table header row. 18 columns (Status / Superseded By /
-    # Partial Overlap for live rows, plus View Superseded at col 18).
-    headers = [ws.cell(row=7, column=c).value for c in range(1, 19)]
+    # Per spec, row 7 = table header row. 19 columns (Status / Superseded By /
+    # Partial Overlap for live rows, View Superseded at col 18, plus
+    # Sub-Period Basis provenance at col 19).
+    headers = [ws.cell(row=7, column=c).value for c in range(1, 20)]
     expected = [
         "Invoice #",
         "Bill Date",
@@ -86,8 +87,23 @@ def test_write_back_billing_sheet_writes_table_headers() -> None:
         "Superseded By",
         "Partial Overlap",
         "View Superseded",
+        "Sub-Period Basis",
     ]
     assert headers == expected
+
+
+def test_write_back_billing_sheet_renders_sub_period_basis_column() -> None:
+    ws = _open_ws()
+    bb = detect_back_billing(_sample_df())
+    write_back_billing_sheet(ws, bb, account="A1")
+    headers = [ws.cell(row=7, column=c).value for c in range(1, 20)]
+    assert headers[-1] == "Sub-Period Basis"
+    for r in range(8, ws.max_row + 1):
+        inv = ws.cell(row=r, column=1).value
+        if inv is None or inv == "" or str(inv).startswith("TOTAL"):
+            continue
+        basis = ws.cell(row=r, column=19).value
+        assert basis in ("Sub-period × rate", "Day-ratio fallback"), f"{inv}: {basis!r}"
 
 
 def test_write_back_billing_sheet_one_row_per_backbilled_invoice() -> None:

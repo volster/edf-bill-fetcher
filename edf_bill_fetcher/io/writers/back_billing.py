@@ -165,6 +165,7 @@ def write_back_billing_sheet(
         "Superseded By",
         "Partial Overlap",
         "View Superseded",
+        "Sub-Period Basis",
     ]
     write_header_row(ws, 7, headers, bg=NAVY, height=28)
 
@@ -270,6 +271,11 @@ def write_back_billing_sheet(
                 )
         else:
             _text(ws, r, 18, "", fill_hex=bg)
+        # Sub-Period Basis (col 19): how Unlawful Charge (£) was derived —
+        # "Sub-period × rate" when the invoice carried a per-sub-period table,
+        # "Day-ratio fallback" when the old proration was used. Provenance
+        # only; never summed into the trailing total.
+        _text(ws, r, 19, str(row.get("Sub-Period Basis", "") or ""), fill_hex=bg)
         r += 1
 
     # Trailing total row: a single union total over LIVE rows only.
@@ -289,7 +295,7 @@ def write_back_billing_sheet(
             total_label,
             [(6, round(total, 2)), (10, round(union_total, 2))],
             5,
-            17,
+            19,
         )
 
     # Column widths
@@ -312,6 +318,7 @@ def write_back_billing_sheet(
         "P": 16,  # Superseded By
         "Q": 16,  # Partial Overlap
         "R": 18,  # View Superseded
+        "S": 20,  # Sub-Period Basis
     }
     set_column_widths_from_spec(ws, widths)
     freeze_at(ws, "A8")
