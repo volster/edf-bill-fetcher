@@ -71,6 +71,11 @@ dev = [
     "mypy>=1.9",
     "types-beautifulsoup4>=4.12,<5",
 ]
+msg = [
+    # Outlook .msg parsing via edf_bill_fetcher.io.adapters.msg — optional
+    # (import-guarded) so the core install never requires it.
+    "extract-msg>=0.50",
+]
 
 [project.urls]
 Homepage = "https://github.com/volster/edf-bill-fetcher"
