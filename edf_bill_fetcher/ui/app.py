@@ -278,6 +278,7 @@ class App:
         self.pst_path = tk.StringVar()
         self.pdf_dir = tk.StringVar()
         self.htm_path = tk.StringVar()
+        self.eml_msg_dir = tk.StringVar()
         self.acc_num = tk.StringVar(value="")
         self.status = tk.StringVar(value="Ready.")
         self.progress_v = tk.DoubleVar(value=0)
@@ -544,6 +545,7 @@ class App:
                 filedialog.askopenfilename(filetypes=[("HTM/HTML", "*.htm *.html")])
             ),
         )
+        browse_row(s1, "EML/MSG Folder:", self.eml_msg_dir, self._pick_eml_msg_dir)
 
         # Output Folder picker (new - spec Design Section 1)
         browse_row(s1, "Output Folder:", self.output_folder, self._pick_output_folder)
@@ -766,6 +768,11 @@ class App:
         p = filedialog.askdirectory()
         if p:
             self.pdf_dir.set(p)
+
+    def _pick_eml_msg_dir(self):
+        p = filedialog.askdirectory()
+        if p:
+            self.eml_msg_dir.set(p)
 
     def _pick_output_folder(self):
         p = filedialog.askdirectory()
@@ -1025,12 +1032,14 @@ class App:
                 self.pst_path.get().strip(),
                 self.pdf_dir.get().strip(),
                 self.htm_path.get().strip(),
+                self.eml_msg_dir.get().strip(),
             ]
         )
         if not has_sources:
             messagebox.showerror(
                 "Error",
-                "Please select at least one source:\nPST/OST file, PDF folder, or HTM export.",
+                "Please select at least one source:\n"
+                "PST/OST file, PDF folder, HTM export, or EML/MSG folder.",
             )
             return
         self.cancel_event.clear()
@@ -1100,6 +1109,12 @@ class App:
             if pdf_path and os.path.exists(pdf_path) and not self.cancel_event.is_set():
                 engine.crawl_local_pdfs(pdf_path)
 
+            eml_msg_path = self.eml_msg_dir.get().strip()
+            if eml_msg_path and os.path.exists(eml_msg_path) and not self.cancel_event.is_set():
+                self.set_status("Scanning EML/MSG folder…")
+                engine.process_eml_folder(eml_msg_path)
+                engine.process_msg_folder(eml_msg_path)
+
             if self.cancel_event.is_set():
                 self._show("warning", "Cancelled", "Extraction cancelled.")
                 return
@@ -1115,6 +1130,8 @@ class App:
                         if pdf_path
                         else os.path.dirname(htm_path)
                         if htm_path
+                        else eml_msg_path
+                        if eml_msg_path
                         else os.getcwd()
                     )
                     self.output_folder.set(base_dir)

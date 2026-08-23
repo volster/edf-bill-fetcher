@@ -142,12 +142,16 @@ def _safe_json_dump(state: dict[str, Any], path: str) -> None:
 def run_cli_extract(args: list[str]) -> None:
     """Run extraction from command line (headless mode)."""
     parser = argparse.ArgumentParser(
-        description="Extract EDF billing data from PST/OST, PDF folder, or HTM export",
+        description=(
+            "Extract EDF billing data from PST/OST, PDF folder, HTM export, or EML/MSG folders"
+        ),
         prog="edf-collector --extract",
     )
     parser.add_argument("--pst", help="Path to PST/OST file")
     parser.add_argument("--pdf-dir", help="Path to directory containing PDF bills")
     parser.add_argument("--htm", help="Path to HTM account history export")
+    parser.add_argument("--eml-dir", help="Path to directory containing .eml message files")
+    parser.add_argument("--msg-dir", help="Path to directory containing .msg message files")
     parser.add_argument("--output", "-o", required=True, help="Output Excel file path")
     parser.add_argument("--records-json", help="Also save extracted records as JSON")
     parser.add_argument(
@@ -183,8 +187,11 @@ def run_cli_extract(args: list[str]) -> None:
     parsed = parser.parse_args(args)
 
     # Check at least one source
-    if not any([parsed.pst, parsed.pdf_dir, parsed.htm]):
-        sys.stderr.write("ERROR: At least one source required (--pst, --pdf-dir, or --htm)\n")
+    if not any([parsed.pst, parsed.pdf_dir, parsed.htm, parsed.eml_dir, parsed.msg_dir]):
+        sys.stderr.write(
+            "ERROR: At least one source required "
+            "(--pst, --pdf-dir, --htm, --eml-dir, or --msg-dir)\n"
+        )
         sys.exit(1)
 
     # Load config from file if provided
@@ -250,6 +257,14 @@ def run_cli_extract(args: list[str]) -> None:
         if parsed.pdf_dir and os.path.exists(parsed.pdf_dir):
             print(f"Scanning PDF folder: {parsed.pdf_dir}")
             engine.crawl_local_pdfs(parsed.pdf_dir)
+
+        if parsed.eml_dir and os.path.exists(parsed.eml_dir):
+            print(f"Scanning EML folder: {parsed.eml_dir}")
+            engine.process_eml_folder(parsed.eml_dir)
+
+        if parsed.msg_dir and os.path.exists(parsed.msg_dir):
+            print(f"Scanning MSG folder: {parsed.msg_dir}")
+            engine.process_msg_folder(parsed.msg_dir)
 
         if not engine.records:
             sys.stderr.write("WARNING: No billing records found\n")

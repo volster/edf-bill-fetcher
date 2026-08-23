@@ -42,10 +42,13 @@ from edf_bill_fetcher.helpers.fallback_extractors import (
 )
 from edf_bill_fetcher.helpers.formatting import account_number_matches
 from edf_bill_fetcher.helpers.pst_resources import (
+    EMAIL_ADDR_RE,
     extract_sender_email,
     pst_attachment_filename,
 )
+from edf_bill_fetcher.io.adapters.eml import parse_eml_message
 from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
+from edf_bill_fetcher.io.adapters.msg import HAS_EXTRACT_MSG, parse_msg_message
 from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pages
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.models.records import BillingRecord
@@ -1057,6 +1060,117 @@ class EvidenceEngine:
             _process_one(item)
 
         self.update_ui(f"PDF folder: {self.pdf_count} PDFs processed")
+
+    # ------------------------------------------------------------------
+    # Local EML / MSG folders
+    # ------------------------------------------------------------------
+
+    def _process_message_folder(self, path, extension, parser, source_name):
+        """Process every ``<extension>`` message in a local folder.
+
+        Shared implementation for :meth:`process_eml_folder` and
+        :meth:`process_msg_folder`.  Each file is parsed by ``parser``
+        into the adapter's 5-key dict and then run through the same
+        per-message pipeline ``crawl_pst`` uses: sender extraction →
+        domain-filter / subject-keyword gate → ``process_text``
+        preferring the html body over the plain one.  A malformed file
+        logs to ``error_log`` and never aborts the folder.
+        """
+        if not path or not os.path.exists(path):
+            return
+        try:
+            files = [f for f in os.listdir(path) if f.lower().endswith(extension)]
+        except OSError as e:
+            self.log_error(f"{source_name} folder: {path}", str(e))
+            return
+        # Sort for a deterministic progress narrative across runs
+        # (os.listdir's filesystem order varies by platform).
+        files.sort(key=lambda f: f.lower())
+        total = len(files)
+
+        for idx, fname in enumerate(files):
+            if self.is_cancelled():
+                return
+            file_path = os.path.join(path, fname)
+            try:
+                data = parser(file_path)
+            except Exception as e:
+                self.log_error(f"{source_name}: {fname}", str(e))
+                continue
+            try:
+                raw_sender = str(data.get("sender") or "")
+                sender_match = EMAIL_ADDR_RE.search(raw_sender)
+                sender_email = (
+                    sender_match.group(1).lower() if sender_match else raw_sender.lower().strip()
+                )
+                subj = str(data.get("subject") or "")
+                date_str = str(data.get("date_str") or "") or "N/A"
+
+                # Same gate as crawl_pst: domain filter when configured,
+                # otherwise the EDF subject-keyword heuristic.
+                use_domain = self.config.get("use_domain_filter", False)
+                domain_str = self.config.get("domain_filter", "")
+                should_process = False
+                if use_domain and domain_str:
+                    if _matches_domain_filter(sender_email, domain_str):
+                        should_process = True
+                else:
+                    if any(
+                        k in subj.upper()
+                        for k in ["EDF", "BILL", "STATEMENT", "ACCOUNT", "INVOICE"]
+                    ):
+                        should_process = True
+
+                if should_process:
+                    with self.lock:
+                        self.email_count += 1
+                    body_html = data.get("body_html")
+                    body_text = data.get("body_text")
+                    if body_html:
+                        clean = BeautifulSoup(body_html, "html.parser").get_text(separator=" ")
+                        self.process_text(clean, "Email Body", subj, date_str, sender=sender_email)
+                    elif body_text:
+                        self.process_text(
+                            body_text, "Email Body", subj, date_str, sender=sender_email
+                        )
+                    else:
+                        self.log_error(f"Email: {subj} ({date_str})", "No readable body")
+            except Exception as e:
+                self.log_error(f"Email: {subj}", str(e))
+
+            if self.update_progress and idx % 100 == 0:
+                self.update_progress(
+                    idx + 1, total, f"Scanning {source_name} folder: {idx + 1}/{total}"
+                )
+
+        self.update_ui(f"{source_name} folder: {total} message(s) scanned")
+
+    def process_eml_folder(self, path):
+        """Process every ``.eml`` message in a local folder.
+
+        ``.eml`` files are parsed with the stdlib-backed
+        :mod:`edf_bill_fetcher.io.adapters.eml` adapter, so this works
+        in any environment — no optional dependency involved.
+        """
+        self._process_message_folder(path, ".eml", parse_eml_message, "EML")
+
+    def process_msg_folder(self, path):
+        """Process every ``.msg`` message in a local folder.
+
+        ``.msg`` parsing needs the optional ``extract-msg`` library
+        (adapter flag ``HAS_EXTRACT_MSG``).  When it is missing the
+        folder is skipped with a single error entry — the same
+        loud-but-continue behaviour as ``process_pst_file``'s missing
+        ``pypff`` guard.
+        """
+        if not HAS_EXTRACT_MSG:
+            self.log_error(
+                "MSG",
+                "extract-msg not installed — cannot parse .msg files; "
+                "install it with `pip install 'edf-bill-fetcher[msg]'`",
+            )
+            return
+        self._process_message_folder(path, ".msg", parse_msg_message, "MSG")
 
 
 # ---------------------------------------------------------------------------
