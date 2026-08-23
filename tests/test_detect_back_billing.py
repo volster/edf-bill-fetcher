@@ -100,6 +100,47 @@ def test_366_days_is_flagged_boundary() -> None:
     assert int(out.loc[0, "Excess Days"]) > 0
 
 
+def test_backbilling_cutoff_is_365_days_not_calendar_months() -> None:
+    from edf_bill_fetcher.processors.detection import backbilling_cutoff
+
+    # 12 calendar months back from 2024-02-29 would be 2023-02-28; the
+    # deliberate 365-day rule lands on 2023-03-01 (leap-aware subtraction).
+    assert backbilling_cutoff(pd.Timestamp("2024-02-29")) == pd.Timestamp("2023-03-01")
+    assert backbilling_cutoff(pd.Timestamp("2025-03-01")) == pd.Timestamp("2024-03-01")
+
+
+def test_leap_day_bill_date_boundary() -> None:
+    # Bill 2024-02-29 with period from 2023-02-28: 366-day gap (leap year)
+    # -> flagged, with exactly 1 excess day.
+    df = pd.DataFrame(
+        [_row(date="29 Feb 2024", period_from="28 Feb 2023", period_to="31 Mar 2023")]
+    )
+    out = detect_back_billing(df)
+    assert len(out) == 1
+    assert out.iloc[0]["Excess Days"] == 1
+    assert out.iloc[0]["12-Month Limit (days)"] == 365
+
+
+def test_month_end_boundary_exactly_365_not_flagged() -> None:
+    # Bill 2025-03-01 with period from 2024-03-01: exactly 365 days ->
+    # NOT back-billing. Pins the month-end shape of the boundary.
+    df = pd.DataFrame(
+        [_row(date="01 Mar 2025", period_from="01 Mar 2024", period_to="31 Mar 2024")]
+    )
+    assert detect_back_billing(df).empty
+
+
+def test_month_end_boundary_366_flagged() -> None:
+    # Bill 2024-03-01 with period from 2023-03-01: 366 days (2024 leap)
+    # -> flagged, 1 excess day.
+    df = pd.DataFrame(
+        [_row(date="01 Mar 2024", period_from="01 Mar 2023", period_to="31 Mar 2023")]
+    )
+    out = detect_back_billing(df)
+    assert len(out) == 1
+    assert out.iloc[0]["Excess Days"] == 1
+
+
 def test_long_period_non_admitted_row() -> None:
     # 478-day period billed >365 days after its Period To -> back-billing.
     # Period 04 Apr 2022 to 26 Jul 2023; bill date 09 Aug 2024 (379 days after Period To).

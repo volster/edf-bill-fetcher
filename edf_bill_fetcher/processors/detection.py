@@ -289,6 +289,19 @@ def compute_unlawful_union_total(bb: pd.DataFrame) -> float:
     return round(sum(rate_p / 100.0 * kwh for rate_p, kwh in claimed.values()), 2)
 
 
+def backbilling_cutoff(bill_date: pd.Timestamp) -> pd.Timestamp:
+    """Return the SLC 7A 12-month cutoff: 365 days before the bill date.
+
+    Deliberate domain decision: the 12-month limit is implemented as a
+    fixed 365-day interval, not calendar months, so leap-year and
+    month-end dates resolve deterministically (e.g. a bill dated
+    2024-02-29 reaches back to 2023-03-01, not 2023-02-28).  This is the
+    single place the rule lives; ``detect_back_billing`` uses it for both
+    the eligibility gate and the excess-days count.
+    """
+    return bill_date - pd.Timedelta(days=365)
+
+
 def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     """Return invoices that are back-billing under SLC 7A / Electricity Act 1989 s.84B.
 
@@ -409,13 +422,13 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         if days <= 0:
             continue
         # Excess Days: consumption days supplied more than 365 days before bill Date.
-        excess = max(0, int((bill_date_dt - pd.Timedelta(days=365) - pf).days))
+        excess = max(0, int((backbilling_cutoff(bill_date_dt) - pf).days))
         # Period Charge (£) with Amount (£) fallback.
         charge, value_source = _pull_period_charge(r)
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
         sub_periods = _parse_sub_periods(r.get("Sub Periods"))
-        cutoff = bill_date_dt - pd.Timedelta(days=365)
+        cutoff = backbilling_cutoff(bill_date_dt)
         if sub_periods:
             unlawful_charge, unlawful_slices = _sub_period_unlawful(sub_periods, cutoff)
             sub_basis = "Sub-period × rate"
