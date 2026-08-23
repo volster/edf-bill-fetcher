@@ -300,3 +300,48 @@ def test_save_evidence_files_copies_when_engine_populated_source_paths(
 
     assert pdf_path.name in saved, f"save_evidence_files did not copy: {saved}"
     assert (dest / pdf_path.name).exists()
+
+
+def test_save_evidence_files_logs_ambiguous_attachment(tmp_path: Path) -> None:
+    (tmp_path / "invoice.pdf").write_bytes(b"x")
+    df = pd.DataFrame(
+        [
+            {"Invoice #": "T-1", "Attachment Name": "invoice.pdf"},
+            {"Invoice #": "T-2", "Attachment Name": "invoice.pdf"},
+        ]
+    )
+    logs: list[str] = []
+    stats: dict[str, int] = {}
+    out = save_evidence_files(
+        df,
+        {"invoice.pdf": str(tmp_path / "invoice.pdf")},
+        str(tmp_path / "ev"),
+        log=logs.append,
+        stats=stats,
+    )
+    assert len(out) == 1
+    assert stats["ambiguous"] == 1
+    assert any("ambiguous" in m for m in logs)
+
+
+def test_save_evidence_files_stats_counts_missing(tmp_path: Path) -> None:
+    df = pd.DataFrame(
+        [
+            {"Invoice #": "T-1", "Attachment Name": "a.pdf"},
+            {"Invoice #": "T-2", "Attachment Name": "missing.pdf"},
+        ]
+    )
+    logs: list[str] = []
+    stats: dict[str, int] = {}
+    (tmp_path / "a.pdf").write_bytes(b"x")
+    out = save_evidence_files(
+        df,
+        {"a.pdf": str(tmp_path / "a.pdf")},
+        str(tmp_path / "ev"),
+        log=logs.append,
+        stats=stats,
+    )
+    assert len(out) == 1
+    assert stats["saved"] == 1
+    assert stats["missing"] == 1
+    assert stats["ambiguous"] == 0

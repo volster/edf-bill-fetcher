@@ -1132,7 +1132,8 @@ class App:
                         # Build the source-paths reverse-lookup from the
                         # crawl attribute the engine carries internally.
                         source_paths = getattr(engine, "source_paths", {}) or {}
-                        saved = save_evidence_files(dfc, source_paths, ev_dir)
+                        bundle_stats: dict[str, int] = {}
+                        saved = save_evidence_files(dfc, source_paths, ev_dir, stats=bundle_stats)
                         index_docx = os.path.join(out_dir, "evidence_index.docx")
                         build_bundle_index(
                             dfc, saved, index_docx, account=str(config.get("acc_num", ""))
@@ -1141,6 +1142,16 @@ class App:
                             f"\n\nSaved {len(saved)} evidence files to:\n{ev_dir}"
                             f"\nBundle index:\n{index_docx}"
                         )
+                        if bundle_stats.get("missing"):
+                            bundle_summary += (
+                                f"\nWarning: {bundle_stats['missing']} referenced "
+                                f"evidence file(s) could not be copied"
+                            )
+                        if bundle_stats.get("ambiguous"):
+                            bundle_summary += (
+                                f"\nWarning: {bundle_stats['ambiguous']} attachment "
+                                f"name(s) are ambiguous (referenced by multiple invoices)"
+                            )
                     except Exception as bundle_err:
                         # Don't lose the run if the bundle step blows up --
                         # log it loudly but still keep the XLSX.

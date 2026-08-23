@@ -103,6 +103,7 @@ def save_evidence_files(
     source_paths: dict[str, str],
     dest_dir: str,
     log: Callable[[str], Any] | None = None,
+    stats: dict[str, int] | None = None,
 ) -> dict[str, str]:
     """Copy every referred file into ``dest_dir``.
 
@@ -113,7 +114,10 @@ def save_evidence_files(
     etc. on the destination basename.
 
     Returns a dict ``{attachment_name: destination_path}`` for every file
-    successfully copied.
+    successfully copied. ``stats``, when supplied, is filled with
+    ``{"saved": n, "missing": m, "ambiguous": k}`` so callers can
+    distinguish a complete bundle from one with missing or ambiguous
+    evidence.
     """
     if log is None:
 
@@ -129,6 +133,7 @@ def save_evidence_files(
 
     invoice_to_att: dict[str, str] = {}
     multi_att_invoices: set[str] = set()
+    att_invoices: dict[str, set[str]] = {}
     if "Invoice #" in evidence_df.columns:
         for _, r in evidence_df.iterrows():
             inv_num = str(r.get("Invoice #", "")).strip()
@@ -137,6 +142,7 @@ def save_evidence_files(
                 continue
             if att in ("N/A", "", "None", "nan"):
                 continue
+            att_invoices.setdefault(att, set()).add(inv_num)
             if inv_num in invoice_to_att and invoice_to_att[inv_num] != att:
                 multi_att_invoices.add(inv_num)
             else:
@@ -167,6 +173,20 @@ def save_evidence_files(
         dest_path = os.path.join(dest_dir, dest_base)
         shutil.copy2(src, dest_path)
         saved[att] = dest_path
+
+    ambiguous = {att for att, invs in att_invoices.items() if len(invs) > 1}
+    for att in sorted(ambiguous):
+        log(f"evidence_files: ambiguous attachment {att!r} referenced by multiple invoices")
+    if stats is not None:
+        missing_attrs = {
+            str(r.get("Attachment Name", "N/A"))
+            for _, r in evidence_df.iterrows()
+            if str(r.get("Attachment Name", "N/A")) not in ("N/A", "", "None", "nan")
+            and str(r.get("Attachment Name", "N/A")) not in saved
+        }
+        stats["saved"] = len(saved)
+        stats["missing"] = len(missing_attrs)
+        stats["ambiguous"] = len(ambiguous)
     return saved
 
 
