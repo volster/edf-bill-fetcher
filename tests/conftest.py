@@ -6,7 +6,83 @@ The project root is added to ``sys.path`` automatically via
 needed here.
 """
 
+from email import policy
+from email.message import EmailMessage
+from pathlib import Path
+
 import pytest
+
+
+def _save_eml(tmp_path: Path, name: str, msg: EmailMessage) -> Path:
+    """Serialize a synthetic EmailMessage to an .eml file under tmp_path."""
+    path = tmp_path / name
+    path.write_bytes(msg.as_bytes())
+    return path
+
+
+@pytest.fixture
+def eml_html_path(tmp_path):
+    """Path to a synthetic .eml with a single text/html body part."""
+    msg = EmailMessage()
+    msg["From"] = "EDF Billing <billing@edfenergy.com>"
+    msg["To"] = "customer@example.com"
+    msg["Subject"] = "Your EDF bill is ready"
+    msg["Date"] = "Tue, 15 Jan 2024 10:30:00 +0000"
+    msg["Content-Type"] = "text/html"
+    msg.set_payload("<html><body><h1>Your EDF bill</h1></body></html>")
+    return _save_eml(tmp_path, "bill_html.eml", msg)
+
+
+@pytest.fixture
+def eml_plain_path(tmp_path):
+    """Path to a synthetic .eml with a single text/plain body part."""
+    msg = EmailMessage()
+    msg["From"] = "EDF Billing <billing@edfenergy.com>"
+    msg["To"] = "customer@example.com"
+    msg["Subject"] = "Your EDF bill"
+    msg["Date"] = "Mon, 12 Feb 2024 09:00:00 +0000"
+    msg.set_content("Your EDF bill for January is ready.\nTotal: £120.00\n")
+    return _save_eml(tmp_path, "bill_plain.eml", msg)
+
+
+@pytest.fixture
+def eml_multipart_path(tmp_path):
+    """Path to a synthetic .eml with a multipart/alternative body."""
+    msg = EmailMessage()
+    msg["From"] = "EDF Billing <billing@edfenergy.com>"
+    msg["To"] = "customer@example.com"
+    msg["Subject"] = "Your EDF bill"
+    msg["Date"] = "Tue, 15 Jan 2024 10:30:00 +0000"
+    msg.set_content("Plain fallback text")
+    msg.add_alternative("<p>Rich <b>HTML</b></p>", subtype="html")
+    return _save_eml(tmp_path, "bill_multipart.eml", msg)
+
+
+@pytest.fixture
+def eml_empty_path(tmp_path):
+    """Path to a synthetic .eml with headers but no body content."""
+    msg = EmailMessage()
+    msg["From"] = "no-reply@edfenergy.com"
+    msg["Subject"] = ""
+    msg["Date"] = "Tue, 15 Jan 2024 10:30:00 +0000"
+    return _save_eml(tmp_path, "empty.eml", msg)
+
+
+@pytest.fixture
+def eml_encoded_subject_path(tmp_path):
+    """Path to a synthetic .eml whose Subject header is RFC2047-encoded.
+
+    Built with the compat32 policy so the encoded subject survives
+    serialization verbatim instead of being normalized by the default
+    policy's generator.
+    """
+    msg = EmailMessage(policy=policy.compat32)
+    msg["From"] = "EDF Billing <billing@edfenergy.com>"
+    msg["Subject"] = "=?utf-8?b?Vml2ZSBsJ8OpbmVyZ2ll?="
+    msg["Date"] = "Tue, 15 Jan 2024 10:30:00 +0000"
+    msg["Content-Type"] = 'text/plain; charset="utf-8"'
+    msg.set_payload("Plain body")
+    return _save_eml(tmp_path, "encoded_subject.eml", msg)
 
 
 @pytest.fixture
