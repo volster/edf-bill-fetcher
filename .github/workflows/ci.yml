@@ -232,6 +232,58 @@ jobs:
           }
           Write-Host "Tcl/Tk mirror verified complete"
 
+          # Post-mirror integrity check: pin the specific Tcl/Tk files
+          # that mid-suite Tk init actually loads.  A Defender scan can
+          # delete a single file from the mirror AFTER the copy
+          # completes (observed: ttk/altTheme.tcl missing mid-suite on
+          # the Windows 3.12 leg, 2026-08-06), so verify each critical
+          # file exists here, re-run the corresponding robocopy once
+          # with a longer retry if any are missing, and fail the step
+          # with the expected source paths if a file is still absent.
+          $criticalFiles = @(
+            @{ Rel = 'tk.tcl';           Src = $tkLibSrc;  Dst = $tkLib  },
+            @{ Rel = 'ttk/altTheme.tcl'; Src = $tkLibSrc;  Dst = $tkLib  },
+            @{ Rel = 'ttk/sizegrip.tcl'; Src = $tkLibSrc;  Dst = $tkLib  },
+            @{ Rel = 'ttk/scale.tcl';    Src = $tkLibSrc;  Dst = $tkLib  },
+            @{ Rel = 'ttk/combobox.tcl'; Src = $tkLibSrc;  Dst = $tkLib  },
+            @{ Rel = 'ttk/entry.tcl';    Src = $tkLibSrc;  Dst = $tkLib  },
+            @{ Rel = 'ttk/text.tcl';     Src = $tkLibSrc;  Dst = $tkLib  },
+            @{ Rel = 'ttk/theme.tcl';    Src = $tkLibSrc;  Dst = $tkLib  },
+            @{ Rel = 'init.tcl';         Src = $tclLibSrc; Dst = $tclLib }
+          )
+          $criticalMissing = @($criticalFiles | Where-Object {
+            -not (Test-Path -LiteralPath (Join-Path $_.Dst $_.Rel))
+          })
+          if ($criticalMissing.Count -gt 0) {
+            Write-Host "Critical mirror file(s) missing — re-running robocopy with longer retry (R:20 W:3): $(($criticalMissing | ForEach-Object { $_.Rel }) -join ', ')"
+            # Re-run robocopy once per affected source tree with a
+            # longer retry window (20 attempts, 3s wait), then
+            # re-verify.
+            $affectedPairs = @($criticalMissing | Group-Object -Property Src | ForEach-Object { $_.Group[0] })
+            foreach ($pair in $affectedPairs) {
+              robocopy $pair.Src $pair.Dst /E /NFL /NDL /NJH /NJS /R:20 /W:3
+              if ($LASTEXITCODE -ge 8) {
+                throw "robocopy retry failed for $($pair.Src) with exit code $LASTEXITCODE"
+              }
+            }
+            # robocopy reports success with exit codes 0-7 (1 = files
+            # copied); clear $LASTEXITCODE so the retry's non-zero
+            # success code does not fail the step.
+            $LASTEXITCODE = 0
+            $stillMissing = @($criticalFiles | Where-Object {
+              -not (Test-Path -LiteralPath (Join-Path $_.Dst $_.Rel))
+            })
+            if ($stillMissing.Count -gt 0) {
+              $detail = ($stillMissing | ForEach-Object {
+                "$($_.Rel): mirror $(Join-Path $_.Dst $_.Rel) <- expected source $(Join-Path $_.Src $_.Rel)"
+              }) -join '; '
+              throw "Tk mirror integrity check failed after robocopy retry — still missing: $detail"
+            }
+            Write-Host "Critical mirror files restored by robocopy retry"
+          } else {
+            Write-Host "Tk mirror integrity check passed"
+          }
+
           "TCL_LIBRARY=$tclLib" | Out-File -Append -FilePath $env:GITHUB_ENV
           "TK_LIBRARY=$tkLib"   | Out-File -Append -FilePath $env:GITHUB_ENV
 
