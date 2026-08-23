@@ -269,7 +269,10 @@ class App:
         """Set up the application window, widgets, and state."""
         self.root = root
         self.root.title("EDF Master Evidence Collector")
-        self.root.geometry("780x860")
+        # Default size + minsize chosen so the window fits 768px-tall
+        # screens; the scrollable canvas in build_ui handles the overflow.
+        self.root.geometry("780x700")
+        self.root.minsize(720, 600)
         self.root.configure(bg=EDF_OFFWHITE)
 
         self.pst_path = tk.StringVar()
@@ -508,6 +511,17 @@ class App:
 
         main.bind("<Configure>", _reconfig)
         canvas.bind("<Configure>", _reconfig)
+
+        # Wheel scrolling: <MouseWheel> for Windows/macOS, <Button-4>/<Button-5>
+        # for X11. Bound on the toplevel bindtag (not bind_all) so every
+        # descendant of the main window scrolls, and so ReportOptionsDialog's
+        # bind_all/unbind_all lifecycle cannot strip the main window's binding.
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self.root.bind("<MouseWheel>", _on_mousewheel)
+        self.root.bind("<Button-4>", lambda _e: canvas.yview_scroll(-1, "units"))
+        self.root.bind("<Button-5>", lambda _e: canvas.yview_scroll(1, "units"))
 
         # --- Section 1: Source Data ---
         s1 = ttk.LabelFrame(main, text=" 1. Source Data ", padding=10)
