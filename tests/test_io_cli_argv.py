@@ -352,6 +352,45 @@ class TestRunCliExtract:
         out = capsys.readouterr().out
         assert "Records saved as JSON" in out
 
+    def test_save_engine_json_flag_writes_versioned_state(
+        self,
+        stub_engine: _StubEngine,
+        stub_export_to_excel: dict[str, list[Any]],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The ``--save-engine-json`` flag writes the versioned state JSON after export.
+
+        The on-disk payload is ``{"version": 1, "config": ...,
+        "filtered_records": ..., "error_log": ...}`` built from the
+        engine's post-extraction state, so a later ``-e state.json``
+        run can round-trip it.
+        """
+        out_xlsx = tmp_path / "out.xlsx"
+        state_json = tmp_path / "engine.json"
+        pdf_dir = tmp_path / "pdfs"
+        pdf_dir.mkdir()
+
+        run_cli_extract(
+            [
+                "--pdf-dir",
+                str(pdf_dir),
+                "-o",
+                str(out_xlsx),
+                "--save-engine-json",
+                str(state_json),
+            ]
+        )
+
+        assert state_json.exists()
+        loaded = json.loads(state_json.read_text(encoding="utf-8"))
+        assert loaded["version"] == 1
+        assert loaded["filtered_records"] == stub_engine.filtered_records
+        assert loaded["error_log"] == stub_engine.error_log
+        assert "config" in loaded
+        out = capsys.readouterr().out
+        assert "Engine state saved as JSON" in out
+
     def test_config_file_failure_exits_1(
         self,
         stub_engine: _StubEngine,

@@ -95,13 +95,48 @@ class _RestrictedUnpickler(pickle.Unpickler):
 
 
 def _safe_pickle_load(path: str) -> Any:
-    """Load a pickle file through the restricted unpickler.
+    """Load engine state from a versioned JSON or legacy pickle file.
 
-    Usage:  obj = _safe_pickle_load("engine.pkl")
-    Raises pickle.UnpicklingError for disallowed types.
+    Dispatch on the file extension: ``.json`` is read through plain
+    ``json.load`` (the versioned state written by ``_safe_json_dump``),
+    ``.pkl`` through the restricted unpickler, and anything else raises
+    ``ValueError`` so a typo'd extension never silently falls back.
+
+    Usage:  state = _safe_pickle_load("engine.json")
+    Raises ValueError for an unrecognised extension and
+    pickle.UnpicklingError for disallowed types in a pickle stream.
     """
-    with open(path, "rb") as f:
-        return _RestrictedUnpickler(f).load()
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".json":
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    if ext == ".pkl":
+        with open(path, "rb") as f:
+            return _RestrictedUnpickler(f).load()
+    raise ValueError(
+        f"Unsupported engine state file extension {ext or '(none)'!r} for {path!r}; "
+        "use .json (versioned JSON) or .pkl (legacy pickle)"
+    )
+
+
+def _safe_json_dump(state: dict[str, Any], path: str) -> None:
+    """Write engine state as versioned JSON: ``{"version": 1, ...}``.
+
+    The payload carries ``config``, ``filtered_records`` and
+    ``error_log`` — the same serialization shape the ``--records-json``
+    export uses, so both outputs stay interoperable.  ``default=str``
+    mirrors that handler and keeps non-primitive values serialisable.
+
+    Usage:  _safe_json_dump(state, "engine.json")
+    """
+    payload = {
+        "version": 1,
+        "config": state.get("config", {}),
+        "filtered_records": state.get("filtered_records", []),
+        "error_log": state.get("error_log", []),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, default=str)
 
 
 def run_cli_extract(args: list[str]) -> None:
@@ -115,6 +150,10 @@ def run_cli_extract(args: list[str]) -> None:
     parser.add_argument("--htm", help="Path to HTM account history export")
     parser.add_argument("--output", "-o", required=True, help="Output Excel file path")
     parser.add_argument("--records-json", help="Also save extracted records as JSON")
+    parser.add_argument(
+        "--save-engine-json",
+        help="Save engine state (config, filtered records, error log) as versioned JSON",
+    )
     parser.add_argument("--config", "-c", help="Path to config JSON file (optional)")
     parser.add_argument("--acc-filter", help="Filter by account number (e.g., A-12345678)")
     parser.add_argument(
@@ -247,6 +286,16 @@ def run_cli_extract(args: list[str]) -> None:
                 json.dump(output_data, f, indent=2, default=str)
             print(f"Records saved as JSON: {parsed.records_json}")
 
+        # Optionally save engine state as versioned JSON
+        if parsed.save_engine_json:
+            state = {
+                "config": config,
+                "filtered_records": engine.filtered_records,
+                "error_log": engine.error_log,
+            }
+            _safe_json_dump(state, parsed.save_engine_json)
+            print(f"Engine state saved as JSON: {parsed.save_engine_json}")
+
         print("Extraction complete!")
         print(f"  PDFs processed: {engine.pdf_count}")
         print(f"  Emails matched: {engine.email_count}")
@@ -277,7 +326,7 @@ def run_cli_pdf_report(args: list[str]) -> None:
     parser.add_argument(
         "--engine-data",
         "-e",
-        help="Path to engine data pickle file (optional, for filtered records)",
+        help="Path to engine state file (.json preferred, .pkl legacy)",
     )
     parsed = parser.parse_args(args)
 
@@ -303,9 +352,14 @@ def run_cli_pdf_report(args: list[str]) -> None:
         filtered = None
         if parsed.engine_data:
             # Use the restricted unpickler to prevent arbitrary code
-            # execution from crafted pickle files (see C1 fix).
+            # execution from crafted pickle files (see C1 fix).  A .json
+            # path yields the versioned JSON state dict instead of an
+            # engine instance; its filtered_records ride along the same way.
             engine = _safe_pickle_load(parsed.engine_data)
-            filtered = getattr(engine, "filtered_records", None)
+            if isinstance(engine, dict):
+                filtered = engine.get("filtered_records")
+            else:
+                filtered = getattr(engine, "filtered_records", None)
 
         from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
 
@@ -345,7 +399,7 @@ def run_cli_docx_report(args: list[str]) -> None:
     parser.add_argument(
         "--engine-data",
         "-e",
-        help="Path to engine data pickle file (optional, for filtered records)",
+        help="Path to engine state file (.json preferred, .pkl legacy)",
     )
     parsed = parser.parse_args(args)
 
@@ -370,9 +424,14 @@ def run_cli_docx_report(args: list[str]) -> None:
         filtered = None
         if parsed.engine_data:
             # Use the restricted unpickler to prevent arbitrary code
-            # execution from crafted pickle files (see C1 fix).
+            # execution from crafted pickle files (see C1 fix).  A .json
+            # path yields the versioned JSON state dict instead of an
+            # engine instance; its filtered_records ride along the same way.
             engine = _safe_pickle_load(parsed.engine_data)
-            filtered = getattr(engine, "filtered_records", None)
+            if isinstance(engine, dict):
+                filtered = engine.get("filtered_records")
+            else:
+                filtered = getattr(engine, "filtered_records", None)
 
         from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
 
