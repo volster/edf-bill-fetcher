@@ -254,6 +254,48 @@ class TestPickleRoundTrip:
             "N/A",
         ]
 
+    def test_sap_and_source_path_state_roundtrips(self, tmp_dir: Path) -> None:
+        """The four newer engine data fields survive a pickle round-trip.
+
+        Pre-fix ``__getstate__`` omitted sap_contract_rows / sap_meter_rows /
+        sap_financial_rows / source_paths, so a reloaded engine silently
+        lost the SAP sheet inputs and the evidence-bundle reverse lookup.
+        """
+        engine = _build_engine()
+        engine.sap_contract_rows = [{"Contract From": "2020-01-01", "Product Code": "ESC1_FIXED"}]
+        engine.sap_meter_rows = [{"Meter Read Date": "2020-02-01", "Reading (kWh)": "1000"}]
+        engine.sap_financial_rows = [
+            {"Document No.": "531000424090", "Amount": "123.45", "Clearing Document": "5000"}
+        ]
+        engine.source_paths = {"Jan 2026 bill.pdf": "/tmp/Jan 2026 bill.pdf"}
+
+        pkl_path = tmp_dir / "engine_sap.pkl"
+        with open(pkl_path, "wb") as fh:
+            pickle.dump(engine, fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+        restored = _safe_pickle_load(str(pkl_path))
+        assert restored.sap_contract_rows == engine.sap_contract_rows
+        assert restored.sap_meter_rows == engine.sap_meter_rows
+        assert restored.sap_financial_rows == engine.sap_financial_rows
+        assert restored.source_paths == engine.source_paths
+
+    def test_old_pickle_without_new_fields_loads_with_defaults(self, tmp_dir: Path) -> None:
+        """Pickles written before the four fields existed still load: the
+        missing keys default to [] / {} instead of raising KeyError."""
+        engine = _build_engine()
+        state = engine.__getstate__()
+        for key in ("sap_contract_rows", "sap_meter_rows", "sap_financial_rows", "source_paths"):
+            state.pop(key, None)
+        pkl_path = tmp_dir / "engine_old.pkl"
+        with open(pkl_path, "wb") as fh:
+            pickle.dump(state, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        restored = _build_engine()
+        restored.__setstate__(state)
+        assert restored.sap_contract_rows == []
+        assert restored.sap_meter_rows == []
+        assert restored.sap_financial_rows == []
+        assert restored.source_paths == {}
+
 
 class TestRestrictedPicklerBlocksUnsafe:
     """The whole point of the restricted loader is to *block*

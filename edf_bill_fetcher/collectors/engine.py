@@ -208,6 +208,10 @@ class EvidenceEngine:
             "email_count": self.email_count,
             "error_log": self.error_log,
             "seen_pdf_hashes": self.seen_pdf_hashes,
+            "sap_contract_rows": self.sap_contract_rows,
+            "sap_meter_rows": self.sap_meter_rows,
+            "sap_financial_rows": self.sap_financial_rows,
+            "source_paths": self.source_paths,
         }
 
     def __setstate__(self, state: dict) -> None:
@@ -222,6 +226,13 @@ class EvidenceEngine:
         self.email_count = state["email_count"]
         self.error_log = state["error_log"]
         self.seen_pdf_hashes = state["seen_pdf_hashes"]
+        # Newer data fields (added after the original pickle contract):
+        # restore with backwards-compatible defaults so pre-existing
+        # pickles (which lack these keys) still load.
+        self.sap_contract_rows = state.get("sap_contract_rows", [])
+        self.sap_meter_rows = state.get("sap_meter_rows", [])
+        self.sap_financial_rows = state.get("sap_financial_rows", [])
+        self.source_paths = state.get("source_paths", {})
         # Rebuild runtime primitives fresh — the persisted snapshot
         # does not carry cancel state forward.
         self.cancel_event = threading.Event()
