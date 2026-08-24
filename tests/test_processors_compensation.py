@@ -284,3 +284,117 @@ def test_disclaimer_present_on_every_row() -> None:
     rows = estimate_compensation(df, config={"as_of": AS_OF})
     assert len(rows) >= 3  # 1 excess + hold + late
     assert all(r["disclaimer"] == DISCLAIMER for r in rows)
+
+
+# ---------- fix round 1: NaN and same-day refund handling ----------
+
+
+def test_nan_amount_record_does_not_suppress_credit_rows() -> None:
+    """A later record with a NaN Amount must not phantom-match as a refund.
+
+    Regression pin for the review finding: NaN compares False to both
+    ``<= 0`` and ``> 0.50`` checks, so without an explicit NaN guard the
+    first later NaN record "refunded" any credit and silently dropped
+    both the hold-interest and late-credit rows.
+    """
+    df = pd.DataFrame(
+        [
+            _record(
+                "KCR-0006",
+                "01 Feb 2026",
+                -100.00,
+                "01 Jan 2026",
+                "31 Jan 2026",
+            ),
+            _record(
+                "KI-0006",
+                "15 Feb 2026",
+                float("nan"),
+                "01 Jan 2026",
+                "31 Jan 2026",
+            ),
+        ]
+    )
+    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    assert len(rows) == 2
+    hold_rows = [r for r in rows if r["category"] == "credit_hold_interest"]
+    late_rows = [r for r in rows if r["category"] == "late_credit_interest"]
+    assert len(hold_rows) == 1
+    assert hold_rows[0]["days"] == 30
+    assert len(late_rows) == 1
+    assert late_rows[0]["days"] == 120
+    assert {r["invoice_ref"] for r in rows} == {"KCR-0006"}
+
+
+def test_nan_period_charge_emits_no_row() -> None:
+    """A back-billing row whose Period Charge is NaN must not emit a row
+    with NaN base_amount/indicative_amount — it is skipped like a zero
+    charge (``NaN <= 0`` is False, so without a guard the NaN row leaked)."""
+    df = pd.DataFrame(
+        [
+            _record(
+                "KI-0007",
+                "01 Mar 2024",
+                1200.00,
+                "01 Jan 2022",
+                "28 Feb 2024",
+                period_charge=float("nan"),
+            )
+        ]
+    )
+    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    assert rows == []
+
+
+def test_same_day_refund_after_credit_suppresses_interest_rows() -> None:
+    """A refund issued on the same statement date as the credit (listed
+    after the credit row) counts as a refund: no hold row (0 days beyond
+    the 90-day window) and no late-credit row."""
+    df = pd.DataFrame(
+        [
+            _record(
+                "KCR-0008",
+                "10 Jan 2026",
+                -100.00,
+                "01 Dec 2025",
+                "31 Dec 2025",
+            ),
+            _record(
+                "PAY-0008",
+                "10 Jan 2026",
+                100.00,
+                "01 Dec 2025",
+                "31 Dec 2025",
+            ),
+        ]
+    )
+    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    assert rows == []
+
+
+def test_same_day_refund_before_credit_is_documented_limitation() -> None:
+    """Pins the documented limitation: a same-date refund listed BEFORE
+    the credit row cannot be ordered by the data, so the credit is still
+    treated as unrefunded and the late-credit row fires."""
+    df = pd.DataFrame(
+        [
+            _record(
+                "PAY-0009",
+                "10 Jan 2026",
+                100.00,
+                "01 Dec 2025",
+                "31 Dec 2025",
+            ),
+            _record(
+                "KCR-0009",
+                "10 Jan 2026",
+                -100.00,
+                "01 Dec 2025",
+                "31 Dec 2025",
+            ),
+        ]
+    )
+    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    late_rows = [r for r in rows if r["category"] == "late_credit_interest"]
+    assert len(late_rows) == 1
+    assert late_rows[0]["invoice_ref"] == "KCR-0009"

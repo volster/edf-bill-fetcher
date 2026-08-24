@@ -15,7 +15,15 @@ claims derived from the deduplicated evidence records:
     current Ofgem credit-balance interest reference).
   * ``late_credit_interest``  -- interest from the statement ``Date`` to
     ``as_of`` on a credit balance that was never refunded (no later
-    positive record within GBP0.50 of the balance magnitude).
+    positive record within GBP0.50 of the balance magnitude; a same-date
+    record counts as the refund only when it is listed after the credit
+    row in the input order, since the data cannot order same-date rows
+    otherwise).
+
+Records with NaN ``Amount (GBP)`` or NaN ``Period Charge (GBP)`` are
+ignored: NaN amounts are neither credits nor refunds, and a NaN charge
+emits no row (``NaN <= 0`` compares False, so both require explicit
+guards).
 
 Each output row carries ``{category, invoice_ref, date, base_amount,
 days, rate, indicative_amount, legal_basis, disclaimer}``.  The
@@ -127,8 +135,13 @@ def estimate_compensation(
     for _, b in bb.iterrows():
         excess = int(b.get("Excess Days", 0) or 0)
         days_billed = int(b.get("Days Billed", 0) or 0)
-        charge = float(b.get("Period Charge (£)", 0.0) or 0.0)
-        if excess <= 0 or days_billed <= 0 or charge <= 0:
+        try:
+            charge = float(b.get("Period Charge (£)", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            charge = float("nan")
+        # NaN charge must not leak into a row with NaN money values: NaN
+        # compares False to ``<= 0``, so the explicit isna guard is required.
+        if excess <= 0 or days_billed <= 0 or pd.isna(charge) or charge <= 0:
             continue
         bill_date = _parse_date(b.get("Bill Date"))
         if bill_date is None:
@@ -157,20 +170,34 @@ def estimate_compensation(
             amount = float(r.get("Amount (£)", 0) or 0)
         except (TypeError, ValueError):
             continue
+        if pd.isna(amount):
+            # NaN amounts are neither credits nor refunds; dropped here so
+            # they cannot phantom-match as a refund in the scan below.
+            continue
         date = _parse_date(r.get("Date"))
         if date is None:
             continue
         all_records.append((date, amount, str(r.get("Invoice #", ""))))
+    # Stable sort keeps equal-date records in input order -- the tiebreak
+    # used for same-day refund matching below.
     all_records.sort(key=lambda c: c[0])
-    credits = [(d, round(abs(a), 2), inv) for d, a, inv in all_records if a < 0]
+    credits = [
+        (idx, d, round(abs(a), 2), inv) for idx, (d, a, inv) in enumerate(all_records) if a < 0
+    ]
 
-    for date, balance, invoice in credits:
-        # Deterministic "refunded" proxy: a later record with a positive
-        # amount within GBP0.50 of the balance magnitude (mirrors the
-        # _reversal_match tolerance used by the rebilling detector).
+    for idx, date, balance, invoice in credits:
+        # Deterministic "refunded" proxy: a record with a positive amount
+        # within GBP0.50 of the balance magnitude that comes after the
+        # credit (mirrors the _reversal_match tolerance used by the
+        # rebilling detector). Same-date records count as "after" only when
+        # listed later in the input order; a same-date record listed BEFORE
+        # the credit cannot be ordered by the data and is treated as not a
+        # refund (documented limitation).
         refund_date: pd.Timestamp | None = None
-        for later_date, later_amount, _ in all_records:
-            if later_date <= date or later_amount <= 0:
+        for later_idx, (later_date, later_amount, _) in enumerate(all_records):
+            if later_date < date or (later_date == date and later_idx <= idx):
+                continue
+            if later_amount <= 0:
                 continue
             if abs(later_amount - balance) > _REFUND_TOLERANCE:
                 continue
