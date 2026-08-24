@@ -159,7 +159,11 @@ class ReportOptionsDialog:
 
         self.format_var = tk.StringVar(value="both")
         formats = [
-            ("both", "Both (PDF + Word)", "Generate both PDF and DOCX reports"),
+            (
+                "both",
+                "All Formats (PDF + Word + HTML)",
+                "Generate PDF, DOCX, and HTML reports",
+            ),
             ("pdf", "PDF Only", "Professional PDF report (reportlab)"),
             ("docx", "Word Document Only", "Editable Word document (python-docx)"),
             (
@@ -885,7 +889,8 @@ class App:
             self._show(
                 "error",
                 "Report Unavailable",
-                "Report generation requires 'reportlab' (PDF) and/or 'python-docx' (Word).\n"
+                "Report generation requires 'reportlab' (PDF) and/or 'python-docx' (Word);\n"
+                "HTML reports are always available once this package is installed.\n"
                 "Install with: pip install reportlab python-docx",
             )
             return
