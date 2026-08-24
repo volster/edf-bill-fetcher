@@ -9,6 +9,7 @@ without a lazy attribute-resolution indirection layer.
 
 from edf_bill_fetcher.io.writers.back_billing import write_back_billing_sheet
 from edf_bill_fetcher.io.writers.data_quality import write_data_quality_sheet
+from edf_bill_fetcher.io.writers.diff import write_diff_workbook
 from edf_bill_fetcher.io.writers.evidence import write_evidence_sheet, write_summary_sheet
 from edf_bill_fetcher.io.writers.export import export_to_excel, write_reconciliation_sheet
 from edf_bill_fetcher.io.writers.forecast import write_forecast_sheet
@@ -40,6 +41,7 @@ __all__ = [
     "write_back_billing_sheet",
     "write_contract_history_sheet",
     "write_data_quality_sheet",
+    "write_diff_workbook",
     "write_evidence_sheet",
     "write_forecast_sheet",
     "write_meter_readings_sheet",

@@ -324,6 +324,100 @@ def run_cli_extract(args: list[str]) -> None:
         sys.exit(1)
 
 
+def _diff_amount_text(value: Any) -> str:
+    """Render an amount cell as ``£x.xx`` (2dp) with a dash for missing values."""
+    if value is None or (isinstance(value, float) and value != value):
+        return "-"
+    try:
+        return f"£{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _diff_field_text(field: str, value: Any) -> str:
+    """Render one changed-field value, prefixing amount-shaped fields with £."""
+    if field == "Amount (£)":
+        return _diff_amount_text(value)
+    return "-" if value is None else str(value)
+
+
+def run_cli_diff(args: list[str]) -> None:
+    """Compare two records JSON files and print/report the delta.
+
+    Usage:  edf-collector --diff OLD.json NEW.json [--diff-output out.xlsx]
+    """
+    parser = argparse.ArgumentParser(
+        description="Compare two records JSON exports (added / removed / changed)",
+        prog="edf-collector --diff",
+    )
+    parser.add_argument("old", help="Path to the OLD records JSON file")
+    parser.add_argument("new", help="Path to the NEW records JSON file")
+    parser.add_argument(
+        "--diff-output",
+        help="Optional path for an Excel workbook with added/removed/changed sheets",
+    )
+    parsed = parser.parse_args(args)
+
+    try:
+        with open(parsed.old, encoding="utf-8") as f:
+            old_loaded = json.load(f)
+        with open(parsed.new, encoding="utf-8") as f:
+            new_loaded = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        sys.stderr.write(f"ERROR: {e}\n")
+        sys.exit(1)
+
+    old_records = (
+        old_loaded["records"]
+        if isinstance(old_loaded, dict) and "records" in old_loaded
+        else old_loaded
+    )
+    new_records = (
+        new_loaded["records"]
+        if isinstance(new_loaded, dict) and "records" in new_loaded
+        else new_loaded
+    )
+    if not isinstance(old_records, list) or not isinstance(new_records, list):
+        sys.stderr.write("ERROR: both diff inputs must be records.json lists\n")
+        sys.exit(1)
+
+    from edf_bill_fetcher.processors.run_diff import diff_records
+
+    diff = diff_records(old_records, new_records)
+
+    print(f"Diff: {parsed.old} -> {parsed.new}")
+    print(f"Added:   {len(diff['added'])}")
+    print(f"Removed: {len(diff['removed'])}")
+    print(f"Changed: {len(diff['changed'])}")
+    for row in diff["added"]:
+        print(
+            f"+ ADDED {row.get('Date', '-')} {_diff_amount_text(row.get('Amount (£)'))} {row.get('Source', '-')}"
+        )
+    for row in diff["removed"]:
+        print(
+            f"- REMOVED {row.get('Date', '-')} {_diff_amount_text(row.get('Amount (£)'))} {row.get('Source', '-')}"
+        )
+    for entry in diff["changed"]:
+        new_row = entry["new_row"]
+        details = ", ".join(
+            f"{field}: {_diff_field_text(field, old)} → {_diff_field_text(field, new)}"
+            for field, old, new in zip(
+                entry["changed_fields"], entry["old_values"], entry["new_values"], strict=True
+            )
+        )
+        print(
+            f"~ CHANGED {new_row.get('Date', '-')} "
+            f"{_diff_amount_text(new_row.get('Amount (£)'))} "
+            f"{new_row.get('Source', '-')} [{details}]"
+        )
+
+    if parsed.diff_output:
+        from edf_bill_fetcher.io.writers.diff import write_diff_workbook
+
+        write_diff_workbook(diff, parsed.diff_output)
+        print(f"Diff workbook written: {parsed.diff_output}")
+
+
 def run_cli_pdf_report(args: list[str]) -> None:
     """Run PDF report generation from command line."""
     parser = argparse.ArgumentParser(
@@ -554,12 +648,15 @@ def main() -> None:
         elif sys.argv[1] in ("--extract", "-e"):
             run_cli_extract(sys.argv[2:])
             return
+        elif sys.argv[1] in ("--diff", "-d"):
+            run_cli_diff(sys.argv[2:])
+            return
 
     if not HAS_TK:
         sys.stderr.write(
             "ERROR: tkinter is not available in this Python build. "
             "Launch a CLI command instead (e.g. --extract, --pdf-report, "
-            "--docx-report, --html-report) or run on a system with Tk installed."
+            "--docx-report, --html-report, --diff) or run on a system with Tk installed."
         )
         sys.stderr.write("\n")
         sys.exit(2)

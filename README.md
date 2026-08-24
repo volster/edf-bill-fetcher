@@ -146,6 +146,10 @@ python main.py --pdf-report -i records.json -o report.pdf
 
 # DOCX variant
 python main.py --docx-report -i records.json -o report.docx
+
+# Compare two records.json exports — prints added/removed/changed counts
+# plus one line per delta row; --diff-output adds a 3-sheet Excel workbook
+python main.py --diff old_records.json new_records.json --diff-output diff.xlsx
 ```
 
 Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records state. The CLI dispatch logic lives in `edf_bill_fetcher.io.cli`; the `main()` entry point at the repo root is a one-line re-export of `edf_bill_fetcher.io.cli.main`.
