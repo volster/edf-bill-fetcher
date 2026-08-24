@@ -38,9 +38,13 @@ try:
     HAS_DOCX_REPORT = (
         importlib.util.find_spec("edf_bill_fetcher.io.reporters.docx_report") is not None
     )
+    HAS_HTML_REPORT = (
+        importlib.util.find_spec("edf_bill_fetcher.io.reporters.html_report") is not None
+    )
 except ImportError:
     HAS_PDF_REPORT = False
     HAS_DOCX_REPORT = False
+    HAS_HTML_REPORT = False
 
 # Branding constants — kept locally to avoid circular imports through
 # edf_collector.py during the modularization refactor.
@@ -158,6 +162,11 @@ class ReportOptionsDialog:
             ("both", "Both (PDF + Word)", "Generate both PDF and DOCX reports"),
             ("pdf", "PDF Only", "Professional PDF report (reportlab)"),
             ("docx", "Word Document Only", "Editable Word document (python-docx)"),
+            (
+                "html",
+                "HTML Only",
+                "Self-contained HTML report (opens in any browser, no external assets)",
+            ),
         ]
 
         for val, label, desc in formats:
@@ -741,7 +750,9 @@ class App:
             font=("Calibri", 12, "bold"),
             command=self._open_report_options,
             relief="flat",
-            state="normal" if (HAS_PDF_REPORT or HAS_DOCX_REPORT) else "disabled",
+            state="normal"
+            if (HAS_PDF_REPORT or HAS_DOCX_REPORT or HAS_HTML_REPORT)
+            else "disabled",
         )
         self.report_options_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(8, 0))
 
@@ -870,7 +881,7 @@ class App:
         an 'EDF Evidence Report' sheet.  Sequential-named reports written
         into output_folder (or the picked file's directory if unset).
         """
-        if not HAS_PDF_REPORT and not HAS_DOCX_REPORT:
+        if not HAS_PDF_REPORT and not HAS_DOCX_REPORT and not HAS_HTML_REPORT:
             self._show(
                 "error",
                 "Report Unavailable",
@@ -911,12 +922,14 @@ class App:
                 output_paths["pdf"] = self._resolve_output_path(stem, "pdf", is_report=True)
             if fmt in ("docx", "both") and HAS_DOCX_REPORT:
                 output_paths["docx"] = self._resolve_output_path(stem, "docx", is_report=True)
+            if fmt in ("html", "both") and HAS_HTML_REPORT:
+                output_paths["html"] = self._resolve_output_path(stem, "html", is_report=True)
 
             if not output_paths:
                 self._show(
                     "warning",
                     "No Reports",
-                    "No report paths resolved (check pdf/docx availability).",
+                    "No report paths resolved (check pdf/docx/html availability).",
                 )
                 return
 
@@ -947,6 +960,7 @@ class App:
 
             def _generate():
                 from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
+                from edf_bill_fetcher.io.reporters.html_report import generate_html_from_gui
                 from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
 
                 try:
@@ -969,6 +983,15 @@ class App:
                             filtered=[],
                         )
                         msgs.append(("DOCX", s, m))
+                    if "html" in output_paths:
+                        s, m = generate_html_from_gui(
+                            records=records,
+                            output_path=output_paths["html"],
+                            config=config,
+                            engine=engine,
+                            filtered=[],
+                        )
+                        msgs.append(("HTML", s, m))
 
                     combined = []
                     all_ok = True
@@ -1251,6 +1274,7 @@ class App:
         returns list of written paths.
         """
         from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
+        from edf_bill_fetcher.io.reporters.html_report import generate_html_from_gui
         from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
 
         ro = getattr(self, "_report_options", {})
@@ -1289,5 +1313,17 @@ class App:
             )
             if success:
                 written.append(docx_path)
+
+        if fmt in ("html", "both") and HAS_HTML_REPORT:
+            html_path = self._resolve_output_path(stem, "html", batch_n=batch_n, is_report=True)
+            success, _ = generate_html_from_gui(
+                records=engine.records,
+                output_path=html_path,
+                config=config,
+                engine=engine,
+                filtered=engine.filtered_records,
+            )
+            if success:
+                written.append(html_path)
 
         return written

@@ -30,6 +30,7 @@ from edf_bill_fetcher.io.cli import (
     main,
     run_cli_docx_report,
     run_cli_extract,
+    run_cli_html_report,
     run_cli_pdf_report,
 )
 
@@ -979,6 +980,167 @@ class TestRunCliDocxReport:
 
 
 # ---------------------------------------------------------------------------
+# run_cli_html_report
+# ---------------------------------------------------------------------------
+
+
+class TestRunCliHtmlReport:
+    """Cover the ``run_cli_html_report`` headless HTML report entry point."""
+
+    def _patch_html_generator(
+        self, monkeypatch: pytest.MonkeyPatch, returns: tuple[bool, str]
+    ) -> dict[str, list[Any]]:
+        """Stub ``generate_html_from_gui`` to record calls and return ``returns``."""
+        import edf_bill_fetcher.io.reporters.html_report as html_mod
+
+        calls: dict[str, list[Any]] = {"calls": []}
+
+        def _fake_generate(records, output_path, config, engine, filtered=None):
+            calls["calls"].append(
+                {
+                    "records": records,
+                    "output_path": output_path,
+                    "config": config,
+                    "engine": engine,
+                    "filtered": filtered,
+                }
+            )
+            return returns
+
+        monkeypatch.setattr(html_mod, "generate_html_from_gui", _fake_generate)
+        return calls
+
+    def test_bare_list_success_path(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A bare-list records JSON succeeds and writes the success message."""
+        records = _synthetic_records()
+        records_json = tmp_path / "records.json"
+        records_json.write_text(json.dumps(records), encoding="utf-8")
+        calls = self._patch_html_generator(monkeypatch, (True, "HTML written"))
+
+        with pytest.raises(SystemExit) as exc:
+            run_cli_html_report(["-i", str(records_json), "-o", str(tmp_path / "r.html")])
+        assert exc.value.code == 0
+        assert "HTML written" in capsys.readouterr().out
+        assert calls["calls"][0]["records"] == records
+        assert calls["calls"][0]["engine"] is None
+        assert calls["calls"][0]["filtered"] is None
+
+    def test_wrapper_dict_unwrapped(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A wrapper ``{"records": [...]}`` JSON is unwrapped."""
+        records = _synthetic_records()
+        wrapper = {"records": records, "meta": "x"}
+        records_json = tmp_path / "records.json"
+        records_json.write_text(json.dumps(wrapper), encoding="utf-8")
+        calls = self._patch_html_generator(monkeypatch, (True, "ok"))
+
+        with pytest.raises(SystemExit):
+            run_cli_html_report(["-i", str(records_json), "-o", str(tmp_path / "r.html")])
+        assert calls["calls"][0]["records"] == records
+
+    def test_failure_path_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A ``False`` return writes an error and exits 1."""
+        records = _synthetic_records()
+        records_json = tmp_path / "records.json"
+        records_json.write_text(json.dumps(records), encoding="utf-8")
+        self._patch_html_generator(monkeypatch, (False, "html rendering failed"))
+
+        with pytest.raises(SystemExit) as exc:
+            run_cli_html_report(["-i", str(records_json), "-o", str(tmp_path / "r.html")])
+        assert exc.value.code == 1
+        assert "ERROR: html rendering failed" in capsys.readouterr().err
+
+    def test_config_file_loaded(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A ``--config`` file is loaded and forwarded."""
+        records = _synthetic_records()
+        records_json = tmp_path / "records.json"
+        records_json.write_text(json.dumps(records), encoding="utf-8")
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps({"report_sections": ["timeline"]}), encoding="utf-8")
+        calls = self._patch_html_generator(monkeypatch, (True, "ok"))
+
+        with pytest.raises(SystemExit):
+            run_cli_html_report(
+                [
+                    "-i",
+                    str(records_json),
+                    "-o",
+                    str(tmp_path / "r.html"),
+                    "-c",
+                    str(config_path),
+                ]
+            )
+        assert calls["calls"][0]["config"]["report_sections"] == ["timeline"]
+
+    def test_engine_data_pickle_loaded(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A ``--engine-data`` pickle is loaded via the restricted unpickler."""
+        records = _synthetic_records()
+        records_json = tmp_path / "records.json"
+        records_json.write_text(json.dumps(records), encoding="utf-8")
+
+        from edf_bill_fetcher.collectors.engine import EvidenceEngine
+
+        def _noop(*a: Any, **kw: Any) -> None:
+            return None
+
+        engine = EvidenceEngine({}, _noop, _noop, None)
+        engine.filtered_records = [{"html_filtered": True}]
+        pkl_path = tmp_path / "engine.pkl"
+        pkl_path.write_bytes(pickle.dumps(engine, protocol=pickle.HIGHEST_PROTOCOL))
+
+        calls = self._patch_html_generator(monkeypatch, (True, "ok"))
+
+        with pytest.raises(SystemExit):
+            run_cli_html_report(
+                [
+                    "-i",
+                    str(records_json),
+                    "-o",
+                    str(tmp_path / "r.html"),
+                    "-e",
+                    str(pkl_path),
+                ]
+            )
+        call = calls["calls"][0]
+        assert isinstance(call["engine"], EvidenceEngine)
+        assert call["filtered"] == [{"html_filtered": True}]
+
+    def test_exception_handler_exits_1(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """An exception inside the report try-block writes an error and exits 1."""
+        with pytest.raises(SystemExit) as exc:
+            run_cli_html_report(
+                ["-i", str(tmp_path / "missing.json"), "-o", str(tmp_path / "r.html")]
+            )
+        assert exc.value.code == 1
+        assert "ERROR:" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
 # main() dispatch (lines 392-420)
 # ---------------------------------------------------------------------------
 
@@ -1052,6 +1214,39 @@ class TestMainDispatch:
                 str(records_json),
                 "-o",
                 str(tmp_path / "r.docx"),
+            ],
+        )
+
+        with pytest.raises(SystemExit):
+            main()
+
+    def test_html_report_dispatch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``main()`` with ``--html-report`` dispatches to ``run_cli_html_report``."""
+        records = _synthetic_records()
+        records_json = tmp_path / "records.json"
+        records_json.write_text(json.dumps(records), encoding="utf-8")
+
+        import edf_bill_fetcher.io.reporters.html_report as html_mod
+
+        monkeypatch.setattr(
+            html_mod,
+            "generate_html_from_gui",
+            lambda **kw: (True, "ok"),
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "edf-collector",
+                "--html-report",
+                "-i",
+                str(records_json),
+                "-o",
+                str(tmp_path / "r.html"),
             ],
         )
 

@@ -468,6 +468,77 @@ def run_cli_docx_report(args: list[str]) -> None:
         sys.exit(1)
 
 
+def run_cli_html_report(args: list[str]) -> None:
+    """Run HTML report generation from command line."""
+    parser = argparse.ArgumentParser(
+        description="Generate HTML report from extracted records",
+        prog="edf-collector --html-report",
+    )
+    parser.add_argument(
+        "--records",
+        "-i",
+        required=True,
+        help="Path to extracted records JSON file (exported from GUI or script)",
+    )
+    parser.add_argument("--output", "-o", required=True, help="Output HTML file path")
+    parser.add_argument("--config", "-c", help="Path to config JSON file (optional)")
+    parser.add_argument(
+        "--engine-data",
+        "-e",
+        help="Path to engine state file (.json preferred, .pkl legacy)",
+    )
+    parsed = parser.parse_args(args)
+
+    try:
+        with open(parsed.records, encoding="utf-8") as f:
+            loaded = json.load(f)
+
+        # Accept either a bare list of records (preferred) or the wrapper
+        # object emitted by ``--extract --records-json``.  Mirrors the
+        # PDF/DOCX CLI loaders so all three formats round-trip identically.
+        if isinstance(loaded, dict) and "records" in loaded:
+            records = loaded["records"]
+        else:
+            records = loaded
+
+        config: ConfigDict = {}
+        if parsed.config:
+            with open(parsed.config, encoding="utf-8") as f:
+                config = cast(ConfigDict, json.load(f))
+
+        engine = None
+        filtered = None
+        if parsed.engine_data:
+            # Use the restricted unpickler to prevent arbitrary code
+            # execution from crafted pickle files (see C1 fix).  A .json
+            # path yields the versioned JSON state dict instead of an
+            # engine instance; its filtered_records ride along the same way.
+            engine = _safe_pickle_load(parsed.engine_data)
+            if isinstance(engine, dict):
+                filtered = engine.get("filtered_records")
+            else:
+                filtered = getattr(engine, "filtered_records", None)
+
+        from edf_bill_fetcher.io.reporters.html_report import generate_html_from_gui
+
+        success, msg = generate_html_from_gui(
+            records=records,
+            output_path=parsed.output,
+            config=config,
+            engine=engine,
+            filtered=filtered,
+        )
+        if success:
+            sys.stdout.write(msg + "\n")
+            sys.exit(0)
+        else:
+            sys.stderr.write(f"ERROR: {msg}\n")
+            sys.exit(1)
+    except Exception as e:
+        sys.stderr.write(f"ERROR: {e}\n")
+        sys.exit(1)
+
+
 def main() -> None:
     """Entry point for the EDF Evidence Collector CLI."""
     if len(sys.argv) > 1:
@@ -477,6 +548,9 @@ def main() -> None:
         elif sys.argv[1] in ("--docx-report", "--word-report", "-w"):
             run_cli_docx_report(sys.argv[2:])
             return
+        elif sys.argv[1] in ("--html-report",):
+            run_cli_html_report(sys.argv[2:])
+            return
         elif sys.argv[1] in ("--extract", "-e"):
             run_cli_extract(sys.argv[2:])
             return
@@ -485,7 +559,7 @@ def main() -> None:
         sys.stderr.write(
             "ERROR: tkinter is not available in this Python build. "
             "Launch a CLI command instead (e.g. --extract, --pdf-report, "
-            "--docx-report) or run on a system with Tk installed."
+            "--docx-report, --html-report) or run on a system with Tk installed."
         )
         sys.stderr.write("\n")
         sys.exit(2)

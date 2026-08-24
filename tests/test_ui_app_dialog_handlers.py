@@ -789,6 +789,7 @@ class TestRunAutoReport:
         app._report_options = {"format": "both", "sections": ["exec_summary"]}
         monkeypatch.setattr(app_module, "HAS_PDF_REPORT", True)
         monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", True)
+        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", False)
         engine = _make_mock_engine(records=[{"A": 1}])
         with patch(
             "edf_bill_fetcher.io.reporters.pdf_report.generate_pdf_from_gui",
@@ -801,6 +802,46 @@ class TestRunAutoReport:
                 written = app._run_auto_report(engine, "stem", 1)
                 assert len(written) == 2
 
+    def test_html_only(self, app: App, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        app.output_folder.set(str(tmp_path))
+        app._report_options = {"format": "html", "sections": ["exec_summary"]}
+        monkeypatch.setattr(app_module, "HAS_PDF_REPORT", False)
+        monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", False)
+        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", True)
+        engine = _make_mock_engine(records=[{"A": 1}])
+        with patch(
+            "edf_bill_fetcher.io.reporters.html_report.generate_html_from_gui",
+            return_value=(True, "ok"),
+        ):
+            written = app._run_auto_report(engine, "stem", 1)
+            assert len(written) == 1
+            assert written[0].endswith(".html")
+
+    def test_both_includes_html(
+        self, app: App, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        app.output_folder.set(str(tmp_path))
+        app._report_options = {"format": "both", "sections": ["exec_summary"]}
+        monkeypatch.setattr(app_module, "HAS_PDF_REPORT", True)
+        monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", True)
+        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", True)
+        engine = _make_mock_engine(records=[{"A": 1}])
+        with patch(
+            "edf_bill_fetcher.io.reporters.pdf_report.generate_pdf_from_gui",
+            return_value=(True, "ok"),
+        ):
+            with patch(
+                "edf_bill_fetcher.io.reporters.docx_report.generate_docx_from_gui",
+                return_value=(True, "ok"),
+            ):
+                with patch(
+                    "edf_bill_fetcher.io.reporters.html_report.generate_html_from_gui",
+                    return_value=(True, "ok"),
+                ):
+                    written = app._run_auto_report(engine, "stem", 1)
+                    assert len(written) == 3
+                    assert sum(1 for p in written if p.endswith(".html")) == 1
+
     def test_neither_available_returns_empty(
         self, app: App, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -808,6 +849,7 @@ class TestRunAutoReport:
         app._report_options = {"format": "both", "sections": ["exec_summary"]}
         monkeypatch.setattr(app_module, "HAS_PDF_REPORT", False)
         monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", False)
+        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", False)
         engine = _make_mock_engine(records=[{"A": 1}])
         written = app._run_auto_report(engine, "stem", 1)
         assert written == []
@@ -859,6 +901,7 @@ class TestLoadSpreadsheetAndReport:
     def test_no_report_libs_shows_error(self, app: App, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(app_module, "HAS_PDF_REPORT", False)
         monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", False)
+        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", False)
         with patch("tkinter.messagebox.showerror") as mock_err:
             app.load_spreadsheet_and_report()
             mock_err.assert_called_once()
@@ -890,6 +933,7 @@ class TestLoadSpreadsheetAndReport:
     ) -> None:
         monkeypatch.setattr(app_module, "HAS_PDF_REPORT", True)
         monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", True)
+        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", False)
         app._report_options = {"format": "both", "sections": ["exec_summary"]}
         app.output_folder.set(str(tmp_path))
         fake_xlsx = tmp_path / "source.xlsx"
@@ -916,6 +960,35 @@ class TestLoadSpreadsheetAndReport:
                                 root.update()
                                 assert mock_info.called
                                 assert mock_info.call_args[0][0] == "Reports Generated"
+
+    def test_html_format_generates_html(
+        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(app_module, "HAS_PDF_REPORT", False)
+        monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", False)
+        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", True)
+        app._report_options = {"format": "html", "sections": ["exec_summary"]}
+        app.output_folder.set(str(tmp_path))
+        fake_xlsx = tmp_path / "source.xlsx"
+        fake_xlsx.write_text("")
+
+        with patch.object(app_module.threading, "Thread", _SyncThread):
+            with patch("tkinter.filedialog.askopenfilename", return_value=str(fake_xlsx)):
+                with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
+                    mock_df = MagicMock()
+                    mock_df.empty = False
+                    mock_df.to_dict.return_value = [{"Amount": 100}]
+                    mock_pd.read_excel.return_value = mock_df
+                    with patch(
+                        "edf_bill_fetcher.io.reporters.html_report.generate_html_from_gui",
+                        return_value=(True, "HTML done"),
+                    ):
+                        with patch("tkinter.messagebox.showinfo") as mock_info:
+                            app.load_spreadsheet_and_report()
+                            root.update()
+                            root.update()
+                            assert mock_info.called
+                            assert mock_info.call_args[0][0] == "Reports Generated"
 
     def test_no_report_paths_resolved_warning(
         self, app: App, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
