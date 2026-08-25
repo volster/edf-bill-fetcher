@@ -47,10 +47,10 @@ class TestReportSectionsRegistry:
     options dialog, so we lock its shape."""
 
     def test_registry_has_expected_count(self):
-        # We expect 14 sections: 11 main numeric + 3 lettered appendices.
+        # We expect 15 sections: 12 main numeric + 3 lettered appendices.
         # The exact count matters less than "this is what downstream code
         # assumes" — change this assertion if you add a section.
-        assert len(REPORT_SECTIONS) == 14
+        assert len(REPORT_SECTIONS) == 15
 
     def test_main_sections_have_is_appendix_false(self):
         # All numbered sections (1, 2, 3 ...) must have is_appendix=False.
@@ -85,7 +85,7 @@ class TestRenderContextNumbering:
     string is built from ``"label title"``."""
 
     def test_full_selection_uses_legacy_layout(self):
-        # With every section selected, main sections are 1..11 and
+        # With every section selected, main sections are 1..12 and
         # appendices are A..C. This is the legacy layout the rest of
         # the report pipeline was previously coded against.
         ctx = RenderContext()
@@ -93,15 +93,15 @@ class TestRenderContextNumbering:
         # Walk by registry order; convert to (label, title) pairs.
         labels_titles = [(spec.label, spec.section.title) for spec in ctx.sections_in_order]
 
-        # First 11 entries are numeric (main). The keys match the
-        # first 11 entries of REPORT_SECTIONS in registry order.
-        for i, (label, _) in enumerate(labels_titles[:11], start=1):
+        # First 12 entries are numeric (main). The keys match the
+        # first 12 entries of REPORT_SECTIONS in registry order.
+        for i, (label, _) in enumerate(labels_titles[:12], start=1):
             assert label == f"{i}.", f"slot {i} should be {i}."
 
         # Last 3 are alphabetic.
-        assert labels_titles[11][0] == "A."
-        assert labels_titles[12][0] == "B."
-        assert labels_titles[13][0] == "C."
+        assert labels_titles[12][0] == "A."
+        assert labels_titles[13][0] == "B."
+        assert labels_titles[14][0] == "C."
 
     def test_toggling_drop_does_not_break(self):
         """Disabling ``statistical`` should renumber everything after it.

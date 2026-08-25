@@ -40,6 +40,7 @@ from edf_bill_fetcher.io.reporters.pdf_report import (
     fmt_date,
 )
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
 
 # =============================================================================
 # CONSTANTS
@@ -747,6 +748,66 @@ def create_tariff_impact_section(df: pd.DataFrame, ctx: RenderContext | None = N
     return "\n".join(parts)
 
 
+def create_compensation_section(
+    df: pd.DataFrame, config: dict[str, Any] | None = None, ctx: RenderContext | None = None
+) -> str:
+    """Create the Compensation Analysis section."""
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("compensation")
+    parts = [f'<div id="sec-compensation"><h2 class="section">{_esc(heading)}</h2>']
+
+    rows = estimate_compensation(df, config)
+
+    if not rows:
+        parts.append("<p>No compensation claims identified in the extracted records.</p></div>")
+        return "\n".join(parts)
+
+    categories: list[tuple[str, list[dict[str, Any]]]] = []
+    seen: set[str] = set()
+    for row in rows:
+        cat = str(row.get("category", ""))
+        if cat not in seen:
+            seen.add(cat)
+            categories.append((cat, []))
+        categories[-1][1].append(row)
+
+    for cat, cat_rows in categories:
+        parts.append(f"<h3>{_esc(cat)}</h3>")
+        table_rows: list[list[Any]] = [
+            [
+                "Category",
+                "Invoice #",
+                "Date",
+                "Base Amount",
+                "Days",
+                "Rate",
+                "Indicative Amount",
+                "Legal Basis",
+            ]
+        ]
+        for r in cat_rows:
+            table_rows.append(
+                [
+                    str(r.get("category", "")),
+                    str(r.get("invoice_ref", "")),
+                    str(r.get("date", "")),
+                    fmt_money(r.get("base_amount")),
+                    str(r.get("days", "")),
+                    fmt_number(r.get("rate"), 4) if r.get("rate") is not None else "N/A",
+                    fmt_money(r.get("indicative_amount")),
+                    str(r.get("legal_basis", "")),
+                ]
+            )
+        parts.append(_table(table_rows))
+
+    total = sum(float(r.get("indicative_amount") or 0.0) for r in rows)
+    parts.append(f"<h3>Total Indicative Compensation: {_esc(fmt_money(total))}</h3>")
+    parts.append(f'<p class="note">{_esc(DISCLAIMER)}</p>')
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
 def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = None) -> str:
     """Create the methodology appendix."""
     if ctx is None:
@@ -1148,6 +1209,10 @@ def generate_html_report(
         "tariff": (
             lambda: {"df": df},
             lambda kwargs: create_tariff_impact_section(**kwargs),
+        ),
+        "compensation": (
+            lambda: {"df": df, "config": config},
+            lambda kwargs: create_compensation_section(**kwargs),
         ),
         "appendix_methodology": (
             lambda: {"config": config},

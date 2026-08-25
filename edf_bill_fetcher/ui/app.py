@@ -71,6 +71,7 @@ class ReportOptionsDialog:
         ("forecast", "Forecast", True),
         ("data_quality", "Data Quality", True),
         ("tariff", "Tariff Impact Analysis", True),
+        ("compensation", "Compensation Analysis", True),
         ("appendix_methodology", "Appendix: Methodology", True),
         ("appendix_glossary", "Appendix: Glossary", True),
         ("appendix_full_evidence", "Appendix: Full Evidence Table", True),

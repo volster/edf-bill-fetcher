@@ -49,6 +49,7 @@ from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps as _load_ofgem_c
 # Import from main module
 from edf_bill_fetcher.io.writers import HAS_SCIPY
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
 
 # =============================================================================
 # COLOR PALETTE & CONSTANTS
@@ -491,6 +492,7 @@ REPORT_SECTIONS: list[ReportSectionMeta] = [
     ReportSectionMeta("forecast", "Forecast & Projection"),
     ReportSectionMeta("data_quality", "Data Quality Assessment"),
     ReportSectionMeta("tariff", "Tariff Impact Analysis"),
+    ReportSectionMeta("compensation", "Compensation Analysis"),
     ReportSectionMeta("appendix_methodology", "Methodology & Data Sources", is_appendix=True),
     ReportSectionMeta("appendix_glossary", "Glossary", is_appendix=True),
     ReportSectionMeta("appendix_full_evidence", "Full Evidence Table", is_appendix=True),
@@ -2025,6 +2027,92 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
     return elements
 
 
+def create_compensation_section(
+    dfc: pd.DataFrame, config: dict[str, Any] | None = None, ctx: RenderContext | None = None
+) -> list:
+    """Create the Compensation Analysis section.
+
+    Renders the indicative-compensation claims from
+    :func:`edf_bill_fetcher.processors.compensation.estimate_compensation`,
+    grouped by category, with a trailing total of ``indicative_amount`` and
+    the module ``DISCLAIMER``.  Empty rows render a brief no-claims note.
+    """
+    elements = []
+    if ctx is None:
+        ctx = RenderContext()
+    heading = ctx.heading("compensation")
+
+    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
+    elements.append(Spacer(1, 0.3 * cm))
+
+    rows = estimate_compensation(dfc, config)
+
+    if not rows:
+        elements.append(
+            Paragraph(
+                "No compensation claims identified in the extracted records.",
+                STYLES["BodyText"],
+            )
+        )
+        elements.append(PageBreak())
+        return elements
+
+    # Group by category, preserving the estimator's stable emission order.
+    categories: list[tuple[str, list[dict[str, Any]]]] = []
+    seen: set[str] = set()
+    for row in rows:
+        cat = str(row.get("category", ""))
+        if cat not in seen:
+            seen.add(cat)
+            categories.append((cat, []))
+        categories[-1][1].append(row)
+
+    for cat, cat_rows in categories:
+        elements.append(Paragraph(f"<b>{cat}</b>", STYLES["SubSectionHeader"]))
+        table_rows: list[list[str]] = [
+            [
+                "Category",
+                "Invoice #",
+                "Date",
+                "Base Amount",
+                "Days",
+                "Rate",
+                "Indicative Amount",
+                "Legal Basis",
+            ]
+        ]
+        for r in cat_rows:
+            table_rows.append(
+                [
+                    str(r.get("category", "")),
+                    str(r.get("invoice_ref", "")),
+                    str(r.get("date", "")),
+                    fmt_money(r.get("base_amount")),
+                    str(r.get("days", "")),
+                    fmt_number(r.get("rate"), 4) if r.get("rate") is not None else "N/A",
+                    fmt_money(r.get("indicative_amount")),
+                    str(r.get("legal_basis", "")),
+                ]
+            )
+        t = Table(
+            table_rows,
+            colWidths=[3.2 * cm, 2.2 * cm, 2.2 * cm, 2.2 * cm, 1.4 * cm, 1.6 * cm, 2.6 * cm, 4.6 * cm],
+        )
+        t.setStyle(make_table_style(num_rows=len(table_rows), font_size=7))
+        elements.append(t)
+        elements.append(Spacer(1, 0.3 * cm))
+
+    total = sum(float(r.get("indicative_amount") or 0.0) for r in rows)
+    elements.append(
+        Paragraph(f"<b>Total Indicative Compensation: {fmt_money(total)}</b>", STYLES["SubSectionHeader"])
+    )
+    elements.append(Spacer(1, 0.3 * cm))
+    elements.append(Paragraph(DISCLAIMER, STYLES["BodyText"]))
+
+    elements.append(PageBreak())
+    return elements
+
+
 # =============================================================================
 # APPENDICES
 # =============================================================================
@@ -2610,6 +2698,10 @@ def generate_ombudsman_pdf(
         "tariff": (
             lambda: {"dfc": df},
             lambda kwargs: create_tariff_impact_section(**kwargs),
+        ),
+        "compensation": (
+            lambda: {"dfc": df, "config": config},
+            lambda kwargs: create_compensation_section(**kwargs),
         ),
         "appendix_methodology": (
             lambda: {"config": config},

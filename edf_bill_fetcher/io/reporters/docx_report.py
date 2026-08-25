@@ -43,6 +43,7 @@ from edf_bill_fetcher.io.reporters.pdf_report import (
     fmt_date,
 )
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
 
 # =============================================================================
 # CONSTANTS
@@ -1122,6 +1123,71 @@ def create_tariff_impact_section(
     doc.add_page_break()
 
 
+def create_compensation_section(
+    doc: Any, styles: Any, df: pd.DataFrame, config: Any = None, ctx: RenderContext | None = None
+) -> None:
+    """Create the Compensation Analysis section."""
+    if ctx is None:
+        ctx = RenderContext()
+    doc.add_paragraph(ctx.heading("compensation"), style=styles["SectionHeader"])
+
+    rows = estimate_compensation(df, config)
+
+    if not rows:
+        doc.add_paragraph(
+            "No compensation claims identified in the extracted records.",
+            style=styles["BodyText"],
+        )
+        doc.add_page_break()
+        return
+
+    categories: list[tuple[str, list[dict[str, Any]]]] = []
+    seen: set[str] = set()
+    for row in rows:
+        cat = str(row.get("category", ""))
+        if cat not in seen:
+            seen.add(cat)
+            categories.append((cat, []))
+        categories[-1][1].append(row)
+
+    for cat, cat_rows in categories:
+        doc.add_paragraph(cat, style=styles["SubSectionHeader"])
+        table = doc.add_table(rows=len(cat_rows) + 1, cols=8)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        headers = [
+            "Category",
+            "Invoice #",
+            "Date",
+            "Base Amount",
+            "Days",
+            "Rate",
+            "Indicative Amount",
+            "Legal Basis",
+        ]
+        for i, h in enumerate(headers):
+            table.rows[0].cells[i].text = h
+        for i, r in enumerate(cat_rows, 1):
+            row = table.rows[i]
+            row.cells[0].text = str(r.get("category", ""))
+            row.cells[1].text = str(r.get("invoice_ref", ""))
+            row.cells[2].text = str(r.get("date", ""))
+            row.cells[3].text = fmt_money(r.get("base_amount"))
+            row.cells[4].text = str(r.get("days", ""))
+            row.cells[5].text = fmt_number(r.get("rate"), 4) if r.get("rate") is not None else "N/A"
+            row.cells[6].text = fmt_money(r.get("indicative_amount"))
+            row.cells[7].text = str(r.get("legal_basis", ""))
+        _format_table(table, font_size=7)
+        doc.add_paragraph("")
+
+    total = sum(float(r.get("indicative_amount") or 0.0) for r in rows)
+    doc.add_paragraph(
+        f"Total Indicative Compensation: {fmt_money(total)}", style=styles["SubSectionHeader"]
+    )
+    doc.add_paragraph(DISCLAIMER, style=styles["BodyText"])
+
+    doc.add_page_break()
+
+
 def create_appendix_methodology(
     doc: Any, styles: Any, config: Any, ctx: RenderContext | None = None
 ) -> None:
@@ -1660,6 +1726,10 @@ def generate_ombudsman_docx(
         "tariff": (
             lambda: {"doc": doc, "styles": styles, "df": df},
             lambda kwargs: create_tariff_impact_section(**kwargs),
+        ),
+        "compensation": (
+            lambda: {"doc": doc, "styles": styles, "df": df, "config": config},
+            lambda kwargs: create_compensation_section(**kwargs),
         ),
         "appendix_methodology": (
             lambda: {"doc": doc, "styles": styles, "config": config},
