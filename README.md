@@ -20,13 +20,14 @@ how each finding was produced.
 
 ## Features
 
-- **Multi-source extraction**: PST/OST email files, local PDF folders, HTM account exports.
+- **Multi-source extraction**: PST/OST email files, EML/MSG message files, local PDF folders, HTM account exports.
 - **Dual format support**: Parses both old-style and new-style (KI/KCR) EDF invoice formats.
 - **Smart amount detection**: Prioritized regex patterns with configurable fallback.
 - **Cross-source deduplication**: Two-pass dedup — Period To + Amount (primary), Amount within a 60-day window (secondary). Within a duplicate cluster the *most complete* row wins (substantive field fill-rate), with source precedence as the tie-breaker. Set `amalgamate_duplicates=True` to merge columns across all duplicate siblings into a single hybrid kept row (each sibling still surfaces on the Duplicate Entries sheet for audit).
 - **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets — see the *Output Sheets* section for the full conditional-emission list.
 - **SAP financial-ledger integration**: when `scan_sap_dumps` is on (default), the engine also digests EDF's three SAP-CSV-in-PDF dumps (`*_Contract-History.pdf`, `*_Meter-Readings.pdf`, `*_Financial-Transactions.pdf`) and renders three source sheets + two analyser sheets (`SAP Back-billing Events` and `SAP ↔ EDF Matched Events`) + a cross-source `Reconciliation` sheet. See the *SAP ledger integration* section below for the full design.
 - **Professional PDF + DOCX output**: 14 dynamically-numbered sections. Numbering is **derived from `REPORT_SECTIONS` so the Table of Contents and body always agree**, regardless of which sections a user selects in the report options dialog.
+- **Deterministic compensation estimator**: estimates indicative compensation claims (SLC 7A back-billing excess, credit-hold interest, late-credit interest) from the evidence records, feeding both the Excel `Compensation` sheet and the report's Compensation Analysis section.
 - **GUI interface**: tkinter-based desktop application with progress tracking.
   - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
   - **Sequential file naming**: `<stem>_<YYYY-MM-DD>_<N>.xlsx` (and `_Report.pdf` / `_Report.docx` variants). Counter is per-day per-folder and shared across all outputs in one batch.
@@ -124,6 +125,7 @@ Or run the built executable `EDF_Evidence_Collector.exe`.
 
 1. **Select Sources** (at least one required):
    - **PST/OST File**: Outlook email archive containing EDF emails (`.pst` / `.ost` are read via `libpff-python`; the `process_pst_file` wrapper auto-logs an error if the lib is missing, so the rest of the pipeline still runs)
+   - **EML/MSG File**: individual Outlook/email message files (`.eml` / `.msg`) containing EDF emails
    - **PDF Folder**: Directory containing EDF bill PDFs
    - **HTM Export**: EDF MyAccount "Payments and Invoices" HTM export
 2. **Configure Options**:
@@ -146,6 +148,9 @@ python main.py --pdf-report -i records.json -o report.pdf
 
 # DOCX variant
 python main.py --docx-report -i records.json -o report.docx
+
+# HTML variant
+python main.py --html-report -i records.json -o report.html
 
 # Compare two records.json exports — prints added/removed/changed counts
 # plus one line per delta row; --diff-output adds a 3-sheet Excel workbook
@@ -175,7 +180,7 @@ still a valid run and produces the available error/provenance output.
 
 ### Programmatic Usage
 
-> Per-source API is symmetric — all three source types expose
+> Per-source API is symmetric — all five source types expose
 > `process_<source>_file(path, source_label, detail_label, fallback_date)`
 > so you can plug in any combination via the same
 > call signature. PST requires `libpff-python` (a runtime dep
@@ -265,7 +270,7 @@ The PDF and DOCX reports are both built from a single section-registry so the ti
 
 | Class          | Sections                                                                                                                                                                                                              |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main (numeric) | Executive Summary · Key Findings Summary · Evidence Index & Source Cross-Reference · Detailed Findings · Timeline of Events · OFGEM Price Cap Comparison · Statistical Analysis · Payment & Credit Analysis · Forecast & Projection · Data Quality Assessment · Tariff Impact Analysis |
+| Main (numeric) | Executive Summary · Key Findings Summary · Evidence Index & Source Cross-Reference · Detailed Findings · Timeline of Events · OFGEM Price Cap Comparison · Statistical Analysis · Payment & Credit Analysis · Forecast & Projection · Data Quality Assessment · Tariff Impact Analysis · Compensation Analysis |
 | Appendix       | Methodology & Data Sources · Glossary · Full Evidence Table                                                                                                                                                                                                              |
 
 Main sections are numbered **1, 2, 3, …** and appendices are lettered **A, B, C, …**, computed at render time based on the user's `report_sections` selection.
@@ -308,6 +313,7 @@ Sheets are written in roughly this order; conditional sheets only appear when th
 | **Rebilling & Corrections** | always (≥2 records) | Killer/killed invoice pairs identified by period overlap > 30 days OR jump-back > 30 days OR long-period killer ≥ 60 days reaching back into a prior invoice's window. Trigger Reason lists every matching heuristic. |
 | **Meter Readings** | always (≥2 records) | Actual vs Estimated timeline with meter-rollover candidates flagged `M`. Estimated Source mirrors the row's `Details` column (e.g. `Automatic estimate`). |
 | **Contract History** | always (≥2 records) | Contract periods inferred from tariff transitions, with ≤ 30-day gaps merging across same-tariff runs. |
+| **Compensation** | always (≥2 records) | Indicative compensation claims — SLC 7A back-billing excess, credit-hold interest, late-credit interest — estimated deterministically from the evidence records, grouped by claim category with a total and a disclaimer. |
 | **SAP Contract History** | `scan_sap_dumps` (default on) and a SAP Contract History PDF is supplied | Contract periods extracted from the SAP Contract History PDF dump |
 | **SAP Meter Readings** | `scan_sap_dumps` and a SAP Meter Readings PDF is supplied | Meter readings from the SAP Meter Readings PDF dump, parsed by a multi-regex fallback chain |
 | **SAP Financial Transactions** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | Per-row extract of every financial transaction from the SAP Financial Transactions PDF. The widened parser surfaces **26 columns** per row (the 16 historically-surfaced columns plus 10 analyser-relevant extensions: Contract, Sub Item, Clearing Posting Date, Clearing Amount, Statistical Key Flag, Tax Code / Tax Code Description, G/L Account / G/L Description, Deferral Date). |
