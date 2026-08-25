@@ -54,6 +54,9 @@ from edf_bill_fetcher.helpers.formatting import (
 from edf_bill_fetcher.io.writers.back_billing import (  # noqa: E402,F401
     write_back_billing_sheet,
 )
+from edf_bill_fetcher.io.writers.compensation import (  # noqa: E402,F401
+    write_compensation_sheet,
+)
 from edf_bill_fetcher.io.writers.data_quality import (  # noqa: E402,F401
     write_data_quality_sheet,
 )
@@ -93,6 +96,9 @@ from edf_bill_fetcher.io.writers.tariff import (  # noqa: E402,F401
     write_tariff_analysis_sheet,
 )
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.processors.compensation import (  # noqa: E402,F401
+    estimate_compensation,
+)
 from edf_bill_fetcher.processors.detection import (  # noqa: E402,F401
     compute_transitive_domination,
 )
@@ -317,6 +323,7 @@ def _reorder_sheets(wb: openpyxl.Workbook) -> None:
         "Rebilling & Corrections",
         "Meter Readings",
         "Contract History",
+        "Compensation",
         "Reconciliation",
         "Reconciliation Drill-down",
         "Dispute Flags",
@@ -1801,6 +1808,12 @@ def export_to_excel(
         evidence_df=dfc,
         evidence_index=analyses["evidence_index"],
     )
+
+    # Indicative compensation claims (Wave 6d): emit a Compensation tab
+    # only when the estimator yields at least one row.
+    comp_rows = estimate_compensation(dfc, dict(config))
+    if comp_rows:
+        write_compensation_sheet(wb.create_sheet(title="Compensation"), comp_rows)
 
     # Stream P1 + P2: SAP CSV-in-PDF data dumps and the cross-source
     # Reconciliation sheet. When ``sap_rows`` is supplied (from the
