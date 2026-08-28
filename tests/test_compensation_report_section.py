@@ -155,9 +155,7 @@ class TestCompensationRender:
         from edf_bill_fetcher.io.reporters.pdf_report import generate_ombudsman_pdf
 
         out = str(tmp_path / "comp.pdf")
-        result = generate_ombudsman_pdf(
-            _compensation_records(), out, _config(), _StubEngine()
-        )
+        result = generate_ombudsman_pdf(_compensation_records(), out, _config(), _StubEngine())
         assert result == out
         assert Path(out).exists()
         assert Path(out).stat().st_size > 0
@@ -168,9 +166,7 @@ class TestCompensationRender:
         from edf_bill_fetcher.io.reporters.docx_report import generate_ombudsman_docx
 
         out = str(tmp_path / "comp.docx")
-        result = generate_ombudsman_docx(
-            _compensation_records(), out, _config(), _StubEngine()
-        )
+        result = generate_ombudsman_docx(_compensation_records(), out, _config(), _StubEngine())
         assert result == out
         doc = Document(out)
         texts = [p.text for p in doc.paragraphs]
@@ -180,9 +176,7 @@ class TestCompensationRender:
         from edf_bill_fetcher.io.reporters.html_report import generate_html_report
 
         out = str(tmp_path / "comp.html")
-        result = generate_html_report(
-            _compensation_records(), out, _config(), _StubEngine()
-        )
+        result = generate_html_report(_compensation_records(), out, _config(), _StubEngine())
         assert result == out
         rendered = Path(out).read_text(encoding="utf-8")
         assert "Compensation Analysis" in rendered
@@ -195,9 +189,7 @@ class TestCompensationEmpty:
         from edf_bill_fetcher.io.reporters.pdf_report import generate_ombudsman_pdf
 
         out = str(tmp_path / "empty.pdf")
-        result = generate_ombudsman_pdf(
-            _no_compensation_records(), out, _config(), _StubEngine()
-        )
+        result = generate_ombudsman_pdf(_no_compensation_records(), out, _config(), _StubEngine())
         assert result == out
         assert Path(out).exists()
 
@@ -207,9 +199,7 @@ class TestCompensationEmpty:
         from edf_bill_fetcher.io.reporters.docx_report import generate_ombudsman_docx
 
         out = str(tmp_path / "empty.docx")
-        result = generate_ombudsman_docx(
-            _no_compensation_records(), out, _config(), _StubEngine()
-        )
+        result = generate_ombudsman_docx(_no_compensation_records(), out, _config(), _StubEngine())
         assert result == out
         doc = Document(out)
         texts = [p.text for p in doc.paragraphs]
@@ -219,9 +209,7 @@ class TestCompensationEmpty:
         from edf_bill_fetcher.io.reporters.html_report import generate_html_report
 
         out = str(tmp_path / "empty.html")
-        result = generate_html_report(
-            _no_compensation_records(), out, _config(), _StubEngine()
-        )
+        result = generate_html_report(_no_compensation_records(), out, _config(), _StubEngine())
         assert result == out
         rendered = Path(out).read_text(encoding="utf-8")
         assert "no compensation claims identified" in rendered.lower()

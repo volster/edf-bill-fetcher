@@ -8,6 +8,42 @@ semver-friendly.
 
 ## [Unreleased]
 
+### Added
+
+- **EML and MSG email ingestion** — the engine now accepts folders of
+  `.eml` (parsed via stdlib `email`) and `.msg` (parsed via the optional
+  `extract-msg` package) messages alongside the existing PST/OST/PDF/HTM
+  sources, wired through the GUI source picker and the `--eml-dir` /
+  `--msg-dir` CLI flags. Missing `extract-msg` is reported cleanly and the
+  rest of the pipeline continues.
+- **HTML report surface** — a third report format generated from the same
+  section registry as PDF/DOCX, produced via the `--html-report` CLI flag
+  and the GUI. A structural parity test pins the PDF/DOCX/HTML dispatchers
+  and the registry to the same section-key set.
+- **`--diff` record comparison** — a CLI command (`edf-collector --diff
+  old.json new.json [--diff-output out.xlsx]`) that reports added/removed/
+  changed records between two records.json exports, with an optional
+  three-sheet Excel diff workbook.
+- **Compensation estimator** — a deterministic, pure-pandas estimator of
+  indicative compensation claims (SLC 7A back-billing excess, credit-hold
+  interest, late-credit interest) from the evidence records, surfacing in
+  both a `Compensation` workbook sheet and a `Compensation Analysis`
+  report section (PDF/DOCX/HTML), each carrying an indicative-figures
+  disclaimer.
+- **Engine-state round-trip via versioned JSON** — the pickled engine
+  state now round-trips as versioned JSON (legacy pickle reads preserved),
+  picked up by the report CLI entry points.
+
+### Changed
+
+- The main GUI window is scrollable and sized to fit 768px-tall screens.
+
+### Fixed
+
+- The compensation estimator skips NaN amounts in the refund scan and
+  NaN period charges, so they can no longer phantom-match a refund or
+  emit NaN money rows.
+
 ## [0.5.0] - 2026-08-21
 
 This release adds a Superseded Reconciliation view for the back-billing

@@ -2096,7 +2096,16 @@ def create_compensation_section(
             )
         t = Table(
             table_rows,
-            colWidths=[3.2 * cm, 2.2 * cm, 2.2 * cm, 2.2 * cm, 1.4 * cm, 1.6 * cm, 2.6 * cm, 4.6 * cm],
+            colWidths=[
+                3.2 * cm,
+                2.2 * cm,
+                2.2 * cm,
+                2.2 * cm,
+                1.4 * cm,
+                1.6 * cm,
+                2.6 * cm,
+                4.6 * cm,
+            ],
         )
         t.setStyle(make_table_style(num_rows=len(table_rows), font_size=7))
         elements.append(t)
@@ -2104,7 +2113,9 @@ def create_compensation_section(
 
     total = sum(float(r.get("indicative_amount") or 0.0) for r in rows)
     elements.append(
-        Paragraph(f"<b>Total Indicative Compensation: {fmt_money(total)}</b>", STYLES["SubSectionHeader"])
+        Paragraph(
+            f"<b>Total Indicative Compensation: {fmt_money(total)}</b>", STYLES["SubSectionHeader"]
+        )
     )
     elements.append(Spacer(1, 0.3 * cm))
     elements.append(Paragraph(DISCLAIMER, STYLES["BodyText"]))
