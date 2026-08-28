@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from edf_bill_fetcher.io.reporters.pdf_report import REPORT_SECTIONS
+from edf_bill_fetcher.models.config import ConfigDict
 
 AS_OF = "2026-06-01"
 
@@ -102,7 +103,7 @@ class _StubEngine:
         self.filtered_records: list[dict] = []
 
 
-def _config() -> dict[str, Any]:
+def _config() -> ConfigDict:
     return {
         "report_account_ref": "A-12345678",
         "as_of": AS_OF,
@@ -155,7 +156,9 @@ class TestCompensationRender:
         from edf_bill_fetcher.io.reporters.pdf_report import generate_ombudsman_pdf
 
         out = str(tmp_path / "comp.pdf")
-        result = generate_ombudsman_pdf(_compensation_records(), out, _config(), _StubEngine())
+        result = generate_ombudsman_pdf(
+            _compensation_records(), out, dict(_config()), _StubEngine()
+        )
         assert result == out
         assert Path(out).exists()
         assert Path(out).stat().st_size > 0
@@ -166,7 +169,9 @@ class TestCompensationRender:
         from edf_bill_fetcher.io.reporters.docx_report import generate_ombudsman_docx
 
         out = str(tmp_path / "comp.docx")
-        result = generate_ombudsman_docx(_compensation_records(), out, _config(), _StubEngine())
+        result = generate_ombudsman_docx(
+            _compensation_records(), out, dict(_config()), _StubEngine()
+        )
         assert result == out
         doc = Document(out)
         texts = [p.text for p in doc.paragraphs]
@@ -189,7 +194,9 @@ class TestCompensationEmpty:
         from edf_bill_fetcher.io.reporters.pdf_report import generate_ombudsman_pdf
 
         out = str(tmp_path / "empty.pdf")
-        result = generate_ombudsman_pdf(_no_compensation_records(), out, _config(), _StubEngine())
+        result = generate_ombudsman_pdf(
+            _no_compensation_records(), out, dict(_config()), _StubEngine()
+        )
         assert result == out
         assert Path(out).exists()
 
@@ -199,7 +206,9 @@ class TestCompensationEmpty:
         from edf_bill_fetcher.io.reporters.docx_report import generate_ombudsman_docx
 
         out = str(tmp_path / "empty.docx")
-        result = generate_ombudsman_docx(_no_compensation_records(), out, _config(), _StubEngine())
+        result = generate_ombudsman_docx(
+            _no_compensation_records(), out, dict(_config()), _StubEngine()
+        )
         assert result == out
         doc = Document(out)
         texts = [p.text for p in doc.paragraphs]
