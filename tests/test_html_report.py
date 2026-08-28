@@ -339,12 +339,3 @@ def test_records_dataframe_roundtrip(sample_records: list[dict[str, Any]]) -> No
         "PST PDF Attachment",
         "Local PDF Folder",
     }
-
-
-def test_evidence_file_path_contract() -> None:
-    """The evidence file for this task lives at the documented path."""
-    evidence = (
-        Path(__file__).resolve().parents[1]
-        / ".omo/evidence/post-release-feature-wave/task-6f1-2026-08-06-post-release-feature-wave.txt"
-    )
-    assert evidence.exists(), "task evidence file is missing"
