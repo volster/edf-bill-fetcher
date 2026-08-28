@@ -166,3 +166,110 @@ def test_last_payment_is_chronologically_last_row() -> None:
 
     assert analysis.last_payment_date == "20/01/2023"
     assert analysis.last_payment_amount == 250.0
+
+
+# --- DataQualityReport (Arch #3 Task 1) ----------------------------------------
+
+
+def _dq_records() -> pd.DataFrame:
+    """A small frame exercising each data-quality dimension.
+
+    3 records: one fully populated, one with a parseable date but missing
+    amount, one duplicate of the first (same Date + Amount) to exercise the
+    duplicate_rate path. Reading is classified on two rows.
+    """
+    return pd.DataFrame(
+        [
+            {
+                "Date": "01/01/2023",
+                "Source": "PDF",
+                "Entry Type": "New Bill",
+                "Amount (£)": 120.0,
+                "Period From": "01/01/2023",
+                "Period To": "01/02/2023",
+                "Reading": "Actual",
+                "Unit Rate (p/kWh)": 30.0,
+            },
+            {
+                "Date": "01/02/2023",
+                "Source": "HTM",
+                "Entry Type": "Payment",
+                "Amount (£)": None,
+                "Period From": "N/A",
+                "Period To": "N/A",
+                "Reading": "N/A",
+                "Unit Rate (p/kWh)": "N/A",
+            },
+            {
+                "Date": "01/01/2023",
+                "Source": "PDF",
+                "Entry Type": "New Bill",
+                "Amount (£)": 120.0,
+                "Period From": "01/01/2023",
+                "Period To": "01/02/2023",
+                "Reading": "Actual",
+                "Unit Rate (p/kWh)": 30.0,
+            },
+        ]
+    )
+
+
+def test_data_quality_report_empty_frame() -> None:
+    from edf_bill_fetcher.models.report_models import (
+        DataQualityReport,
+        compute_data_quality_report,
+    )
+
+    report = compute_data_quality_report(pd.DataFrame())
+
+    assert isinstance(report, DataQualityReport)
+    assert report.total_records == 0
+    assert report.date_parsed == 0
+    assert report.date_failed == 0
+    assert report.date_parse_rate == 0.0
+    assert report.amt_complete == 0
+    assert report.amt_missing == 0
+    assert report.period_complete == 0
+    assert report.period_completeness_rate == 0.0
+    assert report.reading_classified == 0
+    assert report.reading_classify_rate == 0.0
+    assert report.ur_computable == 0
+    assert report.ur_computable_rate == 0.0
+    assert report.duplicate_count == 0
+    assert report.duplicate_rate == 0.0
+    assert report.source_distribution == {}
+    assert report.entry_type_distribution == {}
+
+
+def test_data_quality_report_counts_and_rates() -> None:
+    from edf_bill_fetcher.models.report_models import compute_data_quality_report
+
+    report = compute_data_quality_report(_dq_records())
+
+    assert report.total_records == 3
+    assert report.date_parsed == 3
+    assert report.date_failed == 0
+    assert report.date_parse_rate == 1.0
+    assert report.amt_complete == 2
+    assert report.amt_missing == 1
+    assert report.period_complete == 2
+    assert report.period_completeness_rate == 2 / 3
+    assert report.reading_classified == 2
+    assert report.reading_classify_rate == 2 / 3
+    assert report.ur_computable == 2
+    assert report.ur_computable_rate == 2 / 3
+    assert report.duplicate_count == 1
+    assert report.duplicate_rate == 1 / 3
+    assert report.source_distribution == {"PDF": 2, "HTM": 1}
+    assert report.entry_type_distribution == {"New Bill": 2, "Payment": 1}
+
+
+def test_data_quality_report_does_not_mutate_input() -> None:
+    from edf_bill_fetcher.models.report_models import compute_data_quality_report
+
+    df = _dq_records()
+    columns_before = set(df.columns)
+
+    compute_data_quality_report(df)
+
+    assert set(df.columns) == columns_before  # no _dt_parsed leakage

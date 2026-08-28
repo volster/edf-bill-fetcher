@@ -67,3 +67,120 @@ def compute_payment_analysis(df: pd.DataFrame) -> PaymentAnalysis:
         last_payment_amount=float(payments["_amount"].iloc[-1]) if len(payments) > 0 else None,
         chronology=payments,
     )
+
+
+@dataclass
+class DataQualityReport:
+    """Typed computed data-quality metrics shared by Excel and the reporters."""
+
+    total_records: int
+    date_parsed: int
+    date_failed: int
+    date_parse_rate: float
+    amt_complete: int
+    amt_missing: int
+    period_complete: int
+    period_completeness_rate: float
+    reading_classified: int
+    reading_classify_rate: float
+    ur_computable: int
+    ur_computable_rate: float
+    duplicate_count: int
+    duplicate_rate: float
+    source_distribution: dict[str, int]
+    entry_type_distribution: dict[str, int]
+
+    def to_dict(self) -> dict:
+        """Map back to the legacy flat dict consumed by the Excel writer."""
+        if self.total_records == 0:
+            return {}
+        return {
+            "total_records": self.total_records,
+            "date_parsed": self.date_parsed,
+            "date_failed": self.date_failed,
+            "date_parse_rate": self.date_parse_rate,
+            "amt_complete": self.amt_complete,
+            "amt_missing": self.amt_missing,
+            "period_complete": self.period_complete,
+            "period_completeness_rate": self.period_completeness_rate,
+            "reading_classified": self.reading_classified,
+            "reading_classify_rate": self.reading_classify_rate,
+            "ur_computable": self.ur_computable,
+            "ur_computable_rate": self.ur_computable_rate,
+            "duplicate_count": self.duplicate_count,
+            "duplicate_rate": self.duplicate_rate,
+            "source_distribution": self.source_distribution,
+            "entry_type_distribution": self.entry_type_distribution,
+        }
+
+
+def compute_data_quality_report(df: pd.DataFrame) -> DataQualityReport:
+    """Compute the canonical data-quality report on a copy of ``df``."""
+    df = df.copy()
+    total_records = len(df)
+    if total_records == 0:
+        return DataQualityReport(
+            total_records=0,
+            date_parsed=0,
+            date_failed=0,
+            date_parse_rate=0.0,
+            amt_complete=0,
+            amt_missing=0,
+            period_complete=0,
+            period_completeness_rate=0.0,
+            reading_classified=0,
+            reading_classify_rate=0.0,
+            ur_computable=0,
+            ur_computable_rate=0.0,
+            duplicate_count=0,
+            duplicate_rate=0.0,
+            source_distribution={},
+            entry_type_distribution={},
+        )
+
+    df["_dt_parsed"] = df["Date"].apply(parse_to_sort_date)
+    date_parsed = int(df["_dt_parsed"].notna().sum())
+    date_failed = total_records - date_parsed
+
+    amt_complete = int(df["Amount (£)"].notna().sum())
+    amt_missing = total_records - amt_complete
+
+    period_complete = (
+        int(((df["Period From"] != "N/A") & (df["Period To"] != "N/A")).sum())
+        if "Period From" in df.columns and "Period To" in df.columns
+        else 0
+    )
+
+    reading_classified = int((df["Reading"] != "N/A").sum()) if "Reading" in df.columns else 0
+
+    ur_computable = (
+        int(df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, int | float)).sum())
+        if "Unit Rate (p/kWh)" in df.columns
+        else 0
+    )
+
+    duplicate_count = int(df.duplicated(subset=["Date", "Amount (£)"]).sum())
+
+    source_distribution = df["Source"].value_counts().to_dict()
+    entry_type_distribution = (
+        df["Entry Type"].value_counts().to_dict() if "Entry Type" in df.columns else {}
+    )
+
+    return DataQualityReport(
+        total_records=total_records,
+        date_parsed=date_parsed,
+        date_failed=date_failed,
+        date_parse_rate=date_parsed / total_records,
+        amt_complete=amt_complete,
+        amt_missing=amt_missing,
+        period_complete=period_complete,
+        period_completeness_rate=period_complete / total_records,
+        reading_classified=reading_classified,
+        reading_classify_rate=reading_classified / total_records,
+        ur_computable=ur_computable,
+        ur_computable_rate=ur_computable / total_records,
+        duplicate_count=duplicate_count,
+        duplicate_rate=duplicate_count / total_records,
+        source_distribution=source_distribution,
+        entry_type_distribution=entry_type_distribution,
+    )

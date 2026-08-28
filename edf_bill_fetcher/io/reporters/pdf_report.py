@@ -1834,6 +1834,8 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
 
 def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create data quality assessment section."""
+    from edf_bill_fetcher.models.report_models import compute_data_quality_report
+
     elements = []
     if ctx is None:
         ctx = RenderContext()
@@ -1842,12 +1844,13 @@ def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = No
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    total = len(df)
-    date_parsed = df["Date"].apply(lambda x: parse_to_sort_date(x) is not pd.NaT).sum()
-    amt_complete = df["Amount (£)"].notna().sum()
-    period_complete = (df["Period From"] != "N/A").sum()
-    reading_classified = (df["Reading"] != "N/A").sum() if "Reading" in df.columns else 0
-    dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
+    dq = compute_data_quality_report(df)
+    total = dq.total_records
+    date_parsed = dq.date_parsed
+    amt_complete = dq.amt_complete
+    period_complete = dq.period_complete
+    reading_classified = dq.reading_classified
+    dup_count = dq.duplicate_count
 
     quality_data = [
         ["Check", "Passed", "Total", "Rate", "Status"],

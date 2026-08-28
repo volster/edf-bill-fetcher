@@ -100,67 +100,10 @@ def _analyze_tariff_impact(df: pd.DataFrame) -> dict[str, object]:
 
 
 def _data_quality_report(df: pd.DataFrame) -> dict[str, object]:
-    """Generate a comprehensive data quality report.
+    """Alias for the shared computed model (see models/report_models.py)."""
+    from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
-    Works on a *copy* of the input DataFrame so the caller's data is
-    never mutated (previously this added ``_dt_parsed`` as a side-effect
-    on the caller's df, which broke downstream code that re-used the
-    same DataFrame for other purposes).
-    """
-    df = df.copy()
-    total_records = len(df)
-    if total_records == 0:
-        return {}
-
-    # Date parsing success
-    from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
-
-    df["_dt_parsed"] = df["Date"].apply(parse_to_sort_date)
-    date_parsed = df["_dt_parsed"].notna().sum()
-    date_failed = total_records - date_parsed
-
-    # Amount completeness
-    amt_complete = df["Amount (£)"].notna().sum()
-    amt_missing = total_records - amt_complete
-
-    # Period info completeness
-    period_from_complete = (df["Period From"] != "N/A").sum()
-    _ = (df["Period To"] != "N/A").sum()  # Not used, but computed for completeness
-    period_complete = period_from_complete  # At least from date
-
-    # Reading classification
-    reading_classified = (df["Reading"] != "N/A").sum() if "Reading" in df.columns else 0
-
-    # Unit rate computable — count numeric values only.
-    ur_computable = df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, int | float)).sum()
-
-    # Duplicates (same date + amount)
-    dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
-
-    # Source distribution
-    source_dist = df["Source"].value_counts().to_dict()
-
-    # Entry type distribution
-    entry_dist = df["Entry Type"].value_counts().to_dict() if "Entry Type" in df.columns else {}
-
-    return {
-        "total_records": total_records,
-        "date_parsed": int(date_parsed),
-        "date_failed": int(date_failed),
-        "date_parse_rate": date_parsed / total_records if total_records > 0 else 0,
-        "amt_complete": int(amt_complete),
-        "amt_missing": int(amt_missing),
-        "period_complete": int(period_complete),
-        "period_completeness_rate": (period_complete / total_records if total_records > 0 else 0),
-        "reading_classified": int(reading_classified),
-        "reading_classify_rate": (reading_classified / total_records if total_records > 0 else 0),
-        "ur_computable": int(ur_computable),
-        "ur_computable_rate": (ur_computable / total_records if total_records > 0 else 0),
-        "duplicate_count": int(dup_count),
-        "duplicate_rate": dup_count / total_records if total_records > 0 else 0,
-        "source_distribution": source_dist,
-        "entry_type_distribution": entry_dist,
-    }
+    return compute_data_quality_report(df).to_dict()
 
 
 def _disclosed_label(admitted: bool, overlaps: bool) -> str:

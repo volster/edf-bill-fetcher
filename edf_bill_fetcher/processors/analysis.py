@@ -15,7 +15,6 @@ import warnings
 
 import pandas as pd
 
-from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.dispute_flags import (
     BALANCE_REDUCTION_AMOUNT,
     BILLING_GAP_HIGH_DAYS,
@@ -294,72 +293,10 @@ def _analyze_tariff_impact(df):
 
 
 def _data_quality_report(df):
-    """Generate a comprehensive data quality report.
+    """Alias for the shared computed model (see models/report_models.py)."""
+    from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
-    Works on a *copy* of the input DataFrame so the caller's data is
-    never mutated (previously this added ``_dt_parsed`` as a side-effect
-    on the caller's df, which broke downstream code that re-used the
-    same DataFrame for other purposes).
-    """
-    # Work on a copy to avoid mutating the caller's DataFrame
-    df = df.copy()
-    total_records = len(df)
-    if total_records == 0:
-        return {}
-
-    # Date parsing success
-    df["_dt_parsed"] = df["Date"].apply(parse_to_sort_date)
-    date_parsed = df["_dt_parsed"].notna().sum()
-    date_failed = total_records - date_parsed
-
-    # Amount completeness
-    amt_complete = df["Amount (£)"].notna().sum()
-    amt_missing = total_records - amt_complete
-
-    # Period info completeness — a row counts as period-complete only
-    # when BOTH Period From and Period To are present.
-    period_complete = ((df["Period From"] != "N/A") & (df["Period To"] != "N/A")).sum()
-
-    # Reading classification
-    # Reading classification — "N/A" is the sentinel for unclassified readings
-    reading_classified = (df["Reading"] != "N/A").sum() if "Reading" in df.columns else 0
-
-    # Unit rate computable — count numeric values only. The unit
-    # rate column can hold `int | float | "N/A"`; only numerics can be
-    # used downstream by tariff charts, so other values are excluded.
-    # The older draft guarded this with `and x != "N/A"`, which is
-    # unreachable for an already-typed numeric — pinned here so a
-    # future careless refactor cannot silently change this branch
-    # back into a no-op-or-true tautology that overcounts.
-    ur_computable = df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, int | float)).sum()
-
-    # Duplicates (same date + amount)
-    dup_count = df.duplicated(subset=["Date", "Amount (£)"]).sum()
-
-    # Source distribution
-    source_dist = df["Source"].value_counts().to_dict()
-
-    # Entry type distribution
-    entry_dist = df["Entry Type"].value_counts().to_dict() if "Entry Type" in df.columns else {}
-
-    return {
-        "total_records": total_records,
-        "date_parsed": date_parsed,
-        "date_failed": date_failed,
-        "date_parse_rate": date_parsed / total_records if total_records > 0 else 0,
-        "amt_complete": amt_complete,
-        "amt_missing": amt_missing,
-        "period_complete": period_complete,
-        "period_completeness_rate": period_complete / total_records if total_records > 0 else 0,
-        "reading_classified": reading_classified,
-        "reading_classify_rate": reading_classified / total_records if total_records > 0 else 0,
-        "ur_computable": ur_computable,
-        "ur_computable_rate": ur_computable / total_records if total_records > 0 else 0,
-        "duplicate_count": int(dup_count),
-        "duplicate_rate": dup_count / total_records if total_records > 0 else 0,
-        "source_distribution": source_dist,
-        "entry_type_distribution": entry_dist,
-    }
+    return compute_data_quality_report(df).to_dict()
 
 
 # ---------------------------------------------------------------------------
