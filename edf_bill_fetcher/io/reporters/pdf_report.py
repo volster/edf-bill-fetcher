@@ -1519,6 +1519,8 @@ def create_ofgem_comparison(
 
 def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create statistical analysis section."""
+    from edf_bill_fetcher.models.report_models import compute_statistical_analysis
+
     elements = []
     if ctx is None:
         ctx = RenderContext()
@@ -1527,11 +1529,8 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    dfc = dfc.copy()
-    dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
-    dfc = dfc.sort_values("_dt")
-    amounts = dfc["Amount (£)"].astype(float).values
-    n = len(amounts)
+    sa = compute_statistical_analysis(dfc)
+    n = sa.count
 
     if n < 3:
         elements.append(
@@ -1541,21 +1540,19 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
         return elements
 
     # Descriptive stats
-    amounts_series = pd.Series(amounts)
-
-    mean_amt = amounts_series.mean()
-    std_amt = amounts_series.std()
+    mean_amt = sa.mean
+    std_amt = sa.std
     cv = fmt_pct(std_amt / mean_amt) if mean_amt and mean_amt > 0 else "N/A"
 
     stats_data = [
         ["Statistic", "Value"],
         ["Count", fmt_number(n, 0)],
         ["Mean (£)", fmt_money(mean_amt)],
-        ["Median (£)", fmt_money(amounts_series.median())],
+        ["Median (£)", fmt_money(sa.median)],
         ["Std Deviation (£)", fmt_money(std_amt)],
-        ["Min (£)", fmt_money(amounts_series.min())],
-        ["Max (£)", fmt_money(amounts_series.max())],
-        ["Range (£)", fmt_money(amounts_series.max() - amounts_series.min())],
+        ["Min (£)", fmt_money(sa.minimum)],
+        ["Max (£)", fmt_money(sa.maximum)],
+        ["Range (£)", fmt_money(sa.range)],
         ["Coefficient of Variation", cv],
     ]
 
@@ -1568,21 +1565,10 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
     elements.append(
         Paragraph("<b>6-Period Rolling Statistics (Latest)</b>", STYLES["SubSectionHeader"])
     )
-    rolling = amounts_series.rolling(6, min_periods=1)
-    roll_mean = rolling.mean().iloc[-1]
-    roll_std = rolling.std().iloc[-1]
-    roll_min = rolling.min().iloc[-1]
-    roll_max = rolling.max().iloc[-1]
-
-    # Handle NaN values
-    if pd.isna(roll_std):
-        roll_std = 0.0
-    if pd.isna(roll_mean):
-        roll_mean = float(amounts_series.iloc[-1])
-    if pd.isna(roll_min):
-        roll_min = float(amounts_series.min())
-    if pd.isna(roll_max):
-        roll_max = float(amounts_series.max())
+    roll_mean = sa.rolling["mean"]
+    roll_std = sa.rolling["std"]
+    roll_min = sa.rolling["min"]
+    roll_max = sa.rolling["max"]
 
     roll_data = [
         ["Metric", "Value"],
@@ -1597,10 +1583,7 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
     elements.append(Spacer(1, 0.5 * cm))
 
     # Normality test (if scipy available)
-    try:
-        from scipy import stats as sp_stats
-
-        shapiro_stat, shapiro_p = sp_stats.shapiro(amounts_series.dropna())
+    if sa.shapiro_stat is not None and sa.shapiro_p is not None:
         elements.append(
             Paragraph("<b>Distribution Normality (Shapiro-Wilk)</b>", STYLES["SubSectionHeader"])
         )
@@ -1608,15 +1591,15 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
             ["Test", "Statistic", "p-value", "Normal?"],
             [
                 "Shapiro-Wilk",
-                f"{shapiro_stat:.4f}",
-                f"{shapiro_p:.4f}",
-                "Yes" if shapiro_p > 0.05 else "No",
+                f"{sa.shapiro_stat:.4f}",
+                f"{sa.shapiro_p:.4f}",
+                "Yes" if sa.shapiro_p > 0.05 else "No",
             ],
         ]
         t = Table(norm_data, colWidths=[4 * cm, 3 * cm, 3 * cm, 3 * cm])
         t.setStyle(make_table_style(num_rows=len(norm_data)))
         elements.append(t)
-    except ImportError:
+    else:
         elements.append(
             Paragraph(
                 "<i>Scipy not available — install for normality testing.</i>", STYLES["SmallText"]

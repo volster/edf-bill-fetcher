@@ -273,3 +273,51 @@ def test_data_quality_report_does_not_mutate_input() -> None:
     compute_data_quality_report(df)
 
     assert set(df.columns) == columns_before  # no _dt_parsed leakage
+
+
+# --- StatisticalAnalysis (Arch #3 Task 2) --------------------------------------
+
+
+def _amount_frame(*amounts: float) -> pd.DataFrame:
+    return pd.DataFrame([{"Date": "01/01/2023", "Amount (£)": a} for a in amounts])
+
+
+def test_statistical_insufficient_data() -> None:
+    from edf_bill_fetcher.models.report_models import (
+        StatisticalAnalysis,
+        compute_statistical_analysis,
+    )
+
+    report = compute_statistical_analysis(_amount_frame(100.0, 200.0))
+
+    assert isinstance(report, StatisticalAnalysis)
+    assert report.count == 2
+    assert report.shapiro_stat is None
+    assert report.shapiro_p is None
+
+
+def test_statistical_descriptive_stats() -> None:
+    from edf_bill_fetcher.models.report_models import compute_statistical_analysis
+
+    report = compute_statistical_analysis(_amount_frame(100.0, 200.0, 300.0, 400.0))
+
+    assert report.count == 4
+    assert report.mean == 250.0
+    assert report.median == 250.0
+    assert report.minimum == 100.0
+    assert report.maximum == 400.0
+    assert report.range == 300.0
+    assert report.std is not None
+
+
+def test_statistical_rolling_matches_pandas() -> None:
+    import pandas as pd
+
+    from edf_bill_fetcher.models.report_models import compute_statistical_analysis
+
+    amounts = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0]
+    report = compute_statistical_analysis(_amount_frame(*amounts))
+    series = pd.Series(amounts)
+
+    assert report.count == 7
+    assert report.rolling["mean"] == series.rolling(6, min_periods=1).mean().iloc[-1]

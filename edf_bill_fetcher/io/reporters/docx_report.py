@@ -920,34 +920,34 @@ def create_statistical_analysis(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
 ) -> None:
     """Create statistical analysis section."""
+    from edf_bill_fetcher.models.report_models import compute_statistical_analysis
+
     if ctx is None:
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("statistical"), style=styles["SectionHeader"])
 
-    if "Amount (£)" in df.columns:
-        amounts = pd.to_numeric(df["Amount (£)"], errors="coerce").dropna()
-        if not amounts.empty:
-            doc.add_paragraph("Bill Amount Statistics:", style=styles["SubSectionHeader"])
+    sa = compute_statistical_analysis(df)
+    if sa.count >= 3:
+        doc.add_paragraph("Bill Amount Statistics:", style=styles["SubSectionHeader"])
 
-            stats_data = [
-                ("Metric", "Value"),
-                ("Count", str(len(amounts))),
-                ("Mean", fmt_money(amounts.mean())),
-                ("Median", fmt_money(amounts.median())),
-                ("Std Dev", fmt_money(amounts.std())),
-                ("Min", fmt_money(amounts.min())),
-                ("Max", fmt_money(amounts.max())),
-                ("25th Percentile", fmt_money(amounts.quantile(0.25))),
-                ("75th Percentile", fmt_money(amounts.quantile(0.75))),
-            ]
+        stats_data = [
+            ("Metric", "Value"),
+            ("Count", str(sa.count)),
+            ("Mean", fmt_money(sa.mean)),
+            ("Median", fmt_money(sa.median)),
+            ("Std Dev", fmt_money(sa.std)),
+            ("Min", fmt_money(sa.minimum)),
+            ("Max", fmt_money(sa.maximum)),
+            ("Range", fmt_money(sa.range)),
+        ]
 
-            table = doc.add_table(rows=len(stats_data), cols=2)
-            table.alignment = WD_TABLE_ALIGNMENT.CENTER
-            for i, (label, val) in enumerate(stats_data):
-                table.rows[i].cells[0].text = label
-                table.rows[i].cells[1].text = val
+        table = doc.add_table(rows=len(stats_data), cols=2)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for i, (label, val) in enumerate(stats_data):
+            table.rows[i].cells[0].text = label
+            table.rows[i].cells[1].text = val
 
-            _format_table(table, header_color="#EBF3FA", font_size=10)
+        _format_table(table, header_color="#EBF3FA", font_size=10)
 
     doc.add_page_break()
 

@@ -184,3 +184,86 @@ def compute_data_quality_report(df: pd.DataFrame) -> DataQualityReport:
         source_distribution=source_distribution,
         entry_type_distribution=entry_type_distribution,
     )
+
+
+@dataclass
+class StatisticalAnalysis:
+    """Typed descriptive + rolling statistics shared by the reporters."""
+
+    count: int
+    mean: float
+    median: float
+    std: float
+    minimum: float
+    maximum: float
+    range: float
+    cv: float | None
+    rolling: dict[str, float]
+    shapiro_stat: float | None
+    shapiro_p: float | None
+
+
+def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
+    """Compute descriptive + rolling statistics from the amount column."""
+    work = df.copy()
+    if "Date" in work.columns:
+        work["_dt"] = work["Date"].apply(parse_to_sort_date)
+        work = work.sort_values("_dt")
+    amounts = pd.to_numeric(work["Amount (£)"], errors="coerce").dropna()
+    n = len(amounts)
+    if n == 0:
+        return StatisticalAnalysis(
+            count=0,
+            mean=0.0,
+            median=0.0,
+            std=0.0,
+            minimum=0.0,
+            maximum=0.0,
+            range=0.0,
+            cv=None,
+            rolling={"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0},
+            shapiro_stat=None,
+            shapiro_p=None,
+        )
+
+    amounts_series = amounts.astype(float)
+    mean = float(amounts_series.mean())
+    median = float(amounts_series.median())
+    std = float(amounts_series.std())
+    minimum = float(amounts_series.min())
+    maximum = float(amounts_series.max())
+    cv = std / mean if mean and mean > 0 else None
+
+    rolling = amounts_series.rolling(6, min_periods=1)
+    roll_mean = float(rolling.mean().iloc[-1])
+    roll_std = float(rolling.std().iloc[-1])
+    roll_min = float(rolling.min().iloc[-1])
+    roll_max = float(rolling.max().iloc[-1])
+    if roll_std != roll_std:  # NaN guard, mirroring the PDF renderer
+        roll_std = 0.0
+
+    shapiro_stat: float | None = None
+    shapiro_p: float | None = None
+    if n >= 3:
+        try:
+            from scipy import stats as sp_stats
+
+            s_stat, s_p = sp_stats.shapiro(amounts_series)
+            shapiro_stat = float(s_stat)
+            shapiro_p = float(s_p)
+        except ImportError:
+            pass
+
+    return StatisticalAnalysis(
+        count=n,
+        mean=mean,
+        median=median,
+        std=std,
+        minimum=minimum,
+        maximum=maximum,
+        range=maximum - minimum,
+        cv=cv,
+        rolling={"mean": roll_mean, "std": roll_std, "min": roll_min, "max": roll_max},
+        shapiro_stat=shapiro_stat,
+        shapiro_p=shapiro_p,
+    )
