@@ -45,9 +45,6 @@ from edf_bill_fetcher.helpers.formatting import (
     fmt_number,
 )
 from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps as _load_ofgem_caps
-
-# Import from main module
-from edf_bill_fetcher.io.writers import HAS_SCIPY
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
 
@@ -1684,6 +1681,8 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
 
 def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create forecast & projection section."""
+    from edf_bill_fetcher.models.report_models import compute_forecast
+
     elements = []
     if ctx is None:
         ctx = RenderContext()
@@ -1702,14 +1701,8 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
     )
     elements.append(Spacer(1, 0.3 * cm))
 
-    # Prepare data for forecasting
-    dfc = dfc.copy()
-    dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
-    dfc = dfc.sort_values("_dt").reset_index(drop=True)
-    amounts = dfc["Amount (£)"].astype(float).values
-    n = len(amounts)
-
-    if n < 3:
+    fc = compute_forecast(dfc)
+    if fc.n < 3:
         elements.append(
             Paragraph(
                 "Insufficient data for forecasting (need at least 3 periods).", STYLES["BodyText"]
@@ -1718,46 +1711,10 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
         elements.append(PageBreak())
         return elements
 
-    if HAS_SCIPY:
-        from scipy import stats as sp_stats
-
-        x = np.arange(n)
-        slope, intercept, r_value, p_value, std_err = sp_stats.linregress(x, amounts)
-        linear_forecast = [intercept + slope * (n + i) for i in range(1, 7)]
-        model_info = [
-            f"<b>Linear Regression:</b> slope={slope:.2f}, intercept={intercept:.2f}, R²={r_value**2:.4f}, p={p_value:.4f}",
-        ]
-    else:
-        # Fallback: simple average
-        linear_forecast = [float(np.mean(amounts))] * 6
-        model_info = ["<b>Linear Regression:</b> not available (install scipy) - using mean"]
-
-    # Try to import statsmodels for Holt-Winters
-    try:
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing
-
-        has_statsmodels = True
-    except ImportError:
-        has_statsmodels = False
-
-    # 2. EMA (Exponential Moving Average) Forecast
-    alpha = 0.3  # smoothing factor
-    ema = amounts[0]
-    for val in amounts[1:]:
-        ema = alpha * val + (1 - alpha) * ema
-    ema_forecast = [ema] * 6
-    model_info.append(f"<b>EMA (α={alpha}):</b> current level={ema:.2f}")
-
-    # 3. Holt-Winters Forecast (if statsmodels available)
-    hw_forecast = None
-    if has_statsmodels and n >= 6:
-        try:
-            # Use additive trend, no seasonality (need at least 2 seasons for seasonality)
-            model = ExponentialSmoothing(amounts, trend="add", seasonal=None)
-            hw_fit = model.fit(smoothing_level=alpha, smoothing_trend=0.1, optimized=True)
-            hw_forecast = hw_fit.forecast(6).tolist()
-        except Exception:
-            hw_forecast = None
+    linear_forecast = fc.linear_forecast
+    ema_forecast = fc.ema_forecast
+    hw_forecast = fc.hw_forecast
+    model_info = fc.model_info
 
     # Build forecast table
     forecast_header = ["Forecast Period", "Linear Reg. (£)", "EMA (£)"]
@@ -1784,13 +1741,6 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
     elements.append(Spacer(1, 0.2 * cm))
     elements.append(t)
     elements.append(Spacer(1, 0.3 * cm))
-
-    if hw_forecast:
-        model_info.append(
-            "<b>Holt-Winters:</b> additive trend, no seasonality (fitted via statsmodels)"
-        )
-    else:
-        model_info.append("<b>Holt-Winters:</b> not available (install statsmodels)")
 
     for info in model_info:
         elements.append(Paragraph(info, STYLES["SmallText"]))

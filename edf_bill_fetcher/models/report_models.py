@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
@@ -266,4 +268,81 @@ def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
         rolling={"mean": roll_mean, "std": roll_std, "min": roll_min, "max": roll_max},
         shapiro_stat=shapiro_stat,
         shapiro_p=shapiro_p,
+    )
+
+
+@dataclass
+class ForecastResult:
+    """Typed multi-method forecast shared by the PDF/DOCX reporters."""
+
+    n: int
+    linear_forecast: list[float]
+    ema_forecast: list[float]
+    hw_forecast: list[float] | None
+    model_info: list[str]
+
+
+def compute_forecast(df: pd.DataFrame) -> ForecastResult:
+    """Compute the linear-regression, EMA, and Holt-Winters projections."""
+    work = df.copy()
+    if "Date" in work.columns:
+        work["_dt"] = work["Date"].apply(parse_to_sort_date)
+        work = work.sort_values("_dt").reset_index(drop=True)
+    amounts = pd.to_numeric(work["Amount (£)"], errors="coerce").dropna().astype(float)
+    n = len(amounts)
+    if n < 3:
+        return ForecastResult(
+            n=n, linear_forecast=[], ema_forecast=[], hw_forecast=None, model_info=[]
+        )
+
+    has_scipy = importlib.util.find_spec("scipy") is not None
+    model_info: list[str] = []
+    if has_scipy:
+        from scipy import stats as sp_stats
+
+        x = np.arange(n)
+        slope, intercept, r_value, p_value, _std_err = sp_stats.linregress(x, amounts)
+        linear_forecast = [float(intercept + slope * (n + i)) for i in range(1, 7)]
+        model_info.append(
+            f"Linear Regression: slope={slope:.2f}, intercept={intercept:.2f}, "
+            f"R²={r_value**2:.4f}, p={p_value:.4f}"
+        )
+    else:
+        linear_forecast = [float(amounts.mean())] * 6
+        model_info.append("Linear Regression: not available (install scipy) - using mean")
+
+    alpha = 0.3
+    ema = float(amounts.iloc[0])
+    for val in amounts.iloc[1:]:
+        ema = alpha * float(val) + (1 - alpha) * ema
+    ema_forecast = [ema] * 6
+    model_info.append(f"EMA (α={alpha}): current level={ema:.2f}")
+
+    try:
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+        has_statsmodels = True
+    except ImportError:
+        has_statsmodels = False
+
+    hw_forecast: list[float] | None = None
+    if has_statsmodels and n >= 6:
+        try:
+            model = ExponentialSmoothing(amounts, trend="add", seasonal=None)
+            hw_fit = model.fit(smoothing_level=alpha, smoothing_trend=0.1, optimized=True)
+            hw_forecast = [float(v) for v in hw_fit.forecast(6).tolist()]
+        except Exception:
+            hw_forecast = None
+
+    if hw_forecast:
+        model_info.append("Holt-Winters: additive trend, no seasonality (fitted via statsmodels)")
+    else:
+        model_info.append("Holt-Winters: not available (install statsmodels)")
+
+    return ForecastResult(
+        n=n,
+        linear_forecast=linear_forecast,
+        ema_forecast=ema_forecast,
+        hw_forecast=hw_forecast,
+        model_info=model_info,
     )

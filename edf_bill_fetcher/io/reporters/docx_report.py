@@ -985,27 +985,54 @@ def create_forecast_section(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
 ) -> None:
     """Create forecast & projection section."""
+    from edf_bill_fetcher.models.report_models import compute_forecast
+
     if ctx is None:
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("forecast"), style=styles["SectionHeader"])
 
     doc.add_paragraph(
-        "Based on historical billing patterns, the following projections are provided. "
-        "These are estimates only and should not be relied upon for financial planning.",
+        "Projections are based on historical billing patterns and should be treated as "
+        "indicative only. They assume continuation of current trends and do not account for "
+        "seasonal variations, tariff changes, or policy changes.",
         style=styles["BodyText"],
     )
 
-    if "Amount (£)" in df.columns:
-        amounts = pd.to_numeric(df["Amount (£)"], errors="coerce").dropna()
-        if len(amounts) >= 3:
-            recent_avg = amounts.tail(min(6, len(amounts))).mean()
-            doc.add_paragraph(
-                f"6-bill rolling average: {fmt_money(recent_avg)}", style=styles["BodyText"]
-            )
-            doc.add_paragraph(
-                f"Estimated annual cost (12 bills): {fmt_money(recent_avg * 12)}",
-                style=styles["BodyText"],
-            )
+    fc = compute_forecast(df)
+    if fc.n < 3:
+        doc.add_paragraph(
+            "Insufficient data for forecasting (need at least 3 periods).",
+            style=styles["BodyText"],
+        )
+        doc.add_page_break()
+        return
+
+    headers = ["Forecast Period", "Linear Reg. (£)", "EMA (£)"]
+    if fc.hw_forecast:
+        headers.append("Holt-Winters (£)")
+
+    table = doc.add_table(rows=7, cols=len(headers))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for i, h in enumerate(headers):
+        table.rows[0].cells[i].text = h
+    for i in range(6):
+        row = table.rows[i + 1]
+        row.cells[0].text = f"+{i + 1} Period"
+        row.cells[1].text = fmt_money(fc.linear_forecast[i])
+        row.cells[2].text = fmt_money(fc.ema_forecast[i])
+        if fc.hw_forecast:
+            row.cells[3].text = fmt_money(fc.hw_forecast[i])
+
+    for note in fc.model_info:
+        doc.add_paragraph(note, style=styles["BodyText"])
+
+    doc.add_paragraph(
+        "Note: Projections assume continuation of current trends and do not account for "
+        "seasonal variations, tariff changes, or policy changes. "
+        "Full forecasting with confidence intervals available in the Excel workbook "
+        "(Forecast & Projection tab).",
+        style=styles["BodyText"],
+    )
 
     doc.add_page_break()
 

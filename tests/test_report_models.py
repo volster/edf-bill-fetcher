@@ -321,3 +321,47 @@ def test_statistical_rolling_matches_pandas() -> None:
 
     assert report.count == 7
     assert report.rolling["mean"] == series.rolling(6, min_periods=1).mean().iloc[-1]
+
+
+# --- ForecastResult (Arch #3 Task 3) -------------------------------------------
+
+
+def test_forecast_insufficient_data() -> None:
+    from edf_bill_fetcher.models.report_models import (
+        ForecastResult,
+        compute_forecast,
+    )
+
+    result = compute_forecast(_amount_frame(100.0, 200.0))
+
+    assert isinstance(result, ForecastResult)
+    assert result.n == 2
+    assert result.linear_forecast == []
+    assert result.ema_forecast == []
+    assert result.hw_forecast is None
+
+
+def test_forecast_ema_alpha_03() -> None:
+    from edf_bill_fetcher.models.report_models import compute_forecast
+
+    amounts = [100.0, 200.0, 300.0, 400.0]
+    result = compute_forecast(_amount_frame(*amounts))
+
+    # EMA with alpha=0.3, folding left-to-right from the first value.
+    ema = amounts[0]
+    for val in amounts[1:]:
+        ema = 0.3 * val + (1 - 0.3) * ema
+
+    assert result.n == 4
+    assert result.ema_forecast == [ema] * 6
+
+
+def test_forecast_linear_shape() -> None:
+    from edf_bill_fetcher.models.report_models import compute_forecast
+
+    result = compute_forecast(_amount_frame(100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0))
+
+    assert result.n == 7
+    assert len(result.linear_forecast) == 6
+    assert len(result.ema_forecast) == 6
+    assert all(isinstance(v, float) for v in result.linear_forecast)
