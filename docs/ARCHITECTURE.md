@@ -229,6 +229,7 @@ Every production file in `edf_bill_fetcher/`, one line each. This is the fastest
 | `helpers/version.py` | `get_package_version` — repo-root pyproject version (single source of truth) |
 | `models/events.py` | Domain dataclasses (`SapBackBillingEvent`, etc.) |
 | `models/config.py` | `ConfigDict` — the typed configuration contract (all 20 canonical keys) |
+| `models/report_models.py` | Six shared analysis models (`DataQualityReport`, `StatisticalAnalysis`, `ForecastResult`, `OfgemComparison`, `TariffAnalysis`, `DisputeAnalysis`) computed once and consumed by the Excel + PDF + DOCX + HTML surfaces |
 | `ui/app.py` | Tkinter GUI + `ReportOptionsDialog` + config persistence |
 | `writers/__init__.py` | Facade re-exporting `_helpers` analysis helpers (plan-exempt leaf) |
 
