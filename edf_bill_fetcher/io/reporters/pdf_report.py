@@ -1766,6 +1766,8 @@ def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = No
 
 def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
     """Create tariff impact analysis section."""
+    from edf_bill_fetcher.models.report_models import compute_tariff_analysis
+
     elements = []
     if ctx is None:
         ctx = RenderContext()
@@ -1773,6 +1775,8 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
 
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
+
+    analysis = compute_tariff_analysis(dfc)
 
     if "Tariff" not in dfc.columns or dfc["Tariff"].isna().all():
         elements.append(
@@ -1785,38 +1789,12 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
         elements.append(PageBreak())
         return elements
 
-    # Filter valid tariff data
-    tariff_data = dfc.dropna(subset=["Tariff"])
-    tariff_data = tariff_data[tariff_data["Tariff"] != "N/A"]
-
-    if tariff_data.empty:
+    if analysis.empty:
         elements.append(Paragraph("No valid tariff records found.", STYLES["BodyText"]))
         elements.append(PageBreak())
         return elements
 
-    # Convert unit rate to numeric
-    tariff_data = tariff_data.copy()
-    tariff_data["unit_rate_num"] = pd.to_numeric(tariff_data["Unit Rate (p/kWh)"], errors="coerce")
-    tariff_data = tariff_data.dropna(subset=["unit_rate_num"])
-
-    if tariff_data.empty:
-        elements.append(Paragraph("No computable unit rates found.", STYLES["BodyText"]))
-        elements.append(PageBreak())
-        return elements
-
-    # Stats by tariff
-    tariff_stats = (
-        tariff_data.groupby("Tariff")
-        .agg(
-            count=("unit_rate_num", "count"),
-            avg_rate=("unit_rate_num", "mean"),
-            median_rate=("unit_rate_num", "median"),
-            min_rate=("unit_rate_num", "min"),
-            max_rate=("unit_rate_num", "max"),
-            avg_charge=("Period Charge (£)", lambda x: pd.to_numeric(x, errors="coerce").mean()),
-        )
-        .reset_index()
-    )
+    tariff_stats = analysis.stats
 
     elements.append(Paragraph("<b>Unit Rate by Tariff</b>", STYLES["SubSectionHeader"]))
     tariff_table = [
@@ -1827,10 +1805,10 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
             [
                 str(row["Tariff"]),
                 str(int(row["count"])),
-                fmt_number(row["avg_rate"], 2),
-                fmt_number(row["median_rate"], 2),
-                fmt_number(row["min_rate"], 2),
-                fmt_number(row["max_rate"], 2),
+                fmt_number(row["avg_unit_rate"], 2),
+                fmt_number(row["median_unit_rate"], 2),
+                fmt_number(row["min_unit_rate"], 2),
+                fmt_number(row["max_unit_rate"], 2),
                 fmt_money(row["avg_charge"]) if pd.notna(row["avg_charge"]) else "N/A",
             ]
         )
@@ -1842,14 +1820,11 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
     elements.append(t)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Tariff changes
-    tariff_data["_dt"] = tariff_data["Date"].apply(parse_to_sort_date)
-    tariff_data = tariff_data.sort_values("_dt")
-    changes = tariff_data["Tariff"].ne(tariff_data["Tariff"].shift()).cumsum()
-    n_changes = int(changes.max()) if not changes.empty else 0
-
     elements.append(
-        Paragraph(f"<b>Tariff Changes Detected: {n_changes}</b>", STYLES["SubSectionHeader"])
+        Paragraph(
+            f"<b>Tariff Changes Detected: {analysis.tariff_changes}</b>",
+            STYLES["SubSectionHeader"],
+        )
     )
 
     elements.append(PageBreak())

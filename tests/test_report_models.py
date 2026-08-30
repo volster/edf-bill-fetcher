@@ -455,3 +455,47 @@ def test_ofgem_verdict_precedence() -> None:
     assert OfgemComparison([], 0, 1, 1, None, None).overall_verdict == "INCOMPLETE"
     assert OfgemComparison([], 0, 0, 1, None, None).overall_verdict == "COMPLIANT (CARRIED)"
     assert OfgemComparison([], 0, 0, 0, None, None).overall_verdict == "COMPLIANT"
+
+
+# --- TariffAnalysis (Arch #3 Task 5) ----------------------------------------------
+
+
+def _tariff_frame(tariffs: list[str]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Date": f"01/{idx:02d}/2024",
+                "Tariff": t,
+                "Unit Rate (p/kWh)": 20.0 + idx,
+                "Period Charge (£)": 100.0 + idx,
+            }
+            for idx, t in enumerate(tariffs, 1)
+        ]
+    )
+
+
+def test_tariff_empty_frame() -> None:
+    from edf_bill_fetcher.models.report_models import TariffAnalysis, compute_tariff_analysis
+
+    result = compute_tariff_analysis(pd.DataFrame(columns=["Date", "Tariff", "Unit Rate (p/kWh)"]))
+    assert isinstance(result, TariffAnalysis)
+    assert result.empty
+
+
+def test_tariff_stats_and_changes() -> None:
+    from edf_bill_fetcher.models.report_models import compute_tariff_analysis
+
+    frame = _tariff_frame(["Standard", "Standard", "Standard", "Fixed", "Fixed"])
+    result = compute_tariff_analysis(frame)
+
+    assert not result.empty
+    assert result.num_tariffs == 2
+    assert result.tariff_changes == 2  # two tariff segments (Standard run, Fixed run)
+
+    stats = result.stats.set_index("Tariff")
+    std = stats.loc["Standard"]
+    assert int(std["count"]) == 3
+    assert std["avg_unit_rate"] == pytest.approx((21.0 + 22.0 + 23.0) / 3)
+    assert std["min_unit_rate"] == 21.0
+    assert std["max_unit_rate"] == 23.0
+    assert std["avg_charge"] == pytest.approx((101.0 + 102.0 + 103.0) / 3)

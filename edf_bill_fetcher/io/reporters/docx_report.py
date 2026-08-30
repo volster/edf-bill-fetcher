@@ -973,6 +973,8 @@ def create_tariff_impact_section(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
 ) -> None:
     """Create tariff impact analysis section."""
+    from edf_bill_fetcher.models.report_models import compute_tariff_analysis
+
     if ctx is None:
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("tariff"), style=styles["SectionHeader"])
@@ -986,34 +988,14 @@ def create_tariff_impact_section(
         doc.add_page_break()
         return
 
-    tariff_data = df.dropna(subset=["Tariff"])
-    tariff_data = tariff_data[tariff_data["Tariff"] != "N/A"]
+    analysis = compute_tariff_analysis(df)
 
-    if tariff_data.empty:
+    if analysis.empty:
         doc.add_paragraph("No valid tariff records found.", style=styles["BodyText"])
         doc.add_page_break()
         return
 
-    tariff_data = tariff_data.copy()
-    tariff_data["unit_rate_num"] = pd.to_numeric(tariff_data["Unit Rate (p/kWh)"], errors="coerce")
-    tariff_data = tariff_data.dropna(subset=["unit_rate_num"])
-
-    if tariff_data.empty:
-        doc.add_paragraph("No computable unit rates found.", style=styles["BodyText"])
-        doc.add_page_break()
-        return
-
-    tariff_stats = (
-        tariff_data.groupby("Tariff")
-        .agg(
-            count=("unit_rate_num", "count"),
-            avg_rate=("unit_rate_num", "mean"),
-            median_rate=("unit_rate_num", "median"),
-            min_rate=("unit_rate_num", "min"),
-            max_rate=("unit_rate_num", "max"),
-        )
-        .reset_index()
-    )
+    tariff_stats = analysis.stats
 
     doc.add_paragraph("Unit Rate by Tariff:", style=styles["SubSectionHeader"])
 
@@ -1028,22 +1010,19 @@ def create_tariff_impact_section(
         r = table.rows[i]
         r.cells[0].text = str(row["Tariff"])
         r.cells[1].text = str(int(row["count"]))
-        r.cells[2].text = fmt_number(row["avg_rate"], 2)
-        r.cells[3].text = fmt_number(row["median_rate"], 2)
-        r.cells[4].text = fmt_number(row["min_rate"], 2)
-        r.cells[5].text = fmt_number(row["max_rate"], 2)
+        r.cells[2].text = fmt_number(row["avg_unit_rate"], 2)
+        r.cells[3].text = fmt_number(row["median_unit_rate"], 2)
+        r.cells[4].text = fmt_number(row["min_unit_rate"], 2)
+        r.cells[5].text = fmt_number(row["max_unit_rate"], 2)
 
     _format_table(table, font_size=8)
 
     doc.add_paragraph("")
 
-    # Tariff changes
-    tariff_data["_dt"] = tariff_data["Date"].apply(parse_to_sort_date)
-    tariff_data = tariff_data.sort_values("_dt")
-    changes = tariff_data["Tariff"].ne(tariff_data["Tariff"].shift()).cumsum()
-    n_changes = int(changes.max()) if not changes.empty else 0
-
-    doc.add_paragraph(f"Tariff Changes Detected: {n_changes}", style=styles["SubSectionHeader"])
+    doc.add_paragraph(
+        f"Tariff Changes Detected: {analysis.tariff_changes}",
+        style=styles["SubSectionHeader"],
+    )
 
     doc.add_page_break()
 

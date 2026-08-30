@@ -471,3 +471,52 @@ def compute_ofgem_comparison(df: pd.DataFrame, config: dict | None = None) -> Of
     return OfgemComparison(
         rows, exceed_count, unavailable_count, carried_count, overall_avg, overall_median
     )
+
+
+@dataclass
+class TariffAnalysis:
+    """Unit-rate stats + tariff-change count shared by all four surfaces."""
+
+    stats: pd.DataFrame
+    num_tariffs: int
+    tariff_changes: int
+
+    @property
+    def empty(self) -> bool:
+        """True when there are no tariff records with a computable unit rate."""
+        return bool(self.stats.empty)
+
+
+def compute_tariff_analysis(df: pd.DataFrame) -> TariffAnalysis:
+    """Compute per-tariff unit-rate statistics and the tariff-change count."""
+    if "Tariff" not in df.columns or "Unit Rate (p/kWh)" not in df.columns:
+        return TariffAnalysis(pd.DataFrame(), 0, 0)
+
+    tariff_data = df[df["Tariff"].notna() & (df["Tariff"] != "N/A")].copy()
+    if tariff_data.empty:
+        return TariffAnalysis(pd.DataFrame(), 0, 0)
+
+    tariff_data["unit_rate_num"] = pd.to_numeric(tariff_data["Unit Rate (p/kWh)"], errors="coerce")
+    tariff_data = tariff_data.dropna(subset=["unit_rate_num"])
+    if tariff_data.empty:
+        return TariffAnalysis(pd.DataFrame(), 0, 0)
+
+    stats = (
+        tariff_data.groupby("Tariff")
+        .agg(
+            count=("unit_rate_num", "count"),
+            avg_unit_rate=("unit_rate_num", "mean"),
+            median_unit_rate=("unit_rate_num", "median"),
+            min_unit_rate=("unit_rate_num", "min"),
+            max_unit_rate=("unit_rate_num", "max"),
+            avg_charge=("Period Charge (£)", lambda x: pd.to_numeric(x, errors="coerce").mean()),
+        )
+        .reset_index()
+    )
+
+    tariff_data = tariff_data.sort_values("_dt" if "_dt" in tariff_data.columns else "Date")
+    changes = tariff_data["Tariff"].ne(tariff_data["Tariff"].shift()).cumsum()
+    num_tariffs = int(tariff_data["Tariff"].nunique())
+    tariff_changes = int(changes.max()) if not changes.empty else 0
+
+    return TariffAnalysis(stats, num_tariffs, tariff_changes)

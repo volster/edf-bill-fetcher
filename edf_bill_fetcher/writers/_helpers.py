@@ -56,46 +56,16 @@ _SOURCE_PRECEDENCE: dict[str, int] = {
 
 
 def _analyze_tariff_impact(df: pd.DataFrame) -> dict[str, object]:
-    """Analyze the impact of tariff changes on unit rates and charges."""
-    if "Tariff" not in df.columns or "Unit Rate (p/kWh)" not in df.columns:
+    """Alias for the shared computed model (see models/report_models.py)."""
+    from edf_bill_fetcher.models.report_models import compute_tariff_analysis
+
+    result = compute_tariff_analysis(df)
+    if result.empty:
         return {}
-
-    tariff_data = df[df["Tariff"].notna() & (df["Tariff"] != "N/A")].copy()
-    if tariff_data.empty:
-        return {}
-
-    # Convert unit rate to numeric
-    tariff_data["unit_rate_num"] = pd.to_numeric(tariff_data["Unit Rate (p/kWh)"], errors="coerce")
-    tariff_data = tariff_data.dropna(subset=["unit_rate_num"])
-
-    if tariff_data.empty:
-        return {}
-
-    # Group by tariff
-    tariff_stats = (
-        tariff_data.groupby("Tariff")
-        .agg(
-            count=("unit_rate_num", "count"),
-            avg_unit_rate=("unit_rate_num", "mean"),
-            median_unit_rate=("unit_rate_num", "median"),
-            min_unit_rate=("unit_rate_num", "min"),
-            max_unit_rate=("unit_rate_num", "max"),
-            avg_charge=(
-                "Period Charge (£)",
-                lambda x: pd.to_numeric(x, errors="coerce").mean(),
-            ),
-        )
-        .reset_index()
-    )
-
-    # Find tariff changes
-    tariff_data = tariff_data.sort_values("_dt" if "_dt" in tariff_data.columns else "Date")
-    tariff_changes = tariff_data["Tariff"].ne(tariff_data["Tariff"].shift()).cumsum()
-
     return {
-        "tariff_stats": tariff_stats,
-        "num_tariffs": int(tariff_data["Tariff"].nunique()),
-        "tariff_changes": int(tariff_changes.max()) if not tariff_changes.empty else 0,
+        "tariff_stats": result.stats,
+        "num_tariffs": result.num_tariffs,
+        "tariff_changes": result.tariff_changes,
     }
 
 
