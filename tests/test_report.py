@@ -14,9 +14,9 @@ import pandas as pd
 import pytest
 from reportlab.platypus import TableStyle
 
+from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps as _load_ofgem_caps
 from edf_bill_fetcher.io.reporters.pdf_report import (
     Colors,
-    _load_ofgem_caps,
     build_styles,
     create_anomaly_detail_section,
     create_appendix_glossary,
@@ -562,8 +562,8 @@ class TestOFGEMComparison:
         }
 
         monkeypatch.setattr(
-            sys.modules["edf_bill_fetcher.io.reporters.pdf_report"],
-            "_load_ofgem_caps",
+            sys.modules["edf_bill_fetcher.models.report_models"],
+            "load_ofgem_caps",
             lambda auto_carry=False: (minimal_caps, None),
         )
 

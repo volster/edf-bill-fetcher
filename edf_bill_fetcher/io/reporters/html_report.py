@@ -35,8 +35,6 @@ from edf_bill_fetcher.io.reporters.pdf_report import (
     _compute_financial_totals,
     _compute_mean_daily,
     _get_package_version,
-    _load_ofgem_caps,
-    _period_to_ofgem_quarter,
     fmt_date,
 )
 from edf_bill_fetcher.models.config import ConfigDict
@@ -452,14 +450,9 @@ def create_timeline_section(df: pd.DataFrame, flags: list, ctx: RenderContext | 
 def create_ofgem_comparison(
     df: pd.DataFrame, config: dict | None = None, ctx: RenderContext | None = None
 ) -> str:
-    """Create the OFGEM price cap comparison section.
+    """Create the OFGEM price cap comparison section."""
+    from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
 
-    Mirrors ``pdf_report.create_ofgem_comparison``: effective bill unit
-    rate is computed from ``Period Charge (£)`` ÷ ``Units (kWh)`` × 100,
-    quarters beyond the published cap table fall back to the
-    carry-forward cap, and the summary row verdicts (REVIEW REQUIRED /
-    INCOMPLETE / COMPLIANT) match the PDF surface.
-    """
     if ctx is None:
         ctx = RenderContext()
     heading = ctx.heading("ofgem")
@@ -472,94 +465,31 @@ def create_ofgem_comparison(
         "regulatory non-compliance.</p>"
     )
 
-    ofgem_caps, latest_known_cap = _load_ofgem_caps(auto_carry=True)
+    comparison = compute_ofgem_comparison(df, config)
 
-    work = df.copy()
-    work["_dt"] = work["Date"].apply(parse_to_sort_date)
-    work = work.sort_values("_dt").reset_index(drop=True)
-
-    valid_pc = work["Period Charge (£)"].notna() & (work["Period Charge (£)"] != "N/A")
-    valid_units = (
-        work["Units (kWh)"].notna() & (work["Units (kWh)"] != "N/A") & (work["Units (kWh)"] != "")
-    )
-    bills = work[valid_pc & valid_units].copy()
-
-    if bills.empty:
+    if not comparison.rows:
         parts.append(
             "<p>No billing records with both Period Charge and Units (kWh) available "
             "for comparison.</p></div>"
         )
         return "\n".join(parts)
 
-    bills["_unit_rate"] = (
-        bills["Period Charge (£)"].astype(float) / bills["Units (kWh)"].astype(float) * 100
-    )
-    bills["_quarter"] = bills["_dt"].apply(_period_to_ofgem_quarter)
-    bills = bills[bills["_quarter"].notna()].copy()
-
-    if bills.empty:
-        parts.append("<p>No billing records fall within an OFGEM-published cap window.</p></div>")
-        return "\n".join(parts)
-
     MISSING = "—"
-    UNAVAILABLE = "CAP DATA UNAVAILABLE"
-    CARRIED = "CAP CARRIED FORWARD"
     cap_rows: list[list[Any]] = []
-    exceed_count = 0
-    unavailable_count = 0
-    carried_count = 0
-    for quarter in sorted(bills["_quarter"].dropna().unique()):
-        avg_rate = bills[bills["_quarter"] == quarter]["_unit_rate"].mean()
-        if pd.isna(avg_rate):
-            continue
-        if quarter not in ofgem_caps:
-            if latest_known_cap:
-                carried_count += 1
-                cap_rate = latest_known_cap["unit_rate"]
-                diff = avg_rate - cap_rate
-                status = (
-                    f"EXCEEDS CAP ({CARRIED})"
-                    if diff > 0
-                    else f"AT CAP ({CARRIED})"
-                    if abs(diff) < 0.01
-                    else f"BELOW CAP ({CARRIED})"
-                )
-                if diff > 0:
-                    exceed_count += 1
-            else:
-                unavailable_count += 1
-                cap_rate = MISSING
-                diff = MISSING
-                status = UNAVAILABLE
-        else:
-            cap_rate = ofgem_caps[quarter]["unit_rate"]
-            diff = avg_rate - cap_rate
-            status = "EXCEEDS CAP" if diff > 0 else "AT CAP" if abs(diff) < 0.01 else "BELOW CAP"
-            if diff > 0:
-                exceed_count += 1
+    for row in comparison.rows:
         cap_rows.append(
             [
-                quarter,
-                fmt_number(avg_rate, 2),
-                fmt_number(cap_rate, 2) if isinstance(cap_rate, float) else cap_rate,
-                fmt_number(diff, 2) if isinstance(diff, float) else diff,
-                status,
+                row.quarter,
+                fmt_number(row.bill_rate, 2),
+                fmt_number(row.cap_rate, 2) if row.cap_rate is not None else MISSING,
+                fmt_number(row.diff, 2)
+                if row.diff is not None and row.diff != 0
+                else ("0.00" if row.diff is not None else MISSING),
+                row.status,
             ]
         )
 
-    if exceed_count > 0:
-        summary_diff = f"{exceed_count} periods exceed cap"
-        summary_status = "REVIEW REQUIRED"
-    elif unavailable_count > 0:
-        summary_diff = f"{unavailable_count} period(s) not benchmarked"
-        summary_status = "INCOMPLETE"
-    elif carried_count > 0:
-        summary_diff = f"{carried_count} period(s) used carried-forward cap"
-        summary_status = "COMPLIANT (CARRIED)"
-    else:
-        summary_diff = "No exceedances"
-        summary_status = "COMPLIANT"
-    cap_rows.append(["OVERALL", "—", "—", summary_diff, summary_status])
+    cap_rows.append(["OVERALL", "—", "—", comparison.overall_diff, comparison.overall_verdict])
 
     header = ["Period", "Bill Unit Rate (p/kWh)", "OFGEM Cap (p/kWh)", "Difference", "Status"]
     parts.append(_table([header, *cap_rows]))

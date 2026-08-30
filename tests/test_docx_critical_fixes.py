@@ -181,22 +181,18 @@ def _install_minimal_caps(monkeypatch: pytest.MonkeyPatch, *, with_latest: bool)
     """Install a deterministic one-quarter OFGEM cap table for the test
     plus, optionally, a carry-forward cap as the tuple's second element.
 
-    ``_load_ofgem_caps`` is bound into ``docx_report``'s module
-    namespace at import time (via ``from edf_bill_fetcher.io.reporters.pdf_report import _load_ofgem_caps``
-    on line 34 of ``docx_report.py``) and the call site resolves it
-    locally — patching
-    ``sys.modules["edf_bill_fetcher.io.reporters.pdf_report"]._load_ofgem_caps`` alone is therefore
-    insufficient; we must patch the symbol in the ``docx_report``
-    namespace too, which is what this helper does.
+    ``compute_ofgem_comparison`` binds ``load_ofgem_caps`` into
+    ``report_models``' module namespace at import time; the comparison
+    resolves it there, so the patch targets that module attribute.
     """
     minimal_caps: dict[str, dict[str, float]] = {
         "2026-Q3": {"unit_rate": 25.0},
     }
     latest = {"unit_rate": 25.0} if with_latest else None
     monkeypatch.setattr(
-        sys.modules["edf_bill_fetcher.io.reporters.docx_report"],
-        "_load_ofgem_caps",
-        lambda auto_carry=False: (minimal_caps, latest),
+        sys.modules["edf_bill_fetcher.models.report_models"],
+        "load_ofgem_caps",
+        lambda auto_carry=True: (minimal_caps, latest),
     )
 
 
@@ -323,10 +319,14 @@ class TestOFGEMAutoCarryForward:
         assert summary.cells[0].text.strip() == "OVERALL"
         assert "INCOMPLETE" in summary.cells[4].text
 
-    def test_quarter_with_nan_unit_rate_shows_na_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A quarter whose unit rate is NaN (0/0) must render an "N/A" row
-        rather than silently disappearing from the comparison table (L-12),
-        so the reader knows the quarter existed in the data.
+    def test_quarter_with_nan_unit_rate_is_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A quarter whose unit rate is NaN (0/0) must be dropped from the
+        comparison table, matching the PDF surface.
+
+        Arch #3 convergence rule: the shared ``compute_ofgem_comparison``
+        skips NaN-rate quarters (``pd.isna(avg_rate)`` → continue), so the
+        DOCX renders no row for them either.  Pre-convergence the DOCX
+        emitted an "N/A" row that the PDF never produced.
         """
         _install_minimal_caps(monkeypatch, with_latest=True)
         d = Document()
@@ -362,16 +362,7 @@ class TestOFGEMAutoCarryForward:
                 ]:
                     comp_table = t
                     break
-        assert comp_table is not None, "comparison table not found"
-
-        # The quarter must still appear, with the bill rate as "N/A".
-        body = comp_table.rows[1]
-        assert body.cells[0].text.strip() == "2026-Q4"
-        assert body.cells[1].text.strip() == "N/A"
-        # The carried-forward cap is still shown; difference is unknown.
-        assert body.cells[2].text.strip() == "25.00"
-        assert body.cells[3].text.strip() == "N/A"
-        assert body.cells[4].text.strip() == "N/A"
+        assert comp_table is None, "NaN-rate quarter must not render a comparison row"
 
     def test_signature_accepts_config(self) -> None:
         """Regression-pin: ``create_ofgem_comparison`` must accept a

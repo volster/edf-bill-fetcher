@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
@@ -365,3 +366,92 @@ def test_forecast_linear_shape() -> None:
     assert len(result.linear_forecast) == 6
     assert len(result.ema_forecast) == 6
     assert all(isinstance(v, float) for v in result.linear_forecast)
+
+
+# --- OfgemComparison (Arch #3 Task 4) ---------------------------------------------
+
+
+def _ofgem_frame(*rows: tuple[str, float, float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Date": date, "Period Charge (£)": charge, "Units (kWh)": units}
+            for date, charge, units in rows
+        ]
+    )
+
+
+def _patch_caps(monkeypatch: pytest.MonkeyPatch, caps: dict, latest: dict | None) -> None:
+    import edf_bill_fetcher.models.report_models as rm
+
+    monkeypatch.setattr(rm, "load_ofgem_caps", lambda auto_carry=True: (caps, latest))
+
+
+def test_ofgem_in_table_and_unavailable_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
+
+    _patch_caps(
+        monkeypatch,
+        {
+            "2024-Q1": {"unit_rate": 28.62, "standing_charge": 53.35},
+            "2024-Q2": {"unit_rate": 24.50, "standing_charge": 60.10},
+        },
+        None,
+    )
+    result = compute_ofgem_comparison(
+        _ofgem_frame(
+            ("15/02/2024", 200.0, 500.0),  # 40.0 p/kWh > 28.62 → EXCEEDS CAP
+            ("15/05/2024", 300.0, 600.0),  # 50.0 p/kWh > 24.50 → EXCEEDS
+            ("15/08/2024", 400.0, 700.0),  # 2024-Q3 absent → CAP DATA UNAVAILABLE
+        )
+    )
+
+    assert [r.quarter for r in result.rows] == ["2024-Q1", "2024-Q2", "2024-Q3"]
+    q1 = result.rows[0]
+    assert q1.bill_rate == pytest.approx(40.0)
+    assert q1.cap_rate == 28.62
+    assert q1.status == "EXCEEDS CAP"
+    q3 = result.rows[2]
+    assert q3.cap_rate is None
+    assert q3.diff is None
+    assert q3.status == "CAP DATA UNAVAILABLE"
+    assert result.exceed_count == 2
+    assert result.unavailable_count == 1
+
+
+def test_ofgem_carried_forward(monkeypatch: pytest.MonkeyPatch) -> None:
+    from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
+
+    _patch_caps(
+        monkeypatch,
+        {"2026-Q3": {"unit_rate": 25.0, "standing_charge": 60.0}},
+        {"unit_rate": 25.0, "standing_charge": 60.0},
+    )
+    result = compute_ofgem_comparison(_ofgem_frame(("15/10/2026", 200.0, 800.0)))  # 25.0 p/kWh
+
+    assert result.rows[0].quarter == "2026-Q4"
+    assert result.rows[0].status == "AT CAP (CAP CARRIED FORWARD)"
+    assert result.carried_count == 1
+    assert result.overall_verdict == "COMPLIANT (CARRIED)"
+
+
+def test_ofgem_nan_rate_quarter_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
+
+    _patch_caps(
+        monkeypatch,
+        {"2026-Q3": {"unit_rate": 25.0, "standing_charge": 60.0}},
+        {"unit_rate": 25.0, "standing_charge": 60.0},
+    )
+    result = compute_ofgem_comparison(_ofgem_frame(("15/10/2026", 0.0, 0.0)))  # 0/0 → NaN
+
+    assert result.rows == []
+    assert result.overall_verdict == "COMPLIANT"
+
+
+def test_ofgem_verdict_precedence() -> None:
+    from edf_bill_fetcher.models.report_models import OfgemComparison
+
+    assert OfgemComparison([], 1, 1, 1, None, None).overall_verdict == "REVIEW REQUIRED"
+    assert OfgemComparison([], 0, 1, 1, None, None).overall_verdict == "INCOMPLETE"
+    assert OfgemComparison([], 0, 0, 1, None, None).overall_verdict == "COMPLIANT (CARRIED)"
+    assert OfgemComparison([], 0, 0, 0, None, None).overall_verdict == "COMPLIANT"

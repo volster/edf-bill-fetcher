@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps
 from edf_bill_fetcher.helpers.payment_figures import payment_amounts
 
 
@@ -345,4 +347,127 @@ def compute_forecast(df: pd.DataFrame) -> ForecastResult:
         ema_forecast=ema_forecast,
         hw_forecast=hw_forecast,
         model_info=model_info,
+    )
+
+
+def _period_to_ofgem_quarter(dt: datetime | None) -> str | None:
+    if dt is None or pd.isna(dt):
+        return None
+    try:
+        quarter = (dt.month - 1) // 3 + 1
+        return f"{dt.year}-Q{quarter}"
+    except Exception:
+        return None
+
+
+@dataclass
+class OfgemRow:
+    """One quarterly row in the OFGEM-cap comparison table."""
+
+    quarter: str
+    bill_rate: float
+    cap_rate: float | None
+    diff: float | None
+    status: str
+
+
+@dataclass
+class OfgemComparison:
+    """Cap-comparison result shared by the PDF/DOCX/HTML reporters."""
+
+    rows: list[OfgemRow]
+    exceed_count: int
+    unavailable_count: int
+    carried_count: int
+    overall_avg: float | None
+    overall_median: float | None
+
+    @property
+    def overall_verdict(self) -> str:
+        """Highest-severity verdict: exceed > unavailable > carried > compliant."""
+        if self.exceed_count > 0:
+            return "REVIEW REQUIRED"
+        if self.unavailable_count > 0:
+            return "INCOMPLETE"
+        if self.carried_count > 0:
+            return "COMPLIANT (CARRIED)"
+        return "COMPLIANT"
+
+    @property
+    def overall_diff(self) -> str:
+        """Summary-diff string for the OVERALL row's Difference column."""
+        if self.exceed_count > 0:
+            return f"{self.exceed_count} periods exceed cap"
+        if self.unavailable_count > 0:
+            return f"{self.unavailable_count} period(s) not benchmarked"
+        if self.carried_count > 0:
+            return f"{self.carried_count} period(s) used carried-forward cap"
+        return "No exceedances"
+
+
+def compute_ofgem_comparison(df: pd.DataFrame, config: dict | None = None) -> OfgemComparison:
+    """Compute per-quarter unit-rate comparison against the OFGEM price cap."""
+    del config
+    ofgem_caps, latest_known_cap = load_ofgem_caps(auto_carry=True)
+
+    work = df.copy()
+    if "_dt" not in work.columns:
+        work["_dt"] = work["Date"].apply(parse_to_sort_date)
+    work = work.sort_values("_dt").reset_index(drop=True)
+
+    valid_pc = work["Period Charge (£)"].notna() & (work["Period Charge (£)"] != "N/A")
+    valid_units = (
+        work["Units (kWh)"].notna() & (work["Units (kWh)"] != "N/A") & (work["Units (kWh)"] != "")
+    )
+    bills = work[valid_pc & valid_units].copy()
+    if bills.empty:
+        return OfgemComparison([], 0, 0, 0, None, None)
+
+    bills["_unit_rate"] = (
+        bills["Period Charge (£)"].astype(float) / bills["Units (kWh)"].astype(float) * 100
+    )
+    bills["_quarter"] = bills["_dt"].apply(_period_to_ofgem_quarter)
+
+    all_rates = bills["_unit_rate"].dropna()
+    overall_avg = float(all_rates.mean()) if not all_rates.empty else None
+    overall_median = float(all_rates.median()) if not all_rates.empty else None
+
+    rows: list[OfgemRow] = []
+    exceed_count = 0
+    unavailable_count = 0
+    carried_count = 0
+    for quarter in sorted(bills["_quarter"].dropna().unique()):
+        avg_rate = bills[bills["_quarter"] == quarter]["_unit_rate"].mean()
+        if pd.isna(avg_rate):
+            continue
+        if quarter not in ofgem_caps:
+            if latest_known_cap:
+                carried_count += 1
+                cap_rate = latest_known_cap["unit_rate"]
+                diff = float(avg_rate) - cap_rate
+                if diff > 0:
+                    status = "EXCEEDS CAP (CAP CARRIED FORWARD)"
+                    exceed_count += 1
+                elif abs(diff) < 0.01:
+                    status = "AT CAP (CAP CARRIED FORWARD)"
+                else:
+                    status = "BELOW CAP (CAP CARRIED FORWARD)"
+                rows.append(OfgemRow(quarter, float(avg_rate), cap_rate, diff, status))
+            else:
+                unavailable_count += 1
+                rows.append(OfgemRow(quarter, float(avg_rate), None, None, "CAP DATA UNAVAILABLE"))
+            continue
+        cap_rate = ofgem_caps[quarter]["unit_rate"]
+        diff = float(avg_rate) - cap_rate
+        if diff > 0:
+            status = "EXCEEDS CAP"
+            exceed_count += 1
+        elif abs(diff) < 0.01:
+            status = "AT CAP"
+        else:
+            status = "BELOW CAP"
+        rows.append(OfgemRow(quarter, float(avg_rate), cap_rate, diff, status))
+
+    return OfgemComparison(
+        rows, exceed_count, unavailable_count, carried_count, overall_avg, overall_median
     )

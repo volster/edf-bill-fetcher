@@ -38,8 +38,6 @@ from edf_bill_fetcher.io.reporters.pdf_report import (
     _compute_financial_totals,
     _compute_mean_daily,
     _get_package_version,
-    _load_ofgem_caps,
-    _period_to_ofgem_quarter,
     fmt_date,
 )
 from edf_bill_fetcher.models.config import ConfigDict
@@ -654,27 +652,10 @@ def create_ofgem_comparison(
     config: dict | None = None,
     ctx: RenderContext | None = None,
 ) -> None:
-    """Create OFGEM price cap comparison section.
+    """Create OFGEM price cap comparison section (shared compute via model)."""
+    from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps
+    from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
 
-    Mirrors ``edf_report.create_ofgem_comparison``: computes the
-    effective bill unit rate from ``Period Charge (£)`` ÷
-    ``Units (kWh)`` × 100 instead of trusting a pre-baked
-    ``Unit Rate (p/kWh)`` column (which is `None` for many records
-    because not every bill has both columns populated).
-
-    That means the DOCX output now covers every record that has
-    Period Charge AND Units available, even when the Excel
-    ``Unit Rate (p/kWh)`` column ended up ``N/A`` — same logic,
-    same table, same row labels as the PDF report.
-
-    Quarters beyond the hard-coded OFGEM cap table are benchmarked
-    against the most recent published cap (the carry-forward value
-    returned alongside the caps dict by ``_load_ofgem_caps(auto_carry=True)``)
-    rather than marked ``CAP DATA UNAVAILABLE`` — same carry-forward
-    contract the PDF report exposes, plus the ``CAP CARRIED FORWARD``
-    status. ``config`` is accepted for signature symmetry with the PDF;
-    the comparison logic itself does not currently consult ``config``.
-    """
     if ctx is None:
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("ofgem"), style=styles["SectionHeader"])
@@ -686,114 +667,9 @@ def create_ofgem_comparison(
         style=styles["BodyText"],
     )
 
-    # Compute quarter for every record first so we can filter to
-    # records that actually fall inside an OFGEM-cap window.
-    work = df.copy()
-    work["_dt"] = work["Date"].apply(parse_to_sort_date)
-    work = work.sort_values("_dt").reset_index(drop=True)
+    comparison = compute_ofgem_comparison(df, config)
 
-    # Same filter the PDF uses: Period Charge + Units both present and
-    # non-empty.  ``Unit Rate (p/kWh)`` is intentionally *not*
-    # consulted — many real records have it set to "N/A" even when
-    # both Period Charge and Units are fine.
-    valid_pc = work["Period Charge (£)"].notna() & (work["Period Charge (£)"] != "N/A")
-    valid_units = (
-        work["Units (kWh)"].notna() & (work["Units (kWh)"] != "N/A") & (work["Units (kWh)"] != "")
-    )
-    bills = work[valid_pc & valid_units].copy()
-
-    if bills.empty:
-        doc.add_paragraph(
-            "No billing records with both Period Charge and Units (kWh) available for comparison.",
-            style=styles["BodyText"],
-        )
-        doc.add_page_break()
-        return
-
-    # Effective unit rate from Period Charge / Units × 100 (= p/kWh).
-    bills["_unit_rate"] = (
-        bills["Period Charge (£)"].astype(float) / bills["Units (kWh)"].astype(float) * 100
-    )
-    # Quarter the bill falls into (drives the OFGEM-cap lookup).
-    bills["_quarter"] = bills["_dt"].apply(_period_to_ofgem_quarter)
-    # Drop rows whose quarter isn't in our published cap list —
-    # otherwise the comparison table shows empty blanks.
-    bills = bills[bills["_quarter"].notna()].copy()
-
-    if bills.empty:
-        doc.add_paragraph(
-            "No billing records fall within an OFGEM-published cap window.",
-            style=styles["BodyText"],
-        )
-        doc.add_page_break()
-        return
-
-    ofgem_caps, latest_known_cap = _load_ofgem_caps(auto_carry=True)
-
-    # Average bill unit rate per quarter; compare to OFGEM cap.
-    # Rows are tuples ``(quarter, avg_rate, cap_rate_or_MISSING,
-    # diff_or_MISSING, status_or_UNAVAILABLE_or_CARRIED)`` — the
-    # cap-rate / diff / status positions use sentinels when the
-    # OFGEM cap dict doesn't cover that quarter, so a reviewer can
-    # still see the quarter exists in the data even when we couldn't
-    # benchmark it.  Quarters beyond the hard-coded table fall back
-    # to ``_LATEST_KNOWN`` (carry-forward) where available, mirroring
-    # the PDF logic in ``edf_report.create_ofgem_comparison:1462-1497``.
-    MISSING = "—"
-    UNAVAILABLE = "CAP DATA UNAVAILABLE"
-    CARRIED = "CAP CARRIED FORWARD"
-    cap_rows: list[tuple[str, float | str, float | str, float | str, str]] = []
-    exceed_count = 0
-    unavailable_count = 0
-    carried_count = 0
-    for quarter in sorted(bills["_quarter"].unique()):
-        quarter_bills = bills[bills["_quarter"] == quarter]
-        avg_rate = quarter_bills["_unit_rate"].mean()
-        if pd.isna(avg_rate):
-            # Quarter exists in the data but no computable unit rate
-            # (e.g. zero/zero or all-missing charges in that window).
-            # Show an "N/A" row so the reader knows the quarter was
-            # present instead of silently dropping it from the table.
-            if quarter in ofgem_caps:
-                cap_rate = ofgem_caps[quarter]["unit_rate"]
-            elif latest_known_cap:
-                cap_rate = latest_known_cap["unit_rate"]
-            else:
-                cap_rate = MISSING
-            cap_rows.append((quarter, "N/A", cap_rate, "N/A", "N/A"))
-            continue
-        if quarter not in ofgem_caps:
-            # Quarter beyond hard-coded table — use auto-carry if
-            # available, otherwise mark as unavailable.  Matches
-            # ``edf_report.create_ofgem_comparison:1462-1497``.
-            if latest_known_cap:
-                carried_count += 1
-                cap_rate = latest_known_cap["unit_rate"]
-                diff = avg_rate - cap_rate
-                if diff > 0:
-                    status = f"EXCEEDS CAP ({CARRIED})"
-                    exceed_count += 1
-                elif abs(diff) < 0.01:
-                    status = f"AT CAP ({CARRIED})"
-                else:
-                    status = f"BELOW CAP ({CARRIED})"
-                cap_rows.append((quarter, avg_rate, cap_rate, diff, status))
-            else:
-                unavailable_count += 1
-                cap_rows.append((quarter, avg_rate, MISSING, MISSING, UNAVAILABLE))
-            continue
-        cap_rate = ofgem_caps[quarter]["unit_rate"]
-        diff = avg_rate - cap_rate
-        if diff > 0:
-            status = "EXCEEDS CAP"
-            exceed_count += 1
-        elif abs(diff) < 0.01:
-            status = "AT CAP"
-        else:
-            status = "BELOW CAP"
-        cap_rows.append((quarter, avg_rate, cap_rate, diff, status))
-
-    if not cap_rows:
+    if not comparison.rows:
         doc.add_paragraph(
             "No comparably-dated billing records to compare against the OFGEM cap table.",
             style=styles["BodyText"],
@@ -801,85 +677,46 @@ def create_ofgem_comparison(
         doc.add_page_break()
         return
 
-    # Headline metrics across every bill in the quarter-table.
-    all_rates = bills["_unit_rate"].dropna()
-    overall_avg = all_rates.mean()
-    overall_median = all_rates.median()
+    if comparison.overall_avg is not None and comparison.overall_median is not None:
+        doc.add_paragraph(
+            f"Average unit rate across all records: {fmt_number(comparison.overall_avg, 2)} p/kWh",
+            style=styles["BodyText"],
+        )
+        doc.add_paragraph(
+            f"Median unit rate: {fmt_number(comparison.overall_median, 2)} p/kWh",
+            style=styles["BodyText"],
+        )
 
-    doc.add_paragraph(
-        f"Average unit rate across all records: {fmt_number(overall_avg, 2)} p/kWh",
-        style=styles["BodyText"],
-    )
-    doc.add_paragraph(
-        f"Median unit rate: {fmt_number(overall_median, 2)} p/kWh",
-        style=styles["BodyText"],
-    )
-
-    # Per-quarter comparison table mirrors the PDF output.
-    table = doc.add_table(rows=len(cap_rows) + 2, cols=5)
+    MISSING = "—"
+    table = doc.add_table(rows=len(comparison.rows) + 2, cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     headers = ["Period", "Bill Unit Rate (p/kWh)", "OFGEM Cap (p/kWh)", "Difference", "Status"]
     for j, h in enumerate(headers):
         table.rows[0].cells[j].text = h
-    for i, row in enumerate(cap_rows, 1):
-        quarter, avg_rate, cap_rate, diff, status = row
-        table.rows[i].cells[0].text = str(quarter)
-        # ``avg_rate`` may be the "N/A" sentinel for NaN-rate quarters.
-        table.rows[i].cells[1].text = (
-            fmt_number(avg_rate, 2) if isinstance(avg_rate, float) else str(avg_rate)
-        )
-        # ``cap_rate`` and ``diff`` may be ``MISSING`` sentinels when a
-        # quarter landed outside the published OFGEM cap window.
+    for i, row in enumerate(comparison.rows, 1):
+        table.rows[i].cells[0].text = row.quarter
+        table.rows[i].cells[1].text = fmt_number(row.bill_rate, 2)
         table.rows[i].cells[2].text = (
-            fmt_number(cap_rate, 2) if isinstance(cap_rate, float) else str(cap_rate)
+            fmt_number(row.cap_rate, 2) if row.cap_rate is not None else MISSING
         )
         table.rows[i].cells[3].text = (
-            fmt_number(diff, 2)
-            if isinstance(diff, float) and diff != 0
-            else ("0.00" if isinstance(diff, float) else str(diff))
+            fmt_number(row.diff, 2)
+            if row.diff is not None and row.diff != 0
+            else ("0.00" if row.diff is not None else MISSING)
         )
-        table.rows[i].cells[4].text = status
-    # Summary row at the bottom.
-    summary_idx = len(cap_rows) + 1
+        table.rows[i].cells[4].text = row.status
+    summary_idx = len(comparison.rows) + 1
     table.rows[summary_idx].cells[0].text = "OVERALL"
     table.rows[summary_idx].cells[1].text = "—"
     table.rows[summary_idx].cells[2].text = "—"
-    if exceed_count > 0:
-        table.rows[summary_idx].cells[3].text = f"{exceed_count} periods exceed cap"
-        table.rows[summary_idx].cells[4].text = "REVIEW REQUIRED"
-    elif unavailable_count > 0:
-        # Quarter(s) presented but benchmark missing — the row is in
-        # the table because we *want* the reviewer to see it, but the
-        # overall verdict can't be safely "COMPLIANT" or "REVIEW
-        # REQUIRED" without an OFGEM comparison. Surface that.
-        table.rows[summary_idx].cells[3].text = f"{unavailable_count} period(s) not benchmarked"
-        table.rows[summary_idx].cells[4].text = "INCOMPLETE"
-    elif carried_count > 0:
-        # All matched but some were carried forward — mirrors
-        # ``edf_report.create_ofgem_comparison:1526-1529``.  An
-        # honest "compliant with cap data that was projected forward
-        # from the last published quarter" verdict rather than the
-        # silent "INCOMPLETE" label the pre-fix DOCX emitted.
-        table.rows[summary_idx].cells[
-            3
-        ].text = f"{carried_count} period(s) used carried-forward cap"
-        table.rows[summary_idx].cells[4].text = "COMPLIANT (CARRIED)"
-    else:
-        table.rows[summary_idx].cells[3].text = "No exceedances"
-        table.rows[summary_idx].cells[4].text = "COMPLIANT"
+    table.rows[summary_idx].cells[3].text = comparison.overall_diff
+    table.rows[summary_idx].cells[4].text = comparison.overall_verdict
     _format_table(table, header_color="#10367A", font_size=9)
 
     doc.add_paragraph("")
 
-    # OFGEM caps reference table — built dynamically from the shared
-    # _load_ofgem_caps() data (edf_report.py) so the DOCX and PDF
-    # generators always show the same values.  The old code hard-coded
-    # a 7-row table that diverged from the PDF (e.g. "34.0" here vs
-    # the correct 28.34 for Oct–Dec 2022).
-    # ``ofgem_caps`` holds only real quarters (the carry-forward cap is
-    # a separate return value), so this filter just picks 2022+ quarters.
+    ofgem_caps, _ = load_ofgem_caps(auto_carry=True)
     recent_caps = {k: v for k, v in ofgem_caps.items() if k.startswith("20") and int(k[:4]) >= 2022}
-    # Human-readable quarter labels, e.g. "2022-Q4" → "Oct 2022 – Dec 2022"
     _q_start = {1: "Jan", 2: "Apr", 3: "Jul", 4: "Oct"}
     _q_end = {1: "Mar", 2: "Jun", 3: "Sep", 4: "Dec"}
     ofgem_rows = [("Period", "Electricity Cap (p/kWh)", "Source")]
