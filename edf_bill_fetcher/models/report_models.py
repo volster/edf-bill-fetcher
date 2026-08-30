@@ -520,3 +520,19 @@ def compute_tariff_analysis(df: pd.DataFrame) -> TariffAnalysis:
     tariff_changes = int(changes.max()) if not changes.empty else 0
 
     return TariffAnalysis(stats, num_tariffs, tariff_changes)
+
+
+@dataclass
+class DisputeAnalysis:
+    """Dispute flags + severity counts shared by the PDF/DOCX/HTML reporters."""
+
+    flags: list[tuple[str, str | float | None, float | None, str, str]]
+    counts: dict[str, int]
+
+
+def compute_dispute_analysis(dfc: pd.DataFrame, mean_daily: float = 0.0) -> DisputeAnalysis:
+    """Typed wrapper over the canonical dispute-flag detector."""
+    from edf_bill_fetcher.processors.analysis import compute_dispute_flags
+
+    flags, counts = compute_dispute_flags(dfc, mean_daily)
+    return DisputeAnalysis(flags=flags, counts=counts)

@@ -499,3 +499,26 @@ def test_tariff_stats_and_changes() -> None:
     assert std["min_unit_rate"] == 21.0
     assert std["max_unit_rate"] == 23.0
     assert std["avg_charge"] == pytest.approx((101.0 + 102.0 + 103.0) / 3)
+
+
+# --- DisputeAnalysis (Arch #3 Task 6) ---------------------------------------------
+
+
+def test_dispute_analysis_wraps_compute_dispute_flags() -> None:
+    from edf_bill_fetcher.models.report_models import DisputeAnalysis, compute_dispute_analysis
+    from edf_bill_fetcher.processors.analysis import compute_dispute_flags
+
+    df = pd.DataFrame(
+        [
+            {"Date": "01/01/2024", "Amount (£)": 100.0, "_dt": pd.Timestamp("2024-01-01")},
+            {"Date": "15/02/2024", "Amount (£)": 500.0, "_dt": pd.Timestamp("2024-02-15")},
+        ]
+    )
+
+    result = compute_dispute_analysis(df)
+    flags, counts = compute_dispute_flags(df)
+
+    assert isinstance(result, DisputeAnalysis)
+    assert result.flags == flags
+    assert result.counts == counts
+    assert any(f[0] == "LARGE JUMP" for f in result.flags)
