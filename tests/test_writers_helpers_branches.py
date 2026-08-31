@@ -283,6 +283,8 @@ def test_holt_winters_forecast_pair_short_series_no_seasonal() -> None:
 
 @pytest.mark.skipif(not h.HAS_STATSMODELS, reason="statsmodels not installed")
 def test_holt_winters_forecast_pair_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    import edf_bill_fetcher.processors.forecasting as fp
+
     class _BoomModel:
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
@@ -290,8 +292,8 @@ def test_holt_winters_forecast_pair_exception(monkeypatch: pytest.MonkeyPatch) -
         def fit(self, **kwargs: object) -> object:
             raise RuntimeError("fit failed")
 
-    monkeypatch.setattr(h, "ExponentialSmoothing", _BoomModel)
-    fitted, forecast = h._holt_winters_forecast_pair(pd.Series([1.0, 2.0, 3.0, 4.0, 5.0]))
+    monkeypatch.setattr(fp, "ExponentialSmoothing", _BoomModel)
+    fitted, forecast = fp._holt_winters_forecast_pair(pd.Series([1.0, 2.0, 3.0, 4.0, 5.0]))
     assert fitted is None
     assert forecast is None
 

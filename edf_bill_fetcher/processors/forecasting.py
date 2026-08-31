@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 
 import numpy as np
+import pandas as pd
 
 HAS_STATSMODELS = importlib.util.find_spec("statsmodels.tsa.holtwinters") is not None
 
@@ -27,11 +28,49 @@ from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,I001
 from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,I001
     compute_rolling_stats as _compute_rolling_stats,
 )
-from edf_bill_fetcher.writers._helpers import (  # noqa: E402,I001
-    _compute_volatility,
-    _iqr_anomalies,
-    _zscore_anomalies,
-)
+
+
+def _sanitised_returns(series: pd.Series) -> pd.Series:
+    """``pct_change`` returns with non-finite values dropped.
+
+    A zero amount makes ``pct_change`` divide by zero and yield ``inf``;
+    a full series of such returns poisons downstream ``std()`` calls. Drop
+    them so volatility/hist-vol are always finite.
+    """
+    returns = series.pct_change()
+    return returns[np.isfinite(returns)]
+
+
+def _compute_volatility(series, window=6):
+    """Compute rolling volatility (std of returns)."""
+    returns = series.pct_change()
+    return returns.rolling(window=window, min_periods=1).std()
+
+
+def _zscore_anomalies(series, threshold=2.5):
+    """Detect anomalies using z-score method."""
+    if len(series) < 3:
+        return pd.Series(False, index=series.index)
+    mean = series.mean()
+    std = series.std()
+    if std == 0:
+        return pd.Series(False, index=series.index)
+    z_scores = np.abs((series - mean) / std)
+    return z_scores > threshold
+
+
+def _iqr_anomalies(series, multiplier=1.5):
+    """Detect anomalies using the IQR method."""
+    if len(series) < 4:
+        return pd.Series(False, index=series.index)
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    if iqr == 0:
+        return pd.Series(False, index=series.index)
+    lower = q1 - multiplier * iqr
+    upper = q3 + multiplier * iqr
+    return (series < lower) | (series > upper)
 
 
 def _linear_forecast_pair(series, steps=6):
@@ -136,6 +175,7 @@ def _holt_winters_forecast(series, steps=6, seasonal_periods=None):
 
 
 __all__ = [
+    "_sanitised_returns",
     "_compute_volatility",
     "_zscore_anomalies",
     "_iqr_anomalies",
