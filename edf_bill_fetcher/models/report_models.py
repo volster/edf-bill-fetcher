@@ -192,7 +192,7 @@ def compute_data_quality_report(df: pd.DataFrame) -> DataQualityReport:
 
 @dataclass
 class StatisticalAnalysis:
-    """Typed descriptive + rolling statistics shared by the reporters."""
+    """Typed descriptive + rolling + anomaly statistics shared by all surfaces."""
 
     count: int
     mean: float
@@ -205,49 +205,97 @@ class StatisticalAnalysis:
     rolling: dict[str, float]
     shapiro_stat: float | None
     shapiro_p: float | None
+    skewness: float
+    kurtosis: float
+    rolling_median: float
+    ema: float
+    momentum: float
+    volatility: float
+    jb_stat: float | None
+    jb_p: float | None
+    z_count: int
+    iqr_count: int
+    z_dates: list[str]
+    iqr_dates: list[str]
 
 
 def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
-    """Compute descriptive + rolling statistics from the amount column."""
+    """Compute descriptive + rolling + anomaly statistics from the amount column."""
+    from edf_bill_fetcher.helpers.date_utils import compute_ema, compute_momentum
+    from edf_bill_fetcher.processors.forecasting import (
+        _iqr_anomalies,
+        _sanitised_returns,
+        _zscore_anomalies,
+    )
+
     work = df.copy()
     if "Date" in work.columns:
         work["_dt"] = work["Date"].apply(parse_to_sort_date)
-        work = work.sort_values("_dt")
-    amounts = pd.to_numeric(work["Amount (£)"], errors="coerce").dropna()
-    n = len(amounts)
-    if n == 0:
-        return StatisticalAnalysis(
-            count=0,
-            mean=0.0,
-            median=0.0,
-            std=0.0,
-            minimum=0.0,
-            maximum=0.0,
-            range=0.0,
-            cv=None,
-            rolling={"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0},
-            shapiro_stat=None,
-            shapiro_p=None,
-        )
+        work = work.sort_values("_dt").reset_index(drop=True)
+    raw = pd.to_numeric(work["Amount (£)"], errors="coerce").astype(float)
+    series = pd.Series(raw.values, index=pd.to_datetime(work["Date"], dayfirst=True, errors="coerce"))
+    n = int(raw.notna().sum())
 
-    amounts_series = amounts.astype(float)
+    empty = StatisticalAnalysis(
+        count=0,
+        mean=0.0,
+        median=0.0,
+        std=0.0,
+        minimum=0.0,
+        maximum=0.0,
+        range=0.0,
+        cv=None,
+        rolling={"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0},
+        shapiro_stat=None,
+        shapiro_p=None,
+        skewness=0.0,
+        kurtosis=0.0,
+        rolling_median=0.0,
+        ema=0.0,
+        momentum=0.0,
+        volatility=0.0,
+        jb_stat=None,
+        jb_p=None,
+        z_count=0,
+        iqr_count=0,
+        z_dates=[],
+        iqr_dates=[],
+    )
+    if n == 0:
+        return empty
+
+    amounts_series = raw.dropna().astype(float)
     mean = float(amounts_series.mean())
     median = float(amounts_series.median())
     std = float(amounts_series.std())
     minimum = float(amounts_series.min())
     maximum = float(amounts_series.max())
-    cv = std / mean if mean and mean > 0 else None
+    skewness = float(amounts_series.skew())
+    kurtosis = float(amounts_series.kurtosis())
+    cv = std / mean * 100 if mean > 0 else 0.0
 
-    rolling = amounts_series.rolling(6, min_periods=1)
-    roll_mean = float(rolling.mean().iloc[-1])
-    roll_std = float(rolling.std().iloc[-1])
-    roll_min = float(rolling.min().iloc[-1])
-    roll_max = float(rolling.max().iloc[-1])
+    roll = raw.rolling(6, min_periods=1)
+    roll_std = float(roll.std().iloc[-1])
     if roll_std != roll_std:  # NaN guard, mirroring the PDF renderer
         roll_std = 0.0
+    rolling = {
+        "mean": float(roll.mean().iloc[-1]),
+        "std": roll_std,
+        "min": float(roll.min().iloc[-1]),
+        "max": float(roll.max().iloc[-1]),
+    }
+    rolling_median = float(roll.median().iloc[-1])
+
+    ema = float(compute_ema(amounts_series, span=6).iloc[-1])
+    momentum = float(compute_momentum(amounts_series, period=3).iloc[-1]) if n >= 4 else 0.0
+
+    returns = _sanitised_returns(series)
+    volatility = float(returns.rolling(6, min_periods=1).std().iloc[-1]) if len(returns) >= 1 else 0.0
 
     shapiro_stat: float | None = None
     shapiro_p: float | None = None
+    jb_stat: float | None = None
+    jb_p: float | None = None
     if n >= 3:
         try:
             from scipy import stats as sp_stats
@@ -255,8 +303,14 @@ def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
             s_stat, s_p = sp_stats.shapiro(amounts_series)
             shapiro_stat = float(s_stat)
             shapiro_p = float(s_p)
+            jb_s, jb_p_ = sp_stats.jarque_bera(amounts_series)
+            jb_stat = float(jb_s)
+            jb_p = float(jb_p_)
         except ImportError:
             pass
+
+    z_mask = _zscore_anomalies(series, threshold=2.5)
+    iqr_mask = _iqr_anomalies(series, multiplier=1.5)
 
     return StatisticalAnalysis(
         count=n,
@@ -267,9 +321,27 @@ def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
         maximum=maximum,
         range=maximum - minimum,
         cv=cv,
-        rolling={"mean": roll_mean, "std": roll_std, "min": roll_min, "max": roll_max},
+        rolling=rolling,
         shapiro_stat=shapiro_stat,
         shapiro_p=shapiro_p,
+        skewness=skewness,
+        kurtosis=kurtosis,
+        rolling_median=rolling_median,
+        ema=ema,
+        momentum=momentum,
+        volatility=volatility,
+        jb_stat=jb_stat,
+        jb_p=jb_p,
+        z_count=int(z_mask.sum()),
+        iqr_count=int(iqr_mask.sum()),
+        z_dates=[
+            f"{d.strftime('%d/%m/%Y') if hasattr(d, 'strftime') else d} ({v:,.2f})"
+            for d, v in series[z_mask].items()
+        ],
+        iqr_dates=[
+            f"{d.strftime('%d/%m/%Y') if hasattr(d, 'strftime') else d} ({v:,.2f})"
+            for d, v in series[iqr_mask].items()
+        ],
     )
 
 

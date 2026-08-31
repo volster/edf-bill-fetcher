@@ -324,6 +324,39 @@ def test_statistical_rolling_matches_pandas() -> None:
     assert report.rolling["mean"] == series.rolling(6, min_periods=1).mean().iloc[-1]
 
 
+def test_statistical_extended_fields() -> None:
+    from edf_bill_fetcher.models.report_models import compute_statistical_analysis
+
+    report = compute_statistical_analysis(_amount_frame(100.0, 200.0, 300.0, 400.0))
+
+    assert isinstance(report.skewness, float)
+    assert isinstance(report.kurtosis, float)
+    assert isinstance(report.rolling_median, float)
+    assert isinstance(report.ema, float)
+    assert report.momentum == 300.0  # 400 - 100 (3-period diff)
+    assert isinstance(report.volatility, float)
+    assert report.z_count == 0
+    assert report.iqr_count == 0
+
+
+def test_statistical_cv_is_percentage() -> None:
+    from edf_bill_fetcher.models.report_models import compute_statistical_analysis
+
+    # mean=250, std~129 -> cv as a percentage is ~51.6 (not the 0.52 ratio).
+    report = compute_statistical_analysis(_amount_frame(100.0, 200.0, 300.0, 400.0))
+    assert report.cv is not None
+    assert report.cv > 1.0
+
+
+def test_statistical_volatility_finite_on_zero_amount() -> None:
+    import math
+
+    from edf_bill_fetcher.models.report_models import compute_statistical_analysis
+
+    report = compute_statistical_analysis(_amount_frame(100.0, 0.0, 150.0, 120.0, 200.0, 180.0))
+    assert math.isfinite(report.volatility)
+
+
 # --- ForecastResult (Arch #3 Task 3) -------------------------------------------
 
 
