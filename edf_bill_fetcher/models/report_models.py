@@ -292,7 +292,7 @@ def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
 
     returns = _sanitised_returns(series)
     volatility = (
-        float(returns.rolling(6, min_periods=1).std().iloc[-1]) if len(returns) >= 1 else 0.0
+        float(returns.rolling(6, min_periods=1).std().iloc[-1]) if len(returns) >= 2 else 0.0
     )
 
     shapiro_stat: float | None = None
@@ -387,7 +387,10 @@ def compute_forecast(df: pd.DataFrame) -> ForecastResult:
     series = pd.Series(
         raw.values, index=pd.to_datetime(work["Date"], dayfirst=True, errors="coerce")
     )
-    n = len(series)
+    # ``n`` is the usable (non-NaN) amount count, matching the report's
+    # pre-extraction dropna() behaviour.  The ``series`` itself keeps NaN gaps
+    # so back-painted fitted values stay row-aligned with the sheet.
+    n = int(raw.notna().sum())
 
     def _empty() -> ForecastResult:
         return ForecastResult(
@@ -420,11 +423,14 @@ def compute_forecast(df: pd.DataFrame) -> ForecastResult:
     returns = _sanitised_returns(series)
     hist_vol = float(returns.std()) if len(returns) >= 2 else 0.05
 
-    model_info = [
-        "Linear Trend — simple linear regression on time index",
-        "Holt-Winters — exponential smoothing with trend + seasonality (statsmodels)",
-        "EMA — extends last Exponential Moving Average (span=6)",
-    ]
+    model_info = ["Linear Trend — simple linear regression on time index"]
+    if hw_fc is not None:
+        model_info.append(
+            "Holt-Winters — exponential smoothing with trend + seasonality (statsmodels)"
+        )
+    else:
+        model_info.append("Holt-Winters — not available (need ≥4 usable points + statsmodels)")
+    model_info.append("EMA — extends last Exponential Moving Average (span=6)")
 
     mae = rmse = mape = None
     if n >= 7:

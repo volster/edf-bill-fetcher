@@ -269,3 +269,22 @@ class TestForecastStatisticalSurfaceParity:
         assert first_lin is not None
         assert fc.linear_fitted is not None
         assert abs(first_lin - fc.linear_fitted[0]) < 10.0
+
+    def test_forecast_report_renders_model_forward_values(self) -> None:
+        from edf_bill_fetcher.helpers.formatting import fmt_money
+        from edf_bill_fetcher.io.reporters.docx_report import (
+            _get_or_create_styles,
+            create_forecast_section,
+        )
+        from edf_bill_fetcher.models.report_models import compute_forecast
+
+        df = _synthetic_records()
+        fc = compute_forecast(df)
+
+        doc = __import__("docx").Document()
+        styles = _get_or_create_styles(doc)
+        create_forecast_section(doc, styles, df)
+
+        rendered = " ".join(cell.text for cell in doc.tables[0].rows[1].cells)
+        assert fc.linear_forecast
+        assert fmt_money(fc.linear_forecast[0]) in rendered
