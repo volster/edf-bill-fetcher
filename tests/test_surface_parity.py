@@ -228,3 +228,44 @@ class TestDataQualitySurfaceParity:
 
         assert model.total_records == len(df)
         assert 0.0 <= model.date_parse_rate <= 1.0
+
+
+class TestForecastStatisticalSurfaceParity:
+    """Excel statistical/forecast cells must equal the shared model values."""
+
+    def test_statistical_volatility_matches_model(self) -> None:
+        import openpyxl
+
+        from edf_bill_fetcher.io.writers.statistical import write_statistical_analysis_sheet
+
+        df = _synthetic_records()
+        model = compute_statistical_analysis(df)
+
+        wb = openpyxl.Workbook()
+        write_statistical_analysis_sheet(wb.active, df, {})
+        ws = wb.active
+
+        label = "6-Period Volatility (σ of returns)"
+        for r in range(1, ws.max_row + 1):
+            if ws.cell(row=r, column=1).value == label:
+                assert abs(ws.cell(row=r, column=2).value - model.volatility) < 1e-6
+                return
+        raise AssertionError("volatility row not found")
+
+    def test_forecast_linear_fitted_matches_model(self) -> None:
+        import openpyxl
+
+        from edf_bill_fetcher.io.writers.forecast import write_forecast_sheet
+        from edf_bill_fetcher.models.report_models import compute_forecast
+
+        df = _synthetic_records()
+        fc = compute_forecast(df)
+
+        wb = openpyxl.Workbook()
+        write_forecast_sheet(wb.active, df)
+        ws = wb.active
+
+        first_lin = ws.cell(row=3, column=3).value
+        assert first_lin is not None
+        assert fc.linear_fitted is not None
+        assert abs(first_lin - fc.linear_fitted[0]) < 10.0
