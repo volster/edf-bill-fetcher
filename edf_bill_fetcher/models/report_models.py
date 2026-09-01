@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -233,7 +232,9 @@ def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
         work["_dt"] = work["Date"].apply(parse_to_sort_date)
         work = work.sort_values("_dt").reset_index(drop=True)
     raw = pd.to_numeric(work["Amount (£)"], errors="coerce").astype(float)
-    series = pd.Series(raw.values, index=pd.to_datetime(work["Date"], dayfirst=True, errors="coerce"))
+    series = pd.Series(
+        raw.values, index=pd.to_datetime(work["Date"], dayfirst=True, errors="coerce")
+    )
     n = int(raw.notna().sum())
 
     empty = StatisticalAnalysis(
@@ -290,7 +291,9 @@ def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
     momentum = float(compute_momentum(amounts_series, period=3).iloc[-1]) if n >= 4 else 0.0
 
     returns = _sanitised_returns(series)
-    volatility = float(returns.rolling(6, min_periods=1).std().iloc[-1]) if len(returns) >= 1 else 0.0
+    volatility = (
+        float(returns.rolling(6, min_periods=1).std().iloc[-1]) if len(returns) >= 1 else 0.0
+    )
 
     shapiro_stat: float | None = None
     shapiro_p: float | None = None
@@ -347,78 +350,110 @@ def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
 
 @dataclass
 class ForecastResult:
-    """Typed multi-method forecast shared by the PDF/DOCX reporters."""
+    """Typed multi-method forecast shared by the Excel writer and the reports."""
 
     n: int
     linear_forecast: list[float]
     ema_forecast: list[float]
     hw_forecast: list[float] | None
     model_info: list[str]
+    linear_fitted: list[float] | None
+    hw_fitted: list[float] | None
+    ema_series: list[float]
+    hist_vol: float
+    mae: float | None
+    rmse: float | None
+    mape: float | None
 
 
 def compute_forecast(df: pd.DataFrame) -> ForecastResult:
-    """Compute the linear-regression, EMA, and Holt-Winters projections."""
+    """Compute linear / EMA / Holt-Winters projections using the canonical helpers.
+
+    This is the same math the ``Forecast & Projection`` sheet runs, so the
+    report and the workbook cannot drift apart.
+    """
+    from edf_bill_fetcher.helpers.date_utils import compute_ema
+    from edf_bill_fetcher.processors.forecasting import (
+        _holt_winters_forecast_pair,
+        _linear_forecast_pair,
+        _sanitised_returns,
+    )
+
     work = df.copy()
     if "Date" in work.columns:
         work["_dt"] = work["Date"].apply(parse_to_sort_date)
         work = work.sort_values("_dt").reset_index(drop=True)
-    amounts = pd.to_numeric(work["Amount (£)"], errors="coerce").dropna().astype(float)
-    n = len(amounts)
-    if n < 3:
+    raw = pd.to_numeric(work["Amount (£)"], errors="coerce").astype(float)
+    series = pd.Series(
+        raw.values, index=pd.to_datetime(work["Date"], dayfirst=True, errors="coerce")
+    )
+    n = len(series)
+
+    def _empty() -> ForecastResult:
         return ForecastResult(
-            n=n, linear_forecast=[], ema_forecast=[], hw_forecast=None, model_info=[]
+            n=n,
+            linear_forecast=[],
+            ema_forecast=[],
+            hw_forecast=None,
+            model_info=[],
+            linear_fitted=None,
+            hw_fitted=None,
+            ema_series=[],
+            hist_vol=0.05,
+            mae=None,
+            rmse=None,
+            mape=None,
         )
 
-    has_scipy = importlib.util.find_spec("scipy") is not None
-    model_info: list[str] = []
-    if has_scipy:
-        from scipy import stats as sp_stats
+    if n < 3:
+        return _empty()
 
-        x = np.arange(n)
-        slope, intercept, r_value, p_value, _std_err = sp_stats.linregress(x, amounts)
-        linear_forecast = [float(intercept + slope * (n + i)) for i in range(1, 7)]
-        model_info.append(
-            f"Linear Regression: slope={slope:.2f}, intercept={intercept:.2f}, "
-            f"R²={r_value**2:.4f}, p={p_value:.4f}"
-        )
-    else:
-        linear_forecast = [float(amounts.mean())] * 6
-        model_info.append("Linear Regression: not available (install scipy) - using mean")
+    forecast_steps = 6
 
-    alpha = 0.3
-    ema = float(amounts.iloc[0])
-    for val in amounts.iloc[1:]:
-        ema = alpha * float(val) + (1 - alpha) * ema
-    ema_forecast = [ema] * 6
-    model_info.append(f"EMA (α={alpha}): current level={ema:.2f}")
+    linear_fitted_arr, linear_fc = _linear_forecast_pair(series, forecast_steps)
+    hw_fitted_arr, hw_fc = _holt_winters_forecast_pair(series, forecast_steps)
 
-    try:
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    ema_series_pd = compute_ema(series, span=6)
+    ema_last = float(ema_series_pd.iloc[-1])
+    ema_forecast = [ema_last] * forecast_steps
 
-        has_statsmodels = True
-    except ImportError:
-        has_statsmodels = False
+    returns = _sanitised_returns(series)
+    hist_vol = float(returns.std()) if len(returns) >= 2 else 0.05
 
-    hw_forecast: list[float] | None = None
-    if has_statsmodels and n >= 6:
-        try:
-            model = ExponentialSmoothing(amounts, trend="add", seasonal=None)
-            hw_fit = model.fit(smoothing_level=alpha, smoothing_trend=0.1, optimized=True)
-            hw_forecast = [float(v) for v in hw_fit.forecast(6).tolist()]
-        except Exception:
-            hw_forecast = None
+    model_info = [
+        "Linear Trend — simple linear regression on time index",
+        "Holt-Winters — exponential smoothing with trend + seasonality (statsmodels)",
+        "EMA — extends last Exponential Moving Average (span=6)",
+    ]
 
-    if hw_forecast:
-        model_info.append("Holt-Winters: additive trend, no seasonality (fitted via statsmodels)")
-    else:
-        model_info.append("Holt-Winters: not available (install statsmodels)")
+    mae = rmse = mape = None
+    if n >= 7:
+        train = pd.Series(series.values[:-6])
+        actual = series.values[-6:]
+        lin_hist = _linear_forecast_pair(train, 6)[1]
+        if lin_hist is not None:
+            nonzero = actual != 0
+            denom = actual[nonzero]
+            mae = float(np.mean(np.abs(lin_hist - actual)))
+            rmse = float(np.sqrt(np.mean((lin_hist - actual) ** 2)))
+            if len(denom) > 0:
+                mape = float(np.mean(np.abs((lin_hist[nonzero] - denom) / denom)) * 100)
 
     return ForecastResult(
         n=n,
-        linear_forecast=linear_forecast,
+        linear_forecast=[float(v) for v in linear_fc] if linear_fc is not None else [],
         ema_forecast=ema_forecast,
-        hw_forecast=hw_forecast,
+        hw_forecast=[float(v) for v in hw_fc] if hw_fc is not None else None,
         model_info=model_info,
+        linear_fitted=[float(v) for v in linear_fitted_arr]
+        if linear_fitted_arr is not None
+        else None,
+        hw_fitted=[float(v) for v in hw_fitted_arr] if hw_fitted_arr is not None else None,
+        ema_series=[float(v) for v in ema_series_pd],
+        hist_vol=hist_vol,
+        mae=mae,
+        rmse=rmse,
+        mape=mape,
     )
 
 

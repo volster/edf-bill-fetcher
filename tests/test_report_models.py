@@ -375,19 +375,43 @@ def test_forecast_insufficient_data() -> None:
     assert result.hw_forecast is None
 
 
-def test_forecast_ema_alpha_03() -> None:
+def test_forecast_ema_uses_span6_ewm() -> None:
+    import pandas as pd
+
     from edf_bill_fetcher.models.report_models import compute_forecast
 
     amounts = [100.0, 200.0, 300.0, 400.0]
     result = compute_forecast(_amount_frame(*amounts))
 
-    # EMA with alpha=0.3, folding left-to-right from the first value.
-    ema = amounts[0]
-    for val in amounts[1:]:
-        ema = 0.3 * val + (1 - 0.3) * ema
+    series = pd.Series(amounts)
+    ema_last = float(series.ewm(span=6, adjust=False).mean().iloc[-1])
 
     assert result.n == 4
-    assert result.ema_forecast == [ema] * 6
+    assert result.ema_forecast == [ema_last] * 6
+    assert len(result.ema_series) == 4
+
+
+def test_forecast_linear_fitted_present() -> None:
+    from edf_bill_fetcher.models.report_models import compute_forecast
+
+    result = compute_forecast(_amount_frame(100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0))
+
+    assert result.n == 7
+    assert result.linear_fitted is not None
+    assert len(result.linear_fitted) == 7
+    assert len(result.linear_forecast) == 6
+
+
+def test_forecast_accuracy_metrics() -> None:
+    from edf_bill_fetcher.models.report_models import compute_forecast
+
+    amounts = [100.0 * i for i in range(1, 11)]
+    result = compute_forecast(_amount_frame(*amounts))
+
+    assert result.n == 10
+    assert result.mae is not None
+    assert result.rmse is not None
+    assert result.mape is not None
 
 
 def test_forecast_linear_shape() -> None:
