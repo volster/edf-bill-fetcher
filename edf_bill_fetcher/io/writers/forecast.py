@@ -122,7 +122,7 @@ def write_forecast_sheet(ws, dfc):
             _money(ws, r, 4, float(hw_val), fill_hex=bg)
         else:
             _text(ws, r, 4, "N/A", fill_hex=bg)
-        ema_at_i = ema_series[i] if not pd.isna(ema_series[i]) else None
+        ema_at_i = ema_series[i] if i < len(ema_series) and not pd.isna(ema_series[i]) else None
         if ema_at_i is not None:
             _money(ws, r, 5, ema_at_i, fill_hex=bg)
         else:
@@ -168,7 +168,10 @@ def write_forecast_sheet(ws, dfc):
             _money(ws, r, 4, float(hw_val), fill_hex=bg)
         else:
             _text(ws, r, 4, "N/A", fill_hex=bg)
-        _money(ws, r, 5, ema_future[i], fill_hex=bg)
+        if i < len(ema_future):
+            _money(ws, r, 5, ema_future[i], fill_hex=bg)
+        else:
+            _text(ws, r, 5, "N/A", fill_hex=bg)
         if lin_val is not None:
             conf = abs(float(lin_val)) * hist_vol * 2
             _money(ws, r, 6, conf, fill_hex=bg)

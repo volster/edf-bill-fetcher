@@ -262,3 +262,27 @@ class TestWriteForecastSheet:
                 f"fitted value should be finite for any historical "
                 f"row that has at least 3 non-NaN data points."
             )
+
+
+def test_forecast_sheet_survives_mostly_nan_amounts() -> None:
+    """A frame with >=3 raw rows but <3 usable amounts must not crash.
+
+    ``compute_forecast`` returns the empty ``ForecastResult``
+    (``ema_series=[]``) when the usable count is under 3, while the
+    sheet's own early-return keys off the raw row count.  The EMA
+    columns must degrade to "N/A" rather than indexing an empty list.
+    """
+    import numpy as np
+    import openpyxl
+
+    from edf_bill_fetcher.io.writers.forecast import write_forecast_sheet
+
+    df = pd.DataFrame(
+        [
+            {"Date": "01/04/2023", "Amount (£)": 100.0},
+            {"Date": "01/05/2023", "Amount (£)": np.nan},
+            {"Date": "01/06/2023", "Amount (£)": 200.0},
+        ]
+    )
+    wb = openpyxl.Workbook()
+    write_forecast_sheet(wb.active, df)  # must not raise
