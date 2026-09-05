@@ -48,7 +48,7 @@ def write_data_quality_sheet(ws, df):
 
     dq: dict[str, _Any] = _data_quality_report(df)
 
-    if not dq:
+    if not dq or dq.get("total_records", 0) == 0:
         _hcell(ws, 1, 1, "No data to analyze", bg=NAVY)
         ws.column_dimensions["A"].width = 40
         return

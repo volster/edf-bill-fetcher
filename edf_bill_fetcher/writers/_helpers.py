@@ -13,20 +13,6 @@ try:
 except ImportError:
     HAS_STATSMODELS = False
 
-from edf_bill_fetcher.helpers.dispute_flags import (
-    BALANCE_REDUCTION_AMOUNT,
-    BILLING_GAP_HIGH_DAYS,
-    BILLING_GAP_MIN_DAYS,
-    ESTIMATED_RUN_MIN,
-    HIGH_DAILY_RATE_HIGH_RATIO,
-    HIGH_DAILY_RATE_RATIO,
-    LARGE_JUMP_HIGH_PCT,
-    LARGE_JUMP_MAX_DAYS,
-    LARGE_JUMP_PCT,
-    RECON_HIGH_PCT,
-    RECON_MIN_TOLERANCE,
-    RECON_PCT_TOLERANCE,
-)
 from edf_bill_fetcher.helpers.excel_utils import build_evidence_index  # noqa: F401
 from edf_bill_fetcher.helpers.formatting import parse_amount
 from edf_bill_fetcher.helpers.theme import EDF_NAVY, EDF_OFFWHITE, EDF_ORANGE  # noqa: F401
@@ -352,165 +338,21 @@ def handle_cluster_unmatched(
     return None
 
 
+# compute_dispute_flags is the canonical dispute-flag detector.  It
+# previously had an independent (divergent) implementation here; that
+# copy has been removed.  This module re-exports the canonical
+# ``processors.analysis.compute_dispute_flags`` so Excel, PDF, DOCX and
+# HTML surfaces can never disagree about flag amounts or severities.
+#
+# The import is LAZY (inside the function body) because
+# ``processors.analysis`` imports ``_disclosed_label`` and
+# ``_reading_type_to_aem`` from THIS module at module scope — a
+# top-level import here would create a circular import.  Deferring the
+# import to call time breaks the cycle while keeping the re-export
+# surface identical (callers can still ``from edf_bill_fetcher.writers
+# import compute_dispute_flags`` or mock.patch the name here).
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
-    """Compute dispute flags from a sorted DataFrame."""
-    flags: list = []
-    n = len(dfc)
-    if n < 2:
-        return flags, {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
+    """Re-export of the canonical detector (lazy import — see comment above)."""
+    from edf_bill_fetcher.processors.analysis import compute_dispute_flags as _canon
 
-    # 1. LARGE JUMP: >25% increase within 90 days
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        try:
-            chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-            pct = chg / float(p["Amount (£)"]) if float(p["Amount (£)"]) > 0 else 0
-            days = (c_["_dt"] - p["_dt"]).days
-            if pct > LARGE_JUMP_PCT and 0 < days <= LARGE_JUMP_MAX_DAYS:
-                flags.append(
-                    (
-                        "LARGE JUMP",
-                        c_["Date"],
-                        c_["Amount (£)"],
-                        f"+£{chg:,.2f} (+{pct * 100:.1f}%) in {days} days (from {p['Date']}: £{p['Amount (£)']:,.2f})",
-                        "HIGH" if pct > LARGE_JUMP_HIGH_PCT else "MEDIUM",
-                    )
-                )
-        except (ValueError, TypeError, KeyError):
-            pass
-
-    # 2. BILLING GAP: >60 days without a bill
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        try:
-            days = (c_["_dt"] - p["_dt"]).days
-            if days > BILLING_GAP_MIN_DAYS:
-                flags.append(
-                    (
-                        "BILLING GAP",
-                        c_["Date"],
-                        c_["Amount (£)"],
-                        f"{days} days without a bill (previous: {p['Date']}). Balance accumulated unchecked.",
-                        "HIGH" if days > BILLING_GAP_HIGH_DAYS else "MEDIUM",
-                    )
-                )
-        except (ValueError, TypeError, KeyError):
-            pass
-
-    # 3. ESTIMATED RUN: 3+ consecutive estimated readings
-    if "Reading" in dfc.columns:
-        run = 0
-        run_start = None
-        for i, rv in enumerate(dfc["Reading"].tolist()):
-            if str(rv).lower() in ("estimated", "est."):
-                run += 1
-                if run == 1:
-                    run_start = dfc.iloc[i]["Date"]
-            else:
-                if run >= ESTIMATED_RUN_MIN:
-                    flags.append(
-                        (
-                            "ESTIMATED RUN",
-                            run_start,
-                            None,
-                            f"{run} consecutive estimated readings from {run_start}.",
-                            "HIGH",
-                        )
-                    )
-                run = 0
-                run_start = None
-        if run >= ESTIMATED_RUN_MIN:
-            flags.append(
-                (
-                    "ESTIMATED RUN",
-                    run_start,
-                    None,
-                    f"{run} consecutive estimated readings from {run_start} (ongoing).",
-                    "HIGH",
-                )
-            )
-
-    # 4. HIGH DAILY RATE: daily rate significantly above average
-    if mean_daily > 0:
-        for i in range(1, n):
-            p = dfc.iloc[i - 1]
-            c_ = dfc.iloc[i]
-            try:
-                days = (c_["_dt"] - p["_dt"]).days
-                charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-                if days > 0 and charge > 0:
-                    daily = charge / days
-                    ratio = daily / mean_daily
-                    if ratio > HIGH_DAILY_RATE_RATIO:
-                        flags.append(
-                            (
-                                "HIGH DAILY RATE",
-                                c_["Date"],
-                                c_["Amount (£)"],
-                                f"£{daily:,.2f}/day ({ratio:.1f}× avg £{mean_daily:,.2f}/day) over {days} days",
-                                "HIGH" if ratio > HIGH_DAILY_RATE_HIGH_RATIO else "MEDIUM",
-                            )
-                        )
-            except (ValueError, TypeError, KeyError, ZeroDivisionError):
-                pass
-
-    # 5. BALANCE REDUCTION: payment/credit > £500
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        try:
-            chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-            if chg < -BALANCE_REDUCTION_AMOUNT:
-                flags.append(
-                    (
-                        "BALANCE REDUCTION",
-                        c_["Date"],
-                        c_["Amount (£)"],
-                        f"Balance fell £{abs(chg):,.2f} (from £{p['Amount (£)']:,.2f} to £{c_['Amount (£)']:,.2f}).",
-                        "INFO",
-                    )
-                )
-        except (ValueError, TypeError, KeyError):
-            pass
-
-    # 6. RECONCILIATION MISMATCH: balance delta vs period charge
-    if "Period Charge (£)" in dfc.columns:
-        for i in range(1, n):
-            p = dfc.iloc[i - 1]
-            c_ = dfc.iloc[i]
-            try:
-                if str(c_.get("Entry Type", "")) == "New Bill" and str(p.get("Entry Type", "")) in (
-                    "New Bill",
-                    "Ongoing Balance",
-                ):
-                    pc = c_.get("Period Charge (£)")
-                    try:
-                        pc_val = float(pc)
-                    except (ValueError, TypeError):
-                        continue
-                    balance_delta = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-                    diff = abs(balance_delta - pc_val)
-                    threshold = (
-                        max(pc_val * RECON_PCT_TOLERANCE, RECON_MIN_TOLERANCE)
-                        if pc_val > 0
-                        else RECON_MIN_TOLERANCE
-                    )
-                    if diff > threshold:
-                        flags.append(
-                            (
-                                "RECONCILIATION MISMATCH",
-                                c_["Date"],
-                                c_["Amount (£)"],
-                                f"Balance delta £{balance_delta:,.2f} vs period charge £{pc_val:,.2f} "
-                                f"(difference: £{diff:,.2f}). Possible payment, credit, or billing error "
-                                f"between {p['Date']} and {c_['Date']}.",
-                                "HIGH" if diff > pc_val * RECON_HIGH_PCT else "MEDIUM",
-                            )
-                        )
-            except (ValueError, TypeError, KeyError):
-                pass
-
-    counts = {s: sum(1 for f in flags if f[4] == s) for s in ("HIGH", "MEDIUM", "INFO")}
-    return flags, counts
+    return _canon(dfc, mean_daily)

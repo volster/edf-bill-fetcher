@@ -345,3 +345,37 @@ class TestFmtDateParity:
             "can drift apart at runtime, which is exactly what Phase 1.2 "
             "was meant to prevent."
         )
+
+
+class TestAllSectionsFallbackCoversRegistry:
+    """Pin the `compensation` drift fix: each reporter's ``all_sections``
+    fallback set must cover every key in ``REPORT_SECTIONS`` (plus the
+    ``cover``/``toc`` framing keys).  A hand-listed ``all_sections`` literal
+    that omits a registry key will fail this test at CI time instead of
+    silently dropping that section for headless/CLI report runs.
+    """
+
+    _MODULES = {
+        "pdf": "edf_bill_fetcher.io.reporters.pdf_report",
+        "docx": "edf_bill_fetcher.io.reporters.docx_report",
+        "html": "edf_bill_fetcher.io.reporters.html_report",
+    }
+
+    @pytest.mark.parametrize("name", ["pdf", "docx", "html"])
+    def test_fallback_set_covers_registry(self, name: str) -> None:
+        src_path = (
+            REPO_ROOT
+            / "edf_bill_fetcher"
+            / "io"
+            / "reporters"
+            / f"{self._MODULES[name].rsplit('.', 1)[-1]}.py"
+        )
+        src = src_path.read_text(encoding="utf-8")
+        # Reject a hand-listed ``all_sections`` literal that could silently
+        # omit a registry key (the pre-fix bug).
+        assert 'all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}' in src, (
+            f"{self._MODULES[name]} no longer derives ``all_sections`` from the "
+            "registry — a hand-listed literal can silently omit sections (see the "
+            "compensation-section drift fix).  Keep the registry-derived form: "
+            '`all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}`.'
+        )

@@ -8,10 +8,11 @@ without a lazy attribute-resolution indirection layer.
 """
 
 from edf_bill_fetcher.io.writers.back_billing import write_back_billing_sheet
+from edf_bill_fetcher.io.writers.compensation import write_compensation_sheet
 from edf_bill_fetcher.io.writers.data_quality import write_data_quality_sheet
 from edf_bill_fetcher.io.writers.diff import write_diff_workbook
 from edf_bill_fetcher.io.writers.evidence import write_evidence_sheet, write_summary_sheet
-from edf_bill_fetcher.io.writers.export import export_to_excel, write_reconciliation_sheet
+from edf_bill_fetcher.io.writers.export import export_to_excel
 from edf_bill_fetcher.io.writers.forecast import write_forecast_sheet
 from edf_bill_fetcher.io.writers.meter import (
     write_contract_history_sheet,
@@ -19,6 +20,7 @@ from edf_bill_fetcher.io.writers.meter import (
 )
 from edf_bill_fetcher.io.writers.payment import write_payment_analysis_sheet
 from edf_bill_fetcher.io.writers.rebilling import write_rebilling_sheet
+from edf_bill_fetcher.io.writers.reconciliation import write_reconciliation_sheet
 from edf_bill_fetcher.io.writers.sap import (
     write_sap_back_billing_sheets,
     write_sap_contract_history_sheet,
@@ -39,6 +41,7 @@ except ImportError:
 __all__ = [
     "export_to_excel",
     "write_back_billing_sheet",
+    "write_compensation_sheet",
     "write_contract_history_sheet",
     "write_data_quality_sheet",
     "write_diff_workbook",

@@ -291,9 +291,11 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             # Dup cells read like the rest of the dup sheet
             # (greyed out so they stand out from the kept set).
             c.fill = PatternFill("solid", start_color=DUP_GREY)
-        # Widen the column to fit the longest summary. After the
-        # Tariff insertion, "Duplicate Of" lives at column T (was S).
-        ws.column_dimensions["T"].width = 50
+        # Widen the Duplicate-Of column to fit the longest summary. The
+        # column letter is derived from the header schema (not hard-coded)
+        # so inserting a column earlier never leaves this writing to the
+        # wrong column.
+        ws.column_dimensions[get_column_letter(col_idx_duplicate_of)].width = 50
 
     widths: dict[str, float] = {
         "A": 18,

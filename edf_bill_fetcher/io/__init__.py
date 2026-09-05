@@ -15,8 +15,10 @@ narrowest import path they need.
 from edf_bill_fetcher.io.cli import (
     _safe_pickle_load,
     main,
+    run_cli_diff,
     run_cli_docx_report,
     run_cli_extract,
+    run_cli_html_report,
     run_cli_pdf_report,
 )
 
@@ -24,6 +26,8 @@ __all__ = [
     "run_cli_extract",
     "run_cli_pdf_report",
     "run_cli_docx_report",
+    "run_cli_html_report",
+    "run_cli_diff",
     "main",
     "_safe_pickle_load",
 ]

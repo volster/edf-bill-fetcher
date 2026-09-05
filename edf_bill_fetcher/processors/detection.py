@@ -409,7 +409,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
             continue
         # Legal gate: bill Date must be more than 365 days after Period From.
         # Any consumption day supplied more than 12 months before the bill
-        # Date is unlawful (SLC 21BA per-unit test). If even the EARLIEST
+        # Date is unlawful (SLC 7A per-unit test). If even the EARLIEST
         # consumption (Period From) is within 365 days, the whole period is
         # lawful and we skip.
         gap_from = int((bill_date_dt - pf).days)

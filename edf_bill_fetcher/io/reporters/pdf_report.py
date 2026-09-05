@@ -2394,24 +2394,10 @@ def generate_ombudsman_pdf(
     # builder never existed, so a no-op section was silently dropped
     # by the dispatcher. Keep things honest — only show keys the
     # renderer actually knows how to draw.
-    all_sections = {
-        "cover",
-        "toc",
-        "exec_summary",
-        "key_findings",
-        "evidence_index",
-        "detailed_findings",
-        "timeline",
-        "ofgem",
-        "statistical",
-        "payment",
-        "forecast",
-        "data_quality",
-        "tariff",
-        "appendix_methodology",
-        "appendix_glossary",
-        "appendix_full_evidence",
-    }
+    # Derive the full set from the registry + the framing keys (cover/toc)
+    # so it can never drift out of sync with REPORT_SECTIONS again (the
+    # previous hand-listed set silently omitted "compensation").
+    all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}
     if not enabled_sections:
         enabled_sections = all_sections
 

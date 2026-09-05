@@ -10,10 +10,9 @@ writers layer can import it without a layering violation: the old
 ``_get_package_version`` in ``io/reporters/pdf_report.py`` resolved
 ``Path(__file__).parent / "pyproject.toml"`` — the reporter's own
 directory, which never contains a pyproject.toml — so it silently
-returned the ``"0.1.0"`` fallback for every run.  The bug was
-invisible because the repo root also declared 0.1.0; the moment the
-declared version diverged from the fallback, reports would stamp a
-stale version.
+returned the fallback for every run.  The bug was invisible because the
+repo root also declared that version; the moment the declared version
+diverged from the fallback, reports would stamp a stale version.
 """
 
 from __future__ import annotations
@@ -30,8 +29,9 @@ def get_package_version() -> str:
 
     Walks upward from this module's directory until a
     ``pyproject.toml`` containing a ``version`` line is found, and
-    falls back to ``"0.1.0"`` if none can be read (wheeled installs,
-    sandboxed runners, frozen builds where the manifest is absent).
+    falls back to the module-level ``_DEFAULT_VERSION`` if none can be
+    read (wheeled installs, sandboxed runners, frozen builds where the
+    manifest is absent).
 
     Walking upward (rather than assuming a fixed relative path) keeps
     the lookup correct whether the package is imported from a source

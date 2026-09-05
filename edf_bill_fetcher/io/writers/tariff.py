@@ -68,11 +68,10 @@ def write_tariff_analysis_sheet(ws, dfc):
         x.fill = PatternFill("solid", start_color=ORANGE)
         x.border = CELL_BORDER
 
+    r = 3
     tariff_stats = tariff_info.get("tariff_stats")
-    if tariff_stats is not None:
-        assert isinstance(tariff_stats, pd.DataFrame)
+    if isinstance(tariff_stats, pd.DataFrame):
         if not tariff_stats.empty:
-            r = 3
             for _, row in tariff_stats.iterrows():
                 bg = LGREY if r % 2 == 0 else None
                 _text(ws, r, 1, str(row["Tariff"]), fill_hex=bg)

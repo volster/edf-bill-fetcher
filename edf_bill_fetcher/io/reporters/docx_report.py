@@ -1516,24 +1516,9 @@ def generate_ombudsman_docx(
     # Section selection: only include sections in config["report_sections"]
     enabled_sections = set(config.get("report_sections", []))
     # Backward compatibility: if not specified, enable all
-    all_sections = {
-        "cover",
-        "toc",
-        "exec_summary",
-        "key_findings",
-        "evidence_index",
-        "detailed_findings",
-        "timeline",
-        "ofgem",
-        "statistical",
-        "payment",
-        "forecast",
-        "data_quality",
-        "tariff",
-        "appendix_methodology",
-        "appendix_glossary",
-        "appendix_full_evidence",
-    }
+    # Derive the full set from the registry + framing keys so it can never
+    # drift out of sync with REPORT_SECTIONS (previously omitted "compensation").
+    all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}
     if not enabled_sections:
         enabled_sections = all_sections
 

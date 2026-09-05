@@ -1021,24 +1021,9 @@ def generate_html_report(
 
     # Section selection: explicit argument wins, then config, then all
     # implementable sections (backward compatibility, as in the PDF).
-    all_sections = {
-        "cover",
-        "toc",
-        "exec_summary",
-        "key_findings",
-        "evidence_index",
-        "detailed_findings",
-        "timeline",
-        "ofgem",
-        "statistical",
-        "payment",
-        "forecast",
-        "data_quality",
-        "tariff",
-        "appendix_methodology",
-        "appendix_glossary",
-        "appendix_full_evidence",
-    }
+    # Derive the full set from the registry + framing keys so it can never
+    # drift out of sync with REPORT_SECTIONS (previously omitted "compensation").
+    all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}
     if report_sections is not None:
         enabled_sections = set(report_sections)
     else:

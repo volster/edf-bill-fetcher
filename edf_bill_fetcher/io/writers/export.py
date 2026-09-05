@@ -771,21 +771,8 @@ def export_to_excel(
     # saved workbook geometry stays 19-column even though the
     # writer's row-iteration will see the 20th column briefly —
     # the writer drops the column before saving.
-    if not dup_df.empty and "_matches_kept_idx" in dup_df.columns:
-        # Already present — nothing to do.
-        pass
-    else:
-        # Neither column nor value is preserved.  Don't write
-        # anything — the post-loop pass will skip minting
-        # HYPERLINKs because ``match_positions_series`` is None.
-        pass
-    # No-op reindex guard for clarity; dup_df reindex on col_order
-    # actually *drops* the helper column, which is what we want
-    # for the Excel geometry — but we also need it for the
-    # hyperlink pass.  Best approach: call site reads it BEFORE
-    # reindex and threads it via a separate side cache.
-    # The simplest implementation is to re-attach the column
-    # *after* reindex here:
+    # ``dup_df.reindex(columns=col_order)`` drops the ``_matches_kept_idx``
+    # helper column, so we re-attach it from the pre-reindex view below.
     if not dup_df.empty:
         dup_df_reindexed = dup_df.reindex(columns=col_order)
         # Re-attach from dup_df's pre-reindex view — the column

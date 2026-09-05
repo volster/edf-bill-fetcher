@@ -10,14 +10,6 @@ Submodules:
   and the openpyxl ``Side``/``Border`` instances used across the evidence workbook.
 """
 
-from edf_bill_fetcher.helpers import (
-    date_utils,
-    excel_utils,
-    formatting,
-    pdf_utils,
-    pst_resources,
-    theme,
-)
 from edf_bill_fetcher.helpers.theme import (
     CELL_BORDER,
     DUP_GREY,
@@ -31,6 +23,8 @@ from edf_bill_fetcher.helpers.theme import (
     SAP_BB_MEDIUM_BORDER,
     SAP_BB_SUMMARY_FILL_PAIR,
 )
+
+from . import date_utils, excel_utils, formatting, pdf_utils, pst_resources, theme
 
 __all__ = [
     "CELL_BORDER",

@@ -110,12 +110,7 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         r += 1
         bg = LGREY if r % 2 == 0 else None
         _text(ws, r, 1, label, fill_hex=bg)
-        if fmt == "£":
-            _money(ws, r, 2, value, fill_hex=bg)
-        elif fmt == "%":
-            _num(ws, r, 2, value, fmt="0.0%", fill_hex=bg)
-        else:
-            _num(ws, r, 2, value, fmt=fmt, fill_hex=bg)
+        _num(ws, r, 2, value, fmt=fmt, fill_hex=bg)
         _text(ws, r, 3, note, fill_hex=bg, color=DGREY)
 
     # Rolling statistics
