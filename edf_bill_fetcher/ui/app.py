@@ -1271,6 +1271,7 @@ class App:
         except Exception:
             self._show("error", "Error", f"An error occurred:\n\n{traceback.format_exc()}")
         finally:
+            engine.cleanup()
             self.root.after(0, self._finish)
 
     def _run_auto_report(self, engine, stem, batch_n):

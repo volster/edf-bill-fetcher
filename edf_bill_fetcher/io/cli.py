@@ -322,6 +322,8 @@ def run_cli_extract(args: list[str]) -> None:
         sys.stderr.write(f"ERROR: {e}\n")
         traceback.print_exc()
         sys.exit(1)
+    finally:
+        engine.cleanup()
 
 
 def _diff_amount_text(value: Any) -> str:

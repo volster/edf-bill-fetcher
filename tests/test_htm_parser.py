@@ -226,7 +226,7 @@ class TestHTMCreditBalance:
         r = records[0]
         assert r["Entry Type"] == "Ongoing Balance"
         # Balance carried into the Amount column regardless of debit/credit.
-        assert r["Amount (£)"] == 250.0
+        assert r["Amount (£)"] == -250.0
         assert r["Period Charge (£)"] == 50.0
 
     def test_payment_in_credit_is_parsed(self):
@@ -239,7 +239,7 @@ class TestHTMCreditBalance:
         r = records[0]
         assert r["Entry Type"] == "Payment"
         # Running balance in Amount (£); payment amount in Period Charge (£).
-        assert r["Amount (£)"] == 150.0
+        assert r["Amount (£)"] == -150.0
         assert r["Period Charge (£)"] == 200.0
 
     def test_standalone_balance_in_credit_is_parsed(self):
@@ -253,7 +253,7 @@ class TestHTMCreditBalance:
         records = parse_htm_account_history(text)
         assert len(records) == 1
         r = records[0]
-        assert r["Amount (£)"] == 123.45
+        assert r["Amount (£)"] == -123.45
 
 
 if __name__ == "__main__":

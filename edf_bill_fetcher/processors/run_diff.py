@@ -102,50 +102,6 @@ def _date_sort_key(
     return (0, timestamp, _canonical_key(record, key_fields))
 
 
-def _build_changed(merged: pd.DataFrame, excluded_fields: set[str]) -> list[dict[str, Any]]:
-    """Turn an old×new merge into ``changed`` entries.
-
-    Each entry reports the full old/new rows plus ``changed_fields``
-    (fields outside ``excluded_fields`` that differ) and the aligned
-    ``old_values`` / ``new_values`` lists.  The internal ``_key`` join
-    column is never surfaced as a record field.
-    """
-    bases: list[str] = []
-    for column in merged.columns:
-        if column.endswith("__old"):
-            base = column[: -len("__old")]
-            if base != "_key" and base not in bases:
-                bases.append(base)
-
-    changed: list[dict[str, Any]] = []
-    for _, pair in merged.iterrows():
-        old_row: dict[str, Any] = {}
-        new_row: dict[str, Any] = {}
-        changed_fields: list[str] = []
-        old_values: list[Any] = []
-        new_values: list[Any] = []
-        for base in bases:
-            old_value = _native(pair[f"{base}__old"])
-            new_value = _native(pair[f"{base}__new"])
-            old_row[base] = old_value
-            new_row[base] = new_value
-            if base not in excluded_fields and not _values_equal(old_value, new_value):
-                changed_fields.append(base)
-                old_values.append(old_value)
-                new_values.append(new_value)
-        if changed_fields:
-            changed.append(
-                {
-                    "old_row": old_row,
-                    "new_row": new_row,
-                    "changed_fields": changed_fields,
-                    "old_values": old_values,
-                    "new_values": new_values,
-                }
-            )
-    return changed
-
-
 def _native_record(row: dict[str, Any]) -> dict[str, Any]:
     """Convert every cell of a DataFrame-derived record to native Python."""
     return {field: _native(value) for field, value in row.items()}
@@ -157,6 +113,10 @@ def diff_records(
     key_fields: Sequence[str] = DEFAULT_KEY_FIELDS,
 ) -> dict[str, list[dict[str, Any]]]:
     """Diff two record sets and return ``added`` / ``removed`` / ``changed``.
+
+    Default matching also requires equal invoice numbers when available.
+    Identical occurrences are consumed one-to-one before changed rows are
+    paired. Ambiguous groups remain additions/removals.
 
     Matching happens in two stages, both on canonical string keys
     built from the key fields (None / NaN normalize to an empty
@@ -179,49 +139,74 @@ def diff_records(
     input pair always produces the same output regardless of input
     order.
     """
-    old_df = pd.DataFrame(list(old_records))
-    new_df = pd.DataFrame(list(new_records))
-    old_df["_key"] = [_canonical_key(record, key_fields) for record in old_records]
-    new_df["_key"] = [_canonical_key(record, key_fields) for record in new_records]
+    old_rows = [_native_record(row) for row in old_records]
+    new_rows = [_native_record(row) for row in new_records]
+    remaining_old = set(range(len(old_rows)))
+    remaining_new = set(range(len(new_rows)))
+    changed: list[dict[str, Any]] = []
 
-    # Stage 1: exact key matches → compare remaining fields.
-    stage1 = old_df.merge(new_df, on="_key", how="inner", suffixes=("__old", "__new"))
-    changed = _build_changed(stage1, set(key_fields))
-    matched_old_keys: set[str] = set(stage1["_key"])
-    matched_new_keys: set[str] = set(stage1["_key"])
+    def identity(row: dict[str, Any], fields: Sequence[str]) -> tuple[str, ...]:
+        values = tuple(_normalize_key_value(row.get(f)) for f in fields)
+        if tuple(key_fields) == DEFAULT_KEY_FIELDS:
+            invoice = _normalize_key_value(row.get("Invoice #")).strip()
+            if invoice in ("N/A", "None", "nan"):
+                invoice = ""
+            values += (invoice,)
+        return values
 
-    # Stage 2: amount-relaxed re-match for records left unmatched.
-    if _AMOUNT_FIELD in key_fields:
-        identity_fields = tuple(field for field in key_fields if field != _AMOUNT_FIELD)
-        if identity_fields:
-            remaining_old = old_df[~old_df["_key"].isin(matched_old_keys)].copy()
-            remaining_new = new_df[~new_df["_key"].isin(matched_new_keys)].copy()
-            if not remaining_old.empty and not remaining_new.empty:
-                remaining_old["_relaxed_key"] = [
-                    _canonical_key(record, identity_fields)
-                    for record in old_records
-                    if _canonical_key(record, key_fields) not in matched_old_keys
-                ]
-                remaining_new["_relaxed_key"] = [
-                    _canonical_key(record, identity_fields)
-                    for record in new_records
-                    if _canonical_key(record, key_fields) not in matched_new_keys
-                ]
-                stage2 = remaining_old.merge(
-                    remaining_new, on="_relaxed_key", how="inner", suffixes=("__old", "__new")
-                )
-                if not stage2.empty:
-                    changed.extend(_build_changed(stage2, set(identity_fields)))
-                    matched_old_keys.update(stage2["_key__old"])
-                    matched_new_keys.update(stage2["_key__new"])
+    def row_order(row: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted((k, _normalize_key_value(v)) for k, v in row.items()))
 
-    added_df = new_df[~new_df["_key"].isin(matched_new_keys)]
-    removed_df = old_df[~old_df["_key"].isin(matched_old_keys)]
-    added = [_native_record(row) for row in added_df.drop(columns="_key").to_dict("records")]
-    removed = [_native_record(row) for row in removed_df.drop(columns="_key").to_dict("records")]
+    def pair(old_i: int, new_i: int) -> None:
+        old, new = old_rows[old_i], new_rows[new_i]
+        fields = list(dict.fromkeys([*old, *new]))
+        differences = [f for f in fields if not _values_equal(old.get(f), new.get(f))]
+        if differences:
+            changed.append(
+                {
+                    "old_row": old,
+                    "new_row": new,
+                    "changed_fields": differences,
+                    "old_values": [old.get(f) for f in differences],
+                    "new_values": [new.get(f) for f in differences],
+                }
+            )
+        remaining_old.remove(old_i)
+        remaining_new.remove(new_i)
+
+    stages = [tuple(key_fields)]
+    relaxed = tuple(f for f in key_fields if f != _AMOUNT_FIELD)
+    if _AMOUNT_FIELD in key_fields and relaxed:
+        stages.append(relaxed)
+    for fields in stages:
+        old_groups: dict[tuple[str, ...], list[int]] = {}
+        new_groups: dict[tuple[str, ...], list[int]] = {}
+        for i in sorted(remaining_old, key=lambda i: row_order(old_rows[i])):
+            old_groups.setdefault(identity(old_rows[i], fields), []).append(i)
+        for i in sorted(remaining_new, key=lambda i: row_order(new_rows[i])):
+            new_groups.setdefault(identity(new_rows[i], fields), []).append(i)
+        for key in sorted(old_groups.keys() & new_groups.keys()):
+            old_group, new_group = old_groups[key], new_groups[key]
+            # Consume identical occurrences first, preserving multiplicity.
+            for old_i in old_group:
+                for new_i in new_group:
+                    if new_i not in remaining_new:
+                        continue
+                    old, new = old_rows[old_i], new_rows[new_i]
+                    if all(_values_equal(old.get(f), new.get(f)) for f in old.keys() | new.keys()):
+                        pair(old_i, new_i)
+                        break
+            unmatched_old = [i for i in old_group if i in remaining_old]
+            unmatched_new = [i for i in new_group if i in remaining_new]
+            # Ambiguous groups remain additions/removals instead of fabricated changes.
+            if len(unmatched_old) == len(unmatched_new) == 1:
+                pair(unmatched_old[0], unmatched_new[0])
+
+    def output_order(row: dict[str, Any]) -> tuple:
+        return (*_date_sort_key(row, key_fields), row_order(row))
 
     return {
-        "added": sorted(added, key=lambda row: _date_sort_key(row, key_fields)),
-        "removed": sorted(removed, key=lambda row: _date_sort_key(row, key_fields)),
-        "changed": sorted(changed, key=lambda entry: _date_sort_key(entry["new_row"], key_fields)),
+        "added": sorted((new_rows[i] for i in remaining_new), key=output_order),
+        "removed": sorted((old_rows[i] for i in remaining_old), key=output_order),
+        "changed": sorted(changed, key=lambda entry: output_order(entry["new_row"])),
     }

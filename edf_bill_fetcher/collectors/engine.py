@@ -174,6 +174,7 @@ class EvidenceEngine:
         # set — getattr(engine, "source_paths", {}) always returned {} and
         # every attachment was skipped with "missing source for X". Spec §3.9.
         self.source_paths: dict[str, str] = {}
+        self._attachment_dir: tempfile.TemporaryDirectory[str] | None = None
 
     # ------------------------------------------------------------------
     # Pickle support — Phase 1.4
@@ -236,6 +237,7 @@ class EvidenceEngine:
         self.sap_meter_rows = state.get("sap_meter_rows", [])
         self.sap_financial_rows = state.get("sap_financial_rows", [])
         self.source_paths = state.get("source_paths", {})
+        self._attachment_dir = None
         # Rebuild runtime primitives fresh — the persisted snapshot
         # does not carry cancel state forward.
         self.cancel_event = threading.Event()
@@ -245,6 +247,12 @@ class EvidenceEngine:
         # ``engine.update_ui = my_gui_callback``.
         self.update_ui = lambda *_a, **_kw: None
         self.update_progress = lambda *_a, **_kw: None
+
+    def cleanup(self) -> None:
+        """Release extracted attachment files after all exports have finished."""
+        if self._attachment_dir is not None:
+            self._attachment_dir.cleanup()
+            self._attachment_dir = None
 
     def is_cancelled(self):
         """Return True if the cancel event has been set by the GUI."""
@@ -718,6 +726,7 @@ class EvidenceEngine:
                 else:
                     slice_detail = detail_label
                     slice_attachment = attachment_name
+                self.source_paths[slice_attachment] = path
 
                 try:
                     # Stream P1: SAP CSV-in-PDF data dumps (Contract /
@@ -973,23 +982,23 @@ class EvidenceEngine:
                                     att_name = _pst_attachment_filename(att)
                                     if not att_name:
                                         att_name = f"Attachment_{self.pdf_count}.pdf"
+                                    if self._attachment_dir is None:
+                                        self._attachment_dir = tempfile.TemporaryDirectory(
+                                            prefix="edf-attachments-"
+                                        )
                                     with tempfile.NamedTemporaryFile(
-                                        delete=False, suffix=".pdf"
+                                        delete=False, suffix=".pdf", dir=self._attachment_dir.name
                                     ) as tmp:
                                         tmp.write(buf)
                                         tmp_path = tmp.name
-                                    try:
-                                        self.process_pdf_file(
-                                            tmp_path,
-                                            "PST PDF Attachment",
-                                            att_name,
-                                            date_str,
-                                            sender=sender_email,
-                                            attachment_name=att_name,
-                                        )
-                                    finally:
-                                        if os.path.exists(tmp_path):
-                                            os.remove(tmp_path)
+                                    self.process_pdf_file(
+                                        tmp_path,
+                                        "PST PDF Attachment",
+                                        att_name,
+                                        date_str,
+                                        sender=sender_email,
+                                        attachment_name=att_name,
+                                    )
                         except Exception as e:
                             self.log_error(f'Attachment in "{subj}"', str(e))
 

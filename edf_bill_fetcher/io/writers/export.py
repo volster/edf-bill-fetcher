@@ -434,7 +434,9 @@ def export_to_excel(
         # simple-format regex gate.
         period_to_dt = _safe_to_datetime(df["Period To"])
         df["_dedup_date"] = period_to_dt
-        is_dup = df.duplicated(subset=["_dedup_date", "Amount (£)"], keep="first")
+        is_dup = period_to_dt.notna() & df.duplicated(
+            subset=["_dedup_date", "Amount (£)"], keep="first"
+        )
         # Pass 1 (period+amount): build ``kept_pass1_index`` keyed on
         # ``(_dedup_date, Amount)`` so we can look up "which kept row
         # did this dup lose to".  The kept row's original df index (not

@@ -51,7 +51,7 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
         r"(\d{1,2}\s+\w+\s+\d{4})\s+We charged your account\s+£([\d,]+\.\d{2})"
         r"(?:\s+For\s+([\d,]+)\s+kWh\s+of\s+electricity\s+used\s+between\s+"
         r"(\d{1,2}\s+\w+\s+\d{4})\s+and\s+(\d{1,2}\s+\w+\s+\d{4}))?"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
+        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(debit|credit)",
         re.IGNORECASE,
     )
     covered: list[tuple[int, int]] = []
@@ -63,6 +63,8 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
         units = m.group(3) if m.group(3) else "N/A"
         charge_amt = float(m.group(2).replace(",", ""))
         balance = float(m.group(6).replace(",", ""))
+        if m.group(7).lower() == "credit":
+            balance = -balance
         excerpt = htm_excerpt(text, m)
         records.append(
             BillingRecord(
@@ -89,7 +91,7 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
 
     pay_re = re.compile(
         r"(\d{1,2}\s+\w+\s+\d{4})\s+You paid us\s+£([\d,]+\.\d{2})"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
+        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(debit|credit)",
         re.IGNORECASE,
     )
     for m in pay_re.finditer(text):
@@ -97,6 +99,8 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
         date_str = parse_to_display_date(m.group(1))
         payment_amt = float(m.group(2).replace(",", ""))
         balance = float(m.group(3).replace(",", ""))
+        if m.group(4).lower() == "credit":
+            balance = -balance
         excerpt = htm_excerpt(text, m)
         records.append(
             BillingRecord(
@@ -123,7 +127,7 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
 
     rev_re = re.compile(
         r"(\d{1,2}\s+\w+\s+\d{4})\s+Reversed account charge\s+£([\d,]+\.\d{2})"
-        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(?:debit|credit)",
+        r".*?Balance\s+£([\d,]+\.\d{2})\s+in\s+(debit|credit)",
         re.IGNORECASE,
     )
     for m in rev_re.finditer(text):
@@ -131,6 +135,8 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
         date_str = parse_to_display_date(m.group(1))
         credit_amt = float(m.group(2).replace(",", ""))
         balance = float(m.group(3).replace(",", ""))
+        if m.group(4).lower() == "credit":
+            balance = -balance
         excerpt = htm_excerpt(text, m)
         records.append(
             BillingRecord(
@@ -170,7 +176,7 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
             continue
         covered.append((m.start(0), m.end(0)))
         date_str = parse_to_display_date(m.group(1))
-        balance = float(m.group(2).replace(",", ""))
+        balance = -float(m.group(2).replace(",", ""))
         records.append(
             BillingRecord(
                 source="HTM Account History",

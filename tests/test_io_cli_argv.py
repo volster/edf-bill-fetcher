@@ -93,6 +93,9 @@ class _StubEngine:
         self.crawl_local_pdfs_calls: list[str] = []
         self.process_htm_file_calls: list[str] = []
 
+    def cleanup(self) -> None:
+        """Release resources in the production engine; this stub owns none."""
+
     def crawl_pst(self, root_folder: Any) -> None:
         """Record the PST root folder handed to the engine."""
         self.crawl_pst_calls.append(root_folder)

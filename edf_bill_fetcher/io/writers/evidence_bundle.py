@@ -160,13 +160,15 @@ def save_evidence_files(
         if not src or not os.path.exists(src):
             log(f"evidence_files: missing source for {att!r}")
             continue
-        dest_base = att
+        # Slice identifiers end in " #N"; preserve the parent file extension.
+        display_name = re.sub(r"(\.pdf) #([0-9]+)$", r"-\2\1", att, flags=re.IGNORECASE)
+        dest_base = sanitise_filename(display_name)
         inv_num = str(r.get("Invoice #", "")).strip()
         if inv_num and inv_num not in ("N/A", "None", "nan") and invoice_to_att.get(inv_num) == att:
-            dest_base = sanitise_filename(inv_num) + os.path.splitext(att)[1]
+            dest_base = sanitise_filename(inv_num) + os.path.splitext(display_name)[1]
+        stem, ext = os.path.splitext(dest_base)
         n = 2
         while dest_base in used_names:
-            stem, ext = os.path.splitext(att)
             dest_base = f"{stem}-{n}{ext}"
             n += 1
         used_names.add(dest_base)

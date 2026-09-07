@@ -795,7 +795,7 @@ def test_process_ost_file_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_process_pst_file_open_crawl_close(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine_mod, "HAS_PYPFF", True)
     pst = _FakePST(root=_FakeFolder(), raise_close=True)
-    monkeypatch.setattr(engine_mod, "pypff", _FakePypffModule(pst))
+    monkeypatch.setattr(engine_mod, "pypff", _FakePypffModule(pst), raising=False)
     engine = _make_engine()
     engine.process_pst_file("fake.pst")
     assert pst.opened is True
