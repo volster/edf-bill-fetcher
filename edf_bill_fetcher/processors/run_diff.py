@@ -157,10 +157,14 @@ def diff_records(
     def row_order(row: dict[str, Any]) -> tuple[tuple[str, str], ...]:
         return tuple(sorted((k, _normalize_key_value(v)) for k, v in row.items()))
 
-    def pair(old_i: int, new_i: int) -> None:
+    def pair(old_i: int, new_i: int, identity_fields: Sequence[str]) -> None:
         old, new = old_rows[old_i], new_rows[new_i]
         fields = list(dict.fromkeys([*old, *new]))
-        differences = [f for f in fields if not _values_equal(old.get(f), new.get(f))]
+        differences = [
+            f
+            for f in fields
+            if f not in identity_fields and not _values_equal(old.get(f), new.get(f))
+        ]
         if differences:
             changed.append(
                 {
@@ -193,16 +197,22 @@ def diff_records(
                     if new_i not in remaining_new:
                         continue
                     old, new = old_rows[old_i], new_rows[new_i]
-                    if all(_values_equal(old.get(f), new.get(f)) for f in old.keys() | new.keys()):
-                        pair(old_i, new_i)
+                    if all(
+                        _values_equal(old.get(f), new.get(f))
+                        for f in old.keys() | new.keys()
+                        if f not in fields
+                    ):
+                        pair(old_i, new_i, fields)
                         break
             unmatched_old = [i for i in old_group if i in remaining_old]
             unmatched_new = [i for i in new_group if i in remaining_new]
             # Ambiguous groups remain additions/removals instead of fabricated changes.
             if len(unmatched_old) == len(unmatched_new) == 1:
-                pair(unmatched_old[0], unmatched_new[0])
+                pair(unmatched_old[0], unmatched_new[0], fields)
 
-    def output_order(row: dict[str, Any]) -> tuple:
+    def output_order(
+        row: dict[str, Any],
+    ) -> tuple[int, pd.Timestamp, str, tuple[tuple[str, str], ...]]:
         return (*_date_sort_key(row, key_fields), row_order(row))
 
     return {
