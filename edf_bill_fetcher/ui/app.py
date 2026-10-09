@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import copy
 import gc
 import glob
 import json
 import os
+import queue
+import tempfile
 import threading
 import traceback
-from datetime import date
+from collections.abc import Callable
+from datetime import date, datetime
+from functools import partial
+from typing import Any, cast
 
 import pandas as pd
 
@@ -309,7 +315,7 @@ class App:
         self.use_domain_filter = tk.BooleanVar(value=True)
         self.domain_filter = tk.StringVar(value="edfenergy.com")
         self.min_amount = tk.DoubleVar(value=50.0)
-        self.analysis_min = tk.DoubleVar(value=500.0)
+        self.analysis_min = tk.DoubleVar(value=0.0)
         self.output_name = tk.StringVar(value="EDF_Dispute_Evidence.xlsx")
         self.report_account_ref = tk.StringVar(value="")
 
@@ -340,7 +346,13 @@ class App:
         self._load_config()
 
         self.cancel_event = threading.Event()
+        self._events: queue.Queue[Callable[[], Any]] = queue.Queue()
+        self._worker = None
+        self._closing = False
         self.build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self._poll_id = self.root.after(50, self._poll_events)
+        self.root.bind("<Destroy>", self._on_destroy, add="+")
 
     # -- Config persistence --
 
@@ -814,7 +826,7 @@ class App:
         if threading.current_thread() is threading.main_thread():
             _apply()
         else:
-            self.root.after(0, _apply)
+            self._events.put(_apply)
 
     def set_progress(self, current, total, text=None):
         """Update the progress bar to current/total percent, marshalling to the tk main thread."""
@@ -828,7 +840,7 @@ class App:
         if threading.current_thread() is threading.main_thread():
             _apply()
         else:
-            self.root.after(0, _apply)
+            self._events.put(_apply)
 
     def _show(self, level, title, text):
         def _s():
@@ -842,10 +854,11 @@ class App:
         if threading.current_thread() is threading.main_thread():
             _s()
         else:
-            self.root.after(0, _s)
+            self._events.put(_s)
 
     def _finish(self):
         self._set_extract_idle()
+        self.load_report_btn.config(state="normal")
         self.progress_v.set(0)
         self.set_status("Cancelled." if self.cancel_event.is_set() else "Ready.")
         gc.collect()
@@ -886,6 +899,8 @@ class App:
         an 'EDF Evidence Report' sheet.  Sequential-named reports written
         into output_folder (or the picked file's directory if unset).
         """
+        if self._worker is not None and self._worker.is_alive():
+            return
         if not HAS_PDF_REPORT and not HAS_DOCX_REPORT and not HAS_HTML_REPORT:
             self._show(
                 "error",
@@ -923,13 +938,14 @@ class App:
             self.output_folder.set(base_dir)
             stem = os.path.basename(file_path).replace(".xlsx", "")
 
+            run_dir = tempfile.mkdtemp(prefix=stem + "_report_", dir=base_dir)
             output_paths: dict[str, str] = {}
             if fmt in ("pdf", "both") and HAS_PDF_REPORT:
-                output_paths["pdf"] = self._resolve_output_path(stem, "pdf", is_report=True)
+                output_paths["pdf"] = os.path.join(run_dir, stem + "_Report.pdf")
             if fmt in ("docx", "both") and HAS_DOCX_REPORT:
-                output_paths["docx"] = self._resolve_output_path(stem, "docx", is_report=True)
+                output_paths["docx"] = os.path.join(run_dir, stem + "_Report.docx")
             if fmt in ("html", "both") and HAS_HTML_REPORT:
-                output_paths["html"] = self._resolve_output_path(stem, "html", is_report=True)
+                output_paths["html"] = os.path.join(run_dir, stem + "_Report.html")
 
             if not output_paths:
                 self._show(
@@ -1008,34 +1024,27 @@ class App:
                             )
                         else:
                             all_ok = False
-                            self.root.after(
-                                0,
-                                lambda mn=m, lb=label: self._show(
-                                    "error", f"{lb} Generation Failed", mn
-                                ),
+                            self._events.put(
+                                partial(self._show, "error", f"{label} Generation Failed", m)
                             )
                     if all_ok and combined:
-                        self.root.after(
-                            0,
-                            lambda c=combined: self._show(
-                                "info", "Reports Generated", "\n\n".join(c)
-                            ),
+                        self._events.put(
+                            partial(self._show, "info", "Reports Generated", "\n\n".join(combined))
                         )
                 except Exception as e:
-                    self.root.after(
-                        0,
-                        lambda err=e: self._show("error", "Error", f"An error occurred:\n\n{err}"),
+                    self._events.put(
+                        partial(self._show, "error", "Error", f"An error occurred:\n\n{e}")
                     )
                 finally:
-                    self.root.after(
-                        0,
+                    self._events.put(
                         lambda: (
                             self.load_report_btn.config(state="normal"),
                             self.set_status("Ready."),
-                        ),
+                        )
                     )
 
-            threading.Thread(target=_generate, daemon=True).start()
+            self._worker = threading.Thread(target=_generate, daemon=False)
+            self._worker.start()
 
         except Exception as e:
             self._show("error", "Load Error", f"Failed to load spreadsheet:\n\n{e}")
@@ -1071,12 +1080,26 @@ class App:
                 "PST/OST file, PDF folder, HTM export, or EML/MSG folder.",
             )
             return
+        if self._worker is not None and self._worker.is_alive():
+            return
+        try:
+            self._run_request = self._snapshot_request()
+        except Exception as error:
+            self._show("error", "Output Error", str(error))
+            return
+        try:
+            self._save_config()
+        except OSError as error:
+            self._show("warning", "Settings", f"Settings could not be saved: {error}")
         self.cancel_event.clear()
+        self.load_report_btn.config(state="disabled")
         self._set_extract_running()
         self.progress_v.set(0)
-        threading.Thread(target=self._run, daemon=True).start()
+        self._worker = threading.Thread(target=self._run, daemon=False)
+        self._worker.start()
 
-    def _run(self):
+    def _snapshot_request(self):
+        """Capture configuration and reserve a directory before starting a worker."""
         config: ConfigDict = {
             "use_anchors": self.use_anchors.get(),
             "use_large": self.use_large.get(),
@@ -1102,13 +1125,72 @@ class App:
             "generate_reconciliation_sheet": self.generate_reconciliation_sheet_var.get(),
         }
 
+        config["as_of"] = datetime.now().date().isoformat()
+        from edf_bill_fetcher.processors.preparation import prepare_evidence
+
+        config = prepare_evidence([], config).config
+        paths = {
+            name: getattr(self, name).get().strip()
+            for name in ("pst_path", "pdf_dir", "htm_path", "eml_msg_dir")
+        }
+        base_dir = self.output_folder.get().strip()
+        if not base_dir:
+            source = next((value for value in paths.values() if value), os.getcwd())
+            base_dir = source if os.path.isdir(source) else os.path.dirname(source)
+        stem = os.path.basename(self.output_name.get().strip() or "EDF_Dispute_Evidence.xlsx")
+        stem = os.path.splitext(stem)[0] or "EDF_Dispute_Evidence"
+        run_dir = tempfile.mkdtemp(
+            prefix=stem + "_" + datetime.now().strftime("%Y%m%d") + "_", dir=base_dir
+        )
+        return {
+            "config": copy.deepcopy(config),
+            "paths": paths,
+            "stem": stem,
+            "run_dir": run_dir,
+            "auto_report": self.auto_generate_report.get(),
+            "report_options": copy.deepcopy(self._report_options),
+        }
+
+    def _poll_events(self):
+        """Execute UI callbacks only on the main thread, including during shutdown."""
+        if self._poll_id is not None:
+            self.root.after_cancel(self._poll_id)
+            self._poll_id = None
+        try:
+            while True:
+                callback = self._events.get_nowait()
+                if not self._closing:
+                    callback()
+        except queue.Empty:
+            pass
+        if self._closing and (self._worker is None or not self._worker.is_alive()):
+            self.root.destroy()
+            return
+        self._poll_id = self.root.after(50, self._poll_events)
+
+    def _on_destroy(self, event):
+        if event.widget is self.root and self._poll_id is not None:
+            self.root.after_cancel(self._poll_id)
+            self._poll_id = None
+
+    def _close(self):
+        """Cancel work and keep its cleanup alive before destroying the Tk interpreter."""
+        self._closing = True
+        self.cancel_event.set()
+        self.root.withdraw()
+
+    def _run(self):
+        config = copy.deepcopy(self._run_request["config"])
+
         from edf_bill_fetcher.collectors.engine import EvidenceEngine  # noqa: F402,E402
 
         engine = EvidenceEngine(config, self.set_status, self.set_progress, self.cancel_event)
         self.engine = engine
+        run_status = "running"
+        run_error = ""
 
         try:
-            pst_path = self.pst_path.get().strip()
+            pst_path = self._run_request["paths"]["pst_path"]
             if pst_path and os.path.exists(pst_path) and not self.cancel_event.is_set():
                 if not HAS_PYPFF:
                     self._show("warning", "PST", "pypff not installed — PST/OST scanning skipped.")
@@ -1129,46 +1211,39 @@ class App:
                     finally:
                         pff.close()
 
-            htm_path = self.htm_path.get().strip()
+            htm_path = self._run_request["paths"]["htm_path"]
             if htm_path and os.path.exists(htm_path) and not self.cancel_event.is_set():
                 self.set_status("Parsing HTM account history…")
                 engine.process_htm_file(htm_path)
 
-            pdf_path = self.pdf_dir.get().strip()
+            pdf_path = self._run_request["paths"]["pdf_dir"]
             if pdf_path and os.path.exists(pdf_path) and not self.cancel_event.is_set():
                 engine.crawl_local_pdfs(pdf_path)
 
-            eml_msg_path = self.eml_msg_dir.get().strip()
+            eml_msg_path = self._run_request["paths"]["eml_msg_dir"]
             if eml_msg_path and os.path.exists(eml_msg_path) and not self.cancel_event.is_set():
                 self.set_status("Scanning EML/MSG folder…")
                 engine.process_eml_folder(eml_msg_path)
                 engine.process_msg_folder(eml_msg_path)
 
             if self.cancel_event.is_set():
+                run_status = "cancelled"
                 self._show("warning", "Cancelled", "Extraction cancelled.")
                 return
 
-            if engine.records:
+            if (
+                engine.records
+                or engine.sap_contract_rows
+                or engine.sap_meter_rows
+                or engine.sap_financial_rows
+            ):
                 self.set_status("Writing Excel report…")
-                # Fall back to source dir when output_folder unset
-                if not self.output_folder.get().strip():
-                    base_dir = (
-                        os.path.dirname(pst_path)
-                        if pst_path
-                        else pdf_path
-                        if pdf_path
-                        else os.path.dirname(htm_path)
-                        if htm_path
-                        else eml_msg_path
-                        if eml_msg_path
-                        else os.getcwd()
-                    )
-                    self.output_folder.set(base_dir)
-                stem = self.output_name.get().strip() or "EDF_Dispute_Evidence"
-                if stem.lower().endswith(".xlsx"):
-                    stem = stem[:-5]
-                xlsx_path = self._resolve_output_path(stem, "xlsx")
+                stem = self._run_request["stem"]
+                xlsx_path = os.path.join(self._run_request["run_dir"], stem + ".xlsx")
+                from edf_bill_fetcher.processors.preparation import prepare_evidence
 
+                prepared = prepare_evidence(engine.records, config)
+                config = prepared.config
                 # Stream P5: save evidence files + themed DOCX bundle index
                 # into a sibling ``evidence_files/`` folder when the toggle is
                 # set on (default True). Runs BEFORE the workbook export so
@@ -1177,7 +1252,7 @@ class App:
                 # attachment-name -> destination-path mapping).
                 saved = None
                 bundle_summary = ""
-                if self.save_evidence_files_var.get():
+                if config.get("save_evidence_files", True):
                     try:
                         import pandas as pd
 
@@ -1188,12 +1263,23 @@ class App:
 
                         out_dir = os.path.dirname(xlsx_path) or os.getcwd()
                         ev_dir = os.path.join(out_dir, "evidence_files")
-                        dfc = pd.DataFrame(engine.records)
+                        dfc = pd.concat(
+                            [
+                                pd.DataFrame(engine.records),
+                                pd.DataFrame(list(engine.source_manifest.values())),
+                            ],
+                            ignore_index=True,
+                        )
                         # Build the source-paths reverse-lookup from the
                         # crawl attribute the engine carries internally.
                         source_paths = getattr(engine, "source_paths", {}) or {}
                         bundle_stats: dict[str, int] = {}
                         saved = save_evidence_files(dfc, source_paths, ev_dir, stats=bundle_stats)
+                        for metadata in engine.source_manifest.values():
+                            path = saved.get(metadata["Attachment Name"])
+                            metadata["Saved Path"] = (
+                                os.path.relpath(path, out_dir) if path else None
+                            )
                         index_docx = os.path.join(out_dir, "evidence_index.docx")
                         build_bundle_index(
                             dfc, saved, index_docx, account=str(config.get("acc_num", ""))
@@ -1213,6 +1299,7 @@ class App:
                                 f"name(s) are ambiguous (referenced by multiple invoices)"
                             )
                     except Exception as bundle_err:
+                        engine.log_error("Evidence bundle", str(bundle_err))
                         # Don't lose the run if the bundle step blows up --
                         # log it loudly but still keep the XLSX.
                         self._show(
@@ -1224,6 +1311,8 @@ class App:
                             ),
                         )
 
+                if self.cancel_event.is_set():
+                    return
                 from edf_bill_fetcher.io.writers.export import export_to_excel
 
                 export_to_excel(
@@ -1239,7 +1328,12 @@ class App:
                     },
                     invoice_pdf_paths=saved,
                 )
-                self._save_config()
+                from edf_bill_fetcher.io.cli import _safe_json_dump
+
+                _safe_json_dump(
+                    {**engine.__getstate__(), "original_records": engine.records},
+                    os.path.join(self._run_request["run_dir"], "records.json"),
+                )
                 summary = (
                     f"Extraction complete.\n\n"
                     f"  Emails matched: {engine.email_count}\n"
@@ -1252,13 +1346,19 @@ class App:
                 if bundle_summary:
                     summary += bundle_summary
 
-                if self.auto_generate_report.get():
-                    report_paths = self._run_auto_report(engine, stem, 1)
+                if self._run_request["auto_report"]:
+                    report_paths = self._run_auto_report(engine, stem, None)
                     if report_paths:
                         summary += "\n\nReports:\n" + "\n".join(report_paths)
 
-                self._show("info", "Success", summary)
+                run_status = "review_required" if engine.error_log else "complete"
+                self._show(
+                    "warning" if engine.error_log else "info",
+                    "Review Required" if engine.error_log else "Success",
+                    summary,
+                )
             else:
+                run_status = "empty"
                 self._show(
                     "warning",
                     "No Data",
@@ -1269,10 +1369,26 @@ class App:
                 )
 
         except Exception:
-            self._show("error", "Error", f"An error occurred:\n\n{traceback.format_exc()}")
+            run_status = "failed"
+            run_error = traceback.format_exc()
+            self._show("error", "Error", f"An error occurred:\n\n{run_error}")
         finally:
+            from edf_bill_fetcher.helpers.artifacts import write_json
+
+            try:
+                write_json(
+                    {
+                        "status": "cancelled" if self.cancel_event.is_set() else run_status,
+                        "error": run_error,
+                        "config": config,
+                        "error_log": engine.error_log,
+                    },
+                    os.path.join(self._run_request["run_dir"], "run.json"),
+                )
+            except OSError as error:
+                self._show("warning", "Run status", f"Run status could not be saved: {error}")
             engine.cleanup()
-            self.root.after(0, self._finish)
+            self._events.put(self._finish)
 
     def _run_auto_report(self, engine, stem, batch_n):
         """Run report generation for the auto-generate flow.
@@ -1284,52 +1400,52 @@ class App:
         from edf_bill_fetcher.io.reporters.html_report import generate_html_from_gui
         from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
 
-        ro = getattr(self, "_report_options", {})
+        ro = self._run_request["report_options"]
         fmt = ro.get("format", "both")
         sections = ro.get("sections", [s[0] for s in ReportOptionsDialog.SECTIONS])
 
-        config: ConfigDict = {
-            "min_amount": self.min_amount.get(),
-            "analysis_min": self.analysis_min.get(),
-            "acc_num": self.acc_num.get(),
-            "report_account_ref": self.report_account_ref.get().strip(),
-            "report_sections": sections,
-        }
+        config = cast(ConfigDict, {**copy.deepcopy(engine.config), "report_sections": sections})
 
         written: list[str] = []
         if fmt in ("pdf", "both") and HAS_PDF_REPORT:
-            pdf_path = self._resolve_output_path(stem, "pdf", batch_n=batch_n, is_report=True)
-            success, _ = generate_pdf_from_gui(
+            pdf_path = os.path.join(self._run_request["run_dir"], stem + "_Report.pdf")
+            success, message = generate_pdf_from_gui(
                 records=engine.records,
                 output_path=pdf_path,
                 config=config,
                 engine=engine,
                 filtered=engine.filtered_records,
             )
+            if not success:
+                raise RuntimeError(message)
             if success:
                 written.append(pdf_path)
 
         if fmt in ("docx", "both") and HAS_DOCX_REPORT:
-            docx_path = self._resolve_output_path(stem, "docx", batch_n=batch_n, is_report=True)
-            success, _ = generate_docx_from_gui(
+            docx_path = os.path.join(self._run_request["run_dir"], stem + "_Report.docx")
+            success, message = generate_docx_from_gui(
                 records=engine.records,
                 output_path=docx_path,
                 config=config,
                 engine=engine,
                 filtered=engine.filtered_records,
             )
+            if not success:
+                raise RuntimeError(message)
             if success:
                 written.append(docx_path)
 
         if fmt in ("html", "both") and HAS_HTML_REPORT:
-            html_path = self._resolve_output_path(stem, "html", batch_n=batch_n, is_report=True)
-            success, _ = generate_html_from_gui(
+            html_path = os.path.join(self._run_request["run_dir"], stem + "_Report.html")
+            success, message = generate_html_from_gui(
                 records=engine.records,
                 output_path=html_path,
                 config=config,
                 engine=engine,
                 filtered=engine.filtered_records,
             )
+            if not success:
+                raise RuntimeError(message)
             if success:
                 written.append(html_path)
 

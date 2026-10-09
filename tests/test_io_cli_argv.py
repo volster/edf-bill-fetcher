@@ -89,9 +89,27 @@ class _StubEngine:
         self.sap_contract_rows: list[dict[str, Any]] = []
         self.sap_meter_rows: list[dict[str, Any]] = []
         self.sap_financial_rows: list[dict[str, Any]] = []
+        self.source_manifest: dict = {}
+        self.source_paths: dict = {}
+        self.config: dict = {}
         self.crawl_pst_calls: list[Any] = []
         self.crawl_local_pdfs_calls: list[str] = []
         self.process_htm_file_calls: list[str] = []
+
+    def __getstate__(self) -> dict:
+        return {
+            "records": self.records,
+            "config": self.config,
+            "error_log": self.error_log,
+            "filtered_records": self.filtered_records,
+            "email_count": self.email_count,
+            "pdf_count": self.pdf_count,
+            "source_manifest": {},
+            "source_paths": {},
+        }
+
+    def log_error(self, source: str, message: str) -> None:
+        self.error_log.append(f"{source}: {message}")
 
     def cleanup(self) -> None:
         """Release resources in the production engine; this stub owns none."""
@@ -119,7 +137,19 @@ def _install_stub_engine(monkeypatch: pytest.MonkeyPatch, engine: _StubEngine) -
     """
     import edf_bill_fetcher.collectors.engine as engine_mod
 
-    monkeypatch.setattr(engine_mod, "EvidenceEngine", lambda *a, **kw: engine)
+    def factory(config, *args, **kwargs):
+        engine.config = dict(config)
+        return engine
+
+    monkeypatch.setattr(engine_mod, "EvidenceEngine", factory)
+    monkeypatch.setattr(
+        "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "edf_bill_fetcher.io.writers.evidence_bundle.build_bundle_index",
+        lambda *args, **kwargs: None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +176,9 @@ def stub_export_to_excel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dic
 
     calls: dict[str, list[Any]] = {"calls": []}
 
-    def _fake_export(data, output_path, error_log, config, filtered=None, sap_rows=None):
+    def _fake_export(
+        data, output_path, error_log, config, filtered=None, sap_rows=None, invoice_pdf_paths=None
+    ):
         """Record the call and touch the output path so callers see a file."""
         calls["calls"].append(
             {
@@ -348,7 +380,12 @@ class TestRunCliExtract:
 
         assert records_json.exists()
         loaded = json.loads(records_json.read_text(encoding="utf-8"))
-        assert loaded["records"] == stub_engine.records
+        from edf_bill_fetcher.processors.preparation import prepare_evidence
+
+        assert (
+            loaded["records"] == prepare_evidence(stub_engine.records, stub_engine.config).records
+        )
+        assert loaded["original_records"] == stub_engine.records
         assert loaded["filtered_records"] == stub_engine.filtered_records
         assert loaded["error_log"] == stub_engine.error_log
         assert "config" in loaded
@@ -388,7 +425,7 @@ class TestRunCliExtract:
 
         assert state_json.exists()
         loaded = json.loads(state_json.read_text(encoding="utf-8"))
-        assert loaded["version"] == 1
+        assert loaded["version"] == 2
         assert loaded["filtered_records"] == stub_engine.filtered_records
         assert loaded["error_log"] == stub_engine.error_log
         assert "config" in loaded
@@ -671,8 +708,8 @@ class TestRunCliPdfReport:
         out = capsys.readouterr().out
         assert "Report written" in out
         assert calls["calls"][0]["records"] == records
-        assert calls["calls"][0]["engine"] is None
-        assert calls["calls"][0]["filtered"] is None
+        assert calls["calls"][0]["engine"].pdf_count == 0
+        assert calls["calls"][0]["filtered"] == []
 
     def test_wrapper_dict_records_unwrapped(
         self,
@@ -780,9 +817,7 @@ class TestRunCliPdfReport:
                     str(pkl_path),
                 ]
             )
-        call = calls["calls"][0]
-        assert isinstance(call["engine"], EvidenceEngine)
-        assert call["filtered"] == [{"filtered": True}]
+        assert calls["calls"] == []
 
     def test_exception_handler_exits_1(
         self,
@@ -961,9 +996,7 @@ class TestRunCliDocxReport:
                     str(pkl_path),
                 ]
             )
-        call = calls["calls"][0]
-        assert isinstance(call["engine"], EvidenceEngine)
-        assert call["filtered"] == [{"docx_filtered": True}]
+        assert calls["calls"] == []
 
     def test_exception_handler_exits_1(
         self,
@@ -1030,8 +1063,8 @@ class TestRunCliHtmlReport:
         assert exc.value.code == 0
         assert "HTML written" in capsys.readouterr().out
         assert calls["calls"][0]["records"] == records
-        assert calls["calls"][0]["engine"] is None
-        assert calls["calls"][0]["filtered"] is None
+        assert calls["calls"][0]["engine"].pdf_count == 0
+        assert calls["calls"][0]["filtered"] == []
 
     def test_wrapper_dict_unwrapped(
         self,
@@ -1125,9 +1158,7 @@ class TestRunCliHtmlReport:
                     str(pkl_path),
                 ]
             )
-        call = calls["calls"][0]
-        assert isinstance(call["engine"], EvidenceEngine)
-        assert call["filtered"] == [{"html_filtered": True}]
+        assert calls["calls"] == []
 
     def test_exception_handler_exits_1(
         self,

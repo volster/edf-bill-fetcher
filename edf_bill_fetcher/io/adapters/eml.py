@@ -22,6 +22,7 @@ from email.header import decode_header
 from email.message import Message
 from email.parser import BytesParser
 from pathlib import Path
+from typing import Any
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
 
@@ -42,7 +43,10 @@ def _decode_header_value(raw: str | None) -> str:
     chunks: list[str] = []
     for chunk, charset in decode_header(raw):
         if isinstance(chunk, bytes):
-            chunks.append(chunk.decode(charset or "utf-8", errors="replace"))
+            try:
+                chunks.append(chunk.decode(charset or "utf-8", errors="replace"))
+            except LookupError:
+                chunks.append(chunk.decode("utf-8", errors="replace"))
         else:
             chunks.append(chunk)
     return "".join(chunks)
@@ -60,7 +64,7 @@ def _decode_payload(part: Message) -> str | None:
         return payload.decode("utf-8", errors="replace")
 
 
-def parse_eml_message(path: str | Path) -> dict[str, str | None]:
+def parse_eml_message(path: str | Path) -> dict[str, Any]:
     """Parse a ``.eml`` message file into the flat 5-key record dict.
 
     Reads the file as bytes and parses it with the stdlib ``email``
@@ -81,8 +85,15 @@ def parse_eml_message(path: str | Path) -> dict[str, str | None]:
 
     body_html = ""
     body_text = ""
+    attachments = []
     for part in msg.walk():
         if part.is_multipart():
+            continue
+        filename = part.get_filename()
+        if filename or part.get_content_disposition() == "attachment":
+            attachment_data = part.get_payload(decode=True)
+            if isinstance(attachment_data, bytes):
+                attachments.append({"name": filename or "attachment", "data": attachment_data})
             continue
         text = _decode_payload(part)
         if text is None:
@@ -99,4 +110,5 @@ def parse_eml_message(path: str | Path) -> dict[str, str | None]:
         "date_str": date_str,
         "body_html": body_html,
         "body_text": body_text,
+        "attachments": attachments,
     }

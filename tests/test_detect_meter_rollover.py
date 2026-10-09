@@ -15,7 +15,7 @@ def _row(
         "Invoice #": invoice,
         "Date": date,
         "Reading": reading_type,
-        "Units (kWh)": units_kwh,
+        "Register Reading (kWh)": units_kwh,
         "Attachment Name": f"{invoice}.pdf",
     }
 

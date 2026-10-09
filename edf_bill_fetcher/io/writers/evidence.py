@@ -8,7 +8,6 @@ and Summary tab.
 from __future__ import annotations
 
 import openpyxl
-import pandas as pd
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -19,15 +18,14 @@ from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
-    pdf_hyperlink_cell,
-    set_column_widths_from_spec,
+    literal_cell,
 )
-from edf_bill_fetcher.helpers.theme import CELL_BORDER, DUP_GREY
+from edf_bill_fetcher.helpers.theme import CELL_BORDER
 from edf_bill_fetcher.io.writers.sheet_layout import (
     freeze_at,
     write_header_row,
 )
-from edf_bill_fetcher.writers._helpers import EST_YELLOW, JUMP_RED
+from edf_bill_fetcher.processors.preparation import normalize_frame, number, scope
 
 # Column letter map for the evidence sheet (matches ``EVIDENCE_HEADERS`` below):
 # A=Source B=Sender C=Date D=PeriodFrom E=PeriodTo F=Invoice#
@@ -68,259 +66,98 @@ EVIDENCE_HEADERS: list[str] = [
     "Logic Used",
     "Anomaly Flag",
     "Sub Periods",
+    "Balance (£)",
+    "Transaction Amount (£)",
+    "Amount Kind",
+    "Account",
+    "Meter",
+    "Register",
+    "Fuel",
+    "Register Reading (kWh)",
+    "Cancel/Rebill Admitted",
+    "Source ID",
+    "Source IDs",
+    "Content Hash",
+    "Original Filename",
+    "Page From",
+    "Page To",
 ]
 COL_AMOUNT = EVIDENCE_HEADERS.index("Amount (£)") + 1
 
 # --- function body 1: write_evidence_sheet (was writers/__init__.py L182-422) ---
 
 
-def write_evidence_sheet(ws, df, is_duplicate=False):
-    """Render the EDF Evidence Report (or Duplicate Entries) worksheet."""
-    headers = EVIDENCE_HEADERS
-    COL_PERIOD_CHG = headers.index("Period Charge (£)") + 1
-    COL_UNIT_RATE = headers.index("Unit Rate (p/kWh)") + 1
-    COL_PCT_CHANGE = headers.index("% Change") + 1
-    COL_READING_IDX = headers.index("Reading") + 1
-    COL_ANOMALY = headers.index("Anomaly Flag") + 1
-    # Task 3: Attachment Name (col P) becomes a relative PDF hyperlink
-    # pointing at ``evidence_files/<Invoice #>.pdf``.
-    att_col_idx = headers.index("Attachment Name") + 1
-    # ``row`` is the 0-based tuple from ``df.values``, so the invoice
-    # number lives at the *un*+1'd header index — unlike ``att_col_idx``
-    # (and the other ``COL_*``), which compare against the 1-based
-    # ``c_idx``.
-    inv_col_idx = headers.index("Invoice #")
-    # Phase 2 follow-on: dup sheets carry a "Duplicate Of"
-    # printable summary cell per row plus a clickable hyperlink
-    # back to the matched kept record in ``EDF Evidence Report``.
-    # The matched-against position lands in a parallel
-    # ``_matches_kept_idx`` Series the caller passes alongside the
-    # dup_df — we render the column in a *post-loop* pass below so
-    # we don't have to count on the row-iteration matching a
-    # fixed column index (which previously conflicted with the
-    # constant ``COL_ANOMALY = 18`` in the writer).
-    has_match_col = "Duplicate Of" in df.columns
-    # Capture the writer-helper ``_matches_kept_idx`` Series *before*
-    # the row iteration so the post-loop pass can mint HYPERLINK
-    # cells.  We then strip the column from the in-scope ``df``
-    # so row iteration only sees the reader-facing schema (no
-    # 20th column leaks into the saved workbook).
-    if "_matches_kept_idx" in df.columns:
-        match_positions_series: pd.Series = df["_matches_kept_idx"].copy()
-    else:
-        match_positions_series = None
-    df = df.drop(columns=["_matches_kept_idx"], errors="ignore")
-    # F1: the caller hands us the canonical ``col_order`` frame
-    # (export.py), which carries 21 columns — the 20 header-schema
-    # columns plus the internal ``Duplicate Of`` marker.  The header
-    # schema has 20.  Capture ``Duplicate Of`` for the post-loop dup
-    # pass, then reindex the frame to the header schema so the
-    # positional row-write below stays aligned.  Without this,
-    # ``Sub Periods`` data lands in an unheaded trailing column (21)
-    # and the ``Sub Periods`` header sits above the ``Duplicate Of``
-    # values.
-    dup_text = df["Duplicate Of"].tolist() if has_match_col else []
-    df = df.reindex(columns=headers)
-    bg = "888888" if is_duplicate else "FE5716"
-    write_header_row(ws, 1, headers, bg=bg, height=28)
-
-    alt_fill = PatternFill("solid", start_color="FFF3EE")
-
-    last_data_row = len(df) + 1
-    for r_idx, row in enumerate(df.values, 2):
-        row_fill = alt_fill if r_idx % 2 == 0 else PatternFill()
-
-        for c_idx, val in enumerate(row, 1):
-            # Task 3: the Attachment Name cell links to the saved PDF for
-            # this row's invoice number (display = invoice number).  Dup
-            # sheets and rows without a real invoice number keep the
-            # plain-text rendering below.
-            if c_idx == att_col_idx and not is_duplicate:
-                inv_no = str(row[inv_col_idx]) if len(row) > inv_col_idx else ""
-                if inv_no and inv_no not in ("N/A", "None", "nan"):
-                    pdf_hyperlink_cell(
-                        ws, r_idx, c_idx, f"evidence_files/{inv_no}.pdf", display=inv_no
+def write_evidence_sheet(ws, df, is_duplicate=False, saved_paths=None):
+    """Render canonical data and link only to files actually saved in this run."""
+    headers = EVIDENCE_HEADERS + (
+        ["Duplicate Of"] if is_duplicate else ["Reason"] if "Reason" in df else []
+    )
+    write_header_row(ws, 1, headers, bg="888888" if is_duplicate else "FE5716", height=28)
+    saved_paths = saved_paths or {}
+    previous: dict[tuple[str, ...], tuple[int, float]] = {}
+    for row_number, record in enumerate(normalize_frame(df).to_dict("records"), 2):
+        record = dict(record)
+        key = scope(record)
+        balance = number(record.get("Balance (£)"))
+        dated = to_excel_date(record.get("Date")) is not None
+        prior = previous.get(key)
+        record["% Change"] = None
+        record["Anomaly Flag"] = ""
+        if balance is not None and dated:
+            previous[key] = (row_number, balance)
+        for col, header in enumerate(headers, 1):
+            value = record.get(header)
+            if header in {"Date", "Period From", "Period To"}:
+                value = to_excel_date(value)
+            cell = literal_cell(ws, row_number, col, value)
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = CELL_BORDER
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            if is_duplicate:
+                cell.fill = PatternFill("solid", start_color="E0E0E0")
+            elif row_number % 2 == 0:
+                cell.fill = PatternFill("solid", start_color="FFF3EE")
+            if "(£)" in header:
+                cell.number_format = "£#,##0.00"
+            elif header == "% Change":
+                cell.number_format = "0.0%"
+            elif header in {"Date", "Period From", "Period To"}:
+                cell.number_format = "dd/mm/yyyy"
+            if not is_duplicate and dated and balance is not None and prior is not None:
+                balance_column = get_column_letter(headers.index("Balance (£)") + 1)
+                prior_row, prior_balance = prior
+                if header == "% Change" and prior_balance:
+                    cell.value = f'=IFERROR(({balance_column}{row_number}-{balance_column}{prior_row})/ABS({balance_column}{prior_row}),"")'
+                    cell.data_type = "f"
+                elif header == "Anomaly Flag" and prior_balance > 0:
+                    cell.value = f'=IF(AND({balance_column}{prior_row}>0,{balance_column}{row_number}>{balance_column}{prior_row}*2),"⚠ >100% INCREASE","")'
+                    cell.data_type = "f"
+            if header == "Attachment Name":
+                path = saved_paths.get(str(record.get("Source ID", ""))) or saved_paths.get(
+                    str(value)
+                )
+                if path:
+                    cell.hyperlink = str(path)
+                    cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
+            if header == "Duplicate Of":
+                pos = number(record.get("_matches_kept_idx"))
+                if pos is not None and pos >= 0:
+                    cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                        ref=cell.coordinate, location=f"'EDF Evidence Report'!A{int(pos) + 2}"
                     )
-                    c = ws.cell(row=r_idx, column=c_idx)
-                    c.fill = row_fill
-                    c.border = CELL_BORDER
-                    c.alignment = Alignment(vertical="top")
-                    continue
-            if c_idx == COL_PCT_CHANGE and not is_duplicate:
-                # % Change as live formula — Amount is col G (derived
-                # from COL_AMOUNT), not col E (Period To serials).
-                amt_col_letter = get_column_letter(COL_AMOUNT)
-                c = ws.cell(
-                    row=r_idx,
-                    column=COL_PCT_CHANGE,
-                    value=(
-                        f"=IFERROR(({amt_col_letter}{r_idx}-"
-                        f"{amt_col_letter}{r_idx - 1})/"
-                        f'{amt_col_letter}{r_idx - 1},"")'
-                    ),
-                )
-                c.number_format = "0.0%"
-                c.alignment = Alignment(horizontal="right", vertical="top")
-                c.font = Font(name="Calibri", size=10)
-                c.border = CELL_BORDER
-                c.fill = row_fill
-            else:
-                # Convert date columns to real Excel date serials (C=3, D=4, E=5)
-                excel_val = val
-                if c_idx in (3, 4, 5):
-                    dt = to_excel_date(val)
-                    if dt is not None:
-                        excel_val = dt
-                c = ws.cell(row=r_idx, column=c_idx, value=excel_val)
-                # Phase 2.x — formula-injection guard on the
-                # generic evidence-sheet row path.  openpyxl
-                # auto-promotes any cell whose text value starts
-                # with ``=``/``+``/``-``/``@`` to ``data_type='f'``
-                # (formula).  Without this fix, a bill whose
-                # Invoice # or Details field begins with ``=cmd
-                # |'/c calc'!A1`` would render as a real formula
-                # when an ombudsman opens the workbook.  Same
-                # belt-and-braces policy as ``_text``: coerce
-                # textual leads to ``str`` first, then pin
-                # ``data_type='s'`` and prefix apostrophe on
-                # leading special chars.
-                if isinstance(excel_val, str) and excel_val:
-                    safe_val = excel_val
-                    if safe_val[0] in "+-=@":
-                        safe_val = "'" + safe_val
-                    c.value = safe_val
-                    c.data_type = "s"
-                if c_idx == COL_AMOUNT and isinstance(val, int | float):
-                    c.number_format = "£#,##0.00"
-                if c_idx == COL_PERIOD_CHG and isinstance(val, int | float):
-                    c.number_format = "£#,##0.00"
-                if c_idx == COL_UNIT_RATE and isinstance(val, int | float):
-                    c.number_format = "0.00"
-                if c_idx in (3, 4, 5) and hasattr(excel_val, "year"):
-                    c.number_format = "dd/mm/yyyy"
-                c.font = Font(name="Calibri", size=10)
-                c.fill = (
-                    row_fill if not is_duplicate else PatternFill("solid", start_color=DUP_GREY)
-                )
-                c.border = CELL_BORDER
-                c.alignment = Alignment(vertical="top")
-
-            # Highlight estimated readings (Reading is col L = 0-based index 11)
-            if (
-                not is_duplicate
-                and len(row) > COL_READING_IDX
-                and row[COL_READING_IDX] == "Estimated"
-            ):
-                c.fill = PatternFill("solid", start_color=EST_YELLOW)
-
-        # Anomaly flag col S (19) — Amount is col G (derived from
-        # COL_AMOUNT), not col E (Period To serials).  Anomaly Flag
-        # shifted right by one when the Tariff column was inserted at
-        # column O; see the column-letter map at the top of this module.
-        if not is_duplicate and r_idx > 2:
-            amt_col_letter = get_column_letter(COL_AMOUNT)
-            ca = ws.cell(
-                row=r_idx,
-                column=COL_ANOMALY,
-                value=(
-                    f"=IF(AND({amt_col_letter}{r_idx - 1}>0,"
-                    f"{amt_col_letter}{r_idx}>{amt_col_letter}{r_idx - 1}*2),"
-                    '"⚠ >100% INCREASE","")'
-                ),
-            )
-            ca.font = Font(name="Calibri", size=10, bold=True)
-            ca.border = CELL_BORDER
-            ca.fill = row_fill
-
-    # Conditional formatting: only colour anomaly column red when non-empty
-    if not is_duplicate and last_data_row > 2:
-        anomaly_col_letter = get_column_letter(COL_ANOMALY)
+    for col, header in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(col)].width = (
+            36 if header in {"Details", "Source IDs", "Source ID", "Content Hash"} else 20
+        )
+    if not is_duplicate and len(df):
+        anomaly_column = get_column_letter(headers.index("Anomaly Flag") + 1)
         ws.conditional_formatting.add(
-            f"{anomaly_col_letter}2:{anomaly_col_letter}{last_data_row}",
+            f"{anomaly_column}2:{anomaly_column}{len(df) + 1}",
             FormulaRule(
-                formula=[f'${anomaly_col_letter}2<>""'],
-                fill=PatternFill("solid", start_color=JUMP_RED),
-                font=Font(name="Calibri", size=10, bold=True),
+                formula=[f'${anomaly_column}2<>""'], fill=PatternFill("solid", start_color="FFCCCC")
             ),
         )
-
-    # Phase 2 follow-on: post-loop pass to render the "Duplicate
-    # Of" column.  The matched-against keystrokes live in
-    # ``match_positions_series`` (a pd.Series keyed on the dup
-    # sheet's df-index by df-positional index) so the click-through
-    # target always aligns with the writer's row indexing scheme.
-    # We render this ``Duplicate Of`` column only when
-    # ``is_duplicate`` is True — main evidence reports never get
-    # one.
-    if is_duplicate and has_match_col and match_positions_series is not None:
-        last_data_row = len(df) + 1
-        col_idx_duplicate_of = len(headers) + 1
-        # Header cell
-        bg = "888888"
-        _hcell(ws, 1, col_idx_duplicate_of, "Duplicate Of", bg=bg)
-        # Use the ``dup_text`` list captured *before* the header-schema
-        # reindex above — the column is no longer on the frame.
-        for r_idx, (match_val, summary) in enumerate(
-            zip(match_positions_series.tolist(), dup_text, strict=True), 2
-        ):
-            target_row_excel: int | None = None
-            try:
-                # ``-1`` sentinel from the dedup walker = no
-                # match (Pass 1 dedup found a duplicate tuple
-                # but Pass 2's kept set dropped it before the
-                # post-reset lookup fired).
-                mi = int(match_val)
-                target_row_excel = mi + 2 if mi >= 0 else None
-            except (TypeError, ValueError):
-                target_row_excel = None
-            if not summary:
-                continue
-            c = ws.cell(row=r_idx, column=col_idx_duplicate_of, value=summary)
-            if target_row_excel:
-                c.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
-                    ref=f"{c.coordinate}",
-                    location=f"'EDF Evidence Report'!A{target_row_excel}",
-                    display=summary,
-                    tooltip=(f"Jump to the kept record at EDF Evidence Report!A{target_row_excel}"),
-                )
-                c.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
-            else:
-                c.font = Font(name="Calibri", size=10)
-            c.alignment = Alignment(vertical="top", wrap_text=True)
-            c.border = CELL_BORDER
-            # Dup cells read like the rest of the dup sheet
-            # (greyed out so they stand out from the kept set).
-            c.fill = PatternFill("solid", start_color=DUP_GREY)
-        # Widen the Duplicate-Of column to fit the longest summary. The
-        # column letter is derived from the header schema (not hard-coded)
-        # so inserting a column earlier never leaves this writing to the
-        # wrong column.
-        ws.column_dimensions[get_column_letter(col_idx_duplicate_of)].width = 50
-
-    widths: dict[str, float] = {
-        "A": 18,
-        "B": 26,
-        "C": 13,
-        "D": 13,
-        "E": 13,
-        "F": 16,
-        "G": 13,
-        "H": 15,
-        "I": 15,
-        "J": 10,
-        "K": 14,
-        "L": 11,
-        "M": 12,
-        "N": 18,
-        # Tariff price-plan column — short enough to fit
-        # "Standard Variable", "Freedom Tariff", etc.
-        "O": 22,
-        "P": 28,
-        "Q": 38,
-        "R": 18,
-        "S": 20,
-    }
-    set_column_widths_from_spec(ws, widths)
+    ws.auto_filter.ref = ws.dimensions
     freeze_at(ws, "A2")
 
 
@@ -355,7 +192,7 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
     date_col = f"'{esn}'!$C$2:$C${last_data_row}"
     # Amount lives in col G of the evidence sheet (not col E, which is
     # Period To); derive it from the shared COL_AMOUNT constant.
-    amt_col_letter = get_column_letter(COL_AMOUNT)
+    amt_col_letter = get_column_letter(EVIDENCE_HEADERS.index("Balance (£)") + 1)
     amt_col = f"'{esn}'!${amt_col_letter}$2:${amt_col_letter}${last_data_row}"
 
     for r_idx, year_val in enumerate(years, 2):
@@ -364,14 +201,14 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
 
         # _xlfn. prefix tells Excel to evaluate MAXIFS/MINIFS on load without
         # the dynamic-array compatibility dialog.
-        peak_f = f'=IFERROR(_xlfn.MAXIFS({amt_col},{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")'
-        low_f = f'=IFERROR(_xlfn.MINIFS({amt_col},{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")'
-        range_f = f'=IFERROR(_xlfn.MAXIFS({amt_col},{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1))-_xlfn.MINIFS({amt_col},{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")'
+        peak_f = f'=IFERROR(_xlfn.MAXIFS({amt_col},{amt_col},"<>",{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")'
+        low_f = f'=IFERROR(_xlfn.MINIFS({amt_col},{amt_col},"<>",{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")'
+        range_f = f'=IFERROR(_xlfn.MAXIFS({amt_col},{amt_col},"<>",{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1))-_xlfn.MINIFS({amt_col},{amt_col},"<>",{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")'
 
         row_values = [
             int(year_val),
             range_f,
-            f'=COUNTIFS({date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1))',
+            f'=COUNTIFS({amt_col},"<>",{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1))',
             f'=IFERROR(AVERAGEIFS({amt_col},{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")',
             peak_f,
             low_f,
@@ -395,7 +232,7 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
             if c_idx == 7:
                 c.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
                     ref=c.coordinate,
-                    location="'Reconciliation Drill-down'!A2",
+                    location="'EDF Evidence Report'!A2",
                     display="→ Drill down",
                     tooltip="Jump to Reconciliation Drill-down sheet",
                 )
@@ -409,7 +246,11 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
         ("OVERALL", None, "center"),
         (f'=IFERROR(MAX(E{first_r}:E{last_r})-MIN(F{first_r}:F{last_r}),"")', "£#,##0.00", "right"),
         (f"=SUM(C{first_r}:C{last_r})", "#,##0", "right"),
-        (f'=IFERROR(AVERAGE(D{first_r}:D{last_r}),"")', "£#,##0.00", "right"),
+        (
+            f'=IFERROR(SUMPRODUCT(D{first_r}:D{last_r},C{first_r}:C{last_r})/SUM(C{first_r}:C{last_r}),"")',
+            "£#,##0.00",
+            "right",
+        ),
         (f'=IFERROR(MAX(E{first_r}:E{last_r}),"")', "£#,##0.00", "right"),
         (f'=IFERROR(MIN(F{first_r}:F{last_r}),"")', "£#,##0.00", "right"),
     ]

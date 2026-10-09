@@ -45,6 +45,15 @@ class BillingRecord:
     period_charge: str | float | None = None
     cancel_rebill_admitted: bool | None = None
     sub_periods: list[dict[str, Any]] = field(default_factory=list)
+    account: str | None = None
+    meter: str | None = None
+    register: str | None = None
+    fuel: str | None = None
+    amount_kind: str | None = None
+    balance: float | None = None
+    transaction_amount: float | None = None
+    energy_unit_rate: float | None = None
+    register_reading: float | None = None
 
     def _serialize_sub_periods(self) -> str:
         return "; ".join(
@@ -80,4 +89,16 @@ class BillingRecord:
             ),
         }
         d["Sub Periods"] = self._serialize_sub_periods()
+        optional = {
+            "Account": self.account,
+            "Meter": self.meter,
+            "Register": self.register,
+            "Fuel": self.fuel,
+            "Amount Kind": self.amount_kind,
+            "Balance (£)": self.balance,
+            "Transaction Amount (£)": self.transaction_amount,
+            "Energy Unit Rate (p/kWh)": self.energy_unit_rate,
+            "Register Reading (kWh)": self.register_reading,
+        }
+        d.update({key: value for key, value in optional.items() if value is not None})
         return d

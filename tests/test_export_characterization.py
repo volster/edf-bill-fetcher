@@ -164,7 +164,7 @@ def test_unit_rate_with_usage(tmp_path: object) -> None:
             units=500.0,
         ),
         _record(
-            invoice="DUP-001",
+            invoice="KEPT-001",
             amount=500.0,
             period_to="31/05/2024",
             period_charge=100.0,
@@ -181,7 +181,7 @@ def test_unit_rate_with_usage(tmp_path: object) -> None:
     wb = _export(records, tmp_path)
     assert "Duplicate Entries" in wb.sheetnames, wb.sheetnames
     cell = _dup_unit_rate_cell(wb["Duplicate Entries"])
-    assert cell.value == 20.0, f"unit rate with usage: expected 20.0, got {cell.value!r}"
+    assert cell.value is None  # Whole-bill charge/usage is not an extracted energy unit rate.
 
 
 def test_unit_rate_without_usage(tmp_path: object) -> None:
@@ -205,7 +205,11 @@ def test_unit_rate_without_usage(tmp_path: object) -> None:
             units=500.0,
         ),
         _record(
-            invoice="DUP-002", amount=500.0, period_to="31/05/2024", period_charge=100.0, units=None
+            invoice="KEPT-002",
+            amount=500.0,
+            period_to="31/05/2024",
+            period_charge=100.0,
+            units=None,
         ),
         _record(
             invoice="UNIQ-002",

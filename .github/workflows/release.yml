@@ -46,7 +46,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[build]"
+          pip install -e ".[build,msg]"
 
       - name: Build Executable
         shell: bash
@@ -72,6 +72,7 @@ jobs:
             --hidden-import=statsmodels \
             --hidden-import=statsmodels.tsa.holtwinters \
             --hidden-import=pypff \
+            --collect-all extract_msg \
             --collect-data edf_bill_fetcher \
             main.py
 
@@ -115,6 +116,10 @@ jobs:
             echo "WARNING: No signed executable found to verify"
           fi
 
+      - name: Record build dependencies
+        shell: bash
+        run: python -m pip freeze --all > dist/build-dependencies.txt
+
       - name: Verify executable exists
         run: |
           if [ -d "dist" ]; then
@@ -134,12 +139,12 @@ jobs:
             # macOS: zip the whole .app bundle (preserves symlinks so the
             # ad-hoc signature survives) plus the raw binary.
             zip -q -r "EDF_Evidence_Collector-macos-${TAG}.zip" \
-              dist/EDF_Evidence_Collector.app dist/EDF_Evidence_Collector
+              dist/EDF_Evidence_Collector.app dist/EDF_Evidence_Collector dist/build-dependencies.txt
           elif [ "$RUNNER_OS" = "Windows" ]; then
             # Windows: PowerShell Compress-Archive to avoid zip quirks.
-            powershell -Command "Compress-Archive -Path dist/EDF_Evidence_Collector.exe -DestinationPath 'EDF_Evidence_Collector-windows-${TAG}.zip' -Force"
+            powershell -Command "Compress-Archive -Path dist/EDF_Evidence_Collector.exe,dist/build-dependencies.txt -DestinationPath 'EDF_Evidence_Collector-windows-${TAG}.zip' -Force"
           else
-            zip -q "EDF_Evidence_Collector-ubuntu-${TAG}.zip" dist/EDF_Evidence_Collector
+            zip -q "EDF_Evidence_Collector-ubuntu-${TAG}.zip" dist/EDF_Evidence_Collector dist/build-dependencies.txt
           fi
           ls -la ./*.zip
 

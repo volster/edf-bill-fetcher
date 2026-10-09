@@ -23,6 +23,8 @@ from docx.shared import (
     RGBColor,
 )
 
+from edf_bill_fetcher.helpers.artifacts import atomic_output
+
 # Import from main module
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.formatting import (
@@ -31,17 +33,21 @@ from edf_bill_fetcher.helpers.formatting import (
 from edf_bill_fetcher.helpers.formatting import (
     fmt_number as _fmt_number,
 )
-from edf_bill_fetcher.io.reporters.pdf_report import (
-    REPORT_SECTIONS,
-    RenderContext,
-    _compute_balance_extremes,
-    _compute_financial_totals,
-    _compute_mean_daily,
-    _get_package_version,
-    fmt_date,
-)
+from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
+from edf_bill_fetcher.helpers.version import get_package_version as _get_package_version
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS, RenderContext
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
+from edf_bill_fetcher.processors.financial import (
+    balance_extremes as _compute_balance_extremes,
+)
+from edf_bill_fetcher.processors.financial import (
+    financial_totals as _compute_financial_totals,
+)
+from edf_bill_fetcher.processors.financial import (
+    mean_daily_rate as _compute_mean_daily,
+)
+from edf_bill_fetcher.processors.preparation import analysis_frame, prepare_evidence
 
 # =============================================================================
 # CONSTANTS
@@ -392,8 +398,8 @@ def create_executive_summary(
         ("Total Records Analyzed", str(n_records)),
         ("Period Covered", f"{period_start} – {period_end}"),
         ("Total Charges (Debits)", fmt_money(charges)),
-        ("Total Payments (Credits)", fmt_money(payments)),
-        ("Net Position", fmt_money(charges - payments)),
+        ("Net Payments/Credits (After Refunds)", fmt_money(payments)),
+        ("Recorded Net Movement", fmt_money(charges - payments)),
         (
             "Opening Balance (First Record)",
             fmt_money(opening_balance) if opening_balance is not None else "—",
@@ -434,22 +440,22 @@ def create_executive_summary(
     doc.add_paragraph("Key Metrics:", style=styles["SubSectionHeader"])
 
     if "Amount (£)" in df.columns:
-        amounts = pd.to_numeric(df["Amount (£)"], errors="coerce").dropna()
+        amounts = pd.to_numeric(df["Balance (£)"], errors="coerce").dropna()
         if not amounts.empty:
             doc.add_paragraph(
-                f"• Average bill amount: {fmt_money(amounts.mean())}",
+                f"• Average observed balance: {fmt_money(amounts.mean())}",
                 style=styles["BodyText"],
             )
             doc.add_paragraph(
-                f"• Median bill amount: {fmt_money(amounts.median())}",
+                f"• Median observed balance: {fmt_money(amounts.median())}",
                 style=styles["BodyText"],
             )
             doc.add_paragraph(
-                f"• Highest single charge: {fmt_money(amounts.max())}",
+                f"• Highest observed balance: {fmt_money(amounts.max())}",
                 style=styles["BodyText"],
             )
             doc.add_paragraph(
-                f"• Lowest single charge: {fmt_money(amounts.min())}",
+                f"• Lowest observed balance: {fmt_money(amounts.min())}",
                 style=styles["BodyText"],
             )
 
@@ -844,7 +850,7 @@ def create_forecast_section(
         doc.add_page_break()
         return
 
-    headers = ["Forecast Period", "Linear Reg. (£)", "EMA (£)"]
+    headers = ["Forecast Month", "Linear Reg. (£)", "EMA (£)"]
     if fc.hw_forecast:
         headers.append("Holt-Winters (£)")
 
@@ -854,7 +860,7 @@ def create_forecast_section(
         table.rows[0].cells[i].text = h
     for i in range(6):
         row = table.rows[i + 1]
-        row.cells[0].text = f"+{i + 1} Period"
+        row.cells[0].text = f"+{i + 1} Month"
         row.cells[1].text = fmt_money(fc.linear_forecast[i])
         row.cells[2].text = fmt_money(fc.ema_forecast[i])
         if fc.hw_forecast:
@@ -866,7 +872,7 @@ def create_forecast_section(
     doc.add_paragraph(
         "Note: Projections assume continuation of current trends and do not account for "
         "seasonal variations, tariff changes, or policy changes. "
-        "Full forecasting with confidence intervals available in the Excel workbook "
+        "Full forecasting with advisory scenario bands available in the Excel workbook "
         "(Forecast & Projection tab).",
         style=styles["BodyText"],
     )
@@ -1320,9 +1326,9 @@ def create_appendix_full_evidence(
     if filtered:
         cont_label = ctx.short_label("appendix_full_evidence").rstrip(".")
         cont_heading = (
-            f"{cont_label}. (cont.) Filtered Records (Below £500 Threshold)"
+            f"{cont_label}. (cont.) Filtered Records (Extraction Threshold)"
             if cont_label
-            else "Filtered Records (Below £500 Threshold)"
+            else "Filtered Records (Extraction Threshold)"
         )
         doc.add_paragraph(cont_heading, style=styles["SectionHeader"])
 
@@ -1413,6 +1419,7 @@ def create_appendix_full_evidence(
 # =============================================================================
 
 
+@atomic_output()
 def generate_ombudsman_docx(
     records: list[dict],
     output_path: str,
@@ -1440,7 +1447,11 @@ def generate_ombudsman_docx(
     if not records:
         raise ValueError("No records to report on")
 
-    df = pd.DataFrame(records)
+    section_failures = []
+    prepared = prepare_evidence(records, config)
+    config = dict(prepared.config)
+    records = prepared.records
+    df = prepared.frame
     if df.empty:
         raise ValueError("Records DataFrame is empty")
 
@@ -1457,9 +1468,9 @@ def generate_ombudsman_docx(
 
     # Ensure required columns exist with defaults
     required_cols = {
-        "Date": "01/01/1970",
+        "Date": "N/A",
         "Source": "Unknown",
-        "Amount (£)": 0.0,
+        "Amount (£)": None,
         "Period From": "N/A",
         "Period To": "N/A",
         "Invoice #": "N/A",
@@ -1506,7 +1517,8 @@ def generate_ombudsman_docx(
     # Ensure _dt column exists for the analysis
     if "_dt" not in df.columns:
         df["_dt"] = df["Date"].apply(parse_to_sort_date)
-    df_sorted = df.sort_values("_dt").reset_index(drop=True)
+    analysis_df = analysis_frame(df, config)
+    df_sorted = analysis_df
 
     # Mean daily rate — shared logic (imported from pdf_report).
     mean_daily = _compute_mean_daily(df_sorted)
@@ -1658,6 +1670,7 @@ def generate_ombudsman_docx(
             kwargs["ctx"] = render_ctx
             invoke(kwargs)
         except Exception as e:
+            section_failures.append(str(e))
             # Surface the failure as a visible paragraph so an
             # ombudsman reader can see something went wrong with a
             # specific section — much better than a silently missing
@@ -1665,6 +1678,10 @@ def generate_ombudsman_docx(
             doc.add_paragraph(f"{spec.title} failed: {e}", style=styles.get("BodyText"))
 
     # Save
+    if section_failures:
+        raise RuntimeError(
+            "Report incomplete; output was not published: " + "; ".join(section_failures)
+        )
     doc.save(output_path)
     return output_path
 

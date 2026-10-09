@@ -1,115 +1,63 @@
-"""Reconciliation sheet writer — extracted from writers/__init__.py (Phase 5E).
-
-Contains the writer plus two small _recon_* helpers for date/amount parsing.
-The shared `_recon_hyperlink` helper stays in writers/_helpers.py and is
-imported (not re-extracted) here.
-"""
+"""Reconcile comparable, scoped observations with stable source sheet coordinates."""
 
 from __future__ import annotations
 
-import re
+from typing import Any
 
-import openpyxl
 import pandas as pd
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.worksheet.worksheet import Worksheet
+from openpyxl.styles import Font
 
-from edf_bill_fetcher.helpers.date_utils import TimestampOrNaT
+from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+from edf_bill_fetcher.helpers.excel_utils import literal_cell
+from edf_bill_fetcher.helpers.identity import account_key
+from edf_bill_fetcher.processors.preparation import identity, normalize_frame, number
 from edf_bill_fetcher.writers._helpers import _recon_hyperlink
 
-# Row offset shared by every sheet in the Reconciliation pair AND the SAP /
-# inferred source sheets its drill-down hyperlinks point at: banner row 1,
-# subtitle row 2, column-header row 3, first data row 4.  Hyperlink target
-# rows computed as ``<data index> + RECON_ROW_OFFSET`` stay valid because
-# all referenced sheets use the same 4-row lead-in.
 RECON_ROW_OFFSET = 4
 
-# ---- _recon_parse_iso_date (was writers/__init__.py L1822-1833) ----
+
+def _recon_parse_iso_date(value):
+    """Use the same UK/ISO interpretation as ingestion and reporting."""
+    return parse_to_sort_date(value)
 
 
-def _recon_parse_iso_date(s: str) -> TimestampOrNaT:
-    if not s:
-        return pd.NaT
-    s = str(s).strip()
-    if not s:
-        return pd.NaT
-    # ISO first (YYYY-MM-DD), then day-first for DD/MM/YYYY.
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
-        return pd.to_datetime(s, errors="coerce")
-    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+def _recon_amount_to_float(value):
+    """Return a finite numeric amount, keeping missing values unavailable."""
+    return number(value)
 
 
-# ---- _recon_amount_to_float (was L1834-1844) ----
-
-
-def _recon_amount_to_float(v: object) -> float:
-    if v is None:
-        return 0.0
-    if isinstance(v, int | float):
-        return float(v)
-    try:
-        return float(str(v).replace(",", "").strip().lstrip("£"))
-    except ValueError:
-        return 0.0
-
-
-# ---- write_reconciliation_sheet (was L1845-2217) ----
+def _compatible(left, right):
+    """Reject conflicting ledger identities; unknown identity is not positive evidence."""
+    for key in ("Account", "Meter", "Register", "Fuel"):
+        a = identity(left.get(key))
+        b = identity(right.get(key))
+        if key == "Account":
+            a = account_key(a or left.get("Kraken ID") or left.get("SAP Account Number"))
+            b = account_key(b)
+        if a and b and a.casefold() != b.casefold():
+            return False
+    return True
 
 
 def write_reconciliation_sheet(
-    ws_summary: Worksheet,
-    ws_detail: Worksheet,
-    sap_contract: list[dict],
-    inferred_contract: pd.DataFrame,
-    sap_meter: list[dict],
-    inferred_meter: pd.DataFrame,
-    sap_financial: list[dict],
-    evidence_df: pd.DataFrame,
-    account: str = "",
-) -> None:
-    """Render the two-sheet cross-source Reconciliation pair.
-
-    Spec §3.2.  Sheet 1 is a compact 3-entity summary with verdict
-    and drill-down hyperlink; Sheet 2 carries unmatched-only rows
-    across three sections with AutoFilter.
-    """
-    ORANGE = "FE5716"
-    NAVY = "10367A"
-
-    def _banner(ws: Worksheet, row: int, text: str) -> None:
-        ws.cell(row=row, column=1, value=text)
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
-        for c in range(1, 9):
-            cell = ws.cell(row=row, column=c)
-            cell.fill = PatternFill("solid", start_color=NAVY)
-            cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-            cell.alignment = Alignment(horizontal="left", vertical="center")
-
-    def _section_banner(ws: Worksheet, row: int, text: str) -> None:
-        ws.cell(row=row, column=1, value=f"\u25a0 {text} \u25a0")
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
-        for c in range(1, 9):
-            cell = ws.cell(row=row, column=c)
-            cell.fill = PatternFill("solid", start_color=ORANGE)
-            cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
-            cell.alignment = Alignment(horizontal="left", vertical="center")
-
-    def _header(ws: Worksheet, row: int, cols: list[str]) -> None:
-        for i, name in enumerate(cols, start=1):
-            cell = ws.cell(row=row, column=i, value=name)
-            cell.fill = PatternFill("solid", start_color="DDDDDD")
-            cell.font = Font(name="Calibri", size=10, bold=True, color="000000")
-
-    # ---- Sheet 1 — summary ----
+    ws_summary,
+    ws_detail,
+    sap_contract,
+    inferred_contract,
+    sap_meter,
+    inferred_meter,
+    sap_financial,
+    evidence_df,
+    account="",
+):
+    """Match once per source row using date, comparable value and ledger identity."""
     ws_summary.title = "Reconciliation"
-    _banner(ws_summary, 1, "EDF CROSS-SOURCE RECONCILIATION")
-    second_line = "SAP dumps vs inferred evidence + reconciled evidence_df rows"
-    if account:
-        second_line += f"  •  Account: {account}"
-    ws_summary.cell(row=2, column=1, value=second_line)
-    ws_summary.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
-
-    sum_headers = [
+    ws_detail.title = "Reconciliation Drill-down"
+    for ws in (ws_summary, ws_detail):
+        literal_cell(ws, 1, 1, "EDF CROSS-SOURCE RECONCILIATION")
+        literal_cell(ws, 2, 1, f"Comparable evidence observations only | Account: {account}")
+        ws.freeze_panes = "A4"
+    summary_headers = [
         "Entity",
         "SAP-side count",
         "EDF-inferred count",
@@ -119,320 +67,162 @@ def write_reconciliation_sheet(
         "Verdict",
         "Drill down",
     ]
-    _header(ws_summary, 3, sum_headers)
-
-    # ---- Sheet 2 — unmatched detail ----
-    ws_detail.title = "Reconciliation Drill-down"
-    _banner(ws_detail, 1, "EDF CROSS-SOURCE RECONCILIATION")
-    ws_detail.cell(row=2, column=1, value=second_line)
-    ws_detail.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
-
-    # Pre-compute detail row counters; each closure below mutates
-    # these so the summary can read the tallies after all three
-    # sections are built.
-    detail_row = RECON_ROW_OFFSET - 1  # header row will be written here first
-    contract_counts: dict[str, int] = {}
-    meter_counts: dict[str, int] = {}
-    financial_counts: dict[str, int] = {}
-
-    def _build_section(
-        ws: Worksheet,
-        title: str,
-        sap_items: list[dict],
-        inferred_df: pd.DataFrame,
-        inferred_cols: list[str],
-        sap_date_key: str,
-        sap_ref_key: str,
-        sap_read_key: str | None,
-        inferred_date_key: str,
-        inferred_read_key: str,
-        source_label: str,
-        inferred_label: str,
-        date_tolerance_days: int = 7,
-        amount_tolerance: float | None = None,
-    ) -> dict[str, int]:
-        nonlocal detail_row
-        counts = {"matched": 0, "unmatched_sap": 0, "unmatched_edf": 0}
-
-        _section_banner(ws, detail_row, title)
-        detail_row += 1
-        header_cols = [
-            "Status",
-            f"SAP {sap_date_key}",
-            f"SAP {sap_read_key or sap_ref_key}",
-            f"Inferred {inferred_date_key}",
-            f"Inferred {inferred_read_key}",
-            "Notes",
-            "Source",
-            "Hyperlink",
-        ]
-        _header(ws, detail_row, header_cols)
-        detail_row += 1
-        section_start = detail_row
-
-        inferred_rows: list[dict] = []
-        if inferred_df is not None and not inferred_df.empty:
-            inferred_rows = inferred_df.to_dict(orient="records")
-
-        # Build matched stacks.
-        unmatched_inferred = list(range(len(inferred_rows)))
-        for sap in sap_items:
-            sap_date = _recon_parse_iso_date(sap.get(sap_date_key, ""))
-            sap_read = _recon_amount_to_float(sap.get(sap_read_key, "")) if sap_read_key else None
-            matched = False
-            for i in unmatched_inferred[:]:
-                inf = inferred_rows[i]
-                inf_date = _recon_parse_iso_date(inf.get(inferred_date_key, ""))
-                date_close = (
-                    abs((sap_date - inf_date).days) <= date_tolerance_days
-                    if not pd.isna(sap_date) and not pd.isna(inf_date)
-                    else False
-                )
-                if not date_close:
-                    continue
-                # Amount-close check (if applicable).
-                if amount_tolerance is not None and sap_read is not None:
-                    inf_read = _recon_amount_to_float(inf.get(inferred_read_key, ""))
-                    if abs(sap_read - inf_read) > amount_tolerance:
-                        continue
-                # Successful match — suppress on detail sheet per spec 3.2;
-                # only the summary counts carry this information.
-                unmatched_inferred.remove(i)
-                counts["matched"] += 1
-                break
-            if not matched:
-                sap_idx = sap_items.index(sap) + RECON_ROW_OFFSET
-                ws.cell(row=detail_row, column=1, value="Missing in Inferred")
-                ws.cell(row=detail_row, column=2, value=sap.get(sap_date_key, ""))
-                ws.cell(
-                    row=detail_row,
-                    column=3,
-                    value=sap.get(sap_read_key or sap_ref_key, ""),
-                )
-                for col in (4, 5):
-                    ws.cell(row=detail_row, column=col, value="—")
-                ws.cell(
-                    row=detail_row,
-                    column=6,
-                    value=f"SAP {title.lower()} row not present in {inferred_label}",
-                )
-                ws.cell(row=detail_row, column=7, value=source_label)
-                _recon_hyperlink(ws, detail_row, 8, source_label, sap_idx)
-                detail_row += 1
-                counts["unmatched_sap"] += 1
-        for i in unmatched_inferred:
-            inf = inferred_rows[i]
-            inf_target = i + RECON_ROW_OFFSET
-            ws.cell(row=detail_row, column=1, value="Missing in SAP")
-            for col in (2, 3):
-                ws.cell(row=detail_row, column=col, value="—")
-            ws.cell(
-                row=detail_row,
-                column=4,
-                value=inf.get(inferred_date_key, ""),
-            )
-            ws.cell(
-                row=detail_row,
-                column=5,
-                value=inf.get(inferred_read_key, ""),
-            )
-            ws.cell(
-                row=detail_row,
-                column=6,
-                value=f"{inferred_label} row not present in SAP dump",
-            )
-            ws.cell(row=detail_row, column=7, value=inferred_label)
-            _recon_hyperlink(ws, detail_row, 8, inferred_label, inf_target)
-            detail_row += 1
-            counts["unmatched_edf"] += 1
-
-        # Compact spacer after each section.
-        detail_row += 1
-        return {**counts, "section_start": section_start}
-
-    # Contract section
-    contract_section = _build_section(
-        ws_detail,
-        "Contract Reconciliation",
-        sap_contract,
-        inferred_contract,
-        ["Contract From", "Contract To", "Product Code"],
-        "Contract From",
-        "Product Code",
-        None,
-        "Contract From",
-        "Product Code",
-        "SAP Contract History",
-        "Contract History",
-    )
-    contract_counts = contract_section
-
-    # Meter Read section
-    meter_section = _build_section(
-        ws_detail,
-        "Meter Read Reconciliation",
-        sap_meter,
-        inferred_meter,
-        ["Meter Read Date", "Reading (kWh)"],
-        "Meter Read Date",
-        "Reading (kWh)",
-        "Reading (kWh)",
-        "Meter Read Date",
-        "Reading (kWh)",
-        "SAP Meter Readings",
-        "Meter Readings",
-    )
-    meter_counts = meter_section
-
-    # Financial reconciliation section
-    _section_banner(ws_detail, detail_row, "Financial Reconciliation")
-    detail_row += 1
-    _header(
-        ws_detail,
-        detail_row,
-        [
-            "Status",
-            "SAP Document No.",
-            "SAP Posting Date",
-            "SAP Amount",
-            "Evidence Date",
-            "Evidence Amount",
-            "Notes",
-            "Hyperlink",
-        ],
-    )
-    detail_row += 1
-    financial_section_start = detail_row
-
-    evidence_rows_list: list[dict] = []
-    if evidence_df is not None and not evidence_df.empty:
-        evidence_rows_list = evidence_df.to_dict(orient="records")
-
-    unmatched_ev = list(range(len(evidence_rows_list)))
-    financial_counts = {"matched": 0, "unmatched_sap": 0, "unmatched_edf": 0}
-    for sap in sap_financial:
-        sap_date = _recon_parse_iso_date(sap.get("Posting Date", ""))
-        sap_amt = _recon_amount_to_float(sap.get("Amount", ""))
-        matched = False
-        for i in unmatched_ev[:]:
-            ev = evidence_rows_list[i]
-            ev_date = _recon_parse_iso_date(ev.get("Date", ""))
-            ev_amt = _recon_amount_to_float(ev.get("Amount (£)", 0))
-            date_close = (
-                abs((sap_date - ev_date).days) <= 7
-                if not pd.isna(sap_date) and not pd.isna(ev_date)
-                else False
-            )
-            amount_close = abs(sap_amt - ev_amt) <= 0.50
-            if date_close and amount_close:
-                matched = True
-                abs_amt_diff = abs(sap_amt - ev_amt)
-                if abs_amt_diff >= 0.01:
-                    # Discrepancy rows stay on the detail sheet.
-                    status = "Discrepancy"
-                    note = f"Amount Δ = £{abs_amt_diff:,.2f}"
-                    ws_detail.cell(row=detail_row, column=1, value=status)
-                    ws_detail.cell(row=detail_row, column=2, value=sap.get("Document No.", ""))
-                    ws_detail.cell(row=detail_row, column=3, value=sap.get("Posting Date", ""))
-                    ws_detail.cell(row=detail_row, column=4, value=sap_amt)
-                    ws_detail.cell(row=detail_row, column=5, value=ev.get("Date", ""))
-                    ws_detail.cell(row=detail_row, column=6, value=ev_amt)
-                    ws_detail.cell(row=detail_row, column=7, value=note)
-                    _recon_hyperlink(
-                        ws_detail, detail_row, 8, "EDF Evidence Report", financial_section_start + i
-                    )
-                    detail_row += 1
-                unmatched_ev.remove(i)
-                financial_counts["matched"] += 1
-                break
-        if not matched:
-            sap_idx = sap_financial.index(sap) + RECON_ROW_OFFSET
-            ws_detail.cell(row=detail_row, column=1, value="Missing in Evidence")
-            ws_detail.cell(row=detail_row, column=2, value=sap.get("Document No.", ""))
-            ws_detail.cell(row=detail_row, column=3, value=sap.get("Posting Date", ""))
-            ws_detail.cell(row=detail_row, column=4, value=sap_amt)
-            for col in (5, 6):
-                ws_detail.cell(row=detail_row, column=col, value="—")
-            ws_detail.cell(
-                row=detail_row,
-                column=7,
-                value="SAP financial row not on Evidence Report",
-            )
-            _recon_hyperlink(ws_detail, detail_row, 8, "SAP Financial Transactions", sap_idx)
-            detail_row += 1
-            financial_counts["unmatched_sap"] += 1
-    for i in unmatched_ev:
-        ev = evidence_rows_list[i]
-        ev_target = financial_section_start + i
-        ws_detail.cell(row=detail_row, column=1, value="Missing in SAP")
-        for col in (2, 3, 4):
-            ws_detail.cell(row=detail_row, column=col, value="—")
-        ws_detail.cell(row=detail_row, column=5, value=ev.get("Date", ""))
-        ws_detail.cell(row=detail_row, column=6, value=ev.get("Amount (£)", ""))
-        ws_detail.cell(
-            row=detail_row,
-            column=7,
-            value="Evidence row not present in SAP Financial dump",
-        )
-        _recon_hyperlink(ws_detail, detail_row, 8, "EDF Evidence Report", ev_target)
-        detail_row += 1
-        financial_counts["unmatched_edf"] += 1
-
-    # ---- AutoFilter + freeze on detail sheet ----
-    if detail_row > 3:
-        ws_detail.auto_filter.ref = f"A3:H{detail_row}"
-    ws_detail.freeze_panes = f"A{RECON_ROW_OFFSET}"
-
-    # ---- Build summary rows (3 entities) ----
-    section_starts = {
-        "Contract": contract_section["section_start"],
-        "Meter Read": meter_section["section_start"],
-        "Financial": financial_section_start,
-    }
-
-    def _verdict(entity: str, counts: dict[str, int]) -> str:
-        if counts["matched"] == 0 and counts["unmatched_sap"] == 0:
-            return f"No SAP-side {entity.lower()} rows to reconcile"
-        if counts["unmatched_edf"] == 0 and counts["unmatched_sap"] == 0:
-            return f"All {counts['matched']} SAP {entity.lower()} rows matched"
-        parts = []
-        if counts["unmatched_sap"]:
-            parts.append(f"{counts['unmatched_sap']} SAP {entity.lower()} row(s) missing in EDF")
-        if counts["unmatched_edf"]:
-            parts.append(f"{counts['unmatched_edf']} EDF {entity.lower()} row(s) missing in SAP")
-        return "; ".join(parts)
-
-    summary_rows = [
-        ("Contract", len(sap_contract), len(inferred_contract), contract_counts),
-        ("Meter Read", len(sap_meter), len(inferred_meter), meter_counts),
-        ("Financial", len(sap_financial), len(evidence_rows_list), financial_counts),
+    detail_headers = [
+        "Entity",
+        "Status",
+        "SAP Date",
+        "SAP Value",
+        "Evidence Date",
+        "Evidence Value",
+        "Notes",
+        "Hyperlink",
     ]
-    for i, (entity, sap_cnt, edf_cnt, counts) in enumerate(summary_rows, start=RECON_ROW_OFFSET):
-        ws_summary.cell(row=i, column=1, value=entity)
-        ws_summary.cell(row=i, column=2, value=sap_cnt)
-        ws_summary.cell(row=i, column=3, value=edf_cnt)
-        ws_summary.cell(row=i, column=4, value=counts["matched"])
-        ws_summary.cell(row=i, column=5, value=counts["unmatched_sap"])
-        ws_summary.cell(row=i, column=6, value=counts["unmatched_edf"])
-        ws_summary.cell(row=i, column=7, value=_verdict(entity, counts))
-        target_row = section_starts[entity]
-        cell = ws_summary.cell(row=i, column=8)
-        cell.value = "→ Drill down"
-        cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
-            ref=cell.coordinate,
-            location=f"'Reconciliation Drill-down'!A{target_row}",
-            display="→ Drill down",
+    for ws, headers in ((ws_summary, summary_headers), (ws_detail, detail_headers)):
+        for col, header_value in enumerate(headers, 1):
+            literal_cell(ws, 3, col, header_value).font = Font(bold=True)
+    evidence = normalize_frame(evidence_df).to_dict("records")
+    meter = []
+    transactions = []
+    for idx, record in enumerate(evidence):
+        if number(record.get("Register Reading (kWh)")) is not None:
+            meter.append(
+                {**record, "_target": idx + 2, "_value": number(record["Register Reading (kWh)"])}
+            )
+        if number(record.get("Transaction Amount (£)")) is not None:
+            transactions.append(
+                {**record, "_target": idx + 2, "_value": number(record["Transaction Amount (£)"])}
+            )
+    contracts = []
+    if inferred_contract is not None:
+        for idx, record in enumerate(inferred_contract.to_dict("records")):
+            # A display tariff name does not establish a SAP product code.
+            if identity(record.get("Product Code")):
+                contracts.append(
+                    {
+                        **record,
+                        "Date": record.get("Contract From"),
+                        "_value": identity(record.get("Product Code")),
+                        "_target": idx + 8,
+                    }
+                )
+    detail_row = 4
+    specs = [
+        (
+            "Contract",
+            sap_contract,
+            contracts,
+            "Contract From",
+            "Product Code",
+            "SAP Contract History",
+            "Contract History",
+        ),
+        (
+            "Meter Read",
+            sap_meter,
+            meter,
+            "Meter Read Date",
+            "Reading (kWh)",
+            "SAP Meter Readings",
+            "EDF Evidence Report",
+        ),
+        (
+            "Financial",
+            sap_financial,
+            transactions,
+            "Posting Date",
+            "Amount",
+            "SAP Financial Transactions",
+            "EDF Evidence Report",
+        ),
+    ]
+    for summary_row, (
+        entity,
+        sap_items,
+        inferred,
+        date_key,
+        value_key,
+        sap_sheet,
+        inferred_sheet,
+    ) in enumerate(specs, 4):
+        start = detail_row
+        remaining = list(range(len(inferred)))
+        matched = unmatched_sap = 0
+        for source_idx, sap in enumerate(sap_items):
+            sap_date = parse_to_sort_date(sap.get(date_key))
+            value: Any = (
+                identity(sap.get(value_key)) if entity == "Contract" else number(sap.get(value_key))
+            )
+            if entity == "Financial" and value is not None:
+                kind = str(sap.get("Document Type", "")).lower()
+                if "payment" in kind or "credit" in kind:
+                    value = -abs(value)
+            matches = []
+            for idx in remaining:
+                record = inferred[idx]
+                date = parse_to_sort_date(record.get("Date"))
+                if pd.isna(sap_date) or pd.isna(date) or not _compatible(sap, record):
+                    continue
+                delta = abs((sap_date - date).days)
+                equal = (
+                    value == record["_value"]
+                    if entity == "Contract"
+                    else value is not None and abs(value - record["_value"]) <= 0.005
+                )
+                if delta <= 7 and equal:
+                    matches.append((delta, idx))
+            if matches:
+                idx = min(matches)[1]
+                remaining.remove(idx)
+                matched += 1
+                continue
+            unmatched_sap += 1
+            status = "Unmatched" if inferred else "Not assessed"
+            note = (
+                "No comparable inferred values available"
+                if not inferred
+                else "No match by date, value and ledger identity"
+            )
+            values = [entity, status, sap.get(date_key), value, None, None, note]
+            for col, val in enumerate(values, 1):
+                literal_cell(ws_detail, detail_row, col, val)
+            _recon_hyperlink(ws_detail, detail_row, 8, sap_sheet, source_idx + 4)
+            detail_row += 1
+        for idx in remaining:
+            record = inferred[idx]
+            values = [
+                entity,
+                "Unmatched",
+                None,
+                None,
+                record.get("Date"),
+                record["_value"],
+                "No comparable SAP match",
+            ]
+            for col, val in enumerate(values, 1):
+                literal_cell(ws_detail, detail_row, col, val)
+            _recon_hyperlink(ws_detail, detail_row, 8, inferred_sheet, record["_target"])
+            detail_row += 1
+        verdict = (
+            "NOT ASSESSED"
+            if not sap_items or not inferred
+            else "MATCHED"
+            if not unmatched_sap and not remaining
+            else "REVIEW"
         )
-        cell.font = Font(color="0563C1", underline="single")
-
-    ws_summary.freeze_panes = f"A{RECON_ROW_OFFSET}"
-
-
-# ---------------------------------------------------------------------------
-
-
-__all__ = [
-    "_recon_amount_to_float",
-    "_recon_parse_iso_date",
-    "write_reconciliation_sheet",
-]
+        values = [
+            entity,
+            len(sap_items),
+            len(inferred),
+            matched,
+            unmatched_sap,
+            len(remaining),
+            verdict,
+        ]
+        for col, summary_value in enumerate(values, 1):
+            literal_cell(ws_summary, summary_row, col, summary_value)
+        _recon_hyperlink(ws_summary, summary_row, 8, ws_detail.title, start)
+    ws_summary.auto_filter.ref = "A3:H6"
+    ws_detail.auto_filter.ref = f"A3:H{max(3, detail_row - 1)}"
+    for ws in (ws_summary, ws_detail):
+        for letter in "ABCDEFGH":
+            ws.column_dimensions[letter].width = 24 if letter != "G" else 55

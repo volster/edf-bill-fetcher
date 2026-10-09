@@ -22,7 +22,7 @@ from edf_bill_fetcher.models.report_models import (
 def _synthetic_records() -> pd.DataFrame:
     """One deterministic fixture: 8 rows, two tariffs, a credit, and a
     NaN Period Charge row.  All identifiers are fabricated."""
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         [
             {
                 "Date": "01/11/2023",
@@ -114,6 +114,13 @@ def _synthetic_records() -> pd.DataFrame:
             },
         ]
     )
+
+    frame["Energy Unit Rate (p/kWh)"] = pd.to_numeric(frame["Unit Rate (p/kWh)"], errors="coerce")
+    frame["Period From"] = frame["Date"]
+    frame["Period To"] = (
+        pd.to_datetime(frame["Date"], dayfirst=True) + pd.Timedelta(days=1)
+    ).dt.strftime("%d/%m/%Y")
+    return frame
 
 
 class TestStatisticalSurfaceParity:
@@ -259,6 +266,7 @@ class TestForecastStatisticalSurfaceParity:
         from edf_bill_fetcher.models.report_models import compute_forecast
 
         df = _synthetic_records()
+        df["Date"] = pd.date_range("2024-01-01", periods=len(df), freq="MS").strftime("%d/%m/%Y")
         fc = compute_forecast(df)
 
         wb = openpyxl.Workbook()
@@ -279,6 +287,7 @@ class TestForecastStatisticalSurfaceParity:
         from edf_bill_fetcher.models.report_models import compute_forecast
 
         df = _synthetic_records()
+        df["Date"] = pd.date_range("2024-01-01", periods=len(df), freq="MS").strftime("%d/%m/%Y")
         fc = compute_forecast(df)
 
         doc = __import__("docx").Document()

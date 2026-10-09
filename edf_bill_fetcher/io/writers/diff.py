@@ -24,6 +24,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from edf_bill_fetcher.helpers.artifacts import atomic_output
+from edf_bill_fetcher.helpers.excel_utils import literal_cell
+
 ADDED_SHEET = "Added Records"
 REMOVED_SHEET = "Removed Records"
 CHANGED_SHEET = "Changed Records"
@@ -54,7 +57,7 @@ def _cell_value(value: Any) -> Any:
 
 def _append_row(ws: Any, row: int, values: list[Any]) -> None:
     for col, value in enumerate(values, 1):
-        ws.cell(row=row, column=col, value=value)
+        literal_cell(ws, row=row, column=col, value=value)
 
 
 def _style_header_row(ws: Any, ncols: int, row: int = 1) -> None:
@@ -131,6 +134,7 @@ def _write_changed_sheet(ws: Any, changed: list[dict[str, Any]]) -> None:
     _autosize(ws, len(headers))
 
 
+@atomic_output()
 def write_diff_workbook(diff: dict[str, list[dict[str, Any]]], output_path: str) -> None:
     """Write the added/removed/changed sheets of a run-diff result to ``output_path``."""
     wb = Workbook()

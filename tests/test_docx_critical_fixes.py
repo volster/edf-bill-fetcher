@@ -188,6 +188,8 @@ def _install_minimal_caps(monkeypatch: pytest.MonkeyPatch, *, with_latest: bool)
     minimal_caps: dict[str, dict[str, float]] = {
         "2026-Q3": {"unit_rate": 25.0},
     }
+    if with_latest:
+        minimal_caps["2026-Q4"] = {"unit_rate": 25.0, "is_carry": True}
     latest = {"unit_rate": 25.0} if with_latest else None
     monkeypatch.setattr(
         sys.modules["edf_bill_fetcher.models.report_models"],
@@ -210,7 +212,11 @@ def _make_ofgem_records(quarter_year: int, quarter_num: int) -> pd.DataFrame:
                 "Entry Type": "New Bill",
                 "Amount (£)": 200.0,
                 "Period Charge (£)": 200.0,
-                "Units (kWh)": 800.0,  # 200.0 / 800 * 100 = 25.0 p/kWh
+                "Units (kWh)": 800.0,
+                "Energy Unit Rate (p/kWh)": 25.0,
+                "Fuel": "electricity",
+                "Payment Method": "Direct Debit",
+                "Tariff Type": "variable",
                 "Period From": f"01 {['Jan', 'Apr', 'Jul', 'Oct'][quarter_num - 1]} {quarter_year}",
                 "Period To": f"30 {['Jan', 'Apr', 'Jul', 'Oct'][quarter_num - 1]} {quarter_year}",
                 "Invoice #": "TEST-001",
@@ -268,7 +274,7 @@ class TestOFGEMAutoCarryForward:
         # not the MISSING sentinel "—".
         assert body.cells[2].text.strip() != "—"
         # Status should reference the carried-forward marker.
-        assert "CAP CARRIED FORWARD" in body.cells[4].text
+        assert "CARRIED" in body.cells[4].text
 
         # The summary row at index len(cap_rows) + 1 should read
         # ``COMPLIANT (CARRIED)`` (the carried-forward verdict), not
@@ -276,7 +282,7 @@ class TestOFGEMAutoCarryForward:
         # was unavailable).
         summary = comp_table.rows[2]
         assert summary.cells[0].text.strip() == "OVERALL"
-        assert "COMPLIANT (CARRIED)" in summary.cells[4].text
+        assert "PROVISIONAL BENCHMARK (CARRIED)" in summary.cells[4].text
 
     def test_quarter_beyond_table_without_latest_known_still_incomplete(
         self, monkeypatch: pytest.MonkeyPatch
@@ -317,7 +323,7 @@ class TestOFGEMAutoCarryForward:
         # Overall verdict is INCOMPLETE.
         summary = comp_table.rows[2]
         assert summary.cells[0].text.strip() == "OVERALL"
-        assert "INCOMPLETE" in summary.cells[4].text
+        assert "NOT ASSESSED" in summary.cells[4].text
 
     def test_quarter_with_nan_unit_rate_is_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A quarter whose unit rate is NaN (0/0) must be dropped from the

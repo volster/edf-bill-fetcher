@@ -1,14 +1,4 @@
-"""Regression test pinning the EDFFC-reconciliation warning contract.
-
-Pre-fix, ``compute_dispute_flags`` swallowed per-row parse errors with
-``pass`` — silently losing the row.  The fix replaces each ``pass`` with
-:func:`warnings.warn` so an upstream parse failure becomes a
-developer-visible signal without breaking the run.
-
-This test feeds a row whose ``Amount (£)`` payload is a raw string
-(not float-castable) into one of the heuristics, then asserts that
-each heuristic emits a warning AND still completes without raising.
-"""
+"""Invalid monetary input remains visible while valid evidence can still be analysed."""
 
 from __future__ import annotations
 

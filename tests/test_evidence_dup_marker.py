@@ -167,20 +167,19 @@ def test_dup_sheet_empty_when_save_dups_disabled(tmp_path: object) -> None:
 
 
 def _seed_canonical(engine: EvidenceEngine) -> None:
-    engine.process_text(
-        "28 Feb 2025 We charged your account £500.00 For 1000 kWh of electricity "
-        "used between 01 Feb 2025 and 28 Feb 2025 Balance £500.00 in debit",
-        "HTM Account History",
-        "seed.001",
-        "28/02/2025",
-    )
+    _seed_dup(engine, "HTM Account History")
 
 
 def _seed_dup(engine: EvidenceEngine, label: str) -> None:
-    engine.process_text(
-        "28 Feb 2025 We charged your account £500.00 For 1000 kWh of electricity "
-        "used between 01 Feb 2025 and 28 Feb 2025 Balance £500.00 in debit",
-        label,
-        "dup.001",
-        "28/02/2025",
+    engine._add_record(
+        {
+            "Source": label,
+            "Date": "28/02/2025",
+            "Entry Type": "New Bill",
+            "Invoice #": "T1234567",
+            "Period From": "01/02/2025",
+            "Period To": "28/02/2025",
+            "Amount (£)": 500.0,
+            "Period Charge (£)": 500.0,
+        }
     )

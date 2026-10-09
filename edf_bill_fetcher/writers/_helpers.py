@@ -22,6 +22,7 @@ from edf_bill_fetcher.models.events import SapBackBillingEvent
 # the two copies are unified into a single implementation.  Existing
 # importers (writers/__init__.py, io/writers/export.py) keep working.
 from edf_bill_fetcher.processors.matching import match_sap_events_to_edf  # noqa: F401
+from edf_bill_fetcher.processors.preparation import SOURCE_PRECEDENCE
 
 EST_YELLOW = "FFFF99"
 JUMP_RED = "FF9999"
@@ -30,14 +31,7 @@ MEDIUM_GREY = "#666666"
 
 # Source precedence for deduplication in export_to_excel.
 # Lower number = higher precedence.
-_SOURCE_PRECEDENCE: dict[str, int] = {
-    "HTM Account History": 0,
-    "Local PDF Folder": 1,
-    "Statement Reconciliation": 1,
-    "PST PDF Attachment": 2,
-    "Email Body": 3,
-    "Email Body (RTF)": 3,
-}
+_SOURCE_PRECEDENCE = SOURCE_PRECEDENCE
 
 
 def _analyze_tariff_impact(df: pd.DataFrame) -> dict[str, object]:
@@ -87,7 +81,7 @@ def _reading_type_to_aem(reading_value: str) -> str:
         return "E"
     if reading_value == "Smart":
         return "A"
-    return "E"
+    return "U"
 
 
 def _recon_hyperlink(

@@ -96,7 +96,7 @@ def test_reading_type_to_aem_all_values() -> None:
     assert h._reading_type_to_aem("Actual") == "A"
     assert h._reading_type_to_aem("Estimated") == "E"
     assert h._reading_type_to_aem("Smart") == "A"
-    assert h._reading_type_to_aem("Unknown") == "E"
+    assert h._reading_type_to_aem("Unknown") == "U"
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +361,7 @@ def test_assess_reason_admitted() -> None:
     )
     assert "KI-1" in narrative
     assert "billed on 01 Mar 2024" in narrative
-    assert "35 days of consumption were supplied more than 12 months before the bill" in narrative
+    assert "35 consumption days fall outside the nominal 365-day window" in narrative
     assert "admits a cancellation/reversal" in narrative
 
 
@@ -376,7 +376,7 @@ def test_assess_reason_not_admitted() -> None:
     )
     assert "KI-2" in narrative
     assert "billed on 01 Mar 2024" in narrative
-    assert "35 days of consumption were supplied more than 12 months before the bill" in narrative
+    assert "35 consumption days fall outside the nominal 365-day window" in narrative
     assert "No admit-phrase was found" in narrative
 
 
@@ -770,10 +770,16 @@ def _flag_df(
     df = pd.DataFrame(
         {
             "Date": dates,
+            "Entry Type": ["New Bill"] * len(dates),
+            "Amount Kind": ["Balance"] * len(dates),
+            "Period From": (pd.to_datetime(dates, dayfirst=True) - pd.Timedelta(days=30)).strftime(
+                "%d/%m/%Y"
+            ),
+            "Period To": dates,
             "_dt": (
                 ["not-a-date"] * len(dates) if bad_dt else pd.to_datetime(dates, dayfirst=True)
             ),
-            "Amount (£)": (["£100"] * len(dates) if bad_amounts else amounts),
+            "Amount (£)": (["NOT_A_NUMBER"] * len(dates) if bad_amounts else amounts),
         }
     )
     if readings is not None:
@@ -848,7 +854,11 @@ def test_compute_dispute_flags_estimated_run_below_three() -> None:
 
 
 def test_compute_dispute_flags_high_daily_rate() -> None:
-    df = _flag_df(["01/01/2024", "01/02/2024"], [100.0, 200.0])
+    df = _flag_df(
+        ["01/01/2024", "01/02/2024", "01/03/2024", "01/04/2024"],
+        [100.0] * 4,
+        period_charges=[1.0, 1.0, 1.0, 1000.0],
+    )
     flags, _ = h.compute_dispute_flags(df, mean_daily=1.0)
     names = [f[0] for f in flags]
     assert "HIGH DAILY RATE" in names

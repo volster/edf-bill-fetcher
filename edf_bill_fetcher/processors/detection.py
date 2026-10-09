@@ -18,6 +18,8 @@ import pandas as pd
 
 from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime, parse_to_display_date
 from edf_bill_fetcher.io.adapters.pdf import legal_context as legal_context_fn  # noqa: E402,F401
+from edf_bill_fetcher.processors.ledgers import scoped_analysis
+from edf_bill_fetcher.processors.preparation import scope
 from edf_bill_fetcher.processors.sap_parsers import (
     detect_reconciliation_statement,
     extract_reconciliation_statement_rows,
@@ -105,17 +107,16 @@ def _assess_reason(
     if admitted:
         head = (
             f"Invoice {invoice} billed on {bd} for consumption from {pf} to {pt}; "
-            f"{excess} days of consumption were supplied more than 12 months before the bill, "
-            "exceeding the SLC 7A back-billing limit. "
-            "EDF's cover page admits a cancellation/reversal, which is "
-            "direct evidence the bill is a back-billing remedy."
+            f"{excess} consumption days fall outside the nominal 365-day window. "
+            "Eligibility under Ofgem back-billing protections requires review. "
+            "EDF's cover page admits a cancellation/reversal; its reason requires assessment."
         )
     else:
         head = (
             f"Invoice {invoice} billed on {bd} for consumption from {pf} to {pt}; "
-            f"{excess} days of consumption were supplied more than 12 months before the bill, "
-            "exceeding the SLC 7A back-billing limit. No "
-            "admit-phrase was found on the cover page."
+            f"{excess} consumption days fall outside the nominal 365-day window. "
+            "Eligibility under Ofgem back-billing protections requires review. "
+            "No admit-phrase was found on the cover page."
         )
     return head
 
@@ -163,25 +164,16 @@ _SAP_DDMMYYYY_RE = re.compile(r"\b(\d{2})-(\d{2})-(\d{4})\b")
 # but still surface the data under alternative phrasings on the cover sheet.
 
 
-def _pull_period_charge(r: pd.Series) -> tuple[float, str]:
-    """Pull ``Period Charge (£)`` from the source row; fall back to ``Amount (£)``.
+def _pull_period_charge(r: pd.Series) -> tuple[float | None, str]:
+    """Use known billed charges, never infer a charge from an account balance."""
+    from edf_bill_fetcher.processors.preparation import normalize_record, number
 
-    Returns ``(charge, value_source)`` where ``value_source`` is
-    ``"Period Charge"`` when the Period Charge column was used, or
-    ``"Amount (fallback)"`` when Period Charge was absent, N/A, or
-    unparseable and the Amount column was used instead.
-    """
-    pc_raw = r.get("Period Charge (£)")
-    if pc_raw is not None:
-        try:
-            return float(pc_raw), "Period Charge"
-        except (TypeError, ValueError):
-            pass
-    amt_raw = r.get("Amount (£)", 0)
-    try:
-        return float(amt_raw), "Amount (fallback)"
-    except (TypeError, ValueError):
-        return 0.0, "Amount (fallback)"
+    row = normalize_record(r.to_dict())
+    charge = number(row.get("Period Charge (£)"))
+    if charge is not None:
+        return charge, "Period Charge"
+    charge = number(row.get("Transaction Amount (£)"))
+    return (charge, "Transaction Amount") if charge is not None else (None, "Unavailable")
 
 
 def _parse_sub_periods(raw: object) -> list[dict]:
@@ -274,6 +266,12 @@ def compute_unlawful_union_total(bb: pd.DataFrame) -> float:
     recovers it, at that invoice's rate and kWh/day.  Returns the sum over
     claimed days of ``rate_p / 100 * kwh_per_day``.
     """
+    if bb is not None and not bb.empty:
+        scopes = pd.Series([scope(r) for r in bb.to_dict("records")], index=bb.index)
+        if scopes.nunique() > 1:
+            return round(
+                sum(compute_unlawful_union_total(group) for _, group in bb.groupby(scopes)), 2
+            )
     if bb is None or bb.empty:
         return 0.0
     claimed: dict[pd.Timestamp, tuple[float, float]] = {}  # day -> (rate_p, kwh/day)
@@ -302,6 +300,7 @@ def backbilling_cutoff(bill_date: pd.Timestamp) -> pd.Timestamp:
     return bill_date - pd.Timedelta(days=365)
 
 
+@scoped_analysis
 def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     """Return invoices that are back-billing under SLC 7A / Electricity Act 1989 s.84B.
 
@@ -425,6 +424,8 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         excess = max(0, int((backbilling_cutoff(bill_date_dt) - pf).days))
         # Period Charge (£) with Amount (£) fallback.
         charge, value_source = _pull_period_charge(r)
+        if charge is None or charge <= 0:
+            continue
         admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
         bill_date_raw = r.get("Date", "")
         sub_periods = _parse_sub_periods(r.get("Sub Periods"))
@@ -536,6 +537,7 @@ def _reversal_match(
     return False
 
 
+@scoped_analysis
 def detect_rebilling(
     df: pd.DataFrame,
     *,
@@ -792,6 +794,7 @@ def compute_transitive_domination(
 _DEFAULT_ROLLOVER_THRESHOLD = 99999 - 5000
 
 
+@scoped_analysis
 def detect_meter_rollover(
     df: pd.DataFrame, rollover_threshold: int = _DEFAULT_ROLLOVER_THRESHOLD
 ) -> pd.DataFrame:
@@ -838,7 +841,7 @@ def detect_meter_rollover(
     prev_invoice = ""
     prev_date_raw = ""
     for _, r in candidates.iterrows():
-        u_raw = r.get("Units (kWh)", "N/A")
+        u_raw = r.get("Register Reading (kWh)", "N/A")
         try:
             u = float(u_raw)
         except (TypeError, ValueError):

@@ -1,30 +1,4 @@
-"""Phase 2.2 / Pass-1 dedup regression — cross-source same-period-amount.
-
-The Pass-1 dedup walker in ``edf_collector.export_to_excel``
-used to compute ``_dedup_date`` as ``df["_sort"].where(cond,
-df["_sort"])`` — a tautology that ignored ``Period To``
-entirely and so never catched HTM↔PST cross-source duplicates
-when the receipt dates differ.  Combined with a
-``sort_values(["_sort", "_src_pri"])`` that sorted Date-
-ascending before source-precedence, the dedup sank the
-higher-precedence HTM row even when its source-of-truth
-billing period matched a PST row exactly.
-
-This regression pins both fixes:
-
-  1. Two-row collision where HTM and PST share Period To but
-     have different receipt Dates — both rows resolved to the
-     same ``_dedup_date`` (the parsed Period To), and the
-     kept row must be HTM (lower _src_pri = higher
-     precedence).
-  2. Three-row collision spanning the full user-stated
-     precedence ladder (HTM, Local PDF, PST, Email Body share
-     Period To; Email Body is repeated with a stray different
-     amount) — confirms the kept row follows precedence, not
-     df order.
-
-The fix is a small but tightly-locked behavioural change.
-"""
+"""Identified cross-source bills deduplicate by completeness and source precedence."""
 
 from __future__ import annotations
 
@@ -68,7 +42,7 @@ def _price_records() -> list[dict]:
             "Source": "Email Body",
             "Period From": "N/A",
             "Period To": "01/04/2024",
-            "Invoice #": "",
+            "Invoice #": "INV-100",
             "Money": 99.99,
             "Amount (£)": 99.99,
             "Period Charge (£)": 0.0,
@@ -90,7 +64,7 @@ def _price_records() -> list[dict]:
             "Source": "PST PDF Attachment",
             "Period From": "01/03/2024",
             "Period To": "01/04/2024",
-            "Invoice #": "",
+            "Invoice #": "INV-100",
             "Money": 100.0,
             "Amount (£)": 100.0,
             "Period Charge (£)": 80.0,
@@ -111,7 +85,7 @@ def _price_records() -> list[dict]:
             "Source": "Local PDF Folder",
             "Period From": "N/A",
             "Period To": "01/04/2024",
-            "Invoice #": "",
+            "Invoice #": "INV-100",
             "Money": 100.0,
             "Amount (£)": 100.0,
             "Period Charge (£)": 80.0,
@@ -134,7 +108,7 @@ def _price_records() -> list[dict]:
             "Source": "HTM Account History",
             "Period From": "01/03/2024",
             "Period To": "01/04/2024",
-            "Invoice #": "",
+            "Invoice #": "INV-100",
             "Money": 100.0,
             "Amount (£)": 100.0,
             "Period Charge (£)": 80.0,

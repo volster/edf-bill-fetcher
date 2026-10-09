@@ -70,7 +70,13 @@ def load_ofgem_caps(
                     UserWarning,
                     stacklevel=2,
                 )
-        caps[key] = {"unit_rate": unit_rate, "standing_charge": standing_charge}
+        caps[key] = {
+            "unit_rate": unit_rate,
+            "standing_charge": standing_charge,
+            "is_carry": bool(entry.get("is_carry", False)),
+            "source": data.get("source", ""),
+            "as_of": data.get("as_of", ""),
+        }
 
     latest_known = caps[sorted_keys[-1]] if auto_carry else None
     return caps, latest_known

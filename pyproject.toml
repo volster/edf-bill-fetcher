@@ -74,7 +74,7 @@ dev = [
 msg = [
     # Outlook .msg parsing via edf_bill_fetcher.io.adapters.msg — optional
     # (import-guarded) so the core install never requires it.
-    "extract-msg>=0.50",
+    "extract-msg>=0.50,<1",
 ]
 
 [project.urls]
@@ -87,7 +87,7 @@ edf-collector = "edf_bill_fetcher.io.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["*"]
+include = ["edf_bill_fetcher*"]
 
 [tool.setuptools.package-data]
 "edf_bill_fetcher.data" = ["*.json"]

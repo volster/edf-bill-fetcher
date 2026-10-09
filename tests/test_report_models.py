@@ -140,7 +140,7 @@ def test_negative_amount_is_absoled_at_stat_level() -> None:
     analysis = compute_payment_analysis(df)
 
     assert analysis.total_paid == 500.0
-    assert analysis.chronology["_amount"].iloc[0] == -500.0
+    assert analysis.chronology["_amount"].iloc[0] == 500.0
 
 
 def test_last_payment_is_chronologically_last_row() -> None:
@@ -257,10 +257,10 @@ def test_data_quality_report_counts_and_rates() -> None:
     assert report.period_completeness_rate == 2 / 3
     assert report.reading_classified == 2
     assert report.reading_classify_rate == 2 / 3
-    assert report.ur_computable == 2
-    assert report.ur_computable_rate == 2 / 3
-    assert report.duplicate_count == 1
-    assert report.duplicate_rate == 1 / 3
+    assert report.ur_computable == 0
+    assert report.ur_computable_rate == 0
+    assert report.duplicate_count == 0
+    assert report.duplicate_rate == 0
     assert report.source_distribution == {"PDF": 2, "HTM": 1}
     assert report.entry_type_distribution == {"New Bill": 2, "Payment": 1}
 
@@ -280,7 +280,12 @@ def test_data_quality_report_does_not_mutate_input() -> None:
 
 
 def _amount_frame(*amounts: float) -> pd.DataFrame:
-    return pd.DataFrame([{"Date": "01/01/2023", "Amount (£)": a} for a in amounts])
+    return pd.DataFrame(
+        [
+            {"Date": f"01/{i:02}/2023", "Amount Kind": "Balance", "Amount (£)": a}
+            for i, a in enumerate(amounts, 1)
+        ]
+    )
 
 
 def test_statistical_insufficient_data() -> None:
@@ -431,7 +436,18 @@ def test_forecast_linear_shape() -> None:
 def _ofgem_frame(*rows: tuple[str, float, float]) -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Date": date, "Period Charge (£)": charge, "Units (kWh)": units}
+            {
+                "Date": date,
+                "Period From": date,
+                "Period To": date,
+                "Entry Type": "New Bill",
+                "Fuel": "electricity",
+                "Payment Method": "Direct Debit",
+                "Tariff Type": "variable",
+                "Energy Unit Rate (p/kWh)": charge / units * 100 if units else None,
+                "Period Charge (£)": charge,
+                "Units (kWh)": units,
+            }
             for date, charge, units in rows
         ]
     )
@@ -466,11 +482,11 @@ def test_ofgem_in_table_and_unavailable_rows(monkeypatch: pytest.MonkeyPatch) ->
     q1 = result.rows[0]
     assert q1.bill_rate == pytest.approx(40.0)
     assert q1.cap_rate == 28.62
-    assert q1.status == "EXCEEDS CAP"
+    assert q1.status == "ABOVE GB-AVERAGE BENCHMARK — REVIEW"
     q3 = result.rows[2]
     assert q3.cap_rate is None
     assert q3.diff is None
-    assert q3.status == "CAP DATA UNAVAILABLE"
+    assert q3.status == "BENCHMARK DATA UNAVAILABLE"
     assert result.exceed_count == 2
     assert result.unavailable_count == 1
 
@@ -480,15 +496,18 @@ def test_ofgem_carried_forward(monkeypatch: pytest.MonkeyPatch) -> None:
 
     _patch_caps(
         monkeypatch,
-        {"2026-Q3": {"unit_rate": 25.0, "standing_charge": 60.0}},
+        {
+            "2026-Q3": {"unit_rate": 25.0, "standing_charge": 60.0},
+            "2026-Q4": {"unit_rate": 25.0, "standing_charge": 60.0, "is_carry": True},
+        },
         {"unit_rate": 25.0, "standing_charge": 60.0},
     )
     result = compute_ofgem_comparison(_ofgem_frame(("15/10/2026", 200.0, 800.0)))  # 25.0 p/kWh
 
     assert result.rows[0].quarter == "2026-Q4"
-    assert result.rows[0].status == "AT CAP (CAP CARRIED FORWARD)"
+    assert result.rows[0].status == "PROVISIONAL BENCHMARK (CARRIED)"
     assert result.carried_count == 1
-    assert result.overall_verdict == "COMPLIANT (CARRIED)"
+    assert result.overall_verdict == "PROVISIONAL BENCHMARK (CARRIED)"
 
 
 def test_ofgem_nan_rate_quarter_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -496,22 +515,28 @@ def test_ofgem_nan_rate_quarter_dropped(monkeypatch: pytest.MonkeyPatch) -> None
 
     _patch_caps(
         monkeypatch,
-        {"2026-Q3": {"unit_rate": 25.0, "standing_charge": 60.0}},
+        {
+            "2026-Q3": {"unit_rate": 25.0, "standing_charge": 60.0},
+            "2026-Q4": {"unit_rate": 25.0, "standing_charge": 60.0, "is_carry": True},
+        },
         {"unit_rate": 25.0, "standing_charge": 60.0},
     )
     result = compute_ofgem_comparison(_ofgem_frame(("15/10/2026", 0.0, 0.0)))  # 0/0 → NaN
 
-    assert result.rows == []
-    assert result.overall_verdict == "COMPLIANT"
+    assert result.unavailable_count == 1
+    assert result.overall_verdict == "NOT ASSESSED"
 
 
 def test_ofgem_verdict_precedence() -> None:
     from edf_bill_fetcher.models.report_models import OfgemComparison
 
     assert OfgemComparison([], 1, 1, 1, None, None).overall_verdict == "REVIEW REQUIRED"
-    assert OfgemComparison([], 0, 1, 1, None, None).overall_verdict == "INCOMPLETE"
-    assert OfgemComparison([], 0, 0, 1, None, None).overall_verdict == "COMPLIANT (CARRIED)"
-    assert OfgemComparison([], 0, 0, 0, None, None).overall_verdict == "COMPLIANT"
+    assert OfgemComparison([], 0, 1, 1, None, None).overall_verdict == "NOT ASSESSED"
+    assert (
+        OfgemComparison([], 0, 0, 1, None, None).overall_verdict
+        == "PROVISIONAL BENCHMARK (CARRIED)"
+    )
+    assert OfgemComparison([], 0, 0, 0, None, None).overall_verdict == "NOT ASSESSED"
 
 
 # --- TariffAnalysis (Arch #3 Task 5) ----------------------------------------------
@@ -567,8 +592,18 @@ def test_dispute_analysis_wraps_compute_dispute_flags() -> None:
 
     df = pd.DataFrame(
         [
-            {"Date": "01/01/2024", "Amount (£)": 100.0, "_dt": pd.Timestamp("2024-01-01")},
-            {"Date": "15/02/2024", "Amount (£)": 500.0, "_dt": pd.Timestamp("2024-02-15")},
+            {
+                "Date": "01/01/2024",
+                "Amount Kind": "Balance",
+                "Amount (£)": 100.0,
+                "_dt": pd.Timestamp("2024-01-01"),
+            },
+            {
+                "Date": "15/02/2024",
+                "Amount Kind": "Balance",
+                "Amount (£)": 500.0,
+                "_dt": pd.Timestamp("2024-02-15"),
+            },
         ]
     )
 

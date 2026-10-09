@@ -46,19 +46,13 @@ ADMIT_RE = re.compile(
 )
 
 _LEGAL_CONTEXT: str = (
-    "Back-billing protections (Ofgem / Electricity Act 1989 s.84B):\n"
-    "Suppliers may not charge a domestic customer for energy supplied\n"
-    "more than 12 months before the date of the bill that first raised\n"
-    "the charge, unless one of the statutory exceptions applies\n"
-    "(customer has been obstructive, has unreasonably refused access,\n"
-    "or has not cooperated with the supplier's reasonable requests). A\n"
-    "supervisor's admission of an earlier billing error -- typically\n"
-    "worded as 'we've recently cancelled some charges for you' on the\n"
-    "cover page of a corrective bill -- is direct evidence that the\n"
-    "cancellation is a back-billing remedy rather than a goodwill\n"
-    "adjustment, and so preserves the 12-month back-billing bar for any\n"
-    "superseded invoices on the same period. This workbook flags any\n"
-    "invoice admitting such a cancellation as evidence of back-billing."
+    "Back-billing review (Ofgem protections):\n"
+    "Domestic back-billing protections may limit recovery of charges for energy supplied\n"
+    "more than 12 months before the charge was first raised. Applicability requires\n"
+    "review of the original bills, supplier contact, customer conduct and relevant exceptions.\n"
+    "This workbook identifies consumption outside a nominal 365-day window and calculates\n"
+    "indicative amounts for review. Cancellation wording records an admission that charges\n"
+    "were changed; the reason for that change and eligibility for redress require assessment."
 )
 
 

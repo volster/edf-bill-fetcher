@@ -14,6 +14,7 @@ import pandas as pd
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
+from edf_bill_fetcher.helpers.excel_utils import literal_cell
 from edf_bill_fetcher.helpers.theme import (
     CELL_BORDER,
     EDF_OFFWHITE,
@@ -94,7 +95,7 @@ def _write_sap_contract_history_sheet_impl(
     title = "EDF SAP CONTRACT AND PRODUCT CHANGE HISTORY"
     if account:
         title = f"{title}  |  Account {account}"
-    t1 = ws.cell(row=1, column=1, value=title)
+    t1 = literal_cell(ws, row=1, column=1, value=title)
     t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
@@ -112,7 +113,7 @@ def _write_sap_contract_history_sheet_impl(
     for i, row in enumerate(rows):
         r = 4 + i
         for j, col in enumerate(columns):
-            cell = ws.cell(row=r, column=j + 1, value=row.get(col, ""))
+            cell = literal_cell(ws, row=r, column=j + 1, value=row.get(col, ""))
             cell.font = Font(name="Calibri", size=10)
             cell.border = CELL_BORDER
             if i % 2 == 0:
@@ -151,7 +152,7 @@ def write_sap_meter_readings_sheet(
     title = "EDF SAP METER-READ HISTORY"
     if account:
         title = f"{title}  |  Account {account}"
-    t1 = ws.cell(row=1, column=1, value=title)
+    t1 = literal_cell(ws, row=1, column=1, value=title)
     t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
@@ -162,7 +163,9 @@ def write_sap_meter_readings_sheet(
     ws.row_dimensions[1].height = 22
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
 
-    l2 = ws.cell(row=2, column=1, value="A = Actual (supplier-confirmed)  |  E = Estimated")
+    l2 = literal_cell(
+        ws, row=2, column=1, value="A = Actual (supplier-confirmed)  |  E = Estimated"
+    )
     l2.font = Font(name="Calibri", size=9, italic=True, color=MEDIUM_GREY.lstrip("#"))
     for c in range(2, ncol + 1):
         ws.cell(row=2, column=c).border = CELL_BORDER
@@ -174,7 +177,7 @@ def write_sap_meter_readings_sheet(
         for j, col in enumerate(columns):
             c = j + 1
             val = row.get(col, "")
-            cell = ws.cell(row=r, column=c, value=val)
+            cell = literal_cell(ws, row=r, column=c, value=val)
             cell.font = Font(name="Calibri", size=10)
             cell.border = CELL_BORDER
             if i % 2 == 0:
@@ -205,7 +208,7 @@ def write_sap_financial_transactions_sheet(
     title = "EDF SAP FINANCIAL TRANSACTIONS"
     if account:
         title = f"{title}  |  Account {account}"
-    t1 = ws.cell(row=1, column=1, value=title)
+    t1 = literal_cell(ws, row=1, column=1, value=title)
     t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
@@ -223,7 +226,7 @@ def write_sap_financial_transactions_sheet(
     for i, row in enumerate(rows):
         r = 4 + i
         for j, col in enumerate(columns):
-            cell = ws.cell(row=r, column=j + 1, value=row.get(col, ""))
+            cell = literal_cell(ws, row=r, column=j + 1, value=row.get(col, ""))
             cell.font = Font(name="Calibri", size=10)
             cell.border = CELL_BORDER
             if i % 2 == 0:
@@ -317,7 +320,7 @@ def _write_sap_bb_events_sheet(
         nz=net_zero_count,
         wc=with_credit_count,
     )
-    t1 = ws.cell(row=1, column=1, value=title)
+    t1 = literal_cell(ws, row=1, column=1, value=title)
     t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
@@ -370,7 +373,7 @@ def _write_sap_bb_events_sheet(
         ]
         # Write values
         for j, val in enumerate(summary_vals, start=1):
-            cell = ws.cell(row=r, column=j, value=val)
+            cell = literal_cell(ws, row=r, column=j, value=val)
             cell.font = Font(name="Calibri", size=10, bold=True)
             cell.border = CELL_BORDER
             cell.fill = PatternFill("solid", start_color=summary_fill)
@@ -424,7 +427,7 @@ def _write_sap_bb_events_sheet(
             # Pad with blanks where this row's columns run out vs ncol header.
             for j, col_name in enumerate(detail_cols, start=1):
                 v = row_dict.get(col_name, "")
-                cell = ws.cell(row=r, column=j, value=v)
+                cell = literal_cell(ws, row=r, column=j, value=v)
                 cell.font = Font(name="Calibri", size=9, color="333333")
                 cell.fill = PatternFill(
                     "solid",
@@ -446,7 +449,7 @@ def _write_sap_bb_events_sheet(
         # using the actual Excel row of that underlying row (via ``id(row)`` lookup
         # into the caller-provided ``sap_row_index_map``).
         first_doc = (ev.rows[0].get("Document No.") or "") if ev.rows else ""
-        cell = ws.cell(row=summary_row_idx, column=ncol, value="→")
+        cell = literal_cell(ws, row=summary_row_idx, column=ncol, value="→")
         cell.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
         cell.alignment = Alignment(horizontal="center", vertical="top")
         if sap_row_index_map is not None and ev.rows:
@@ -505,7 +508,7 @@ def _write_sap_bb_matches_sheet(
     title = "SAP ↔ EDF MATCHED EVENTS"
     if account:
         title = f"{title}  |  Account {account}"
-    t1 = ws.cell(row=1, column=1, value=title)
+    t1 = literal_cell(ws, row=1, column=1, value=title)
     t1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
     t1.fill = PatternFill("solid", start_color=ORANGE)
     t1.border = CELL_BORDER
@@ -528,7 +531,7 @@ def _write_sap_bb_matches_sheet(
         "Invoice # link to view the matched row on the EDF Evidence\n"
         "Report."
     )
-    intro_cell = ws.cell(row=3, column=1, value=intro)
+    intro_cell = literal_cell(ws, row=3, column=1, value=intro)
     intro_cell.font = Font(name="Calibri", size=10, italic=True)
     intro_cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncol)
@@ -599,7 +602,7 @@ def _write_sap_bb_matches_sheet(
         ]
         row_fill = confidence_band_fill.get(m.confidence_band, "")
         for j, v in enumerate(vals, start=1):
-            cell = ws.cell(row=r, column=j, value=v)
+            cell = literal_cell(ws, row=r, column=j, value=v)
             cell.font = Font(name="Calibri", size=10)
             cell.border = CELL_BORDER
             if row_fill:
@@ -730,7 +733,7 @@ def write_sap_back_billing_position_sheet(
     r = 4
     for i, ev in enumerate(events):
         for j, col in enumerate(ev_cols, start=1):
-            cell = ws.cell(row=r, column=j, value=ev.get(col, ""))
+            cell = literal_cell(ws, row=r, column=j, value=ev.get(col, ""))
             cell.font = Font(name="Calibri", size=10)
             cell.border = CELL_BORDER
             if i % 2 == 0:
@@ -749,7 +752,7 @@ def write_sap_back_billing_position_sheet(
     r += 1
     for i, rec in enumerate(result.get("reconciliation", [])):
         for j, col in enumerate(rec_cols, start=1):
-            cell = ws.cell(row=r, column=j, value=rec.get(col, ""))
+            cell = literal_cell(ws, row=r, column=j, value=rec.get(col, ""))
             cell.font = Font(name="Calibri", size=10)
             cell.border = CELL_BORDER
             if i % 2 == 0:

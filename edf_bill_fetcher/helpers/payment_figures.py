@@ -6,14 +6,16 @@ import pandas as pd
 
 
 def payment_amount(row: pd.Series) -> tuple[float, str]:
-    """Return the transaction amount and its source for one payment row."""
-    period_charge = pd.to_numeric(row.get("Period Charge (£)"), errors="coerce")
-    if pd.notna(period_charge):
-        return float(period_charge), "Period Charge (£)"
-    amount = pd.to_numeric(row.get("Amount (£)"), errors="coerce")
-    if pd.notna(amount):
-        return float(amount), "Amount (£) fallback"
-    return 0.0, "Unavailable"
+    """Return the magnitude of an actual payment/credit, never its balance."""
+    from edf_bill_fetcher.processors.preparation import normalize_record, number
+
+    normalized = normalize_record(row.to_dict() if isinstance(row, pd.Series) else dict(row))
+    transaction = number(normalized["Transaction Amount (£)"])
+    return (
+        (abs(transaction), "Transaction Amount (£)")
+        if transaction is not None
+        else (0.0, "Unavailable")
+    )
 
 
 def payment_amounts(rows: pd.DataFrame) -> pd.Series:

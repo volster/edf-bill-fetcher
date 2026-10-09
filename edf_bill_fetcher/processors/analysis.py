@@ -25,7 +25,6 @@ from edf_bill_fetcher.helpers.dispute_flags import (
     LARGE_JUMP_HIGH_PCT,
     LARGE_JUMP_MAX_DAYS,
     LARGE_JUMP_PCT,
-    RECON_HIGH_PCT,
     RECON_MIN_TOLERANCE,
     RECON_PCT_TOLERANCE,
 )
@@ -34,194 +33,126 @@ from edf_bill_fetcher.writers._helpers import _disclosed_label, _reading_type_to
 
 
 def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[list, dict]:
-    """Compute dispute flags from a sorted DataFrame.
+    """Compute scoped findings from explicit balances and billed daily charges."""
+    from edf_bill_fetcher.processors.financial import bill_daily_rates, mean_daily_rate
+    from edf_bill_fetcher.processors.preparation import (
+        balance_frame,
+        identity,
+        normalize_frame,
+        number,
+        scope,
+    )
 
-    Returns:
-        tuple: (flags_list, flag_counts_dict)
-        - flags_list: list of (type, date, amount, detail, severity) tuples
-        - flag_counts_dict: dict with HIGH, MEDIUM, INFO counts
+    for i, raw in enumerate(dfc.to_dict("records")):
+        value = raw.get("Amount (£)")
+        if identity(value) and number(value) is None:
+            warnings.warn(
+                f"Balance heuristics could not evaluate invalid amount at row index {i + 1}",
+                UserWarning,
+                stacklevel=2,
+            )
 
-    Issues a :func:`warnings.warn` for any row that fails to evaluate
-    under each heuristic (parse error, missing key, etc.).  Previously
-    those rows were silently swallowed and the report lost the
-    surrounding evidence — turning them into warnings surfaces a
-    developer-visible signal without breaking the run.
-
-    """
-
-    def _flag_or_warn(
-        row_idx: int,
-        flag_name: str,
-        exc: BaseException,
-    ) -> None:
-        warnings.warn(
-            (
-                f"compute_dispute_flags[{flag_name}] could not evaluate "
-                f"row index {row_idx}: {exc!r}; row silently skipped."
-            ),
-            stacklevel=3,
-        )
-
-    flags: list[tuple[str, str | float | None, float | None, str, str]] = []
-    n = len(dfc)
-    if n < 2:
-        return flags, {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
-
-    # 1. LARGE JUMP: >25% increase within 90 days
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        try:
-            chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-            pct = chg / float(p["Amount (£)"]) if float(p["Amount (£)"]) > 0 else 0
-            days = (c_["_dt"] - p["_dt"]).days
-            if pct > LARGE_JUMP_PCT and 0 < days <= LARGE_JUMP_MAX_DAYS:
-                flags.append(
-                    (
-                        "LARGE JUMP",
-                        c_["Date"],
-                        chg,  # delta (jump size), not the running balance
-                        f"+£{chg:,.2f} (+{pct * 100:.1f}%) in {days} days (from {p['Date']}: £{p['Amount (£)']:,.2f})",
-                        "HIGH" if pct > LARGE_JUMP_HIGH_PCT else "MEDIUM",
-                    )
-                )
-        except (ValueError, TypeError, KeyError) as exc:
-            _flag_or_warn(i, "LARGE_JUMP", exc)
-
-    # 2. BILLING GAP: >60 days without a bill
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        try:
-            days = (c_["_dt"] - p["_dt"]).days
+    work = normalize_frame(dfc)
+    flags = []
+    work["_scope"] = [scope(r) for r in work.to_dict("records")]
+    for _, group in work.groupby("_scope", sort=False):
+        bills = group[group["Entry Type"].isin(["New Bill", "Ongoing Balance"])].sort_values("_dt")
+        dated_bills = bills[bills["_dt"].notna()]
+        for i in range(1, len(dated_bills)):
+            previous, current = dated_bills.iloc[i - 1], dated_bills.iloc[i]
+            days = (current["_dt"] - previous["_dt"]).days
             if days > BILLING_GAP_MIN_DAYS:
                 flags.append(
                     (
                         "BILLING GAP",
-                        c_["Date"],
-                        c_["Amount (£)"],
-                        f"{days} days without a bill (previous: {p['Date']}). Balance accumulated unchecked.",
+                        current["Date"],
+                        current["Balance (£)"],
+                        f"{days} days between recorded bills (previous: {previous['Date']}). Check for missing evidence.",
                         "HIGH" if days > BILLING_GAP_HIGH_DAYS else "MEDIUM",
                     )
                 )
-        except (ValueError, TypeError, KeyError) as exc:
-            _flag_or_warn(i, "BILLING_GAP", exc)
-
-    # 3. ESTIMATED RUN: 3+ consecutive estimated readings
-    if "Reading" in dfc.columns:
-        run = 0
-        run_start = None
-        for i, rv in enumerate(dfc["Reading"].tolist()):
-            if str(rv).lower() in ("estimated", "est."):
-                run += 1
-                if run == 1:
-                    run_start = dfc.iloc[i]["Date"]
+        run = []
+        for _, row in bills.iterrows():
+            if str(row["Reading"]).lower() in {"estimated", "est."}:
+                run.append(row)
             else:
-                if run >= ESTIMATED_RUN_MIN:
+                if len(run) >= ESTIMATED_RUN_MIN:
                     flags.append(
                         (
                             "ESTIMATED RUN",
-                            run_start,
+                            run[0]["Date"],
                             None,
-                            f"{run} consecutive estimated readings from {run_start}.",
+                            f"{len(run)} consecutive estimated readings from {run[0]['Date']}.",
                             "HIGH",
                         )
                     )
-                run = 0
-                run_start = None
-        if run >= ESTIMATED_RUN_MIN:
+                run = []
+        if len(run) >= ESTIMATED_RUN_MIN:
             flags.append(
                 (
                     "ESTIMATED RUN",
-                    run_start,
+                    run[0]["Date"],
                     None,
-                    f"{run} consecutive estimated readings from {run_start} (ongoing).",
+                    f"{len(run)} consecutive estimated readings from {run[0]['Date']} (ongoing).",
                     "HIGH",
                 )
             )
-
-    # 4. HIGH DAILY RATE: daily rate significantly above average
-    if mean_daily > 0:
-        for i in range(1, n):
-            p = dfc.iloc[i - 1]
-            c_ = dfc.iloc[i]
-            try:
-                days = (c_["_dt"] - p["_dt"]).days
-                charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-                if days > 0 and charge > 0:
-                    daily = charge / days
-                    ratio = daily / mean_daily
-                    if ratio > HIGH_DAILY_RATE_RATIO:
-                        flags.append(
-                            (
-                                "HIGH DAILY RATE",
-                                c_["Date"],
-                                c_["Amount (£)"],
-                                f"£{daily:,.2f}/day ({ratio:.1f}× avg £{mean_daily:,.2f}/day) over {days} days",
-                                "HIGH" if ratio > HIGH_DAILY_RATE_HIGH_RATIO else "MEDIUM",
-                            )
-                        )
-            except (ValueError, TypeError, KeyError, ZeroDivisionError) as exc:
-                _flag_or_warn(i, "HIGH_DAILY_RATE", exc)
-
-    # 5. BALANCE REDUCTION: payment/credit > £500
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        try:
-            chg = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-            if chg < -BALANCE_REDUCTION_AMOUNT:
+        baseline = mean_daily_rate(bills)
+        for _, row in bill_daily_rates(bills).iterrows():
+            ratio = row["_daily"] / baseline if baseline > 0 else 0
+            if ratio > HIGH_DAILY_RATE_RATIO:
+                flags.append(
+                    (
+                        "HIGH DAILY RATE",
+                        row["Date"],
+                        row["Period Charge (£)"],
+                        f"£{row['_daily']:,.2f}/day ({ratio:.1f}× avg £{baseline:,.2f}/day) over {int(row['_days'])} consumption days",
+                        "HIGH" if ratio > HIGH_DAILY_RATE_HIGH_RATIO else "MEDIUM",
+                    )
+                )
+        balances = balance_frame(group)
+        for i in range(1, len(balances)):
+            previous, current = balances.iloc[i - 1], balances.iloc[i]
+            delta = current["Balance (£)"] - previous["Balance (£)"]
+            days = (current["_dt"] - previous["_dt"]).days
+            pct = delta / previous["Balance (£)"] if previous["Balance (£)"] > 0 else 0
+            if pct > LARGE_JUMP_PCT and 0 < days <= LARGE_JUMP_MAX_DAYS:
+                flags.append(
+                    (
+                        "LARGE JUMP",
+                        current["Date"],
+                        delta,
+                        f"+£{delta:,.2f} (+{pct * 100:.1f}%) in {days} days (from {previous['Date']}: £{previous['Balance (£)']:,.2f})",
+                        "HIGH" if pct > LARGE_JUMP_HIGH_PCT else "MEDIUM",
+                    )
+                )
+            if delta < -BALANCE_REDUCTION_AMOUNT:
                 flags.append(
                     (
                         "BALANCE REDUCTION",
-                        c_["Date"],
-                        abs(chg),  # reduction size, not the running balance
-                        f"Balance fell £{abs(chg):,.2f} (from £{p['Amount (£)']:,.2f} to £{c_['Amount (£)']:,.2f}).",
+                        current["Date"],
+                        abs(delta),
+                        f"Balance fell £{abs(delta):,.2f}; verify the underlying payments or adjustments.",
                         "INFO",
                     )
                 )
-        except (ValueError, TypeError, KeyError) as exc:
-            _flag_or_warn(i, "BALANCE_REDUCTION", exc)
-
-    # 6. RECONCILIATION MISMATCH: balance delta vs period charge
-    if "Period Charge (£)" in dfc.columns:
-        for i in range(1, n):
-            p = dfc.iloc[i - 1]
-            c_ = dfc.iloc[i]
-            try:
-                if str(c_.get("Entry Type", "")) == "New Bill" and str(p.get("Entry Type", "")) in (
-                    "New Bill",
-                    "Ongoing Balance",
-                ):
-                    pc = c_.get("Period Charge (£)")
-                    try:
-                        pc_val = float(pc)
-                    except (ValueError, TypeError):
-                        continue
-                    balance_delta = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-                    diff = abs(balance_delta - pc_val)
-                    threshold = (
-                        max(pc_val * RECON_PCT_TOLERANCE, RECON_MIN_TOLERANCE)
-                        if pc_val > 0
-                        else RECON_MIN_TOLERANCE
-                    )
-                    if diff > threshold:
-                        flags.append(
-                            (
-                                "RECONCILIATION MISMATCH",
-                                c_["Date"],
-                                c_["Amount (£)"],
-                                f"Balance delta £{balance_delta:,.2f} vs period charge £{pc_val:,.2f} "
-                                f"(difference: £{diff:,.2f}). Possible payment, credit, or billing error "
-                                f"between {p['Date']} and {c_['Date']}.",
-                                "HIGH" if diff > pc_val * RECON_HIGH_PCT else "MEDIUM",
-                            )
+            between = group[(group["_dt"] > previous["_dt"]) & (group["_dt"] <= current["_dt"])]
+            movements = pd.to_numeric(between["Transaction Amount (£)"], errors="coerce").dropna()
+            if days > 0 and not movements.empty:
+                expected = float(movements.sum())
+                difference = abs(delta - expected)
+                if difference > max(abs(expected) * RECON_PCT_TOLERANCE, RECON_MIN_TOLERANCE):
+                    flags.append(
+                        (
+                            "RECONCILIATION MISMATCH",
+                            current["Date"],
+                            difference,
+                            f"Observed balance movement £{delta:,.2f} vs recorded transactions £{expected:,.2f}. "
+                            "The ledger may be incomplete; this alone does not establish a billing error.",
+                            "INFO",
                         )
-            except (ValueError, TypeError, KeyError) as exc:
-                _flag_or_warn(i, "RECONCILIATION_MISMATCH", exc)
-
-    # Count by severity
-    counts = {s: sum(1 for f in flags if f[4] == s) for s in ("HIGH", "MEDIUM", "INFO")}
+                    )
+    counts = {s: sum(f[4] == s for f in flags) for s in ("HIGH", "MEDIUM", "INFO")}
     return flags, counts
 
 

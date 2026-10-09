@@ -15,6 +15,8 @@ with ``date_utils.py``, ``formatting.py``, or ``pdf_utils.py``.
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import tempfile
 import xml.etree.ElementTree as ET
@@ -333,3 +335,19 @@ __all__ = [
     "pdf_hyperlink_cell",
     "CELL_BORDER",
 ]
+
+
+def literal_cell(ws, row, column, value=None):
+    """Write external values as data; strings can never become Excel formulas."""
+    if isinstance(value, (dict, list, tuple, set)):
+        value = json.dumps(value, default=str, ensure_ascii=False)
+    if isinstance(value, float) and not math.isfinite(value):
+        value = None
+    if isinstance(value, str):
+        from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+        value = ILLEGAL_CHARACTERS_RE.sub("", value)
+    cell = ws.cell(row=row, column=column, value=value)
+    if isinstance(value, str):
+        cell.data_type = "s"
+    return cell

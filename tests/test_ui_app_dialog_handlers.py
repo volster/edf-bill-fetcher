@@ -19,7 +19,7 @@ import tkinter as tk
 from collections.abc import Callable, Generator
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -76,8 +76,11 @@ def root() -> Generator[tk.Tk, None, None]:
 
 
 @pytest.fixture
-def app(root: tk.Tk) -> App:
-    return _make_app(root)
+def app(root: tk.Tk, tmp_path: Path) -> App:
+    instance = _make_app(root)
+    instance.output_folder.set(str(tmp_path))
+    instance._CONFIG_PATH = str(tmp_path / "settings.json")
+    return instance
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +288,7 @@ class TestThreadMarshalling:
         with patch("edf_bill_fetcher.ui.app.threading.current_thread", return_value=fake_thread):
             with patch("edf_bill_fetcher.ui.app.threading.main_thread", return_value=object()):
                 app.set_status("from-worker")
+                app._poll_events()
         root.update()
         assert app.status.get() == "from-worker"
 
@@ -315,6 +319,7 @@ class TestThreadMarshalling:
         with patch("edf_bill_fetcher.ui.app.threading.current_thread", return_value=fake_thread):
             with patch("edf_bill_fetcher.ui.app.threading.main_thread", return_value=object()):
                 app.set_progress(25, 100, text="worker-progress")
+                app._poll_events()
         root.update()
         assert app.progress_v.get() == 25.0
         assert app.status.get() == "worker-progress"
@@ -346,6 +351,7 @@ class TestThreadMarshalling:
             with patch("edf_bill_fetcher.ui.app.threading.main_thread", return_value=object()):
                 with patch("tkinter.messagebox.showinfo") as mock_info:
                     app._show("info", "T", "worker-msg")
+                    app._poll_events()
                     # Process the queued after(0, _s) callback.
                     root.update_idletasks()
                     root.update()
@@ -486,7 +492,34 @@ def _make_mock_engine(records: list | None = None) -> MagicMock:
     engine.sap_meter_rows = []
     engine.sap_financial_rows = []
     engine.source_paths = {}
+    engine.source_manifest = {}
+    engine.config = {"as_of": "2026-06-01", "analysis_min": 0}
+    engine.__getstate__ = lambda self: {
+        "records": engine.records,
+        "config": engine.config,
+        "error_log": engine.error_log,
+        "filtered_records": engine.filtered_records,
+        "email_count": engine.email_count,
+        "pdf_count": engine.pdf_count,
+        "sap_contract_rows": [],
+        "sap_meter_rows": [],
+        "sap_financial_rows": [],
+        "source_paths": {},
+        "source_manifest": {},
+    }
     return engine
+
+
+def _run_worker(app: App) -> None:
+    app._run_request = app._snapshot_request()
+    app._save_config()
+    app._run()
+    app._poll_events()
+
+
+def _auto_report(app: App, engine: MagicMock, stem: str, batch_n: int) -> list[str]:
+    app._run_request = app._snapshot_request()
+    return cast(list[str], app._run_auto_report(engine, stem, batch_n))
 
 
 class TestRunWorker:
@@ -513,7 +546,7 @@ class TestRunWorker:
         with patch(
             "edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=_make_mock_engine()
         ):
-            app._run()
+            _run_worker(app)
             root.update()
             root.update()
         self.mock_warn.assert_called_once()
@@ -527,7 +560,7 @@ class TestRunWorker:
         monkeypatch.setattr(app_module, "HAS_PYPFF", False)
         engine = _make_mock_engine(records=[])
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            app._run()
+            _run_worker(app)
             root.update()
             root.update()
         calls = self.mock_warn.call_args_list
@@ -553,7 +586,7 @@ class TestRunWorker:
         engine = _make_mock_engine(records=[])
         with patch("edf_bill_fetcher.ui.app.pypff", fake_pypff):
             with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-                app._run()
+                _run_worker(app)
                 root.update()
                 root.update()
         fake_pypff.File.assert_called_once()
@@ -571,7 +604,7 @@ class TestRunWorker:
         engine = _make_mock_engine(records=[])
         with patch("edf_bill_fetcher.ui.app.pypff", _EmptyPypff()):
             with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-                app._run()
+                _run_worker(app)
                 root.update()
                 root.update()
         self.mock_err.assert_called_once()
@@ -584,7 +617,7 @@ class TestRunWorker:
         monkeypatch.setattr(os.path, "exists", lambda p: True)
         engine = _make_mock_engine(records=[])
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            app._run()
+            _run_worker(app)
             root.update()
             root.update()
         calls = self.mock_warn.call_args_list
@@ -599,7 +632,7 @@ class TestRunWorker:
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
             with patch("edf_bill_fetcher.io.writers.export.export_to_excel") as mock_export:
                 with patch.object(app, "_save_config") as mock_save:
-                    app._run()
+                    _run_worker(app)
                     root.update()
                     root.update()
                     mock_export.assert_called_once()
@@ -615,10 +648,10 @@ class TestRunWorker:
         engine.error_log = ["parse error 1"]
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
             with patch("edf_bill_fetcher.io.writers.export.export_to_excel"):
-                app._run()
+                _run_worker(app)
                 root.update()
                 root.update()
-        summary = self.mock_info.call_args[0][1]
+        summary = self.mock_warn.call_args[0][1]
         assert "Parse errors: 1" in summary
 
     def test_save_evidence_files_bundle_path(
@@ -638,7 +671,7 @@ class TestRunWorker:
                         with patch(
                             "edf_bill_fetcher.io.writers.evidence_bundle.build_bundle_index"
                         ) as mock_build:
-                            app._run()
+                            _run_worker(app)
                             root.update()
                             root.update()
                             mock_save_ev.assert_called_once()
@@ -658,7 +691,7 @@ class TestRunWorker:
                         "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files",
                         side_effect=RuntimeError("boom"),
                     ):
-                        app._run()
+                        _run_worker(app)
                         root.update()
                         root.update()
         calls = self.mock_warn.call_args_list
@@ -677,10 +710,10 @@ class TestRunWorker:
                 with patch.object(
                     app, "_run_auto_report", return_value=["/tmp/r.pdf"]
                 ) as mock_auto:
-                    app._run()
+                    _run_worker(app)
                     root.update()
                     root.update()
-                    mock_auto.assert_called_once_with(engine, "EDF_Dispute_Evidence", 1)
+                    mock_auto.assert_called_once_with(engine, "EDF_Dispute_Evidence", None)
         summary = self.mock_info.call_args[0][1]
         assert "Reports:" in summary
 
@@ -691,7 +724,7 @@ class TestRunWorker:
         app.htm_path.set("/tmp/export.htm")
         engine = _make_mock_engine(records=[])
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            app._run()
+            _run_worker(app)
             root.update()
             root.update()
             engine.process_htm_file.assert_called_once_with("/tmp/export.htm")
@@ -703,7 +736,7 @@ class TestRunWorker:
         app.pdf_dir.set("/tmp/pdfs")
         engine = _make_mock_engine(records=[])
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            app._run()
+            _run_worker(app)
             root.update()
             root.update()
             engine.crawl_local_pdfs.assert_called_once_with("/tmp/pdfs")
@@ -721,10 +754,10 @@ class TestRunWorker:
         engine = _make_mock_engine(records=[{"Amount": 100}])
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
             with patch("edf_bill_fetcher.io.writers.export.export_to_excel"):
-                app._run()
+                _run_worker(app)
                 root.update()
                 root.update()
-                assert app.output_folder.get() == str(tmp_path)
+                assert Path(app._run_request["run_dir"]).parent == tmp_path
 
     def test_stem_strips_xlsx_suffix(
         self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -734,7 +767,7 @@ class TestRunWorker:
         engine = _make_mock_engine(records=[{"Amount": 100}])
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
             with patch("edf_bill_fetcher.io.writers.export.export_to_excel") as mock_export:
-                app._run()
+                _run_worker(app)
                 root.update()
                 root.update()
                 xlsx_path = mock_export.call_args[0][1]
@@ -761,7 +794,7 @@ class TestRunAutoReport:
             with patch(
                 "edf_bill_fetcher.io.reporters.docx_report.generate_docx_from_gui"
             ) as mock_docx:
-                written = app._run_auto_report(engine, "stem", 1)
+                written = _auto_report(app, engine, "stem", 1)
                 assert len(written) == 1
                 assert written[0].endswith(".pdf")
                 mock_docx.assert_not_called()
@@ -779,7 +812,7 @@ class TestRunAutoReport:
             with patch(
                 "edf_bill_fetcher.io.reporters.pdf_report.generate_pdf_from_gui"
             ) as mock_pdf:
-                written = app._run_auto_report(engine, "stem", 1)
+                written = _auto_report(app, engine, "stem", 1)
                 assert len(written) == 1
                 assert written[0].endswith(".docx")
                 mock_pdf.assert_not_called()
@@ -799,7 +832,7 @@ class TestRunAutoReport:
                 "edf_bill_fetcher.io.reporters.docx_report.generate_docx_from_gui",
                 return_value=(True, "ok"),
             ):
-                written = app._run_auto_report(engine, "stem", 1)
+                written = _auto_report(app, engine, "stem", 1)
                 assert len(written) == 2
 
     def test_html_only(self, app: App, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -813,7 +846,7 @@ class TestRunAutoReport:
             "edf_bill_fetcher.io.reporters.html_report.generate_html_from_gui",
             return_value=(True, "ok"),
         ):
-            written = app._run_auto_report(engine, "stem", 1)
+            written = _auto_report(app, engine, "stem", 1)
             assert len(written) == 1
             assert written[0].endswith(".html")
 
@@ -838,7 +871,7 @@ class TestRunAutoReport:
                     "edf_bill_fetcher.io.reporters.html_report.generate_html_from_gui",
                     return_value=(True, "ok"),
                 ):
-                    written = app._run_auto_report(engine, "stem", 1)
+                    written = _auto_report(app, engine, "stem", 1)
                     assert len(written) == 3
                     assert sum(1 for p in written if p.endswith(".html")) == 1
 
@@ -851,7 +884,7 @@ class TestRunAutoReport:
         monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", False)
         monkeypatch.setattr(app_module, "HAS_HTML_REPORT", False)
         engine = _make_mock_engine(records=[{"A": 1}])
-        written = app._run_auto_report(engine, "stem", 1)
+        written = _auto_report(app, engine, "stem", 1)
         assert written == []
 
     def test_pdf_failure_not_written(
@@ -865,8 +898,8 @@ class TestRunAutoReport:
             "edf_bill_fetcher.io.reporters.pdf_report.generate_pdf_from_gui",
             return_value=(False, "err"),
         ):
-            written = app._run_auto_report(engine, "stem", 1)
-            assert written == []
+            with pytest.raises(RuntimeError, match="err"):
+                _auto_report(app, engine, "stem", 1)
 
 
 # ---------------------------------------------------------------------------
@@ -956,6 +989,7 @@ class TestLoadSpreadsheetAndReport:
                         ):
                             with patch("tkinter.messagebox.showinfo") as mock_info:
                                 app.load_spreadsheet_and_report()
+                                app._poll_events()
                                 root.update()
                                 root.update()
                                 assert mock_info.called
@@ -985,6 +1019,7 @@ class TestLoadSpreadsheetAndReport:
                     ):
                         with patch("tkinter.messagebox.showinfo") as mock_info:
                             app.load_spreadsheet_and_report()
+                            app._poll_events()
                             root.update()
                             root.update()
                             assert mock_info.called

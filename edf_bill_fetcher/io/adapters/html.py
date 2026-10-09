@@ -76,7 +76,7 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
                 invoice_num="N/A",
                 amount=balance,
                 period_charge=charge_amt,
-                entry_type="Ongoing Balance",
+                entry_type="New Bill",
                 reading="N/A",
                 units_kwh=units,
                 standing_charge="N/A",

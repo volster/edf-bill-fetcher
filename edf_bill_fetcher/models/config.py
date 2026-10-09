@@ -41,6 +41,10 @@ class ConfigDict(TypedDict, total=False):
     # --- Account / identity -------------------------------------------------
     acc_num: str
     report_account_ref: str
+    fuel: str
+    payment_method: str
+    tariff_type: str
+    cap_region: str
 
     # --- Amount thresholds --------------------------------------------------
     min_amount: float

@@ -1,24 +1,4 @@
-"""Regression test pinning the EDFFC-1 bug:
-
-The ``save_dups`` config flag is supposed to toggle whether the
-deduplication pass over the main ``df`` runs at all.  When False the user
-expects dedup to be skipped (``df`` retains every row, no rows dropped,
-no rows surfaced as duplicates); when True the dedup pass runs normally
-(duplicates filtered out of ``df`` and recorded in ``dup_df``).
-
-Pre-fix the ``save_dups`` block in ``export_to_excel`` had identical
-if/else branches (``dup_df = df[is_dup].copy()`` in both), AND the
-``df = df[~is_dup].reset_index(drop=True)`` line ran unconditionally
-after.  Net effect: the toggle was dead — dedup ran and dup_df was
-populated regardless of the flag, contradicting the documented UI
-contract.
-
-This test feeds a row through the Engine twice (once kept, once dup) and
-asserts the on-toggle contract:
-
-* ``save_dups=True``  -> ``df`` keeps one copy, ``dup_df`` has the other.
-* ``save_dups=False`` -> ``df`` keeps BOTH copies, ``dup_df`` is empty.
-"""
+"""Duplicate-sheet visibility must leave canonical deduplication unchanged."""
 
 from __future__ import annotations
 
@@ -60,7 +40,7 @@ def _engine_with_config(save_dups: bool) -> EvidenceEngine:
 def _seed_canonical_record(engine: EvidenceEngine) -> None:
     """Feed an HTM-style record into the Engine."""
     engine.process_text(
-        "28 Feb 2025 We charged your account £500.00 For 1000 kWh of electricity "
+        "Invoice number: T1234567 28 Feb 2025 We charged your account £500.00 For 1000 kWh of electricity "
         "used between 01 Feb 2025 and 28 Feb 2025 Balance £500.00 in debit",
         "HTM Account History",
         "seed.001",
@@ -71,7 +51,7 @@ def _seed_canonical_record(engine: EvidenceEngine) -> None:
 def _seed_duplicate_record(engine: EvidenceEngine, source_label: str) -> None:
     """Feed a duplicate of the canonical record under a different source."""
     engine.process_text(
-        "28 Feb 2025 We charged your account £500.00 For 1000 kWh of electricity "
+        "Invoice number: T1234567 28 Feb 2025 We charged your account £500.00 For 1000 kWh of electricity "
         "used between 01 Feb 2025 and 28 Feb 2025 Balance £500.00 in debit",
         source_label,
         "dup.001",
@@ -130,33 +110,17 @@ def test_save_dups_false_retains_all_rows_no_dup_sheet(tmp_path: object) -> None
     assert out.exists()  # type: ignore[attr-defined]
 
 
-def test_save_dups_kwarg_match_dedup_branch_in_export() -> None:
-    """Static check: the dedup block must branch on ``save_dups`` for
-    BOTH the dup_df construction and the df filter, and the False arm
-    must differ from the True arm (no tautology).
+def test_save_dups_does_not_change_canonical_records() -> None:
+    from edf_bill_fetcher.processors.preparation import prepare_evidence
 
-    Since Spec 3 (amalgamation) was added, the df filter branch is now
-    ``if config.get("save_dups", True) and not config.get(...)`` which
-    is a valid guard — the static check here ensures at minimum that:
-
-    * The dup_df construction still branches on save_dups (True→copy,
-      False→iloc).
-    * The ``.iloc[0:0]`` sentinel is still present (the False arm for
-      dup_df empties the duplicate set).
-    * There were at least two source occurrences of the save_dups config
-      access (the dup_df side and the df-filter side).
-    """
-    import inspect
-
-    src = inspect.getsource(export_to_excel)
-    # The compound form ``if config.get("save_dups", True) and not ...``
-    # is a valid guard — it still branches on save_dups.  Count *any*
-    # occurrence of the config key.
-    n = src.count('config.get("save_dups"')
-    assert n >= 3, (
-        f"expected at least 3 save_dups config accesses (dup_df True/False "
-        f"+ df-filter guard + amalgamate guard); saw {n}"
-    )
-    assert ".iloc[0:0]" in src or "pd.DataFrame()" in src, (
-        "save_dups=False branch must NOT carry duplicates through"
-    )
+    record = {
+        "Date": "01/01/2024",
+        "Entry Type": "New Bill",
+        "Invoice #": "INV-1",
+        "Amount (£)": 100.0,
+    }
+    visible = prepare_evidence([record, record], {"use_dedup": True, "save_dups": True})
+    hidden = prepare_evidence([record, record], {"use_dedup": True, "save_dups": False})
+    assert visible.records == hidden.records
+    assert len(visible.records) == 1
+    assert len(visible.duplicates) == len(hidden.duplicates) == 1

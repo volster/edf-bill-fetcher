@@ -51,7 +51,11 @@ def write_statistical_analysis_sheet(ws, dfc, config):
     DGREY = "888888"
 
     # Prepare data
-    dfc = dfc.copy()
+    from edf_bill_fetcher.processors.preparation import balance_frame, scope
+
+    dfc = balance_frame(dfc)
+    if len({scope(r) for r in dfc.to_dict("records")}) > 1:
+        dfc = dfc.iloc[:0]
     dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
     dfc = dfc.sort_values("_dt").reset_index(drop=True)
     n = len(dfc)

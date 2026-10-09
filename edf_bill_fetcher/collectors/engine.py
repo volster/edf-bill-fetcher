@@ -14,6 +14,7 @@ import re
 import sys
 import tempfile
 import threading
+from pathlib import Path
 
 try:
     import pypff  # type: ignore[import-untyped]  # noqa: F401
@@ -41,6 +42,7 @@ from edf_bill_fetcher.helpers.fallback_extractors import (
     fallback_period_to,
 )
 from edf_bill_fetcher.helpers.formatting import account_number_matches
+from edf_bill_fetcher.helpers.identity import account_matches, document_identity
 from edf_bill_fetcher.helpers.pst_resources import (
     EMAIL_ADDR_RE,
     extract_sender_email,
@@ -62,6 +64,7 @@ from edf_bill_fetcher.processors.patterns import (
     READING_PATTERNS,
     extract_sub_periods,
 )
+from edf_bill_fetcher.processors.preparation import normalize_record
 from edf_bill_fetcher.processors.sap_parsers import (
     detect_reconciliation_statement,
     detect_sap_dump,
@@ -174,6 +177,10 @@ class EvidenceEngine:
         # set — getattr(engine, "source_paths", {}) always returned {} and
         # every attachment was skipped with "missing source for X". Spec §3.9.
         self.source_paths: dict[str, str] = {}
+        self.source_manifest: dict[str, dict[str, Any]] = {}
+        self._source_context: dict[str, Any] = {}
+        self.attachment_count = 0
+        self.skipped_attachment_count = 0
         self._attachment_dir: tempfile.TemporaryDirectory[str] | None = None
 
     # ------------------------------------------------------------------
@@ -216,6 +223,9 @@ class EvidenceEngine:
             "sap_meter_rows": self.sap_meter_rows,
             "sap_financial_rows": self.sap_financial_rows,
             "source_paths": self.source_paths,
+            "source_manifest": self.source_manifest,
+            "attachment_count": self.attachment_count,
+            "skipped_attachment_count": self.skipped_attachment_count,
         }
 
     def __setstate__(self, state: dict) -> None:
@@ -237,6 +247,10 @@ class EvidenceEngine:
         self.sap_meter_rows = state.get("sap_meter_rows", [])
         self.sap_financial_rows = state.get("sap_financial_rows", [])
         self.source_paths = state.get("source_paths", {})
+        self.source_manifest = state.get("source_manifest", {})
+        self.attachment_count = state.get("attachment_count", 0)
+        self.skipped_attachment_count = state.get("skipped_attachment_count", 0)
+        self._source_context = {}
         self._attachment_dir = None
         # Rebuild runtime primitives fresh — the persisted snapshot
         # does not carry cancel state forward.
@@ -273,42 +287,31 @@ class EvidenceEngine:
         return "N/A", "N/A"
 
     def _add_record(self, rec):
-        """Thread-safe record append after optional magnitude-based filter check.
-
-        Filter compares ``abs(amount)`` to ``min_amount`` so high-magnitude
-        refunds (e.g. ``-£1000``) are KEPT in the main records — only
-        records whose absolute amount is below the threshold are shelved
-        to ``filtered_records``.
-
-        The amount field accepts both numeric and string values: strings
-        are coerced to float where possible, and an uncoercible sentinel
-        (e.g. ``"N/A"``) becomes ``None`` so the filter check is skipped
-        and the record is kept rather than crashing the run.
-        """
-        raw_amt = rec.get("Amount (£)", 0) or 0
-        try:
-            amt = float(raw_amt)
-        except (TypeError, ValueError):
-            amt = None
-        if (
-            amt is not None
-            and self.config.get("filter_below", True)
-            and abs(amt) < self.config.get("min_amount", 50.0)
-        ):
-            with self.lock:
-                self.filtered_records.append(
-                    {
-                        "Source": rec.get("Source", ""),
-                        "Date": rec.get("Date", ""),
-                        "Amount (£)": amt,
-                        "Details": rec.get("Details", "")[:60],
-                        "Logic Used": rec.get("Logic Used", ""),
-                        "Reason": f"Amount magnitude below £{self.config.get('min_amount', 50.0):,.2f} threshold",
-                    }
+        """Preserve full observations and consistently enforce account selection."""
+        rec = normalize_record({**self._source_context, **rec})
+        if self.config.get("use_acc_filter") and self.config.get("acc_num"):
+            if not account_matches(self.config["acc_num"], rec):
+                self.log_error(
+                    "Account filter",
+                    f"Unmatched or unidentified account in {rec.get('Attachment Name')}",
                 )
-            return
-        with self.lock:
-            self.records.append(rec)
+                return
+        amount = rec["Transaction Amount (£)"]
+        if amount is None:
+            amount = rec["Balance (£)"]
+        if (
+            amount is not None
+            and self.config.get("filter_below", True)
+            and abs(amount) < self.config.get("min_amount", 50.0)
+        ):
+            rec["Reason"] = (
+                f"Amount magnitude below £{self.config.get('min_amount', 50.0):,.2f} threshold"
+            )
+            with self.lock:
+                self.filtered_records.append(rec)
+        else:
+            with self.lock:
+                self.records.append(rec)
 
     # ------------------------------------------------------------------
     # New-format PDF processing
@@ -317,8 +320,9 @@ class EvidenceEngine:
     def _process_new_invoice(
         self, text, source_label, detail_label, fallback_date, sender="", attachment_name=""
     ):
+        self._source_context.update(document_identity(text))
         fields = extract_new_invoice_fields(text)
-        if "amount" not in fields:
+        if "amount" not in fields and "period_charge" not in fields:
             return False  # didn't match
 
         sub_periods = extract_sub_periods(text)
@@ -389,7 +393,9 @@ class EvidenceEngine:
                 period_from=fields.get("period_from", "N/A"),
                 period_to=fields.get("period_to", "N/A"),
                 invoice_num=fields.get("inv_num", "N/A"),
-                amount=fields["amount"],
+                amount=fields.get("amount"),
+                amount_kind="Balance",
+                energy_unit_rate=self._energy_rate(text),
                 period_charge=fields.get("period_charge", "N/A"),
                 entry_type=entry_type,
                 reading=r_type,
@@ -410,8 +416,9 @@ class EvidenceEngine:
     def _process_new_credit(
         self, text, source_label, detail_label, fallback_date, sender="", attachment_name=""
     ):
+        self._source_context.update(document_identity(text))
         fields = extract_new_credit_fields(text)
-        if "amount" not in fields:
+        if "amount" not in fields and "period_charge" not in fields:
             return False
 
         if self.config.get("use_acc_filter"):
@@ -449,7 +456,9 @@ class EvidenceEngine:
                 period_from=period_from,
                 period_to=period_to,
                 invoice_num=fields.get("inv_num", "N/A"),
-                amount=fields["amount"],
+                amount=-abs(fields["amount"]),
+                amount_kind="Transaction",
+                transaction_amount=-abs(fields["amount"]),
                 period_charge="N/A",
                 entry_type="Credit",
                 reading="N/A",
@@ -476,6 +485,7 @@ class EvidenceEngine:
             return
 
         clean_text = re.sub(r"\s+", " ", text)
+        self._source_context.update(document_identity(clean_text))
 
         # Account filter
         if self.config.get("use_acc_filter"):
@@ -500,7 +510,7 @@ class EvidenceEngine:
                     except Exception:
                         continue
 
-        if not found_amt and self.config.get("use_large", True):
+        if found_amt is None and self.config.get("use_large", True):
             matches = _POUND_AMOUNT_FALLBACK_RE.findall(clean_text)
             if matches:
                 floats = [float(x.replace(",", "")) for x in matches]
@@ -509,7 +519,7 @@ class EvidenceEngine:
                     found_amt = max(highs)
                     strategy = "Large Amount Fallback"
 
-        if not found_amt:
+        if found_amt is None:
             return
 
         # Date extraction
@@ -570,6 +580,10 @@ class EvidenceEngine:
                 period_to=period_to,
                 invoice_num=inv_num,
                 amount=found_amt,
+                amount_kind="Balance"
+                if matched_pattern_name in _AMOUNT_PATTERN_ONGOING_BALANCE
+                else "Unknown",
+                energy_unit_rate=self._energy_rate(clean_text),
                 period_charge=period_charge,
                 entry_type=entry_type,
                 reading=r_type,
@@ -654,6 +668,74 @@ class EvidenceEngine:
     # PDF file processing — detects format automatically
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _energy_rate(text: str) -> float | None:
+        """Extract a stated energy unit rate; total-charge/kWh is not a rate."""
+        rates = re.findall(
+            r"(?:Electricity used|Energy used|Unit rate).*?(?:@|at)\s*([\d.]+)\s*p(?:/|\s*per\s*)kWh",
+            text,
+            re.I,
+        )
+        values = {float(value) for value in rates}
+        return next(iter(values)) if len(values) == 1 else None
+
+    def _selected_sap_rows(self, rows: list[dict]) -> list[dict]:
+        """Apply the selected account to each row in a possibly mixed SAP dump."""
+        result = []
+        for row in rows:
+            if (
+                self.config.get("use_acc_filter")
+                and self.config.get("acc_num")
+                and not account_matches(self.config["acc_num"], row)
+            ):
+                self.log_error("SAP account filter", f"Excluded account {row.get('Account')!r}")
+                continue
+            result.append({**self._source_context, **row})
+        return result
+
+    def _register_source(self, path: str, name: str, content: bytes) -> dict[str, Any]:
+        """Record a source occurrence using content and origin identity."""
+        digest = hashlib.sha256(content).hexdigest()
+        origin = self._source_context.get("Parent Message") or os.path.abspath(path)
+        source_id = hashlib.sha256((origin + "\0" + name + "\0" + digest).encode()).hexdigest()
+        original_name = name or os.path.basename(path)
+        unique_name = original_name
+        if unique_name in self.source_paths and self.source_paths[unique_name] != path:
+            stem, ext = os.path.splitext(original_name)
+            unique_name = f"{stem}-{source_id[:12]}{ext}"
+        self.source_paths[unique_name] = path
+        self.source_paths[source_id] = path
+        metadata = {
+            "Source ID": source_id,
+            "Content Hash": digest,
+            "Original Path": os.path.abspath(path),
+            "Original Filename": original_name,
+            "Attachment Name": unique_name,
+            "Parent Message": self._source_context.get("Parent Message", ""),
+        }
+        self.source_manifest[source_id] = metadata.copy()
+        return metadata
+
+    def _process_attachment(
+        self, data: bytes, name: str, source: str, date_str: str, sender: str, parent: str = ""
+    ) -> None:
+        """Keep supported attachments alive until all bundle writers finish."""
+        self.attachment_count += 1
+        if not data.startswith(b"%PDF"):
+            self.skipped_attachment_count += 1
+            self.log_error("Attachment", f"Unsupported attachment {name!r} in {parent!r}")
+            return
+        if self._attachment_dir is None:
+            self._attachment_dir = tempfile.TemporaryDirectory(prefix="edf-attachments-")
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=".pdf", dir=self._attachment_dir.name
+        ) as handle:
+            handle.write(data)
+            path = handle.name
+        self._source_context = {"Parent Message": parent}
+        self.pdf_count += 1
+        self.process_pdf_file(path, source, name, date_str, sender=sender, attachment_name=name)
+
     def process_pdf_file(
         self, path, source_label, detail_label, fallback_date, sender="", attachment_name=""
     ):
@@ -665,9 +747,21 @@ class EvidenceEngine:
 
             with open(path, "rb") as fh:
                 raw = fh.read()
-            pdf_hash = hashlib.sha256(raw).hexdigest()
+            parent_message = self._source_context.get("Parent Message", "")
+            self._source_context = self._register_source(path, attachment_name or detail_label, raw)
+            self._source_context["Parent Message"] = parent_message
+            attachment_name = self._source_context["Attachment Name"]
+            pdf_hash = self._source_context["Content Hash"]
             with self.lock:
                 if pdf_hash in self.seen_pdf_hashes:
+                    for record in self.records + self.filtered_records:
+                        if record.get("Content Hash") == pdf_hash:
+                            record.setdefault("Source IDs", []).append(
+                                self._source_context["Source ID"]
+                            )
+                            record.setdefault("Source Occurrences", []).append(
+                                self._source_context.copy()
+                            )
                     return
                 self.seen_pdf_hashes.add(pdf_hash)
 
@@ -680,8 +774,7 @@ class EvidenceEngine:
                 for p in pdf.pages:
                     try:
                         page_text = p.extract_text()
-                        if page_text:
-                            pdf_text_parts.append(page_text)
+                        pdf_text_parts.append(page_text or "")
                     except (
                         pdfplumber.utils.exceptions.PdfminerException,
                         ValueError,
@@ -692,6 +785,7 @@ class EvidenceEngine:
                         # ``BaseException`` (e.g. ``KeyboardInterrupt``) and
                         # unexpected runtime errors propagate so the caller
                         # can still cancel or surface real bugs.
+                        pdf_text_parts.append("")
                         self.log_error(
                             f"PDF page {detail_label}", f"Page extraction failed: {page_err}"
                         )
@@ -718,8 +812,13 @@ class EvidenceEngine:
             slices = slice_pdf_pages(pdf_text_parts)
             multi = len(slices) > 1
 
+            first_page = 1
             for i, slice_pages in enumerate(slices, start=1):
                 slice_text = " ".join(slice_pages)
+                self._source_context.update(document_identity(slice_text))
+                self._source_context["Page From"] = first_page
+                self._source_context["Page To"] = first_page + len(slice_pages) - 1
+                first_page += len(slice_pages)
                 if multi:
                     slice_detail = f"{detail_label} #{i}"
                     slice_attachment = f"{attachment_name} #{i}"
@@ -741,26 +840,32 @@ class EvidenceEngine:
                         source_file = slice_attachment or slice_detail or ""
                         if sap_kind == "contract":
                             self.sap_contract_rows.extend(
-                                parse_sap_contract_history(
-                                    slice_text,
-                                    source_file=source_file,
-                                    report=lambda msg: self.log_error("SAP dump", msg),
+                                self._selected_sap_rows(
+                                    parse_sap_contract_history(
+                                        slice_text,
+                                        source_file=source_file,
+                                        report=lambda msg: self.log_error("SAP dump", msg),
+                                    )
                                 )
                             )
                         elif sap_kind == "meter_read":
                             self.sap_meter_rows.extend(
-                                parse_sap_meter_read_history(
-                                    slice_text,
-                                    source_file=source_file,
-                                    report=lambda msg: self.log_error("SAP dump", msg),
+                                self._selected_sap_rows(
+                                    parse_sap_meter_read_history(
+                                        slice_text,
+                                        source_file=source_file,
+                                        report=lambda msg: self.log_error("SAP dump", msg),
+                                    )
                                 )
                             )
                         elif sap_kind == "financial":
                             self.sap_financial_rows.extend(
-                                parse_sap_financial_transactions(
-                                    slice_text,
-                                    source_file=source_file,
-                                    report=lambda msg: self.log_error("SAP dump", msg),
+                                self._selected_sap_rows(
+                                    parse_sap_financial_transactions(
+                                        slice_text,
+                                        source_file=source_file,
+                                        report=lambda msg: self.log_error("SAP dump", msg),
+                                    )
                                 )
                             )
                         continue
@@ -773,7 +878,8 @@ class EvidenceEngine:
                     # emit one record per underlying row.
                     if detect_reconciliation_statement(slice_text):
                         rows = extract_reconciliation_statement_rows(slice_text, slice_attachment)
-                        for row in rows:
+                        for source_row, row in enumerate(rows, 1):
+                            row["Source Row"] = source_row
                             self._add_record(row)
                         continue
                     fmt = detect_pdf_format(slice_text)
@@ -821,6 +927,10 @@ class EvidenceEngine:
     def process_htm_file(self, path):
         """Read an HTM account-history export and extract every record it contains."""
         try:
+            self._source_context = {}
+            self._source_context = self._register_source(
+                path, os.path.basename(path), Path(path).read_bytes()
+            )
             # Read with strict UTF-8 first — evidence data must not be
             # silently corrupted by mojibake replacement.  Fall back to
             # "replace" only if strict fails, and log a warning so the
@@ -834,8 +944,10 @@ class EvidenceEngine:
                     content = f.read()
             soup = BeautifulSoup(content, "html.parser")
             text = soup.get_text(separator=" ", strip=True)
+            self._source_context.update(document_identity(text))
             recs = parse_htm_account_history(text)
             for rec in recs:
+                rec["Attachment Name"] = self._source_context["Attachment Name"]
                 self._add_record(rec)
             self.update_ui(f"HTM: extracted {len(recs)} account history entries")
         except Exception as e:
@@ -900,6 +1012,7 @@ class EvidenceEngine:
                 return
             try:
                 msg = folder.get_sub_message(i)
+                self._source_context = {}
                 subj = str(msg.get_subject() or "")
                 d_time = msg.get_delivery_time()
                 date_str = parse_to_display_date(d_time.strftime("%Y-%m-%d")) if d_time else "N/A"
@@ -935,7 +1048,12 @@ class EvidenceEngine:
                     if html:
                         body_text = BeautifulSoup(html, "html.parser").get_text(separator=" ")
                         self.process_text(
-                            body_text, "Email Body", subj, date_str, sender=sender_email
+                            body_text,
+                            "Email Body",
+                            subj,
+                            date_str,
+                            sender=sender_email,
+                            attachment_name=self._source_context.get("Attachment Name", ""),
                         )
                     elif plain:
                         self.process_text(
@@ -976,28 +1094,18 @@ class EvidenceEngine:
                             size = att.get_size()
                             if size > 4:
                                 buf = att.read_buffer(size)
-                                if buf and buf.startswith(b"%PDF"):
-                                    with self.lock:
-                                        self.pdf_count += 1
-                                    att_name = _pst_attachment_filename(att)
-                                    if not att_name:
-                                        att_name = f"Attachment_{self.pdf_count}.pdf"
-                                    if self._attachment_dir is None:
-                                        self._attachment_dir = tempfile.TemporaryDirectory(
-                                            prefix="edf-attachments-"
-                                        )
-                                    with tempfile.NamedTemporaryFile(
-                                        delete=False, suffix=".pdf", dir=self._attachment_dir.name
-                                    ) as tmp:
-                                        tmp.write(buf)
-                                        tmp_path = tmp.name
-                                    self.process_pdf_file(
-                                        tmp_path,
-                                        "PST PDF Attachment",
+                                if buf:
+                                    att_name = (
+                                        _pst_attachment_filename(att)
+                                        or f"Attachment_{a_idx + 1}.pdf"
+                                    )
+                                    self._process_attachment(
+                                        buf,
                                         att_name,
+                                        "PST PDF Attachment",
                                         date_str,
-                                        sender=sender_email,
-                                        attachment_name=att_name,
+                                        sender_email,
+                                        f"{subj} ({date_str})",
                                     )
                         except Exception as e:
                             self.log_error(f'Attachment in "{subj}"', str(e))
@@ -1051,6 +1159,7 @@ class EvidenceEngine:
             )
             with self.lock:
                 self.pdf_count += 1
+            self._source_context = {}
             self.process_pdf_file(
                 file_path, "Local PDF Folder", fname, fallback_date, attachment_name=fname
             )
@@ -1088,7 +1197,12 @@ class EvidenceEngine:
         if not path or not os.path.exists(path):
             return
         try:
-            files = [f for f in os.listdir(path) if f.lower().endswith(extension)]
+            files = sorted(
+                os.path.relpath(os.path.join(base, f), path)
+                for base, _, names in os.walk(path)
+                for f in names
+                if f.lower().endswith(extension)
+            )
         except OSError as e:
             self.log_error(f"{source_name} folder: {path}", str(e))
             return
@@ -1103,6 +1217,11 @@ class EvidenceEngine:
             file_path = os.path.join(path, fname)
             try:
                 data = parser(file_path)
+                self._source_context = {}
+                with open(file_path, "rb") as message_file:
+                    self._source_context = self._register_source(
+                        file_path, fname, message_file.read()
+                    )
             except Exception as e:
                 self.log_error(f"{source_name}: {fname}", str(e))
                 continue
@@ -1137,13 +1256,36 @@ class EvidenceEngine:
                     body_text = data.get("body_text")
                     if body_html:
                         clean = BeautifulSoup(body_html, "html.parser").get_text(separator=" ")
-                        self.process_text(clean, "Email Body", subj, date_str, sender=sender_email)
+                        self.process_text(
+                            clean,
+                            "Email Body",
+                            subj,
+                            date_str,
+                            sender=sender_email,
+                            attachment_name=self._source_context.get("Attachment Name", ""),
+                        )
                     elif body_text:
                         self.process_text(
-                            body_text, "Email Body", subj, date_str, sender=sender_email
+                            body_text,
+                            "Email Body",
+                            subj,
+                            date_str,
+                            sender=sender_email,
+                            attachment_name=self._source_context.get("Attachment Name", ""),
                         )
                     else:
                         self.log_error(f"Email: {subj} ({date_str})", "No readable body")
+                    for attachment in data.get("attachments", []):
+                        if self.is_cancelled():
+                            break
+                        self._process_attachment(
+                            attachment["data"],
+                            attachment["name"],
+                            f"{source_name} PDF Attachment",
+                            date_str,
+                            sender_email,
+                            file_path,
+                        )
             except Exception as e:
                 self.log_error(f"Email: {subj}", str(e))
 

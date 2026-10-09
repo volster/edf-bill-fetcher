@@ -12,12 +12,10 @@ dispatcher ↔ DOCX dispatcher key set parity.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
-import numpy as np
 import pandas as pd
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
@@ -36,6 +34,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from edf_bill_fetcher.helpers.artifacts import atomic_output
 from edf_bill_fetcher.helpers.date_utils import (
     parse_to_display_date,
     parse_to_sort_date,
@@ -46,6 +45,7 @@ from edf_bill_fetcher.helpers.formatting import (
 )
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
+from edf_bill_fetcher.processors.preparation import analysis_frame, prepare_evidence
 
 # =============================================================================
 # COLOR PALETTE & CONSTANTS
@@ -467,121 +467,12 @@ def build_doc_template(output_path: str) -> BaseDocTemplate:
 # sections are numbered 1, 2, 3... and appendices are lettered A, B, C..., all
 # computed at render time based on the user's selection. So the body's heading
 # text and the TOC ALWAYS match, regardless of which sections are toggled.
-@dataclass(frozen=True)
-class ReportSectionMeta:
-    """Manifest entry for one report section."""
-
-    key: str
-    title: str
-    is_appendix: bool = False
-
-
-REPORT_SECTIONS: list[ReportSectionMeta] = [
-    ReportSectionMeta("exec_summary", "Executive Summary"),
-    ReportSectionMeta("key_findings", "Key Findings Summary"),
-    ReportSectionMeta("evidence_index", "Evidence Index & Source Cross-Reference"),
-    ReportSectionMeta("detailed_findings", "Detailed Findings"),
-    ReportSectionMeta("timeline", "Timeline of Events"),
-    ReportSectionMeta("ofgem", "OFGEM Price Cap Comparison"),
-    ReportSectionMeta("statistical", "Statistical Analysis"),
-    ReportSectionMeta("payment", "Payment & Credit Analysis"),
-    ReportSectionMeta("forecast", "Forecast & Projection"),
-    ReportSectionMeta("data_quality", "Data Quality Assessment"),
-    ReportSectionMeta("tariff", "Tariff Impact Analysis"),
-    ReportSectionMeta("compensation", "Compensation Analysis"),
-    ReportSectionMeta("appendix_methodology", "Methodology & Data Sources", is_appendix=True),
-    ReportSectionMeta("appendix_glossary", "Glossary", is_appendix=True),
-    ReportSectionMeta("appendix_full_evidence", "Full Evidence Table", is_appendix=True),
-]
-
-
-@dataclass(frozen=True)
-class _LabelledSection:
-    """A section after numbering has been resolved for the selected report."""
-
-    section: ReportSectionMeta
-    label: str  # e.g. "1." or "A."
-    index: int  # within main (or appendix) list
-
-
-class RenderContext:
-    """Per-render state used to derive headings consistently.
-
-    The body builders call ``ctx.heading(key)`` to get the heading string for
-    the section they own. The TOC builder iterates ``ctx.sections_in_order``
-    to produce the matching TOC.
-    """
-
-    def __init__(self, selected: set[str] | list[str] | None = None) -> None:
-        """Build a render context for the selected report sections.
-
-        Args:
-            selected: Section keys to include; ``None`` defaults to every
-                registered section so legacy context-free callers see the
-                full 1..11 + A..C layout.
-
-        """
-        # Distinguish three cases:
-        #   * ``selected is None`` — no explicit choice; default to every
-        #     section so legacy context-free tests/CI still see the
-        #     full registry with the 1..11 + A..C layout.
-        #   * ``selected`` is any other iterable (including an empty set) —
-        #     use it verbatim. An empty set produces an empty context.
-        # We previously conflated "no argument" with "empty set",
-        # which silently swallowed intent and made it impossible to
-        # render an empty report from the GUI dialog. Now empty set
-        # is honoured.
-        if selected is None:
-            self.selected = {s.key for s in REPORT_SECTIONS}
-        else:
-            self.selected = set(selected)
-
-        # Compute numeric/alphabetic labels only for selected & visible sections,
-        # skipping framing sections (cover, toc) which are not listed in
-        # REPORT_SECTIONS — they never appear in the body nor the TOC.
-        visible = [s for s in REPORT_SECTIONS if s.key in self.selected]
-        main = [s for s in visible if not s.is_appendix]
-        appendix = [s for s in visible if s.is_appendix]
-        self._labelled: dict[str, _LabelledSection] = {}
-        for i, section in enumerate(main, start=1):
-            self._labelled[section.key] = _LabelledSection(section=section, label=f"{i}.", index=i)
-        for i, section in enumerate(appendix):
-            label = chr(ord("A") + i) + "."
-            self._labelled[section.key] = _LabelledSection(
-                section=section, label=label, index=i + 1
-            )
-
-    @property
-    def sections_in_order(self) -> list[_LabelledSection]:
-        """All sections that should appear in the TOC, in order."""
-        main = [v for v in self._labelled.values() if not v.section.is_appendix]
-        appendix = [v for v in self._labelled.values() if v.section.is_appendix]
-        return main + appendix
-
-    def heading(self, key: str) -> str:
-        """Return the full heading line for the given section key.
-
-        e.g. ``ctx.heading('timeline')`` returns ``"5. Timeline of Events"`` if
-        timeline is the 5th selected main section. Raises KeyError if the key
-        is not in REPORT_SECTIONS.
-        """
-        section = next((s for s in REPORT_SECTIONS if s.key == key), None)
-        if section is None:
-            raise KeyError(f"Unknown section key: {key!r}")
-        labelled = self._labelled.get(key)
-        if labelled is None:
-            # Section was present but not selected — use its natural title
-            # (no number) so we never produce "0. Title" or similar.
-            return section.title
-        return f"{labelled.label} {section.title}"
-
-    def short_label(self, key: str) -> str:
-        """Just the numeric / alphabetic marker, e.g. ``"3."`` or ``"A."``.
-
-        Returns ``""`` if the section is not selected or unrecognised.
-        """
-        labelled = self._labelled.get(key)
-        return labelled.label if labelled else ""
+from edf_bill_fetcher.models.report_sections import (  # noqa: E402,F401
+    REPORT_SECTIONS,
+    RenderContext,
+    ReportSectionMeta,
+    _LabelledSection,
+)
 
 
 def _get_package_version() -> str:
@@ -606,147 +497,9 @@ def _get_package_version() -> str:
     return get_package_version()
 
 
-def _compute_mean_daily(df_sorted: pd.DataFrame) -> float:
-    """Compute the mean daily charge rate from a date-sorted DataFrame.
-
-    Walks consecutive rows, computes the charge difference divided by
-    the day gap, keeps only positive charges, and returns
-    ``mean(pos_diffs) / 30.0``.  This normalises per-day charges into
-    an approximate monthly figure used by ``compute_dispute_flags``.
-
-    NOTE on the "MEAN DAILY" label used by the rendered reports: the
-    value is averaged over each positive-charge /period/ (treated as
-    a 30-day billing cycle) rather than each calendar day.  The
-    division by 30 is the convention used throughout this project;
-    the displayed label refers to the / 30 step, not actual day-level
-    averaging.
-
-    Returns 0.0 when there are fewer than two positive-charge intervals
-    or if any error occurs (e.g. missing columns).
-
-    This helper is the single source of truth for this calculation;
-    both the PDF report and the DOCX report call it so the numbers
-    can never diverge.
-    """
-    try:
-        pos_diffs = []
-        for i in range(1, len(df_sorted)):
-            p = df_sorted.iloc[i - 1]
-            c_ = df_sorted.iloc[i]
-            days = (c_["_dt"] - p["_dt"]).days
-            charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-            if days > 0 and charge > 0:
-                daily = charge / days
-                pos_diffs.append(daily)
-        return float(np.mean(pos_diffs)) / 30.0 if len(pos_diffs) else 0.0
-        # NOTE: dividing by 30 rescales the per-day average into the
-        # project-canonical /period/ rate used throughout the rendered
-        # reports (see docstring above for the labelling convention).
-    except Exception:
-        return 0.0
-
-
-def _compute_financial_totals(df: pd.DataFrame) -> tuple[float, float]:
-    """Compute (total_charges, total_payments_and_credits) correctly.
-
-    ``Amount (£)`` in this codebase is always a positive running
-    account BALANCE, never a signed transaction delta — this is
-    true for bills, Payment records, and Credit records alike
-    (see ``parse_htm_account_history`` and ``extract_new_invoice_fields``
-    in ``edf_collector.py``: every writer sets ``Amount (£)`` to a
-    positive cumulative balance).  Do NOT compute charges/payments by
-    splitting ``Amount (£)`` on sign; that approach silently produces
-    £0.00 payments (no rows are negative) and wildly overstated charges
-    (it sums balances, not period charges).
-
-    Correct approach, mirroring ``_detect_payment_patterns`` and
-    ``write_payment_analysis_sheet`` in ``edf_collector.py``:
-
-      * "Charges" = the sum of ``Period Charge (£)`` for records whose
-        ``Entry Type`` is ``"New Bill"`` — i.e. the actual amount billed
-        for that period, NOT the cumulative ``Amount (£)`` balance.
-      * "Payments/Credits" = the sum of ``Amount (£)`` for records whose
-        ``Entry Type`` is ``"Payment"`` or ``"Credit"`` — for those rows
-        the balance figure IS the amount of the payment/credit event.
-
-    Returns (charges, payments) as floats.  Missing/non-numeric values
-    are treated as 0 and do not raise.  This helper is the single
-    source of truth for the executive-summary financial totals so the
-    PDF and DOCX reports can never diverge — both ``generate_ombudsman_pdf``
-    and ``generate_ombudsman_docx`` call it.
-    """
-    # ``get`` falls back to an empty object Series when the column is
-    # absent entirely (e.g. a hand-built test DataFrame missing Entry
-    # Type).  The later boolean masks then reduce to all-False, which
-    # correctly yields zero totals.
-    entry_type = df.get("Entry Type", pd.Series(dtype=object))
-
-    # Charges: only "New Bill" rows, using Period Charge (£), not the
-    # cumulative Amount (£) balance.  "Ongoing Balance" rows do not
-    # carry a period charge — they are snapshots of the running balance
-    # and would double-count if summed into charges.
-    bill_mask = entry_type == "New Bill"
-    period_charge = pd.to_numeric(df.get("Period Charge (£)"), errors="coerce")
-    charges = float(period_charge[bill_mask].fillna(0).sum())
-
-    # Payments/Credits: identified by Entry Type, not by sign of Amount.
-    # ``Amount (£)`` on Payment/Credit rows is a positive balance figure
-    # representing the size of that payment/credit event (see HTM parser
-    # lines 626/656/707 in edf_collector.py — all set ``Amount (£)``
-    # from the same positive balance field).
-    pay_mask = entry_type.isin(["Payment", "Credit"])
-    pay_amounts = pd.to_numeric(df.get("Amount (£)"), errors="coerce")
-    payments = float(pay_amounts[pay_mask].fillna(0).sum())
-
-    return charges, payments
-
-
-def _compute_balance_extremes(df: pd.DataFrame) -> tuple[float | None, float | None]:
-    """Compute (opening_balance, closing_balance) for the executive summary.
-
-    Returns (opening, closing) — the first and last sort-date
-    ``Amount (£)`` in chronological order.  Because ``Amount (£)``
-    is the cumulative account balance throughout this codebase
-    (NEVER a signed transaction delta — see
-    ``_compute_financial_totals`` for the rationale), the chronologically
-    earliest record's balance IS the opening balance, and the latest
-    record's balance IS the closing balance.  No reconciliation needed.
-
-    Returns ``(None, None)`` when the input has no usable dates —
-    the caller falls back to ``"—"`` as the rendered token so the
-    table can never carry a misleading figure on empty data.
-
-    Why placeholders are wrong
-    --------------------------
-    Pre-fix the executive-summary tables rendered literal ``"—"``
-    em-dashes for Opening/Closing balance rows.  An ombudsman
-    reviewer reading the headline financial table sees a dash where
-    they expect a concrete number — the project-mandated
-    reader-first policy ("show, never leave a placeholder") is
-    violated by both the original em-dashes and the absence of the
-    rows from the DOCX variant.  Compute the real values whenever
-    the underlying dataframe lets us.
-    """
-    # Need both a parseable date and a numeric amount to make a
-    # judgement call on which row is "first" and "last".
-    if "Date" not in df.columns or "Amount (£)" not in df.columns:
-        return None, None
-
-    amounts = pd.to_numeric(df["Amount (£)"], errors="coerce")
-    dates = df["Date"].apply(parse_to_sort_date)
-    # Only consider rows that have BOTH a valid date and a numeric
-    # amount; rows with NaT dates or NaN amounts are excluded.
-    valid = dates.notna() & amounts.notna()
-    if not valid.any():
-        return None, None
-
-    sorted_idx = dates[valid].sort_values().index.tolist()
-    if not sorted_idx:
-        return None, None
-
-    opening = float(amounts.loc[sorted_idx[0]])
-    closing = float(amounts.loc[sorted_idx[-1]])
-    return opening, closing
+from edf_bill_fetcher.processors.financial import balance_extremes as _compute_balance_extremes  # noqa: E402,F401
+from edf_bill_fetcher.processors.financial import financial_totals as _compute_financial_totals  # noqa: E402,F401
+from edf_bill_fetcher.processors.financial import mean_daily_rate as _compute_mean_daily  # noqa: E402,F401
 
 
 def create_cover_page(
@@ -900,8 +653,8 @@ def create_executive_summary(
     fin_data = [
         ["Metric", "Amount"],
         ["Total Charges (Debits)", fmt_money(total_charges)],
-        ["Total Payments/Credits", fmt_money(total_payments)],
-        ["Net Balance Increase", fmt_money(net_change)],
+        ["Net Payments/Credits (After Refunds)", fmt_money(total_payments)],
+        ["Recorded Net Movement", fmt_money(net_change)],
         # Opening/Closing balance rows were hard-coded "—" placeholders
         # before this commit.  Now the dispatcher pre-computes them via
         # ``_compute_balance_extremes`` so the reader sees the actual
@@ -932,7 +685,7 @@ def create_executive_summary(
         findings.append(
             f"<b>{flag_count['HIGH']} HIGH-severity anomalies</b> detected, including billing spikes "
             f"exceeding 50% period-over-period, gaps over 120 days without billing, and "
-            f"reconciliation mismatches suggesting unrecorded payments or billing errors."
+            f"missing or inconsistent ledger evidence requiring review."
         )
     if flag_count.get("MEDIUM", 0) > 0:
         findings.append(
@@ -942,7 +695,7 @@ def create_executive_summary(
     if flag_count.get("INFO", 0) > 0:
         findings.append(
             f"<b>{flag_count['INFO']} informational items</b> noted, primarily balance reductions "
-            f"from payments/credits over £500."
+            f"requiring checks of the underlying transactions."
         )
 
     if not findings:
@@ -956,12 +709,9 @@ def create_executive_summary(
     # Conclusion
     elements.append(Paragraph("<b>Conclusion</b>", STYLES["SubSectionHeader"]))
     conclusion = (
-        "Based on the systematic analysis of all available billing records, this report identifies "
-        "multiple instances where EDF Energy's billing practices deviate from expected norms "
-        "and regulatory requirements. The documented anomalies—particularly the high-severity "
-        "billing spikes, extended billing gaps, and reconciliation failures—warrant formal "
-        "investigation by the Energy Ombudsman. The complainant requests a full billing audit "
-        "for the identified periods and appropriate redress for any overcharging."
+        "This report summarizes the supplied evidence and highlights observations for review. "
+        "Balance changes and missing records alone do not establish overcharging or a regulatory breach. "
+        "Check the original documents, account context and applicable rules before making a claim."
     )
     elements.append(Paragraph(conclusion, STYLES["BodyText"]))
 
@@ -1003,7 +753,7 @@ def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> 
     # Summary table
     summary_data = [
         ["Severity", "Count", "Description"],
-        ["HIGH", str(len(high)), "Immediate concern — regulatory breach likely"],
+        ["HIGH", str(len(high)), "Review original evidence and account context"],
         ["MEDIUM", str(len(medium)), "Significant deviation — investigation warranted"],
         ["INFO", str(len(info)), "Informational — payments/credits noted"],
         ["TOTAL", str(len(flags)), "All automated findings"],
@@ -1548,7 +1298,7 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
                     fmt_date(row["Date"]),
                     xml_escape(str(row["Entry Type"])),
                     fmt_money(row["_amount"]),
-                    fmt_money(row["Amount (£)"]),
+                    fmt_money(row.get("Balance (£)")),
                     xml_escape(str(row.get("Details", "")))[:80],
                 ]
             )
@@ -1610,13 +1360,13 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
     model_info = fc.model_info
 
     # Build forecast table
-    forecast_header = ["Forecast Period", "Linear Reg. (£)", "EMA (£)"]
+    forecast_header = ["Forecast Month", "Linear Reg. (£)", "EMA (£)"]
     if hw_forecast:
         forecast_header.append("Holt-Winters (£)")
 
     forecast_data = [forecast_header]
     for i in range(6):
-        row = [f"+{i + 1} Period", fmt_money(linear_forecast[i]), fmt_money(ema_forecast[i])]
+        row = [f"+{i + 1} Month", fmt_money(linear_forecast[i]), fmt_money(ema_forecast[i])]
         if hw_forecast:
             row.append(fmt_money(hw_forecast[i]))
         forecast_data.append(row)
@@ -1629,7 +1379,7 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
     t = Table(forecast_data, colWidths=col_widths)
     t.setStyle(make_table_style(num_rows=len(forecast_data)))
     elements.append(
-        Paragraph("<b>Next 6 Periods — Multi-Method Projection</b>", STYLES["SubSectionHeader"])
+        Paragraph("<b>Next 6 Months — Multi-Method Projection</b>", STYLES["SubSectionHeader"])
     )
     elements.append(Spacer(1, 0.2 * cm))
     elements.append(t)
@@ -1644,7 +1394,7 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
         Paragraph(
             "<i>Note: Projections assume continuation of current trends and do not account for "
             "seasonal variations, tariff changes, or policy changes. "
-            "Full forecasting with confidence intervals available in the Excel workbook (Forecast &amp; Projection tab).</i>",
+            "Full forecasting with advisory scenario bands available in the Excel workbook (Forecast &amp; Projection tab).</i>",
             STYLES["SmallText"],
         )
     )
@@ -1992,7 +1742,7 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
             "A.5 Configuration Used",
             [
                 f"Minimum Amount Threshold: {fmt_money(config.get('min_amount', 500))}",
-                f"Analysis Threshold: {fmt_money(config.get('analysis_min', 500))}",
+                f"Analysis Threshold: {fmt_money(config.get('analysis_min', 0))}",
                 f"Account Filter: {'Enabled' if config.get('use_acc_filter') else 'Disabled'} "
                 f"({config.get('acc_num', 'N/A')})",
                 f"Domain Filter: {'Enabled' if config.get('use_domain_filter') else 'Disabled'} "
@@ -2285,6 +2035,7 @@ def create_appendix_glossary(ctx: RenderContext | None = None) -> list:
 # =============================================================================
 
 
+@atomic_output()
 def generate_ombudsman_pdf(
     records: list[dict],
     output_path: str,
@@ -2312,7 +2063,11 @@ def generate_ombudsman_pdf(
     if not records:
         raise ValueError("No records to report on")
 
-    df = pd.DataFrame(records)
+    section_failures = []
+    prepared = prepare_evidence(records, config)
+    config = dict(prepared.config)
+    records = prepared.records
+    df = prepared.frame
     if df.empty:
         raise ValueError("Records DataFrame is empty")
 
@@ -2329,9 +2084,9 @@ def generate_ombudsman_pdf(
 
     # Ensure required columns exist with defaults
     required_cols = {
-        "Date": "01/01/1970",
+        "Date": "N/A",
         "Source": "Unknown",
-        "Amount (£)": 0.0,
+        "Amount (£)": None,
         "Period From": "N/A",
         "Period To": "N/A",
         "Invoice #": "N/A",
@@ -2379,7 +2134,8 @@ def generate_ombudsman_pdf(
     # Ensure _dt column exists for the analysis
     if "_dt" not in df.columns:
         df["_dt"] = df["Date"].apply(parse_to_sort_date)
-    df_sorted = df.sort_values("_dt").reset_index(drop=True)
+    analysis_df = analysis_frame(df, config)
+    df_sorted = analysis_df
 
     # Mean daily rate — shared logic (see _compute_mean_daily in this file).
     mean_daily = _compute_mean_daily(df_sorted)
@@ -2430,6 +2186,7 @@ def generate_ombudsman_pdf(
         try:
             elements.extend(create_table_of_contents(render_ctx))
         except Exception as e:
+            section_failures.append(str(e))
             elements.append(
                 Paragraph(
                     f"<i>Table of Contents failed: {xml_escape(str(e))}</i>",
@@ -2481,15 +2238,15 @@ def generate_ombudsman_pdf(
             lambda kwargs: create_ofgem_comparison(**kwargs),
         ),
         "statistical": (
-            lambda: {"dfc": df},
+            lambda: {"dfc": analysis_df},
             lambda kwargs: create_statistical_analysis(**kwargs),
         ),
         "payment": (
-            lambda: {"dfc": df},
+            lambda: {"dfc": analysis_df},
             lambda kwargs: create_payment_analysis(**kwargs),
         ),
         "forecast": (
-            lambda: {"dfc": df},
+            lambda: {"dfc": analysis_df},
             lambda kwargs: create_forecast_section(**kwargs),
         ),
         "data_quality": (
@@ -2497,11 +2254,11 @@ def generate_ombudsman_pdf(
             lambda kwargs: create_data_quality_section(**kwargs),
         ),
         "tariff": (
-            lambda: {"dfc": df},
+            lambda: {"dfc": analysis_df},
             lambda kwargs: create_tariff_impact_section(**kwargs),
         ),
         "compensation": (
-            lambda: {"dfc": df, "config": config},
+            lambda: {"dfc": analysis_df, "config": config},
             lambda kwargs: create_compensation_section(**kwargs),
         ),
         "appendix_methodology": (
@@ -2534,6 +2291,7 @@ def generate_ombudsman_pdf(
             kwargs["ctx"] = render_ctx
             elements.extend(invoke(kwargs))
         except Exception as e:
+            section_failures.append(str(e))
             elements.append(
                 Paragraph(
                     f"<i>{section.title} failed: {xml_escape(str(e))}</i>",
@@ -2542,6 +2300,10 @@ def generate_ombudsman_pdf(
             )
 
     # Build
+    if section_failures:
+        raise RuntimeError(
+            "Report incomplete; output was not published: " + "; ".join(section_failures)
+        )
     doc.build(elements)
     return output_path
 

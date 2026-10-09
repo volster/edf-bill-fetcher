@@ -66,8 +66,9 @@ class TestJsonEngineStateRoundTrip:
         _safe_json_dump(state, str(path))
 
         on_disk = json.loads(path.read_text(encoding="utf-8"))
-        assert on_disk["version"] == 1
-        assert on_disk["config"] == state["config"]
+        assert on_disk["version"] == 2
+        assert {key: on_disk["config"][key] for key in state["config"]} == state["config"]
+        assert on_disk["config"]["as_of"]
         assert on_disk["filtered_records"] == state["filtered_records"]
         assert on_disk["error_log"] == state["error_log"]
 
@@ -82,8 +83,8 @@ class TestJsonEngineStateRoundTrip:
         _safe_json_dump(state, str(path))
         loaded = _safe_pickle_load(str(path))
 
-        assert loaded["version"] == 1
-        assert loaded["config"] == {}
+        assert loaded["version"] == 2
+        assert loaded["config"]["as_of"]
         assert loaded["filtered_records"] == []
         assert loaded["error_log"] == []
 

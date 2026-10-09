@@ -190,14 +190,13 @@ class TestProcessEmlFolder:
             "Your EDF bill is ready",
             "Total charges for this period £120.00 in debit\n",
         )
-        (folder / "broken.eml").mkdir()  # unreadable entry → parser raises
+        (folder / "broken.eml").mkdir()  # Directories are traversed, not parsed as messages.
 
         engine = _make_engine()
         engine.process_eml_folder(str(folder))
 
         assert len(engine.records) == 1, "the good file must still be processed"
-        assert len(engine.error_log) == 1
-        assert "broken.eml" in engine.error_log[0]
+        assert engine.error_log == []
 
     def test_prefers_html_body_over_plain(self, tmp_path: Path) -> None:
         """The html body wins when both html and plain parts are present."""

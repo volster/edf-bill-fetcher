@@ -86,8 +86,8 @@ def _make_records() -> list[dict]:
         date="04/04/2024",
         pf="01/03/2024",
         pt="01/04/2024",
-        inv="",
-        pc=0.0,
+        inv="INV-777",
+        pc=None,
         units="100",
         reading="N/A",
         tariff="N/A",
@@ -108,8 +108,8 @@ def _make_records() -> list[dict]:
         date="03/04/2024",
         pf="N/A",
         pt="01/04/2024",
-        inv="",
-        pc=0.0,
+        inv="INV-777",
+        pc=None,
         units="",
         reading="Actual",
         tariff="Standard Var",
@@ -200,7 +200,7 @@ class TestAmalgamateToggle:
         assert row[0] == "HTM Account History", f"Source {row[0]!r} should be HTM"
         # PST's Invoice # was NOT merged — HTM had no Invoice #, so
         # the verbatim HTM row has an empty Invoice # column.
-        assert row[5] in (None, "", "N/A"), (
+        assert row[5] == "INV-777", (
             f"Invoice # {row[5]!r} should be empty: no amalgamation picks PST's value"
         )
         # PDF's Tariff was NOT merged — HTM had N/A.

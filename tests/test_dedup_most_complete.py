@@ -59,8 +59,8 @@ def _make_records() -> list[dict]:
     | Date                 | 04/04/2024      | 02/04/2024     |
     | Period From          | N/A             | 01/03/2024     |
     | Period To            | 01/04/2024      | 01/04/2024     |
-    | Invoice #            | ""              | INV-777        |
-    | Period Charge (£)    | 0.0             | 80.0           |
+    | Invoice #            | INV-777              | INV-777        |
+    | Period Charge (£)    | unavailable             | 80.0           |
     | Units (kWh)          | ""              | "100"          |
     | Reading              | ""              | "Actual"       |
     | Tariff               | "N/A"           | "Standard Var" |
@@ -86,9 +86,9 @@ def _make_records() -> list[dict]:
             "Source": "HTM Account History",
             "Period From": "N/A",
             "Period To": "01/04/2024",
-            "Invoice #": "",
+            "Invoice #": "INV-777",
             "Money": 100.0,
-            "Period Charge (£)": 0.0,
+            "Period Charge (£)": None,
             "Units (kWh)": "",
             "Reading": "",
             "Tariff": "N/A",

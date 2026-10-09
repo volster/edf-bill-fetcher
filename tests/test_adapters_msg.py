@@ -71,6 +71,7 @@ def test_msg_full_parse(msg_path: Path) -> None:
     """Parse a synthetic .msg into the exact 5-key record dict."""
     result = msg_module.parse_msg_message(msg_path)
     assert result == {
+        "attachments": [],
         "sender": "EDF Billing <billing@edfenergy.com>",
         "subject": "Your EDF bill is ready",
         "date_str": "15/01/2024",
@@ -83,6 +84,7 @@ def test_msg_missing_date_and_bodies_return_empty_strings(msg_empty_path: Path) 
     """Missing date and body content yield empty strings, not exceptions."""
     result = msg_module.parse_msg_message(msg_empty_path)
     assert result == {
+        "attachments": [],
         "sender": "EDF Billing <billing@edfenergy.com>",
         "subject": "Your EDF bill is ready",
         "date_str": "",

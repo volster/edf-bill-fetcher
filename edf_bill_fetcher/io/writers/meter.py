@@ -55,7 +55,7 @@ def _write_meter_readings_sheet_impl(
 
     Layout:
       row 1: title banner with account
-      row 2: legend 'A = Actual, E = Estimated, M = Meter rollover'
+      row 2: legend 'A = Actual, E = Estimated, U = Unknown, M = Meter rollover'
       row 7: table header (8 cols)
       rows 8+: one row per evidence record, ordered by Date
 
@@ -100,7 +100,7 @@ def _write_meter_readings_sheet_impl(
     # Row 2: legend subheader
     sub = (
         "A = Actual (supplier-confirmed reading)  |  E = Estimated  |  "
-        "M = Meter rollover candidate (negative delta near rollover threshold)"
+        "U = Unknown | M = Meter rollover candidate (negative delta near rollover threshold)"
     )
     sub_cell = ws.cell(row=2, column=1, value=sub)
     sub_cell.font = Font(name="Calibri", size=10, italic=True)
@@ -134,7 +134,7 @@ def _write_meter_readings_sheet_impl(
         bg = "EEF2FF" if r % 2 == 0 else None
         inv = str(row.get("Invoice #", ""))
         reading = row.get("Reading", "")
-        units_raw = row.get("Units (kWh)", "N/A")
+        units_raw = row.get("Register Reading (kWh)", "N/A")
         try:
             units = float(units_raw)
         except (TypeError, ValueError):

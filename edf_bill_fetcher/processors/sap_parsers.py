@@ -29,7 +29,7 @@ import io as _io
 import re
 from collections.abc import Callable
 
-from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
+from edf_bill_fetcher.helpers.date_utils import parse_to_display_date, parse_to_sort_date
 from edf_bill_fetcher.helpers.formatting import parse_amount
 from edf_bill_fetcher.processors.patterns import (
     _BILLING_PERIOD_RE,
@@ -49,7 +49,7 @@ from edf_bill_fetcher.processors.patterns import (
 _ACC_NUM_RE = re.compile(r"Account number:\s*(A-\d+|\d[\d ]*\d)", re.IGNORECASE)
 _DATE_ISSUED_RE = re.compile(r"Date issued:\s*(\d{1,2}\s+\w+\s+\d{4})", re.IGNORECASE)
 _CURRENT_BAL_RE = re.compile(
-    r"Current balance\s+£([\d,]+\.\d{2})(?:\s+(debit|credit))?",
+    r"Current balance\s+£([\d,]+\.\d{2})(?:\s+(?:in\s+)?(debit|credit))?",
     re.IGNORECASE,
 )
 _UNITS_USED_RE = re.compile(r"Electricity used\s+([\d,]+\.?\d*)\s+kWh", re.IGNORECASE)
@@ -203,6 +203,11 @@ def parse_sap_contract_history(
                 "Notes": "",
                 "Cancelled Flag": r.get("Cancelled Flag", ""),
                 "Source File": source_file,
+                "Account": r.get("Kraken ID", "") or r.get("SAP Account Number", ""),
+                "Kraken ID": r.get("Kraken ID", ""),
+                "SAP Account Number": r.get("SAP Account Number", ""),
+                "Fuel": r.get("Fuel Type", ""),
+                "Meter": r.get("Meter Number", r.get("Meter Serial Number", "")),
             }
         )
     return out
@@ -249,6 +254,11 @@ def parse_sap_meter_read_history(
                 "Meter Read Reason": (r.get("Meter Read Reason") or "").strip(),
                 "Register": r.get("Register", ""),
                 "Source File": source_file,
+                "Account": r.get("Kraken ID", "") or r.get("SAP Account Number", ""),
+                "Kraken ID": r.get("Kraken ID", ""),
+                "SAP Account Number": r.get("SAP Account Number", ""),
+                "Fuel": r.get("Fuel Type", ""),
+                "Meter": r.get("Meter Number", r.get("Meter Serial Number", "")),
             }
         )
     return out
@@ -310,6 +320,11 @@ def parse_sap_financial_transactions(
                 "Document Type": r.get("Document Type", ""),
                 "Document Type Description": r.get("Document Type Description", ""),
                 "Source File": source_file,
+                "Account": r.get("Kraken ID", "") or r.get("SAP Account Number", ""),
+                "Kraken ID": r.get("Kraken ID", ""),
+                "SAP Account Number": r.get("SAP Account Number", ""),
+                "Fuel": r.get("Fuel Type", ""),
+                "Meter": r.get("Meter Number", r.get("Meter Serial Number", "")),
                 # Analyser-relevant extensions (spec §3.1):
                 "Contract": r.get("Contract", ""),
                 "Sub Item": r.get("Sub Item", ""),
@@ -415,6 +430,8 @@ def extract_new_invoice_fields(text):
     if m:
         fields["amount"] = float(m.group(1).replace(",", ""))
         fields["amount_side"] = (m.group(2) or "").lower()
+        if fields["amount_side"] == "credit":
+            fields["amount"] = -float(fields["amount"])
 
     # Period charge (total for this invoice).
     #
@@ -427,6 +444,8 @@ def extract_new_invoice_fields(text):
     m = _PERIOD_CHARGE_RE.search(text)
     if m:
         fields["period_charge"] = float(m.group(1).replace(",", ""))
+        if (m.group(2) or "").lower() == "credit":
+            fields["period_charge"] = -float(fields["period_charge"])
 
     # kWh used
     m = _UNITS_USED_RE.search(text)
@@ -575,6 +594,9 @@ _RECON_NEW_BALANCE_RE = re.compile(
 def _recon_to_iso(s: str) -> str:
     """Convert a single date string like ``14 May 2024`` to ``14/05/2024``."""
     s = s.strip().rstrip(".")
+    parsed = parse_to_sort_date(s)
+    if parsed is not None and str(parsed) != "NaT":
+        return str(parsed.strftime("%d/%m/%Y"))
     m = re.match(r"(\d{1,2})\s+([A-Za-z\.]+)\s+(\d{4})", s)
     if not m:
         return "N/A"

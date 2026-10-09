@@ -236,16 +236,7 @@ class TestFormulaInjectionGuardEvidenceSheet:
             f"'s'; an Excel formula evaluation prompt would "
             f"otherwise surface"
         )
-        # Belt-and-braces: the value should start with an
-        # apostrophe so any consumer that ignores data_type
-        # still treats the cell as text.
-        assert cell.value.startswith("'"), (
-            f"Leading-special-char Invoice # not apostrophe-prefixed; cell.value={cell.value!r}"
-        )
-        # Strip the apostrophe and confirm the actual payload
-        # is preserved verbatim — the mediator isn't silently
-        # mangling customer-supplied invoice references.
-        assert cell.value.lstrip("'") == attack_val
+        assert cell.value == attack_val
 
     def test_invoice_number_with_equals_sign_is_guarded(self, workdir: Path) -> None:
         self._guarded(workdir, "=cmd|'/c calc'!A1")
@@ -315,14 +306,4 @@ class TestFormulaInjectionGuardOpacityRoundtrip:
                 f"{col_name} cell data_type={cell.data_type!r}; "
                 f"expected 's' to block Excel formula evaluation"
             )
-            # value prefix apostrophe to defeat any consumer that
-            # ignores data_type.
-            assert cell.value.startswith("'"), (
-                f"{col_name} value missing apostrophe prefix; got value={cell.value!r}"
-            )
-            # Verbatim preservation of the original payload.
-            # Task 3: Attachment Name no longer carries the raw
-            # filename — it displays the (still-guarded) invoice
-            # number as the PDF-hyperlink display.
-            expected = attack_payloads["Invoice #"] if col_name == "Attachment Name" else payload
-            assert cell.value.lstrip("'") == expected
+            assert cell.value == payload

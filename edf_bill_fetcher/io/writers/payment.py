@@ -128,16 +128,13 @@ def write_payment_analysis_sheet(ws, dfc):
         # the shared chronology (see models/report_models.py).
         amount_to_show = row["_amount"]
         _money(ws, r, 3, amount_to_show, fill_hex=bg)
-        # Balance After (£) -- the running balance stored in
-        # ``Amount (£)`` for HTM rows. For legacy rows where Amount
-        # WAS the transaction, we have no separate balance, so show
-        # the same amount (with a note that real balance-after is
-        # not parsed for legacy formats).
-        try:
-            balance_after = float(row["Amount (£)"])
-        except (TypeError, ValueError):
-            balance_after = amount_to_show
-        _money(ws, r, 4, balance_after, fill_hex=bg)
+        from edf_bill_fetcher.processors.preparation import number
+
+        balance_after = number(row.get("Balance (£)"))
+        if balance_after is not None:
+            _money(ws, r, 4, balance_after, fill_hex=bg)
+        else:
+            _text(ws, r, 4, "Unavailable", fill_hex=bg)
         _text(ws, r, 5, str(row.get("Details", ""))[:60], fill_hex=bg, wrap=True)
 
     # Chart - Payment amounts over time.

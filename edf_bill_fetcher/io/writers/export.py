@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import re
-import warnings
 from datetime import datetime
 from typing import Any
 
@@ -19,16 +18,15 @@ import pandas as pd
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from edf_bill_fetcher.helpers.artifacts import atomic_output
 from edf_bill_fetcher.helpers.date_utils import (  # noqa: E402,F401,I001
     _safe_to_datetime,
     parse_to_sort_date,
     to_excel_date,
 )
-from edf_bill_fetcher.helpers.date_utils import (
-    completeness_score as _completeness_score,
-)
 from edf_bill_fetcher.helpers.excel_utils import (  # noqa: E402,F401,I001
     CELL_BORDER,
+    literal_cell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
     build_sap_row_index_map as _build_sap_row_index_map,
@@ -47,9 +45,6 @@ from edf_bill_fetcher.helpers.excel_utils import (
 )
 from edf_bill_fetcher.helpers.excel_utils import (
     text as _text,
-)
-from edf_bill_fetcher.helpers.formatting import (
-    _apply_amalgamate_to_kept_frame,
 )
 from edf_bill_fetcher.io.writers.back_billing import (  # noqa: E402,F401
     write_back_billing_sheet,
@@ -102,7 +97,14 @@ from edf_bill_fetcher.processors.compensation import (  # noqa: E402,F401
 from edf_bill_fetcher.processors.detection import (  # noqa: E402,F401
     compute_transitive_domination,
 )
+from edf_bill_fetcher.processors.financial import bill_daily_rates, mean_daily_rate
 from edf_bill_fetcher.processors.matching import _build_bb_clusters
+from edf_bill_fetcher.processors.preparation import (
+    analysis_frame,
+    balance_frame,
+    prepare_evidence,
+    scope,
+)
 from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
     _SOURCE_PRECEDENCE,
     compute_dispute_flags,
@@ -263,42 +265,8 @@ def _write_provenance_sheet(wb, config, n_records, n_filtered, n_errors):
 
 
 def _prepare_analysis_frame(df_an: pd.DataFrame, config: ConfigDict) -> pd.DataFrame:
-    """Apply the analysis-min magnitude filter to the analysis frame.
-
-    Balance-affecting entries are split by ``Entry Type``: every
-    ``Payment``/``Credit`` row is kept, while ``New Bill``/``Ongoing
-    Balance`` rows are kept only when their ``Amount (£)`` is at or above
-    ``config["analysis_min"]``.
-
-    Legal back-billing candidates are exempt from the amount gate so a
-    late-billed invoice is not silently dropped from the analysis input.
-    A candidate is an invoice whose bill ``Date`` is more than 365 days
-    after the start of its billed consumption (``Period From``) -- the
-    SLC 7A back-billing test compares the bill date with the consumption
-    date, NOT the ``Period To - Period From`` span.  A one-day period
-    billed five years late passes; a long period billed contemporaneously
-    does not pass solely because of its span.
-
-    This is the gate logic that was previously inline at export.py:807-811.
-    """
-    analysis_min = float(config.get("analysis_min", 500.0))
-    payment_credit_mask = df_an["Entry Type"].isin(("Payment", "Credit"))
-    bill_mask = df_an["Entry Type"].isin(("New Bill", "Ongoing Balance"))
-    amount_mask = df_an["Amount (£)"] >= analysis_min
-
-    bill_date = _safe_to_datetime(df_an["Date"])
-    period_from = _safe_to_datetime(df_an["Period From"])
-    legal_candidate = (bill_date - period_from).dt.days > 365
-
-    nat_count = bill_mask & (bill_date.isna() | period_from.isna())
-    if nat_count.any():
-        warnings.warn(
-            f"{int(nat_count.sum())} bill row(s) with unparseable dates dropped from analysis frame",
-            stacklevel=2,
-        )
-
-    dfc = df_an[(payment_credit_mask) | (bill_mask & (amount_mask | legal_candidate))]
-    return dfc.copy().reset_index(drop=True)
+    """Compatibility entry point for the shared eligibility policy."""
+    return analysis_frame(df_an, config)
 
 
 def _reorder_sheets(wb: openpyxl.Workbook) -> None:
@@ -349,8 +317,9 @@ def _reorder_sheets(wb: openpyxl.Workbook) -> None:
 # ---------------------------------------------------------------------------
 
 
+@atomic_output()
 def export_to_excel(
-    data: list[dict[str, Any]],
+    data: list[dict[str, Any]] | pd.DataFrame,
     output_path: str,
     error_log: list[str],
     config: ConfigDict,
@@ -367,435 +336,16 @@ def export_to_excel(
     ``invoice_pdf_paths`` is the ``{attachment_name: destination_path}``
     mapping returned by :func:`save_evidence_files` (Task 2). It lets the
     Superseded Reconciliation sheet link to the *actual* saved PDFs; when
-    omitted, relative ``evidence_files/<invoice>.pdf`` paths are derived
-    deterministically from the invoice numbers instead.
+    omitted, file links remain unavailable.
     """
-    df = pd.DataFrame(data)
-    df["_sort"] = df["Date"].apply(parse_to_sort_date)
-    df = df.sort_values(by=["_sort", "Invoice #"], ascending=[True, False]).reset_index(drop=True)
-    df["% Change"] = None
-
-    # Deduplication — multi-pass to match the same bill across sources
-    # Pass 1: Period To + Amount  (catches HTM ↔ PST where billing period matches)
-    # Pass 2: Amount within 60-day window for records with no period info (Local PDF)
-    dup_df = pd.DataFrame()
-    if config.get("use_dedup", True):
-        # Source precedence lives at module scope (``_SOURCE_PRECEDENCE``)
-        # so that ``tests/test_source_precedence.py`` can pin the
-        # explicit ordering without booting the entire Excel
-        # export pipeline.  Lower number = higher precedence.
-        df["_src_pri"] = df["Source"].map(_SOURCE_PRECEDENCE).fillna(9).astype(int)
-        # Completeness score — primary sort key.  Spec: "duplicates
-        # should be assessed and the most complete version of the
-        # information presented".  ``_completeness_score`` counts
-        # populated substantive fields on each row; the richer row
-        # sorts *before* the sparser row so ``keep="first"`` keeps it.
-        # Computed here (not earlier) so it's available even if the
-        # upstream pipeline headers change in future.
-        df["_completeness"] = df.apply(_completeness_score, axis=1)
-        # Sort order (primary to tie-breaker):
-        #   1. _completeness descending      — most-populated row wins
-        #   2. _src_pri ascending             — higher-precedence source wins ties
-        #   3. _sort ascending                — earliest date wins remaining ties
-        # ``keep="first"`` then retains the head of every duplicate cluster.
-        # Pre-fix the sort was only ``["_src_pri", "_sort"]`` so source
-        # precedence dominated completeness — a sparser HTM row would
-        # beat a richer PST row.  The companion test is
-        # ``tests/test_dedup_most_complete.py``.
-        df = df.sort_values(
-            ["_completeness", "_src_pri", "_sort"],
-            ascending=[False, True, True],
-        ).reset_index(drop=True)
-
-        # Dedup key: prefer Period To (consistent across sources for same bill),
-        # fall back to Date for records without period info.  Pass 1's
-        # ``DUPLICATED`` flags for *period-aware* rows track which *kept*
-        # row they collide against so the dup sheet can render a clickable
-        # summary linking back to the source-of-truth record.  We capture
-        # the matched-against row's *original* df index — that index is
-        # what ``dup_df.index`` carries through to the writer, since
-        # ``dup_df = df[is_dup]`` runs before the ``reset_index`` line below.
-        # Period To is the source-of-truth end-of-billing-period
-        # date when present; fall back to ``_sort`` (the parsed
-        # source-specific ``Date``) when the row is no-period
-        # (e.g. Local PDF).  ``df["_sort"].where(cond, df["_sort"])``
-        # is a tautology — Period To was being ignored and Pass 1
-        # ``_dedup_date`` is the *canonical* dedup key — Period To when
-        # available, otherwise left as ``NaT`` so the row is excluded
-        # from ``duplicated`` clusters (since ``duplicated`` treats
-        # NaT as equal across rows, falling back to ``_sort`` would
-        # silently merge unrelated no-period same-amount rows).
-        # Rows with NaT here are rerouted through Pass-2's no-period
-        # bucket logic below, which uses ``Period To == "N/A" | NaN``
-        # as the explicit handling mask.
-        # Vectorised pass via _safe_to_datetime to suppress the
-        # 'format-inference fallback' UserWarning pandas emits on
-        # mixed-format Series when a single string passes the
-        # simple-format regex gate.
-        period_to_dt = _safe_to_datetime(df["Period To"])
-        df["_dedup_date"] = period_to_dt
-        is_dup = period_to_dt.notna() & df.duplicated(
-            subset=["_dedup_date", "Amount (£)"], keep="first"
-        )
-        # Pass 1 (period+amount): build ``kept_pass1_index`` keyed on
-        # ``(_dedup_date, Amount)`` so we can look up "which kept row
-        # did this dup lose to".  The kept row's original df index (not
-        # its reset_index value) survives into the dup sheet.
-        kept_for_dup: dict[int, int] = {}  # dup_idx -> kept_idx (both original indices)
-        kept_for_summary: dict[int, dict[str, object]] = {}  # kept_idx -> display fields
-        kept_frame = df[~is_dup]
-        kept_pass1_index: dict[tuple, int] = {}
-        for kept_idx in kept_frame.index:
-            k = (
-                kept_frame.at[kept_idx, "_dedup_date"],
-                kept_frame.at[kept_idx, "Amount (£)"],
-            )
-            kept_pass1_index.setdefault(k, kept_idx)
-            # Cache the displayed fields once per kept row so the
-            # dup lookup below doesn't re-read them.
-            kept_for_summary[kept_idx] = {
-                "Source": kept_frame.at[kept_idx, "Source"],
-                "Date": kept_frame.at[kept_idx, "Date"],
-                "Amount (£)": kept_frame.at[kept_idx, "Amount (£)"],
-            }
-        # Resolve Pass 1's kept-against reference per duplicate
-        # before any reset_index runs.
-        for dup_idx in df[is_dup].index:
-            k = (
-                df.at[dup_idx, "_dedup_date"],
-                df.at[dup_idx, "Amount (£)"],
-            )
-            kept_idx = kept_pass1_index.get(k, -1)
-            kept_for_dup[dup_idx] = kept_idx
-
-        # Pass 2: records with no period info (e.g. Local PDF) — match by
-        # Amount within a 60-day window of any already-kept record.
-        #
-        # Phase 2.2 follows the spec: group candidates by Amount (£)
-        # first, then look up matches inside each amount-bucket
-        # rather than scanning the entire kept-mask frame for every
-        # candidate.  The previous implementation was O(N²) — at
-        # 5,000 records the *bench* showed it took ~2.3 s.  This
-        # bucketed approach is O(N) amortised: typical EDF bills
-        # have unique amounts, so bucket size is 1–2 rows and the
-        # inner day-window check is effectively constant.
-        #
-        # Layout-preserving detail worth flagging: the *legacy*
-        # algorithm visits ``df.index`` in increasing order and
-        # looks at the live ``kept`` mask — which includes
-        # forward-yet-to-be-visited rows whose ``~is_dup`` is the
-        # pre-iteration value (so any same-amount row ±60 days
-        # *before or after* the candidate, except itself, can
-        # match).  We replicate that exact behaviour by iterating
-        # ``df.index`` in *reverse* and building per-amount buckets
-        # incrementally: at row N's visit, the bucket for any
-        # amount A already contains every row with amount A and
-        # index > N that wasn't marked as dup — exactly the
-        # forward-direction rows the legacy code saw.
-        #
-        # Concretely: with the legacy ``kept = df[(~is_dup) &
-        # (df.index != idx)]`` mask, the set of candidate matches
-        # for row idx against amount A is
-        # ``{j != idx : df.Amount[j] == A and ~is_dup.at[j]}``.
-        # For most rows this set is split into:
-        #   (i) j in [0, idx) — *earlier* df indices,
-        #  (ii) j in (idx, len(df)) — *later* df indices.
-        # The legacy code consulted both groups via the live
-        # ``~is_dup`` mask.  Iterating reverse and limiting our
-        # bucket hashes to *only* ``j > idx`` (the "earlier in
-        # reverse-iteration-order" rows) lands on exactly the
-        # same candidate set provided *no row gets marked as dup
-        # before its later neighbours are visited* — which the
-        # reverse loop guarantees by ordering inspections from
-        # the bottom of the frame upwards.
-        no_period = (df["Period To"] == "N/A") | df["Period To"].isna()
-        # ``bucket_by_amt`` is keyed on Amount and stores the
-        # ``(df_ordinal, _sort date)`` of every row already visited
-        # (reverse-iteration order) that hasn't been marked as
-        # duplicate.  We append a row to its bucket whenever the
-        # row *does not* get marked — symmetric to the legacy
-        # ``kept`` mask at iteration time.
-        bucket_by_amt: dict[float, list[tuple[int, object]]] = {}
-        # Reverse-iterate ``df.index`` so that "later in df order"
-        # rows are visited first and accumulate in the bucket for
-        # the earlier row's lookup.  Equivalently, the bucket for
-        # each amount at ``idx`` is exactly the rows j > idx with
-        # Amount[j] == amount and ~is_dup.at[j] — the same row set
-        # legacy would consult.
-        reverse_idx = list(df[~is_dup & no_period].index)[::-1]
-        for idx in reverse_idx:
-            amt = df.loc[idx, "Amount (£)"]
-            rec_date = df.loc[idx, "_sort"]
-            same_amt = bucket_by_amt.get(amt, [])
-            matched = False
-            for m_idx, m_date in same_amt:
-                # ``pd.notna`` short-circuit means NaT-dated rows
-                # already in the bucket (originally the loop
-                # ``continue``-skipped them but still listed them
-                # in the next-iter kept set) never trigger a match.
-                if pd.notna(m_date) and abs((rec_date - m_date).days) <= 60:
-                    matched = True
-                    # Capture the matched-against row's *original
-                    # df index* so the dup sheet can resolve to
-                    # the same frame.  We resolve the summary
-                    # *before* the kept set is `reset_index`-
-                    # rasterised below — once ``df = df[~is_dup]
-                    # .reset_index(drop=True)`` runs, the
-                    # ``m_idx`` no longer references a row.
-                    kept_for_dup[idx] = m_idx
-                    kept_for_summary[m_idx] = {
-                        "Source": df.at[m_idx, "Source"],
-                        "Date": df.at[m_idx, "Date"],
-                        "Amount (£)": df.at[m_idx, "Amount (£)"],
-                    }
-                    break
-            if matched:
-                is_dup.at[idx] = True
-                # Don't add to the bucket — the legacy loop's
-                # recomputed ``~is_dup`` mask would have excluded a
-                # row marked dup at the *start* of iteration, so it
-                # cannot anchor later (here: earlier-in-iteration)
-                # matches either.
-            else:
-                # Always add the row even if ``_sort`` is NaT —
-                # the legacy ``kept`` mask at the *next* (lower) row
-                # includes this row because it's ``~is_dup``-true,
-                # and the NaT date just means it can't anchor a
-                # match on its own.
-                bucket_by_amt.setdefault(amt, []).append((idx, rec_date))
-
-        # ``dup_df`` is built BEFORE the ``reset_index`` line below so
-        # ``dup_df.index`` still carries each duplicate's original df
-        # index — that's the key we use to look up the kept-against
-        # summary in ``kept_for_summary``.
-        #
-        # ``save_dups`` toggles whether dedup *itself* is applied to the
-        # main dataframe (``df``).  When True (the historical default),
-        # duplicates are filtered out of ``df`` and *recorded* in
-        # ``dup_df`` for the dup sheet — users never lose visibility of
-        # what was dropped.  When False, dedup is skipped entirely: every
-        # row stays in ``df`` and ``dup_df`` is empty.
-        if config.get("save_dups", True):
-            dup_df = df[is_dup].copy()
-        else:
-            dup_df = df[is_dup].iloc[0:0].copy()
-
-        # Spec 3 (stretch): hybrid rows when ``amalgamate_duplicates`` is
-        # True.  Instead of keeping the completeness-winner verbatim, we
-        # merge each duplicate cluster's non-empty fields into a single
-        # hybrid kept row.  The composite keeps the completeness-winner's
-        # ``Source`` identity and picks any populated column value from
-        # any sibling.  Each non-surviving sibling still stays in
-        # ``dup_df`` (the spec's 'never drop without being recorded').
-        #
-        # N.B. the amalgamated ``df`` is is already a cleaned kept set
-        # (all duplicates removed), so the ``df[~is_dup]`` filter below
-        # is skipped for the amalgamate path.
-        if (
-            config.get("save_dups", True)
-            and config.get("amalgamate_duplicates", False)
-            and not dup_df.empty
-        ):
-            df = _apply_amalgamate_to_kept_frame(df, dup_df, kept_pass1_index, kept_for_dup, is_dup)
-            # dup_df stays unchanged — the amalgamation only touches the
-            # kept set; the dup sheet still records every sibling.
-
-        if config.get("save_dups", True) and not config.get("amalgamate_duplicates", False):
-            df = df[~is_dup].reset_index(drop=True)
-        # else: do not drop duplicates — leave ``df`` unchanged so the
-        # user sees the raw ingress and can resolve duplicates manually.
-        df = df.drop(columns=["_src_pri", "_dedup_date", "_completeness"], errors="ignore")
-
-    df = df.drop(columns=["_sort"], errors="ignore")
-    dup_df = (
-        dup_df.drop(
-            columns=["_sort", "_src_pri", "_dedup_date", "_completeness"],
-            errors="ignore",
-        )
-        if not dup_df.empty
-        else dup_df
-    )
-
-    # Compute Unit Rate (p/kWh) where both Period Charge and Units are available.
-    #
-    # Phase 2.1: vectorised path.  The historic row-wise apply walked
-    # Python per row, which the bench measured at ~63 ms at 5,000
-    # records (not the bottleneck we'd been worried about, but the
-    # spec asks for vectorisation).  New path uses pd.to_numeric
-    # + np.where — same observable output (rounded to 0.01) but
-    # vectorised.  ``Units`` is normalised for the inline comma
-    # (``"1,234"`` to ``"1234"``) the same way the row-wise path
-    # did via ``str(units).replace(",", "")``.
-    pc = pd.to_numeric(df["Period Charge (£)"], errors="coerce")
-    units = pd.to_numeric(
-        df["Units (kWh)"].astype(str).str.replace(",", ""),
-        errors="coerce",
-    )
-    df["Unit Rate (p/kWh)"] = np.where(
-        (units > 0) & (pc > 0),
-        np.round((pc / units) * 100, 2),
-        np.nan,
-    )
-
-    # ``dup_df`` computation is kept in the path for backward
-    # compatibility — the dup DataFrame is much smaller than the
-    # kept set, so per-row apply only adds ms-level overhead.  The
-    # per-row unit-rate helper lives at module scope (``_compute_unit_rate``)
-    # so ``pickle`` can find it on round-trip (closures aren't picklable).
-    if not dup_df.empty:
-        dup_df["Unit Rate (p/kWh)"] = dup_df.apply(_compute_unit_rate, axis=1)
-        # Matched-against kept-record block (Phase-2 follow-up).
-        # Each duplicate row gets a clickable summary pointing
-        # back to the *kept* record so an ombudsman reviewing the
-        # workbook can navigate from the dup sheet to the
-        # source-of-truth record with one click.  Earlier in the
-        # dedup walk we built ``kept_for_summary`` keyed on the
-        # duplicate's *original* df-index — that's also the index
-        # ``dup_df.index`` carries because ``dup_df = df[is_dup]
-        # .copy()`` runs *before* the ``reset_index(drops...)``
-        # line.  So we can resolve the summary now without
-        # re-doing any index resets.
-        kept_idx_by_dup = {
-            dup_idx: kept_for_summary.get(kept_for_dup.get(dup_idx, -1), {})
-            for dup_idx in dup_df.index
-        }
-
-        # ``df`` is the kept set after dedup reset_index.  After
-        # ``df = df[~is_dup].reset_index(drop=True)``, ``df.index``
-        # is a sequential 0..N-1 range, *not* the original df
-        # labels.  But the *order* of rows is preserved — the n-th
-        # row of the kept set is the same n-th kept row that survived
-        # dedup.  We therefore translate the original-index
-        # references we still hold in ``kept_for_dup`` (the dedup
-        # walker wrote them *before* reset_index) into post-reset
-        # positions by ranking the kept rows in ascending original
-        # df-index order — kept_rank[k] = rank-in-kept-set.
-        kept_rank: dict[int, int] = {}
-        for rank, orig_idx in enumerate(sorted(kept_for_summary.keys())):
-            kept_rank[int(orig_idx)] = rank
-
-        # ``Duplicate Of`` is the visible column on the dup sheet
-        # itself; ``_matches_kept_idx`` is the link target the
-        # Excel writer will use to mint the click-through hyperlink
-        # back to the kept row in the main evidence report.
-        dup_df["Duplicate Of"] = [_summary(kept_idx_by_dup, idx) for idx in dup_df.index]
-        # ``_matches_kept_idx`` is the *post-reset* position of
-        # the kept row in ``EDF Evidence Report`` — the Excel
-        # writer uses this with ``A{+1}`` as the click target
-        # so an ombudsman can jump from the dup cell directly to
-        # the source-of-truth record.  We translate via
-        # ``kept_rank`` (computed above from kept-against-original
-        # ordering) because the dedup walker built ``kept_for_dup``
-        # *before* ``reset_index`` ran on the kept frame.
-        dup_df["_matches_kept_idx"] = pd.Series(
-            {idx: kept_rank.get(int(kept_for_dup.get(idx, -1)), -1) for idx in dup_df.index},
-            dtype="Int64",
-        )
-
-    # F2 (SEV-1): single source of truth for the saved-column
-    # ordering.  Every ``_add_record``-time builder must stamp
-    # every name in this list (use ``record.setdefault(col, "N/A")``
-    # if unsure) — otherwise ``reindex`` silently drops the column
-    # and the workbook schema drifts from what other readers
-    # (Tariff Analysis, Dict Comparer) expect.  The structural
-    # guard lives in ``tests/test_export_headers_invariant.py``.
-    col_order = [
-        "Source",
-        "Sender",
-        "Date",
-        "Period From",
-        "Period To",
-        "Invoice #",
-        "Amount (£)",
-        "Period Charge (£)",
-        "Unit Rate (p/kWh)",
-        "% Change",
-        "Entry Type",
-        "Reading",
-        "Units (kWh)",
-        "Standing Chg (p/day)",
-        # Tariff column — lights up the Tariff Analysis Excel/DOCX/PDF
-        # section.  Populated only by ``_process_new_invoice``;
-        # every other source path stamps "N/A".  Without this entry
-        # here, ``reindex`` would drop the column from the saved
-        # workbook even though every record dict now carries it.
-        "Tariff",
-        "Attachment Name",
-        "Details",
-        "Logic Used",
-        "Anomaly Flag",
-        "Duplicate Of",
-        "Sub Periods",
-    ]
-    # Diagnostic-only columns that the analyser writers (Back-billing,
-    # Rebilling, Meter Readings, Contract History) need for their
-    # Source Excerpt column lookup, but which must NOT appear on the
-    # EDF Evidence Report tab.  They survive the canonical ``reindex``
-    # below so ``dfc = df_an[...]`` retains them for the analyser
-    # writers' ``evidence_df=dfc`` argument.  ``write_evidence_sheet``
-    # drops them via the ``evidence_df = df.drop(columns=[...])`` pass
-    # at line ~3694 just before the Evidence Report is written.
-    # 'Balance Last Bill (£)' is captured by the reconciliation-statement
-    # parser and is consumed by the analyser writers as a diagnostic; it
-    # stays here for the same reason.
-    diagnostic_cols = [
-        "Source PDF Text",
-        "_regex_trace",
-        "Balance Last Bill (£)",
-    ]
-    # Only carry forward the diagnostic cols that are actually present
-    # on the records -- avoids reindex inserting all-NaN cols when no
-    # record builder emitted them (e.g. a synthetic test DataFrame).
-    diagnostic_present = [c for c in diagnostic_cols if c in df.columns]
-    df = df.reindex(columns=col_order + diagnostic_present)
-    # Belt-and-braces invariant: every column the *kept* set still
-    # carries must be in the canonical order list — otherwise a
-    # future record builder that adds a new column without updating
-    # col_order would survive the reindex and land as a
-    # mysteries-leading-column in the saved workbook.  We assert
-    # loudly here (developer-visible) rather than silently dropping
-    # the unknown column.  The diagnostic cols (``Source PDF Text``,
-    # ``_regex_trace``, ``Balance Last Bill (£)``) are intentionally
-    # excluded from the canonical ``col_order`` so they're not written
-    # to the Evidence Report sheet; the assertion below permits them.
-    _allowed_extras = {"Source PDF Text", "_regex_trace", "Balance Last Bill (£)"}
-    _unexpected = [c for c in df.columns if c not in col_order and c not in _allowed_extras]
-    if _unexpected:
-        raise ValueError(
-            "export_to_excel received columns not in col_order: "
-            f"{_unexpected!r}.  Add them to col_order or build the "
-            "records so they carry only known keys."
-        )
-    # The dup sheet needs both ``Duplicate Of`` *and*
-    # ``_matches_kept_idx`` available to the writer so the
-    # post-loop pass can mint clickable HYPERLINK cells.  We
-    # attach ``_matches_kept_idx`` after the reindex pass so the
-    # saved workbook geometry stays 19-column even though the
-    # writer's row-iteration will see the 20th column briefly —
-    # the writer drops the column before saving.
-    # ``dup_df.reindex(columns=col_order)`` drops the ``_matches_kept_idx``
-    # helper column, so we re-attach it from the pre-reindex view below.
-    if not dup_df.empty:
-        dup_df_reindexed = dup_df.reindex(columns=col_order)
-        # Re-attach from dup_df's pre-reindex view — the column
-        # is dropped by reindex, so we restore it from the
-        # original here.  This is the only place where the
-        # writer would otherwise lose access to the helper.
-        if "_matches_kept_idx" in dup_df.columns:
-            dup_df = pd.concat(
-                [
-                    dup_df_reindexed,
-                    dup_df["_matches_kept_idx"].rename("_matches_kept_idx"),
-                ],
-                axis=1,
-            )
-        else:
-            dup_df = dup_df_reindexed
+    records = data.to_dict("records") if isinstance(data, pd.DataFrame) else data
+    prepared = prepare_evidence(records, config)
+    config = prepared.config
+    df = prepared.frame
+    dup_df = pd.DataFrame(prepared.duplicates) if config.get("save_dups", True) else pd.DataFrame()
 
     # Years for summary tab
-    years = sorted(
-        y for y in df["Date"].apply(parse_to_sort_date).dropna().dt.year.astype(int).unique()
-    )
+    years = sorted(y for y in df["_dt"].dropna().dt.year.astype(int).unique())
 
     wb = openpyxl.Workbook()
     wb.calculation.fullCalcOnLoad = True
@@ -833,11 +383,20 @@ def export_to_excel(
         columns=[c for c in _diagnostic_columns_for_evidence_report if c in df.columns],
         errors="ignore",
     )
-    write_evidence_sheet(ws_main, evidence_df, is_duplicate=False)
+    saved_links = {
+        key: os.path.relpath(path, os.path.dirname(os.path.abspath(output_path)))
+        for key, path in (invoice_pdf_paths or {}).items()
+    }
+    write_evidence_sheet(ws_main, evidence_df, is_duplicate=False, saved_paths=saved_links)
 
     # Tab 2: Annual Summary
     ws_summary = wb.create_sheet(title="Annual Summary", index=0)
-    write_summary_sheet(ws_summary, years, ws_main.title, last_data_row=len(df) + 1)
+    if len({scope(r) for r in df.to_dict("records")}) <= 1 and years:
+        write_summary_sheet(ws_summary, years, ws_main.title, last_data_row=len(df) + 1)
+    else:
+        literal_cell(
+            ws_summary, 1, 1, "Balance summary unavailable: empty data or multiple ledgers"
+        )
 
     # Tab 3: Duplicates
     if not dup_df.empty:
@@ -855,23 +414,7 @@ def export_to_excel(
     # Tab 4: Filtered
     if filtered and config.get("save_filtered", True):
         ws_filt = wb.create_sheet(title="Filtered (Below Min)")
-        filt_headers = ["Source", "Date", "Amount (£)", "Details", "Logic Used", "Reason"]
-        for ci, h in enumerate(filt_headers, 1):
-            _hcell(ws_filt, 1, ci, h, bg="888888")
-        filt_df = pd.DataFrame(filtered).sort_values("Amount (£)", ascending=False)
-        for r_idx, frow in enumerate(filt_df.values, 2):
-            bg_hex = "F5F5F5" if r_idx % 2 == 0 else None
-            for c_idx, val in enumerate(frow, 1):
-                c = ws_filt.cell(row=r_idx, column=c_idx, value=val)
-                c.font = Font(name="Calibri", size=10)
-                c.border = CELL_BORDER
-                if bg_hex:
-                    c.fill = PatternFill("solid", start_color=bg_hex)
-                if c_idx == 3:
-                    c.number_format = "£#,##0.00"
-        for col, w in zip(["A", "B", "C", "D", "E", "F"], [18, 13, 14, 38, 18, 28], strict=False):
-            ws_filt.column_dimensions[col].width = w
-        ws_filt.freeze_panes = "A2"
+        write_evidence_sheet(ws_filt, pd.DataFrame(filtered), saved_paths=saved_links)
 
     # Tab 5: Parse errors
     if error_log:
@@ -886,7 +429,7 @@ def export_to_excel(
             else:
                 ts, ctx, err = "", entry, ""
             for c_idx, val in enumerate([ts, ctx, err], 1):
-                c = ws_err.cell(row=r_idx, column=c_idx, value=val)
+                c = literal_cell(ws_err, row=r_idx, column=c_idx, value=val)
                 c.font = Font(name="Calibri", size=10)
                 c.border = CELL_BORDER
         ws_err.column_dimensions["A"].width = 10
@@ -899,774 +442,768 @@ def export_to_excel(
     # =====================================================================
 
     df_an = df.copy()
-    df_an["_dt"] = df_an["Date"].apply(parse_to_sort_date)
+    df_an["_dt"] = pd.to_datetime(df_an["Date"].apply(parse_to_sort_date))
     df_an = df_an.sort_values("_dt").reset_index(drop=True)
 
     dfc = _prepare_analysis_frame(df_an, config)
     dfc["year"] = dfc["_dt"].dt.year
     dfc["month"] = dfc["_dt"].dt.month
 
-    if len(dfc) < 2:
-        # Not enough data for analysis sheets; save the workbook with what
-        # we have (evidence, summary, duplicates, etc. are already written).
-        _reorder_sheets(wb)
-        wb.save(output_path)
-        return
+    full_analysis = dfc
+    dfc = balance_frame(dfc)
+    dfc["year"] = dfc["_dt"].dt.year
+    dfc["month"] = dfc["_dt"].dt.month
+    if len(dfc) >= 2 and len({scope(r) for r in dfc.to_dict("records")}) == 1:
+        amounts = dfc["Amount (£)"].values.astype(float)
+        dates_lbl = dfc["Date"].tolist()
+        n = len(amounts)
 
-    amounts = dfc["Amount (£)"].values.astype(float)
-    dates_lbl = dfc["Date"].tolist()
-    n = len(amounts)
-
-    raw_diffs = np.diff(amounts)
-    pos_diffs = raw_diffs[raw_diffs > 0]
-
-    yearly = (
-        dfc.groupby("year")
-        .agg(
-            count=("Amount (£)", "count"),
-            avg_bal=("Amount (£)", "mean"),
-            peak=("Amount (£)", "max"),
-            low=("Amount (£)", "min"),
+        yearly = (
+            dfc.groupby("year")
+            .agg(
+                count=("Amount (£)", "count"),
+                avg_bal=("Amount (£)", "mean"),
+                peak=("Amount (£)", "max"),
+                low=("Amount (£)", "min"),
+            )
+            .reset_index()
         )
-        .reset_index()
-    )
 
-    # ----- TAB A: KEY STATISTICS -----
-    ws_ks = wb.create_sheet(title="Key Statistics")
-    ws_ks.column_dimensions["A"].width = 44
-    ws_ks.column_dimensions["B"].width = 22
-    ws_ks.column_dimensions["C"].width = 44
+        # ----- TAB A: KEY STATISTICS -----
+        ws_ks = wb.create_sheet(title="Key Statistics")
+        ws_ks.column_dimensions["A"].width = 44
+        ws_ks.column_dimensions["B"].width = 22
+        ws_ks.column_dimensions["C"].width = 44
 
-    tc = ws_ks.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  KEY STATISTICS")
-    tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-    tc.fill = PatternFill("solid", start_color=ORANGE)
-    tc.border = CELL_BORDER
-    tc.alignment = Alignment(horizontal="left", vertical="center")
-    for c in [2, 3]:
-        x = ws_ks.cell(row=1, column=c)
-        x.fill = PatternFill("solid", start_color=ORANGE)
-        x.border = CELL_BORDER
-    ws_ks.row_dimensions[1].height = 26
+        tc = ws_ks.cell(row=1, column=1, value="EDF ENERGY DISPUTE  —  KEY STATISTICS")
+        tc.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+        tc.fill = PatternFill("solid", start_color=ORANGE)
+        tc.border = CELL_BORDER
+        tc.alignment = Alignment(horizontal="left", vertical="center")
+        for c in [2, 3]:
+            x = ws_ks.cell(row=1, column=c)
+            x.fill = PatternFill("solid", start_color=ORANGE)
+            x.border = CELL_BORDER
+        ws_ks.row_dimensions[1].height = 26
 
-    acc_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
+        acc_ref = str(config.get("report_account_ref") or config.get("acc_num") or "N/A")
 
-    r = 2
-    _section_hdr(ws_ks, r, "ACCOUNT OVERVIEW")
-    r = 3
-    _ks_row(ws_ks, r, "Account reference", acc_ref, alt=True)
-    r = 4
-    _ks_row(
-        ws_ks,
-        r,
-        "First bill on record",
-        "='Balance Trend'!A2",
-        fmt="date",
-        note="From Balance Trend sheet",
-    )
-    r = 5
-    _ks_row(
-        ws_ks,
-        r,
-        "Most recent bill",
-        "=INDEX('Balance Trend'!A:A,MATCH(9.99E+307,'Balance Trend'!B:B)+1)",
-        fmt="date",
-        alt=True,
-    )
-    r = 6
-    _ks_row(
-        ws_ks,
-        r,
-        "Period covered (days)",
-        "=IFERROR(INT(INDEX('Balance Trend'!A:A,MATCH(9.99E+307,'Balance Trend'!B:B)+1)-'Balance Trend'!A2),\"\")",
-        fmt="#,##0",
-        note="Days between first and last bill",
-    )
-    r = 7
-    _ks_row(
-        ws_ks,
-        r,
-        "Total bills on record",
-        "=IFERROR(COUNT('Balance Trend'!B:B),\"\")",
-        fmt="#,##0",
-        alt=True,
-    )
+        r = 2
+        _section_hdr(ws_ks, r, "ACCOUNT OVERVIEW")
+        r = 3
+        _ks_row(
+            ws_ks,
+            r,
+            "Account reference",
+            "'" + acc_ref if acc_ref.startswith(("=", "+", "-", "@")) else acc_ref,
+            alt=True,
+        )
+        r = 4
+        _ks_row(
+            ws_ks,
+            r,
+            "First bill on record",
+            "='Balance Trend'!A2",
+            fmt="date",
+            note="From Balance Trend sheet",
+        )
+        r = 5
+        _ks_row(
+            ws_ks,
+            r,
+            "Most recent bill",
+            "=INDEX('Balance Trend'!A:A,MATCH(9.99E+307,'Balance Trend'!B:B))",
+            fmt="date",
+            alt=True,
+        )
+        r = 6
+        _ks_row(
+            ws_ks,
+            r,
+            "Period covered (days)",
+            "=IFERROR(INT(INDEX('Balance Trend'!A:A,MATCH(9.99E+307,'Balance Trend'!B:B))-'Balance Trend'!A2),\"\")",
+            fmt="#,##0",
+            note="Days between first and last bill",
+        )
+        r = 7
+        _ks_row(
+            ws_ks,
+            r,
+            "Total bills on record",
+            "=IFERROR(COUNT('Balance Trend'!B:B),\"\")",
+            fmt="#,##0",
+            alt=True,
+        )
 
-    r = 8
-    _section_hdr(ws_ks, r, "BALANCE FIGURES")
-    r = 9
-    _ks_row(
-        ws_ks,
-        r,
-        "Opening balance (first bill)",
-        "='Balance Trend'!B2",
-        fmt="£",
-        alt=True,
-        note="First entry in Balance Trend",
-    )
-    r = 10
-    _ks_row(
-        ws_ks,
-        r,
-        "Current balance (latest bill)",
-        "=INDEX('Balance Trend'!B:B,MATCH(9.99E+307,'Balance Trend'!B:B))",
-        fmt="£",
-        bold=True,
-        note="Last numeric entry in Balance Trend",
-    )
-    r = 11
-    _ks_row(
-        ws_ks,
-        r,
-        "Total balance increase",
-        '=IFERROR(B10-B9,"")',
-        fmt="£",
-        bold=True,
-        alt=True,
-        note="Latest minus earliest",
-    )
-    r = 12
-    _ks_row(ws_ks, r, "% increase over full period", '=IFERROR((B10-B9)/B9,"")', fmt="%", bold=True)
-    r = 13
-    _ks_row(
-        ws_ks,
-        r,
-        "Mean balance across all bills",
-        "=IFERROR(AVERAGE('Balance Trend'!B:B),\"\")",
-        fmt="£",
-        alt=True,
-    )
-    r = 14
-    _ks_row(ws_ks, r, "Median balance", "=IFERROR(MEDIAN('Balance Trend'!B:B),\"\")", fmt="£")
-    r = 15
-    _ks_row(
-        ws_ks,
-        r,
-        "Peak balance recorded",
-        "=IFERROR(MAX('Balance Trend'!B:B),\"\")",
-        fmt="£",
-        alt=True,
-    )
-    r = 16
-    _ks_row(ws_ks, r, "Lowest balance recorded", "=IFERROR(MIN('Balance Trend'!B:B),\"\")", fmt="£")
+        r = 8
+        _section_hdr(ws_ks, r, "BALANCE FIGURES")
+        r = 9
+        _ks_row(
+            ws_ks,
+            r,
+            "Opening balance (first bill)",
+            "='Balance Trend'!B2",
+            fmt="£",
+            alt=True,
+            note="First entry in Balance Trend",
+        )
+        r = 10
+        _ks_row(
+            ws_ks,
+            r,
+            "Current balance (latest bill)",
+            "=INDEX('Balance Trend'!B:B,MATCH(9.99E+307,'Balance Trend'!B:B))",
+            fmt="£",
+            bold=True,
+            note="Last numeric entry in Balance Trend",
+        )
+        r = 11
+        _ks_row(
+            ws_ks,
+            r,
+            "Total balance increase",
+            '=IFERROR(B10-B9,"")',
+            fmt="£",
+            bold=True,
+            alt=True,
+            note="Latest minus earliest",
+        )
+        r = 12
+        _ks_row(
+            ws_ks, r, "% increase over full period", '=IFERROR((B10-B9)/B9,"")', fmt="%", bold=True
+        )
+        r = 13
+        _ks_row(
+            ws_ks,
+            r,
+            "Mean balance across all bills",
+            "=IFERROR(AVERAGE('Balance Trend'!B:B),\"\")",
+            fmt="£",
+            alt=True,
+        )
+        r = 14
+        _ks_row(ws_ks, r, "Median balance", "=IFERROR(MEDIAN('Balance Trend'!B:B),\"\")", fmt="£")
+        r = 15
+        _ks_row(
+            ws_ks,
+            r,
+            "Peak balance recorded",
+            "=IFERROR(MAX('Balance Trend'!B:B),\"\")",
+            fmt="£",
+            alt=True,
+        )
+        r = 16
+        _ks_row(
+            ws_ks, r, "Lowest balance recorded", "=IFERROR(MIN('Balance Trend'!B:B),\"\")", fmt="£"
+        )
 
-    r = 17
-    _section_hdr(ws_ks, r, "PERIODIC CHARGES")
-    r = 18
-    _ks_row(
-        ws_ks,
-        r,
-        "Note",
-        "Bills are a running cumulative balance — periodic charge = closing minus opening balance",
-        alt=True,
-    )
-    r = 19
-    _ks_row(
-        ws_ks,
-        r,
-        "Mean charge per period (positive only)",
-        '=IFERROR(AVERAGEIF(\'Period Charges\'!F:F,">0"),"")',
-        fmt="£",
-    )
-    r = 20
-    _ks_row(
-        ws_ks,
-        r,
-        "Largest single-period charge",
-        "=IFERROR(MAX('Period Charges'!F:F),\"\")",
-        fmt="£",
-        bold=True,
-        alt=True,
-    )
-    r = 21
-    _ks_row(
-        ws_ks,
-        r,
-        "Smallest positive charge",
-        "=IFERROR(_xlfn.MINIFS('Period Charges'!F:F,'Period Charges'!F:F,\">0\"),\"\")",
-        fmt="£",
-    )
-    r = 22
-    _ks_row(
-        ws_ks,
-        r,
-        "Periods where balance increased",
-        '=IFERROR(COUNTIF(\'Period Charges\'!F:F,">0"),"")',
-        fmt="#,##0",
-        alt=True,
-    )
-    r = 23
-    _ks_row(
-        ws_ks,
-        r,
-        "Periods where balance fell (payments/credits)",
-        '=IFERROR(COUNTIF(\'Period Charges\'!F:F,"<0"),"")',
-        fmt="#,##0",
-    )
-    r = 24
-    _ks_row(
-        ws_ks,
-        r,
-        "Implied annual rate (avg last 6 charges ×12)",
-        "=IFERROR(AVERAGE(OFFSET('Period Charges'!F1,MAX(1,COUNTIF('Period Charges'!F:F,\">0\")-5),0,6,1))*12,\"\")",
-        fmt="£",
-        bold=True,
-        alt=True,
-        note="Assumes ~monthly billing — may overstate if billing is quarterly",
-    )
+        r = 17
+        _section_hdr(ws_ks, r, "PERIODIC CHARGES")
+        r = 18
+        _ks_row(
+            ws_ks,
+            r,
+            "Note",
+            "Period charges come from bill line items; balance changes also include payments and adjustments",
+            alt=True,
+        )
+        r = 19
+        _ks_row(
+            ws_ks,
+            r,
+            "Mean charge per period (positive only)",
+            '=IFERROR(AVERAGEIF(\'Period Charges\'!F:F,">0"),"")',
+            fmt="£",
+        )
+        r = 20
+        _ks_row(
+            ws_ks,
+            r,
+            "Largest single-period charge",
+            "=IFERROR(MAX('Period Charges'!F:F),\"\")",
+            fmt="£",
+            bold=True,
+            alt=True,
+        )
+        r = 21
+        _ks_row(
+            ws_ks,
+            r,
+            "Smallest positive charge",
+            "=IFERROR(_xlfn.MINIFS('Period Charges'!F:F,'Period Charges'!F:F,\">0\"),\"\")",
+            fmt="£",
+        )
+        r = 22
+        _ks_row(
+            ws_ks,
+            r,
+            "Periods where balance increased",
+            '=IFERROR(COUNTIF(\'Period Charges\'!F:F,">0"),"")',
+            fmt="#,##0",
+            alt=True,
+        )
+        r = 23
+        _ks_row(
+            ws_ks,
+            r,
+            "Negative period charges",
+            '=IFERROR(COUNTIF(\'Period Charges\'!F:F,"<0"),"")',
+            fmt="#,##0",
+        )
+        r = 24
+        _ks_row(
+            ws_ks,
+            r,
+            "Annualized actual daily charge ×365",
+            mean_daily_rate(full_analysis) * 365,
+            fmt="£",
+            bold=True,
+            alt=True,
+            note="Assumes ~monthly billing — may overstate if billing is quarterly",
+        )
 
-    r = 25
-    _section_hdr(ws_ks, r, "READING & DATA QUALITY")
-    r = 26
-    _ks_row(
-        ws_ks,
-        r,
-        "Estimated readings",
-        '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Estimated"),"")',
-        fmt="#,##0",
-        alt=True,
-    )
-    r = 27
-    _ks_row(
-        ws_ks,
-        r,
-        "Actual / customer readings",
-        '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Actual"),"")',
-        fmt="#,##0",
-    )
-    r = 28
-    _ks_row(
-        ws_ks,
-        r,
-        "Smart meter readings",
-        '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Smart"),"")',
-        fmt="#,##0",
-        alt=True,
-    )
-    r = 29
-    _ks_row(
-        ws_ks,
-        r,
-        "% of bills with estimated readings",
-        "=IFERROR(B26/COUNT('EDF Evidence Report'!G:G),\"\")",
-        fmt="%",
-    )
+        r = 25
+        _section_hdr(ws_ks, r, "READING & DATA QUALITY")
+        r = 26
+        _ks_row(
+            ws_ks,
+            r,
+            "Estimated readings",
+            '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Estimated"),"")',
+            fmt="#,##0",
+            alt=True,
+        )
+        r = 27
+        _ks_row(
+            ws_ks,
+            r,
+            "Actual / customer readings",
+            '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Actual"),"")',
+            fmt="#,##0",
+        )
+        r = 28
+        _ks_row(
+            ws_ks,
+            r,
+            "Smart meter readings",
+            '=IFERROR(COUNTIF(\'EDF Evidence Report\'!L:L,"Smart"),"")',
+            fmt="#,##0",
+            alt=True,
+        )
+        r = 29
+        _ks_row(
+            ws_ks,
+            r,
+            "% of bills with estimated readings",
+            "=IFERROR(B26/COUNT('EDF Evidence Report'!G:G),\"\")",
+            fmt="%",
+        )
 
-    r = 30
-    _section_hdr(ws_ks, r, "UNIT RATES")
-    r = 31
-    _ks_row(
-        ws_ks,
-        r,
-        "Average unit rate (p/kWh)",
-        "=IFERROR(AVERAGE('EDF Evidence Report'!I:I),\"\")",
-        fmt="0.00",
-        alt=True,
-        note="Across all bills with valid period charge and kWh",
-    )
-    r = 32
-    _ks_row(
-        ws_ks,
-        r,
-        "Maximum unit rate (p/kWh)",
-        "=IFERROR(MAX('EDF Evidence Report'!I:I),\"\")",
-        fmt="0.00",
-        note="Highest effective rate — potential overcharge",
-    )
-    r = 33
-    _ks_row(
-        ws_ks,
-        r,
-        "Minimum unit rate (p/kWh)",
-        "=IFERROR(MIN('EDF Evidence Report'!I:I),\"\")",
-        fmt="0.00",
-        alt=True,
-    )
+        r = 30
+        _section_hdr(ws_ks, r, "UNIT RATES")
+        r = 31
+        _ks_row(
+            ws_ks,
+            r,
+            "Average unit rate (p/kWh)",
+            "=IFERROR(AVERAGE('EDF Evidence Report'!I:I),\"\")",
+            fmt="0.00",
+            alt=True,
+            note="Across all bills with valid period charge and kWh",
+        )
+        r = 32
+        _ks_row(
+            ws_ks,
+            r,
+            "Maximum unit rate (p/kWh)",
+            "=IFERROR(MAX('EDF Evidence Report'!I:I),\"\")",
+            fmt="0.00",
+            note="Highest extracted energy unit rate",
+        )
+        r = 33
+        _ks_row(
+            ws_ks,
+            r,
+            "Minimum unit rate (p/kWh)",
+            "=IFERROR(MIN('EDF Evidence Report'!I:I),\"\")",
+            fmt="0.00",
+            alt=True,
+        )
 
-    ws_ks.freeze_panes = "A2"
+        ws_ks.freeze_panes = "A2"
 
-    # ----- TAB B: BALANCE TREND -----
-    ws_bt = wb.create_sheet(title="Balance Trend")
-    for ci, h in enumerate(
-        ["Date", "Balance (£)", "6-Bill Rolling Avg (£)", "Linear Trend (£)", "Period Charge (£)"],
-        1,
-    ):
-        _hcell(ws_bt, 1, ci, h, bg=NAVY)
-    ws_bt.row_dimensions[1].height = 22
+        # ----- TAB B: BALANCE TREND -----
+        ws_bt = wb.create_sheet(title="Balance Trend")
+        for ci, h in enumerate(
+            [
+                "Date",
+                "Balance (£)",
+                "6-Bill Rolling Avg (£)",
+                "Linear Trend (£)",
+                "Balance Movement (£)",
+            ],
+            1,
+        ):
+            _hcell(ws_bt, 1, ci, h, bg=NAVY)
+        ws_bt.row_dimensions[1].height = 22
 
-    last_data_row = n + 1
-    for i in range(n):
-        r = i + 2
-        bg = LGREY if i % 2 == 0 else None
+        last_data_row = n + 1
+        for i in range(n):
+            r = i + 2
+            bg = LGREY if i % 2 == 0 else None
 
-        # Write date as a true Excel date serial
-        excel_dt = to_excel_date(dates_lbl[i])
-        c1 = ws_bt.cell(row=r, column=1, value=excel_dt)
-        c1.number_format = "dd/mm/yyyy"
-        c1.font = Font(name="Calibri", size=10)
-        c1.border = CELL_BORDER
-        c1.alignment = Alignment(horizontal="left")
-        if bg:
-            c1.fill = PatternFill("solid", start_color=bg)
-
-        _money(ws_bt, r, 2, float(amounts[i]), fill_hex=bg)
-
-        start_r = max(2, r - 5)
-        for col_i, formula in [
-            (3, f'=IFERROR(AVERAGE(B{start_r}:B{r}),"")'),
-            (
-                4,
-                f'=IFERROR(FORECAST.LINEAR(ROW(),B$2:B${last_data_row},ROW(B$2:B${last_data_row})),"")',
-            ),
-        ]:
-            cx = ws_bt.cell(row=r, column=col_i, value=formula)
-            cx.number_format = "£#,##0.00"
-            cx.font = Font(name="Calibri", size=10)
-            cx.border = CELL_BORDER
-            cx.alignment = Alignment(horizontal="right")
+            # Write date as a true Excel date serial
+            excel_dt = to_excel_date(dates_lbl[i])
+            c1 = ws_bt.cell(row=r, column=1, value=excel_dt)
+            c1.number_format = "dd/mm/yyyy"
+            c1.font = Font(name="Calibri", size=10)
+            c1.border = CELL_BORDER
+            c1.alignment = Alignment(horizontal="left")
             if bg:
-                cx.fill = PatternFill("solid", start_color=bg)
+                c1.fill = PatternFill("solid", start_color=bg)
 
-        if i > 0:
-            c5 = ws_bt.cell(row=r, column=5, value=f"=B{r}-B{r - 1}")
-            c5.number_format = "£#,##0.00"
-            c5.font = Font(name="Calibri", size=10)
-            c5.border = CELL_BORDER
-            c5.alignment = Alignment(horizontal="right")
-            if bg:
-                c5.fill = PatternFill("solid", start_color=bg)
+            _money(ws_bt, r, 2, float(amounts[i]), fill_hex=bg)
 
-    # Line chart
-    lc = LineChart()
-    lc.title = "Account Balance Over Time"
-    lc.style = 10
-    lc.y_axis.title = "Balance (£)"
-    lc.x_axis.title = "Bill Date"
-    lc.width, lc.height = 30, 18
-    data_ref = Reference(ws_bt, min_col=2, max_col=4, min_row=1, max_row=n + 1)
-    dates_ref = Reference(ws_bt, min_col=1, min_row=2, max_row=n + 1)
-    lc.add_data(data_ref, titles_from_data=True)
-    lc.set_categories(dates_ref)
-    lc.series[0].graphicalProperties.line.solidFill = ORANGE
-    lc.series[0].graphicalProperties.line.width = 22000
-    if len(lc.series) > 1:
-        lc.series[1].graphicalProperties.line.solidFill = NAVY
-        lc.series[1].graphicalProperties.line.width = 15000
-        lc.series[1].graphicalProperties.line.dashDot = "dash"
-    if len(lc.series) > 2:
-        lc.series[2].graphicalProperties.line.solidFill = DGREY
-        lc.series[2].graphicalProperties.line.width = 10000
-        lc.series[2].graphicalProperties.line.dashDot = "sysDash"
-    ws_bt.add_chart(lc, "G2")
-    for col, w in zip(["A", "B", "C", "D", "E"], [14, 16, 20, 16, 16], strict=False):
-        ws_bt.column_dimensions[col].width = w
-    ws_bt.freeze_panes = "A2"
+            start_r = max(2, r - 5)
+            for col_i, formula in [
+                (3, f'=IFERROR(AVERAGE(B{start_r}:B{r}),"")'),
+                (
+                    4,
+                    f'=IFERROR(FORECAST.LINEAR(A{r},B$2:B${last_data_row},A$2:A${last_data_row}),"")',
+                ),
+            ]:
+                cx = ws_bt.cell(row=r, column=col_i, value=formula)
+                cx.number_format = "£#,##0.00"
+                cx.font = Font(name="Calibri", size=10)
+                cx.border = CELL_BORDER
+                cx.alignment = Alignment(horizontal="right")
+                if bg:
+                    cx.fill = PatternFill("solid", start_color=bg)
 
-    # ----- TAB C: YEAR-ON-YEAR -----
-    ws_yoy = wb.create_sheet(title="Year-on-Year")
-    for ci, h in enumerate(
-        [
-            "Year",
-            "Bills",
-            "Peak Balance (£)",
-            "Avg Balance (£)",
-            "Lowest Balance (£)",
-            "YoY Avg Δ (£)",
-            "YoY Avg Δ (%)",
-            "Est. Readings",
-            "Biggest Jump (£)",
-        ],
-        1,
-    ):
-        _hcell(ws_yoy, 1, ci, h, bg=ORANGE)
-    ws_yoy.row_dimensions[1].height = 22
+            if i > 0:
+                c5 = ws_bt.cell(row=r, column=5, value=f"=B{r}-B{r - 1}")
+                c5.number_format = "£#,##0.00"
+                c5.font = Font(name="Calibri", size=10)
+                c5.border = CELL_BORDER
+                c5.alignment = Alignment(horizontal="right")
+                if bg:
+                    c5.fill = PatternFill("solid", start_color=bg)
 
-    prev_avg = None
-    yoy_data = []
-    for r_off, row_y in enumerate(yearly.itertuples(), 2):
-        yr = row_y.year
-        cnt = row_y.count
-        pk = row_y.peak
-        av = row_y.avg_bal
-        lo = row_y.low
-        yoy_chg_pct: float | None = ((av - prev_avg) / prev_avg) if prev_avg else None
+        # Line chart
+        lc = LineChart()
+        lc.title = "Account Balance Over Time"
+        lc.style = 10
+        lc.y_axis.title = "Balance (£)"
+        lc.x_axis.title = "Bill Date"
+        lc.width, lc.height = 30, 18
+        data_ref = Reference(ws_bt, min_col=2, max_col=4, min_row=1, max_row=n + 1)
+        dates_ref = Reference(ws_bt, min_col=1, min_row=2, max_row=n + 1)
+        lc.add_data(data_ref, titles_from_data=True)
+        lc.set_categories(dates_ref)
+        lc.series[0].graphicalProperties.line.solidFill = ORANGE
+        lc.series[0].graphicalProperties.line.width = 22000
+        if len(lc.series) > 1:
+            lc.series[1].graphicalProperties.line.solidFill = NAVY
+            lc.series[1].graphicalProperties.line.width = 15000
+            lc.series[1].graphicalProperties.line.dashDot = "dash"
+        if len(lc.series) > 2:
+            lc.series[2].graphicalProperties.line.solidFill = DGREY
+            lc.series[2].graphicalProperties.line.width = 10000
+            lc.series[2].graphicalProperties.line.dashDot = "sysDash"
+        ws_bt.add_chart(lc, "G2")
+        for col, w in zip(["A", "B", "C", "D", "E"], [14, 16, 20, 16, 16], strict=False):
+            ws_bt.column_dimensions[col].width = w
+        ws_bt.freeze_panes = "A2"
 
-        yr_rows = dfc[dfc["year"] == yr]
-        yr_idx = yr_rows.index.tolist()
-        max_jump = None
-        for ii in yr_idx:
-            if ii > 0 and ii in dfc.index and ii - 1 in dfc.index:
-                jmp = dfc.at[ii, "Amount (£)"] - dfc.at[ii - 1, "Amount (£)"]
-                if max_jump is None or jmp > max_jump:
-                    max_jump = jmp
+        # ----- TAB C: YEAR-ON-YEAR -----
+        ws_yoy = wb.create_sheet(title="Year-on-Year")
+        for ci, h in enumerate(
+            [
+                "Year",
+                "Bills",
+                "Peak Balance (£)",
+                "Avg Balance (£)",
+                "Lowest Balance (£)",
+                "YoY Avg Δ (£)",
+                "YoY Avg Δ (%)",
+                "Est. Readings",
+                "Biggest Jump (£)",
+            ],
+            1,
+        ):
+            _hcell(ws_yoy, 1, ci, h, bg=ORANGE)
+        ws_yoy.row_dimensions[1].height = 22
 
-        alt = r_off % 2 == 0
-        bg = LGREY if alt else None
+        prev_avg = None
+        yoy_data = []
+        for r_off, row_y in enumerate(yearly.itertuples(), 2):
+            yr = row_y.year
+            cnt = row_y.count
+            pk = row_y.peak
+            av = row_y.avg_bal
+            lo = row_y.low
+            yoy_chg_pct: float | None = ((av - prev_avg) / prev_avg) if prev_avg else None
 
-        _num(ws_yoy, r_off, 1, yr, fmt="#,##0", fill_hex=bg, bold=True)
-        _num(ws_yoy, r_off, 2, cnt, fmt="#,##0", fill_hex=bg)
-        _money(ws_yoy, r_off, 3, pk, fill_hex=bg, bold=True)
-        _money(ws_yoy, r_off, 4, av, fill_hex=bg)
-        _money(ws_yoy, r_off, 5, lo, fill_hex=bg)
+            yr_rows = dfc[dfc["year"] == yr]
+            yr_idx = yr_rows.index.tolist()
+            max_jump = None
+            for ii in yr_idx:
+                if ii > 0 and ii in dfc.index and ii - 1 in dfc.index:
+                    jmp = dfc.at[ii, "Amount (£)"] - dfc.at[ii - 1, "Amount (£)"]
+                    if max_jump is None or jmp > max_jump:
+                        max_jump = jmp
 
-        if r_off > 2:
-            c6 = ws_yoy.cell(row=r_off, column=6, value=f"=D{r_off}-D{r_off - 1}")
-            c6.number_format = "£#,##0.00"
-            c6.font = Font(name="Calibri", size=10, bold=True)
-            c6.border = CELL_BORDER
-            c6.alignment = Alignment(horizontal="right")
-            if bg:
-                c6.fill = PatternFill("solid", start_color=bg)
+            alt = r_off % 2 == 0
+            bg = LGREY if alt else None
 
-            c7 = ws_yoy.cell(row=r_off, column=7, value=f'=IFERROR(F{r_off}/D{r_off - 1},"")')
-            c7.number_format = "+0.0%;-0.0%;—"
-            c7.font = Font(name="Calibri", size=10, bold=True)
-            c7.border = CELL_BORDER
-            c7.alignment = Alignment(horizontal="right")
-            yoy_fill = (
-                RED
-                if yoy_chg_pct is not None and yoy_chg_pct > 0.5
-                else (
-                    AMBER
-                    if yoy_chg_pct is not None and yoy_chg_pct > 0.2
-                    else (GREEN if yoy_chg_pct is not None and yoy_chg_pct < -0.1 else bg)
+            _num(ws_yoy, r_off, 1, yr, fmt="#,##0", fill_hex=bg, bold=True)
+            _num(ws_yoy, r_off, 2, cnt, fmt="#,##0", fill_hex=bg)
+            _money(ws_yoy, r_off, 3, pk, fill_hex=bg, bold=True)
+            _money(ws_yoy, r_off, 4, av, fill_hex=bg)
+            _money(ws_yoy, r_off, 5, lo, fill_hex=bg)
+
+            if r_off > 2:
+                c6 = ws_yoy.cell(row=r_off, column=6, value=f"=D{r_off}-D{r_off - 1}")
+                c6.number_format = "£#,##0.00"
+                c6.font = Font(name="Calibri", size=10, bold=True)
+                c6.border = CELL_BORDER
+                c6.alignment = Alignment(horizontal="right")
+                if bg:
+                    c6.fill = PatternFill("solid", start_color=bg)
+
+                c7 = ws_yoy.cell(row=r_off, column=7, value=f'=IFERROR(F{r_off}/D{r_off - 1},"")')
+                c7.number_format = "+0.0%;-0.0%;—"
+                c7.font = Font(name="Calibri", size=10, bold=True)
+                c7.border = CELL_BORDER
+                c7.alignment = Alignment(horizontal="right")
+                yoy_fill = (
+                    RED
+                    if yoy_chg_pct is not None and yoy_chg_pct > 0.5
+                    else (
+                        AMBER
+                        if yoy_chg_pct is not None and yoy_chg_pct > 0.2
+                        else (GREEN if yoy_chg_pct is not None and yoy_chg_pct < -0.1 else bg)
+                    )
+                )
+                if yoy_fill:
+                    c7.fill = PatternFill("solid", start_color=yoy_fill)
+            else:
+                ws_yoy.cell(row=r_off, column=6, value="—").border = CELL_BORDER
+                ws_yoy.cell(row=r_off, column=7, value="—").border = CELL_BORDER
+
+            yr_est = (
+                int((dfc[dfc["year"] == yr]["Reading"] == "Estimated").sum())
+                if "Reading" in dfc.columns
+                else 0
+            )
+            _num(ws_yoy, r_off, 8, yr_est, fmt="#,##0", fill_hex=bg)
+            if max_jump is not None:
+                _money(ws_yoy, r_off, 9, max_jump, fill_hex=(RED if max_jump > 5000 else bg))
+
+            yoy_data.append((yr, av))
+            prev_avg = av
+
+        bc = BarChart()
+        bc.type = "col"
+        bc.title = "Average Balance by Year"
+        bc.y_axis.title = "Average Balance (£)"
+        bc.style = 10
+        bc.width, bc.height = 22, 14
+        n_yrs = len(yoy_data)
+        avg_ref = Reference(ws_yoy, min_col=4, min_row=1, max_row=n_yrs + 1)
+        yr_ref = Reference(ws_yoy, min_col=1, min_row=2, max_row=n_yrs + 1)
+        bc.add_data(avg_ref, titles_from_data=True)
+        bc.set_categories(yr_ref)
+        bc.series[0].graphicalProperties.solidFill = ORANGE
+        ws_yoy.add_chart(bc, "K2")
+        for col, w in zip(
+            ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
+            [8, 8, 18, 18, 18, 16, 14, 14, 18],
+            strict=False,
+        ):
+            ws_yoy.column_dimensions[col].width = w
+        ws_yoy.freeze_panes = "A2"
+
+        # ----- TAB D: PERIOD CHARGES -----
+        ws_pc = wb.create_sheet(title="Period Charges")
+        for ci, h in enumerate(
+            [
+                "From Date",
+                "To Date",
+                "Days",
+                "Opening Balance (£)",
+                "Closing Balance (£)",
+                "Charge (£)",
+                "Daily Rate (£/day)",
+                "Flag",
+            ],
+            1,
+        ):
+            _hcell(ws_pc, 1, ci, h, bg=NAVY)
+        ws_pc.row_dimensions[1].height = 22
+
+        mean_daily = mean_daily_rate(full_analysis)
+        pc_rows_data: list[tuple[str, float]] = []
+
+        pc_r = 2
+        pc_rows_data = []
+        mean_daily = mean_daily_rate(full_analysis)
+        for _, bill in bill_daily_rates(full_analysis).iterrows():
+            days = int(bill["_days"])
+            charge = float(bill["Period Charge (£)"])
+            daily = float(bill["_daily"])
+            flag = "Review daily rate" if mean_daily > 0 and daily > mean_daily * 2.5 else ""
+            for bill_col, value in enumerate(
+                [
+                    bill["Period From"],
+                    bill["Period To"],
+                    days,
+                    None,
+                    bill["Balance (£)"],
+                    charge,
+                    daily,
+                    flag,
+                ],
+                1,
+            ):
+                literal_cell(ws_pc, pc_r, bill_col, value)
+            pc_rows_data.append((bill["Date"], charge))
+            pc_r += 1
+
+        if pc_r > 2:
+            sr = pc_r + 2
+            _section_hdr(ws_pc, sr, "SUMMARY STATISTICS", ncols=8, bg=ORANGE)
+            sr += 1
+            dr = f"F2:F{pc_r - 1}"
+            cr = f"C2:C{pc_r - 1}"
+
+            _pc_stat(
+                ws_pc,
+                sr,
+                "Mean charge per period (positive only)",
+                f'=IFERROR(AVERAGEIF({dr},">0"),"")',
+            )
+            _pc_stat(ws_pc, sr + 1, "Largest single charge", f'=IFERROR(MAX({dr}),"")')
+            _pc_stat(ws_pc, sr + 2, "Largest credit / reduction", f'=IFERROR(MIN({dr}),"")')
+            _pc_stat(
+                ws_pc, sr + 3, "Charge periods", f'=IFERROR(COUNTIF({dr},">0"),"")', fmt="#,##0"
+            )
+            _pc_stat(
+                ws_pc, sr + 4, "Credit periods", f'=IFERROR(COUNTIF({dr},"<0"),"")', fmt="#,##0"
+            )
+            _pc_stat(
+                ws_pc,
+                sr + 5,
+                "Average days between bills",
+                f'=IFERROR(AVERAGE({cr}),"")',
+                fmt="#,##0.0",
+            )
+
+        if len(pc_rows_data) > 1:
+            bc2 = BarChart()
+            bc2.type = "col"
+            bc2.title = "Charge Added Each Period"
+            bc2.y_axis.title = "Charge (£)"
+            bc2.style = 10
+            bc2.width, bc2.height = 28, 14
+            chg_ref2 = Reference(ws_pc, min_col=6, min_row=1, max_row=pc_r - 1)
+            date_ref2 = Reference(ws_pc, min_col=2, min_row=2, max_row=pc_r - 1)
+            bc2.add_data(chg_ref2, titles_from_data=True)
+            bc2.set_categories(date_ref2)
+            bc2.series[0].graphicalProperties.solidFill = NAVY
+            ws_pc.add_chart(bc2, "J2")
+
+        for col, w in zip(
+            ["A", "B", "C", "D", "E", "F", "G", "H"], [13, 13, 7, 18, 18, 16, 14, 42], strict=False
+        ):
+            ws_pc.column_dimensions[col].width = w
+        ws_pc.freeze_panes = "A2"
+
+        # ----- TAB E: DISPUTE FLAGS -----
+        ws_df = wb.create_sheet(title="Dispute Flags")
+
+        _banner(ws_df, 1, "EDF ENERGY DISPUTE  —  AUTOMATED ANALYSIS FLAGS", ORANGE)
+        ws_df.cell(
+            row=2,
+            column=1,
+            value=f"Generated {datetime.now().strftime('%d/%m/%Y %H:%M')}  |  Period: {dates_lbl[0]} to {dates_lbl[-1]}",
+        )
+        ws_df.cell(row=2, column=1).font = Font(name="Calibri", size=9, italic=True, color=DGREY)
+
+        for ci, (txt, col_hex) in enumerate(
+            [
+                ("■ RED = HIGH severity", RED),
+                ("■ AMBER = MEDIUM", AMBER),
+                ("■ GREEN = Payment/credit", GREEN),
+            ],
+            1,
+        ):
+            lc2 = ws_df.cell(row=3, column=ci * 2 - 1, value=txt)
+            lc2.font = Font(name="Calibri", size=9, bold=True)
+            lc2.fill = PatternFill("solid", start_color=col_hex)
+            lc2.border = CELL_BORDER
+
+        hdr_row = 5
+        for ci, h in enumerate(["#", "Date", "Balance (£)", "Flag Type", "Detail", "Severity"], 1):
+            _hcell(ws_df, hdr_row, ci, h, bg=NAVY)
+
+        flags, counts = compute_dispute_flags(full_analysis, mean_daily)
+
+        sev_fill = {"HIGH": RED, "MEDIUM": AMBER, "INFO": GREEN}
+        for fi, (ftype, flag_date, amt, detail, sev) in enumerate(flags, hdr_row + 1):
+            bg = sev_fill.get(sev, LGREY)
+            _num(ws_df, fi, 1, fi - hdr_row, fmt="#,##0", fill_hex=bg)
+            _text(ws_df, fi, 2, flag_date or "—", fill_hex=bg)
+            if amt:
+                _money(ws_df, fi, 3, float(amt), fill_hex=bg)
+            else:
+                ws_df.cell(row=fi, column=3).fill = PatternFill("solid", start_color=bg)
+                ws_df.cell(row=fi, column=3).border = CELL_BORDER
+            _text(ws_df, fi, 4, ftype, bold=True, fill_hex=bg)
+            _text(ws_df, fi, 5, detail, fill_hex=bg, wrap=True)
+            _text(ws_df, fi, 6, sev, bold=True, fill_hex=bg, align="center")
+            ws_df.row_dimensions[fi].height = 30
+
+        if flags:
+            fr = len(flags) + hdr_row + 2
+            counts = {s: sum(1 for f in flags if f[4] == s) for s in ("HIGH", "MEDIUM", "INFO")}
+            _banner(
+                ws_df,
+                fr,
+                f"TOTAL FLAGS: {len(flags)}   |   HIGH: {counts['HIGH']}   |   MEDIUM: {counts['MEDIUM']}   |   INFO: {counts['INFO']}",
+                NAVY,
+            )
+
+        for col, w in zip(["A", "B", "C", "D", "E", "F"], [5, 13, 16, 20, 60, 10], strict=False):
+            ws_df.column_dimensions[col].width = w
+        ws_df.freeze_panes = f"A{hdr_row + 1}"
+
+        # ----- TAB F: DISPUTE TIMELINE -----
+        ws_tl = wb.create_sheet(title="Dispute Timeline")
+        _banner(ws_tl, 1, "EDF ENERGY DISPUTE  —  CHRONOLOGICAL TIMELINE", ORANGE)
+        ws_tl.cell(
+            row=2,
+            column=1,
+            value=f"Account: {acc_ref}  |  Period: {dates_lbl[0]} to {dates_lbl[-1]}",
+        )
+        ws_tl.cell(row=2, column=1).font = Font(name="Calibri", size=9, italic=True, color=DGREY)
+
+        for ci, h in enumerate(["Date", "Event Type", "Description"], 1):
+            _hcell(ws_tl, 4, ci, h, bg=NAVY)
+
+        timeline_events = []
+
+        # Bookend: first record
+        timeline_events.append(
+            (dates_lbl[0], "ACCOUNT START", f"First bill on record. Balance: £{amounts[0]:,.2f}.")
+        )
+
+        # Top 5 largest balance jumps
+        jumps = []
+        for i in range(1, n):
+            delta = float(amounts[i]) - float(amounts[i - 1])
+            days = (dfc.iloc[i]["_dt"] - dfc.iloc[i - 1]["_dt"]).days
+            if delta > 0:
+                jumps.append((delta, i, days))
+        jumps.sort(key=lambda x: x[0], reverse=True)
+        for delta, idx, days in jumps[:5]:
+            timeline_events.append(
+                (
+                    dfc.iloc[idx]["Date"],
+                    "LARGE INCREASE",
+                    f"Balance rose £{delta:,.2f} in {days} days "
+                    f"(from £{amounts[idx - 1]:,.2f} to £{amounts[idx]:,.2f}).",
                 )
             )
-            if yoy_fill:
-                c7.fill = PatternFill("solid", start_color=yoy_fill)
-        else:
-            ws_yoy.cell(row=r_off, column=6, value="—").border = CELL_BORDER
-            ws_yoy.cell(row=r_off, column=7, value="—").border = CELL_BORDER
 
-        yr_est = (
-            int((dfc[dfc["year"] == yr]["Reading"] == "Estimated").sum())
-            if "Reading" in dfc.columns
-            else 0
-        )
-        _num(ws_yoy, r_off, 8, yr_est, fmt="#,##0", fill_hex=bg)
-        if max_jump is not None:
-            _money(ws_yoy, r_off, 9, max_jump, fill_hex=(RED if max_jump > 5000 else bg))
+        # Billing gaps > 60 days
+        for i in range(1, n):
+            days = (dfc.iloc[i]["_dt"] - dfc.iloc[i - 1]["_dt"]).days
+            if days > 60:
+                timeline_events.append(
+                    (
+                        dfc.iloc[i]["Date"],
+                        "BILLING GAP",
+                        f"{days} days without a bill (previous: {dfc.iloc[i - 1]['Date']}). "
+                        f"Balance accumulated unchecked.",
+                    )
+                )
 
-        yoy_data.append((yr, av))
-        prev_avg = av
+        # Estimated reading runs (reuse existing detection)
+        if "Reading" in dfc.columns:
+            run = 0
+            run_start_date = None
+            for i, rv in enumerate(dfc["Reading"].tolist()):
+                if str(rv).lower() in ("estimated", "est."):
+                    run += 1
+                    if run == 1:
+                        run_start_date = dfc.iloc[i]["Date"]
+                else:
+                    if run >= 3:
+                        timeline_events.append(
+                            (
+                                run_start_date,
+                                "ESTIMATED READINGS",
+                                f"{run} consecutive bills used estimated meter readings.",
+                            )
+                        )
+                    run = 0
+                    run_start_date = None
+            if run >= 3:
+                timeline_events.append(
+                    (
+                        run_start_date,
+                        "ESTIMATED READINGS",
+                        f"{run} consecutive estimated readings (ongoing).",
+                    )
+                )
 
-    bc = BarChart()
-    bc.type = "col"
-    bc.title = "Average Balance by Year"
-    bc.y_axis.title = "Average Balance (£)"
-    bc.style = 10
-    bc.width, bc.height = 22, 14
-    n_yrs = len(yoy_data)
-    avg_ref = Reference(ws_yoy, min_col=4, min_row=1, max_row=n_yrs + 1)
-    yr_ref = Reference(ws_yoy, min_col=1, min_row=2, max_row=n_yrs + 1)
-    bc.add_data(avg_ref, titles_from_data=True)
-    bc.set_categories(yr_ref)
-    bc.series[0].graphicalProperties.solidFill = ORANGE
-    ws_yoy.add_chart(bc, "K2")
-    for col, w in zip(
-        ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
-        [8, 8, 18, 18, 18, 16, 14, 14, 18],
-        strict=False,
-    ):
-        ws_yoy.column_dimensions[col].width = w
-    ws_yoy.freeze_panes = "A2"
+        # Payment events (balance reductions)
+        for i in range(1, n):
+            delta = float(amounts[i]) - float(amounts[i - 1])
+            if delta < -200:
+                timeline_events.append(
+                    (
+                        dfc.iloc[i]["Date"],
+                        "PAYMENT/CREDIT",
+                        f"Balance reduced by £{abs(delta):,.2f} "
+                        f"(from £{amounts[i - 1]:,.2f} to £{amounts[i]:,.2f}).",
+                    )
+                )
 
-    # ----- TAB D: PERIOD CHARGES -----
-    ws_pc = wb.create_sheet(title="Period Charges")
-    for ci, h in enumerate(
-        [
-            "From Date",
-            "To Date",
-            "Days",
-            "Opening Balance (£)",
-            "Closing Balance (£)",
-            "Charge (£)",
-            "Daily Rate (£/day)",
-            "Flag",
-        ],
-        1,
-    ):
-        _hcell(ws_pc, 1, ci, h, bg=NAVY)
-    ws_pc.row_dimensions[1].height = 22
+        # Reconciliation mismatches (from flags)
+        for ftype, fdate, _famt, fdetail, _fsev in flags:
+            if ftype == "RECONCILIATION MISMATCH":
+                timeline_events.append((fdate, "RECONCILIATION", fdetail))
 
-    mean_daily = float(np.mean(pos_diffs)) / 30.0 if len(pos_diffs) else 0
-    pc_rows_data = []
-
-    pc_r = 2
-    for i in range(1, n):
-        p = dfc.iloc[i - 1]
-        c_ = dfc.iloc[i]
-        days = (c_["_dt"] - p["_dt"]).days
-        charge = float(c_["Amount (£)"]) - float(p["Amount (£)"])
-        daily = charge / days if days > 0 else None
-
-        flag = ""
-        if days > 90:
-            flag = f"⚠ {days}-day gap — possible missed bill(s)"
-        elif charge < 0:
-            flag = f"↓ Balance reduced by £{abs(charge):,.2f} (payment or credit)"
-        elif daily and mean_daily > 0 and daily > mean_daily * 2.5:
-            flag = f"⚠ Daily rate {daily / mean_daily:.1f}× average"
-
-        bg = LGREY if pc_r % 2 == 0 else None
-        if flag.startswith("⚠"):
-            bg = AMBER
-        elif charge < 0:
-            bg = GREEN
-
-        _text(ws_pc, pc_r, 1, p["Date"], fill_hex=bg)
-        _text(ws_pc, pc_r, 2, c_["Date"], fill_hex=bg)
-        _num(ws_pc, pc_r, 3, days, fmt="#,##0", fill_hex=bg)
-        _money(ws_pc, pc_r, 4, float(p["Amount (£)"]), fill_hex=bg)
-        _money(ws_pc, pc_r, 5, float(c_["Amount (£)"]), fill_hex=bg)
-
-        c6 = ws_pc.cell(row=pc_r, column=6, value=f"=E{pc_r}-D{pc_r}")
-        c6.number_format = "£#,##0.00"
-        c6.font = Font(name="Calibri", size=10)
-        c6.border = CELL_BORDER
-        c6.alignment = Alignment(horizontal="right")
-        if bg:
-            c6.fill = PatternFill("solid", start_color=bg)
-
-        c7 = ws_pc.cell(row=pc_r, column=7, value=f'=IFERROR(F{pc_r}/C{pc_r},"")')
-        c7.number_format = "£#,##0.00"
-        c7.font = Font(name="Calibri", size=10)
-        c7.border = CELL_BORDER
-        c7.alignment = Alignment(horizontal="right")
-        if bg:
-            c7.fill = PatternFill("solid", start_color=bg)
-
-        _text(ws_pc, pc_r, 8, flag, fill_hex=bg, wrap=True)
-
-        if charge > 0:
-            pc_rows_data.append((c_["Date"], charge))
-        pc_r += 1
-
-    if pc_r > 2:
-        sr = pc_r + 2
-        _section_hdr(ws_pc, sr, "SUMMARY STATISTICS", ncols=8, bg=ORANGE)
-        sr += 1
-        dr = f"F2:F{pc_r - 1}"
-        cr = f"C2:C{pc_r - 1}"
-
-        _pc_stat(
-            ws_pc,
-            sr,
-            "Mean charge per period (positive only)",
-            f'=IFERROR(AVERAGEIF({dr},">0"),"")',
-        )
-        _pc_stat(ws_pc, sr + 1, "Largest single charge", f'=IFERROR(MAX({dr}),"")')
-        _pc_stat(ws_pc, sr + 2, "Largest credit / reduction", f'=IFERROR(MIN({dr}),"")')
-        _pc_stat(ws_pc, sr + 3, "Charge periods", f'=IFERROR(COUNTIF({dr},">0"),"")', fmt="#,##0")
-        _pc_stat(ws_pc, sr + 4, "Credit periods", f'=IFERROR(COUNTIF({dr},"<0"),"")', fmt="#,##0")
-        _pc_stat(
-            ws_pc,
-            sr + 5,
-            "Average days between bills",
-            f'=IFERROR(AVERAGE({cr}),"")',
-            fmt="#,##0.0",
-        )
-
-    if len(pc_rows_data) > 1:
-        bc2 = BarChart()
-        bc2.type = "col"
-        bc2.title = "Charge Added Each Period"
-        bc2.y_axis.title = "Charge (£)"
-        bc2.style = 10
-        bc2.width, bc2.height = 28, 14
-        chg_ref2 = Reference(ws_pc, min_col=6, min_row=1, max_row=pc_r - 1)
-        date_ref2 = Reference(ws_pc, min_col=2, min_row=2, max_row=pc_r - 1)
-        bc2.add_data(chg_ref2, titles_from_data=True)
-        bc2.set_categories(date_ref2)
-        bc2.series[0].graphicalProperties.solidFill = NAVY
-        ws_pc.add_chart(bc2, "J2")
-
-    for col, w in zip(
-        ["A", "B", "C", "D", "E", "F", "G", "H"], [13, 13, 7, 18, 18, 16, 14, 42], strict=False
-    ):
-        ws_pc.column_dimensions[col].width = w
-    ws_pc.freeze_panes = "A2"
-
-    # ----- TAB E: DISPUTE FLAGS -----
-    ws_df = wb.create_sheet(title="Dispute Flags")
-
-    _banner(ws_df, 1, "EDF ENERGY DISPUTE  —  AUTOMATED ANALYSIS FLAGS", ORANGE)
-    ws_df.cell(
-        row=2,
-        column=1,
-        value=f"Generated {datetime.now().strftime('%d/%m/%Y %H:%M')}  |  Period: {dates_lbl[0]} to {dates_lbl[-1]}",
-    )
-    ws_df.cell(row=2, column=1).font = Font(name="Calibri", size=9, italic=True, color=DGREY)
-
-    for ci, (txt, col_hex) in enumerate(
-        [
-            ("■ RED = HIGH severity", RED),
-            ("■ AMBER = MEDIUM", AMBER),
-            ("■ GREEN = Payment/credit", GREEN),
-        ],
-        1,
-    ):
-        lc2 = ws_df.cell(row=3, column=ci * 2 - 1, value=txt)
-        lc2.font = Font(name="Calibri", size=9, bold=True)
-        lc2.fill = PatternFill("solid", start_color=col_hex)
-        lc2.border = CELL_BORDER
-
-    hdr_row = 5
-    for ci, h in enumerate(["#", "Date", "Balance (£)", "Flag Type", "Detail", "Severity"], 1):
-        _hcell(ws_df, hdr_row, ci, h, bg=NAVY)
-
-    flags, counts = compute_dispute_flags(dfc, mean_daily)
-
-    sev_fill = {"HIGH": RED, "MEDIUM": AMBER, "INFO": GREEN}
-    for fi, (ftype, flag_date, amt, detail, sev) in enumerate(flags, hdr_row + 1):
-        bg = sev_fill.get(sev, LGREY)
-        _num(ws_df, fi, 1, fi - hdr_row, fmt="#,##0", fill_hex=bg)
-        _text(ws_df, fi, 2, flag_date or "—", fill_hex=bg)
-        if amt:
-            _money(ws_df, fi, 3, float(amt), fill_hex=bg)
-        else:
-            ws_df.cell(row=fi, column=3).fill = PatternFill("solid", start_color=bg)
-            ws_df.cell(row=fi, column=3).border = CELL_BORDER
-        _text(ws_df, fi, 4, ftype, bold=True, fill_hex=bg)
-        _text(ws_df, fi, 5, detail, fill_hex=bg, wrap=True)
-        _text(ws_df, fi, 6, sev, bold=True, fill_hex=bg, align="center")
-        ws_df.row_dimensions[fi].height = 30
-
-    if flags:
-        fr = len(flags) + hdr_row + 2
-        counts = {s: sum(1 for f in flags if f[4] == s) for s in ("HIGH", "MEDIUM", "INFO")}
-        _banner(
-            ws_df,
-            fr,
-            f"TOTAL FLAGS: {len(flags)}   |   HIGH: {counts['HIGH']}   |   MEDIUM: {counts['MEDIUM']}   |   INFO: {counts['INFO']}",
-            NAVY,
-        )
-
-    for col, w in zip(["A", "B", "C", "D", "E", "F"], [5, 13, 16, 20, 60, 10], strict=False):
-        ws_df.column_dimensions[col].width = w
-    ws_df.freeze_panes = f"A{hdr_row + 1}"
-
-    # ----- TAB F: DISPUTE TIMELINE -----
-    ws_tl = wb.create_sheet(title="Dispute Timeline")
-    _banner(ws_tl, 1, "EDF ENERGY DISPUTE  —  CHRONOLOGICAL TIMELINE", ORANGE)
-    ws_tl.cell(
-        row=2, column=1, value=f"Account: {acc_ref}  |  Period: {dates_lbl[0]} to {dates_lbl[-1]}"
-    )
-    ws_tl.cell(row=2, column=1).font = Font(name="Calibri", size=9, italic=True, color=DGREY)
-
-    for ci, h in enumerate(["Date", "Event Type", "Description"], 1):
-        _hcell(ws_tl, 4, ci, h, bg=NAVY)
-
-    timeline_events = []
-
-    # Bookend: first record
-    timeline_events.append(
-        (dates_lbl[0], "ACCOUNT START", f"First bill on record. Balance: £{amounts[0]:,.2f}.")
-    )
-
-    # Top 5 largest balance jumps
-    jumps = []
-    for i in range(1, n):
-        delta = float(amounts[i]) - float(amounts[i - 1])
-        days = (dfc.iloc[i]["_dt"] - dfc.iloc[i - 1]["_dt"]).days
-        if delta > 0:
-            jumps.append((delta, i, days))
-    jumps.sort(key=lambda x: x[0], reverse=True)
-    for delta, idx, days in jumps[:5]:
+        # Bookend: latest record
         timeline_events.append(
             (
-                dfc.iloc[idx]["Date"],
-                "LARGE INCREASE",
-                f"Balance rose £{delta:,.2f} in {days} days "
-                f"(from £{amounts[idx - 1]:,.2f} to £{amounts[idx]:,.2f}).",
+                dates_lbl[-1],
+                "CURRENT STATE",
+                f"Latest bill on record. Balance: £{amounts[-1]:,.2f}. "
+                f"Total increase from first record: £{amounts[-1] - amounts[0]:,.2f}.",
             )
         )
 
-    # Billing gaps > 60 days
-    for i in range(1, n):
-        days = (dfc.iloc[i]["_dt"] - dfc.iloc[i - 1]["_dt"]).days
-        if days > 60:
-            timeline_events.append(
-                (
-                    dfc.iloc[i]["Date"],
-                    "BILLING GAP",
-                    f"{days} days without a bill (previous: {dfc.iloc[i - 1]['Date']}). "
-                    f"Balance accumulated unchecked.",
-                )
-            )
+        # Sort by date and write
+        timeline_events.sort(key=lambda e: parse_to_sort_date(e[0]) or pd.Timestamp.min)
+        tl_r = 5
+        for tl_date, etype, desc in timeline_events:
+            bg_hex = LGREY if tl_r % 2 == 0 else None
+            _text(ws_tl, tl_r, 1, tl_date, fill_hex=bg_hex)
+            _text(ws_tl, tl_r, 2, etype, bold=True, fill_hex=bg_hex)
+            _text(ws_tl, tl_r, 3, desc, fill_hex=bg_hex, wrap=True)
+            ws_tl.row_dimensions[tl_r].height = 40
+            tl_r += 1
 
-    # Estimated reading runs (reuse existing detection)
-    if "Reading" in dfc.columns:
-        run = 0
-        run_start_date = None
-        for i, rv in enumerate(dfc["Reading"].tolist()):
-            if str(rv).lower() in ("estimated", "est."):
-                run += 1
-                if run == 1:
-                    run_start_date = dfc.iloc[i]["Date"]
-            else:
-                if run >= 3:
-                    timeline_events.append(
-                        (
-                            run_start_date,
-                            "ESTIMATED READINGS",
-                            f"{run} consecutive bills used estimated meter readings.",
-                        )
-                    )
-                run = 0
-                run_start_date = None
-        if run >= 3:
-            timeline_events.append(
-                (
-                    run_start_date,
-                    "ESTIMATED READINGS",
-                    f"{run} consecutive estimated readings (ongoing).",
-                )
-            )
+        for col, w in zip(["A", "B", "C"], [14, 22, 90], strict=False):
+            ws_tl.column_dimensions[col].width = w
+        ws_tl.freeze_panes = "A5"
 
-    # Payment events (balance reductions)
-    for i in range(1, n):
-        delta = float(amounts[i]) - float(amounts[i - 1])
-        if delta < -200:
-            timeline_events.append(
-                (
-                    dfc.iloc[i]["Date"],
-                    "PAYMENT/CREDIT",
-                    f"Balance reduced by £{abs(delta):,.2f} "
-                    f"(from £{amounts[i - 1]:,.2f} to £{amounts[i]:,.2f}).",
-                )
-            )
+        # =====================================================================
+    dfc = full_analysis
 
-    # Reconciliation mismatches (from flags)
-    for ftype, fdate, _famt, fdetail, _fsev in flags:
-        if ftype == "RECONCILIATION MISMATCH":
-            timeline_events.append((fdate, "RECONCILIATION", fdetail))
-
-    # Bookend: latest record
-    timeline_events.append(
-        (
-            dates_lbl[-1],
-            "CURRENT STATE",
-            f"Latest bill on record. Balance: £{amounts[-1]:,.2f}. "
-            f"Total increase from first record: £{amounts[-1] - amounts[0]:,.2f}.",
-        )
-    )
-
-    # Sort by date and write
-    timeline_events.sort(key=lambda e: parse_to_sort_date(e[0]) or pd.Timestamp.min)
-    tl_r = 5
-    for tl_date, etype, desc in timeline_events:
-        bg_hex = LGREY if tl_r % 2 == 0 else None
-        _text(ws_tl, tl_r, 1, tl_date, fill_hex=bg_hex)
-        _text(ws_tl, tl_r, 2, etype, bold=True, fill_hex=bg_hex)
-        _text(ws_tl, tl_r, 3, desc, fill_hex=bg_hex, wrap=True)
-        ws_tl.row_dimensions[tl_r].height = 40
-        tl_r += 1
-
-    for col, w in zip(["A", "B", "C"], [14, 22, 90], strict=False):
-        ws_tl.column_dimensions[col].width = w
-    ws_tl.freeze_panes = "A5"
-
-    # =====================================================================
     # NEW ANALYSIS TABS (added after Dispute Timeline)
     # =====================================================================
 
@@ -1727,31 +1264,26 @@ def export_to_excel(
                 continue
             live_row_map[_inv] = _bb_row
             _bb_row += 1
-    # Invoice-keyed relative PDF paths for the Superseded Reconciliation
-    # sheet: one entry per superseded invoice and its survivor. Default to
-    # deterministic ``evidence_files/<invoice>.pdf``; when the UI supplied
-    # the actual save_evidence_files mapping (attachment-name -> absolute
-    # destination), prefer the real saved path for invoices whose
-    # attachment resolved to a copied file.
+    # Superseded and surviving invoice links must resolve to copied sources.
+    from edf_bill_fetcher.processors.ledgers import invoice_reference
+
     superseded_invs = list(domination_map.keys())
     survivors = sorted({s for s, _ in domination_map.values()})
-    recon_pdf_paths: dict[str, str] = {
-        inv: f"evidence_files/{inv}.pdf" for inv in [*superseded_invs, *survivors]
-    }
+    targets = set(superseded_invs + survivors)
+    recon_pdf_paths: dict[str, str] = {}
     if invoice_pdf_paths:
-        att_by_inv: dict[str, str] = {}
-        if "Invoice #" in df.columns and "Attachment Name" in df.columns:
-            for _, r in df.iterrows():
-                inv = str(r.get("Invoice #", "")).strip()
-                att = str(r.get("Attachment Name", "")).strip()
-                if inv and att and att not in ("N/A", "None", "nan"):
-                    att_by_inv.setdefault(inv, att)
         out_dir = os.path.abspath(os.path.dirname(output_path) or ".")
-        for inv in list(recon_pdf_paths):
-            att_name = att_by_inv.get(inv)
-            saved_path = invoice_pdf_paths.get(att_name) if att_name else None
+        for record in df.to_dict("records"):
+            inv = str(record.get("Invoice #", ""))
+            qualified = invoice_reference(record, inv)
+            target = qualified if qualified in targets else inv
+            if target not in targets:
+                continue
+            saved_path = invoice_pdf_paths.get(str(record.get("Attachment Name", "")))
             if saved_path:
-                recon_pdf_paths[inv] = os.path.relpath(os.path.abspath(saved_path), out_dir)
+                recon_pdf_paths.setdefault(
+                    target, os.path.relpath(os.path.abspath(saved_path), out_dir)
+                )
     # The reconciliation writer is called FIRST so it can report the
     # survivor -> KILLER-header row map it actually emitted; that map is
     # the correct target for the back-billing writer's "View superseded"
@@ -1770,7 +1302,7 @@ def export_to_excel(
         analyses["back_billing"],
         account=account_label,
         overlapping_invoices=overlapping_invoices,
-        evidence_df=dfc,
+        evidence_df=df,
         evidence_index=analyses["evidence_index"],
         domination_map=domination_map,
         view_superseded_row=recon_row_map,
@@ -1779,7 +1311,7 @@ def export_to_excel(
         wb.create_sheet(title="Rebilling & Corrections"),
         analyses["rebilling"],
         account=account_label,
-        evidence_df=dfc,
+        evidence_df=df,
         evidence_index=analyses["evidence_index"],
     )
     write_meter_readings_sheet(
@@ -1787,14 +1319,14 @@ def export_to_excel(
         dfc,
         analyses["meter_rollover"],
         account=account_label,
-        evidence_df=dfc,
+        evidence_df=df,
         evidence_index=analyses["evidence_index"],
     )
     write_contract_history_sheet(
         wb.create_sheet(title="Contract History"),
         analyses["contracts"],
         account=account_label,
-        evidence_df=dfc,
+        evidence_df=df,
         evidence_index=analyses["evidence_index"],
     )
 
@@ -1883,7 +1415,7 @@ def export_to_excel(
                 sap_financial_first_row=4,
                 edf_rows=edf_records_for_bb,
                 edf_sheet_name="EDF Evidence Report",
-                edf_first_row=4,
+                edf_first_row=2,
                 account=account_label,
                 sap_row_index_map=_build_sap_row_index_map(sap_financial),
             )
@@ -1904,9 +1436,9 @@ def export_to_excel(
                 sap_contract,
                 analyses["contracts"],
                 sap_meter,
-                dfc,
+                df,
                 sap_financial,
-                dfc,
+                df,
                 account=account_label,
             )
 

@@ -1,11 +1,4 @@
-"""TDD tests for the SLC-aware compensation estimator.
-
-Covers ``estimate_compensation`` in ``processors/compensation.py``:
-back-billing excess pro-ration, forced-credit-balance (hold) interest,
-late-credit interest, refund suppression, no-op inputs, the DISCLAIMER
-constant, and config plumbing (credit_hold_days / credit_interest_rate
-/ as_of).
-"""
+"""Indicative live-charge allocations and opt-in nonoverlapping credit-interest scenarios."""
 
 from __future__ import annotations
 
@@ -38,11 +31,13 @@ def _record(
 ) -> dict[str, object]:
     return {
         "Invoice #": invoice,
+        "Entry Type": "Refund" if invoice.startswith("PAY-") else "New Bill",
+        "Amount Kind": "Transaction" if invoice.startswith("PAY-") else "Balance",
         "Date": date,
         "Period From": period_from,
         "Period To": period_to,
         "Amount (£)": amount,
-        "Period Charge (£)": period_charge,
+        "Period Charge (£)": amount if invoice.startswith("PAY-") else period_charge,
     }
 
 
@@ -70,7 +65,7 @@ def test_back_billing_excess_pro_ration() -> None:
             )
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
     excess_rows = [r for r in rows if r["category"] == "back_billing_excess"]
     assert len(excess_rows) == 1
     row = excess_rows[0]
@@ -82,8 +77,8 @@ def test_back_billing_excess_pro_ration() -> None:
     assert row["rate"] is None
     assert row["indicative_amount"] == pytest.approx(round(1200.00 * 425 / 788, 2), abs=0.01)
     assert 0 < row["indicative_amount"] < row["base_amount"]
-    assert "Electricity Act 1989 s.84B" in row["legal_basis"]
-    assert "SLC 7A" in row["legal_basis"]
+    assert "Indicative consumption" in row["legal_basis"]
+    assert "live union allocation" in row["legal_basis"]
     assert row["disclaimer"] == DISCLAIMER
 
 
@@ -92,10 +87,7 @@ def test_back_billing_excess_pro_ration() -> None:
 
 def test_credit_hold_interest_beyond_hold_window() -> None:
     """A negative Amount held 120 days (30 beyond the 90-day hold window)
-    earns hold interest at the default 2% annual rate on those 30 days.
-
-    The same credit is also never refunded, so a late-credit row (120 days)
-    is emitted alongside it.
+    earns one scenario amount at an explicitly configured 2% annual rate.
     """
     df = pd.DataFrame(
         [
@@ -108,7 +100,7 @@ def test_credit_hold_interest_beyond_hold_window() -> None:
             )
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
     hold_rows = [r for r in rows if r["category"] == "credit_hold_interest"]
     assert len(hold_rows) == 1
     row = hold_rows[0]
@@ -119,15 +111,10 @@ def test_credit_hold_interest_beyond_hold_window() -> None:
     assert row["days"] == 30  # 120 elapsed - 90 hold window
     assert row["rate"] == pytest.approx(0.02)
     assert row["indicative_amount"] == pytest.approx(round(0.02 * 100.00 * 30 / 365, 2), abs=0.01)
-    assert "SLC 21BA" in row["legal_basis"]
+    assert "entitlement unassessed" in row["legal_basis"]
     assert row["disclaimer"] == DISCLAIMER
 
-    late_rows = [r for r in rows if r["category"] == "late_credit_interest"]
-    assert len(late_rows) == 1
-    assert late_rows[0]["days"] == 120
-    assert late_rows[0]["indicative_amount"] == pytest.approx(
-        round(0.02 * 100.00 * 120 / 365, 2), abs=0.01
-    )
+    assert len(rows) == 1  # No second interest charge for the same episode.
 
 
 # ---------- late-credit interest ----------
@@ -135,8 +122,7 @@ def test_credit_hold_interest_beyond_hold_window() -> None:
 
 def test_late_credit_interest_credit_never_refunded() -> None:
     """A credit held 30 days (inside the 90-day hold window) earns NO hold
-    interest, but because it was never refunded it earns late-credit
-    interest for the full 30 days from Date to as_of.
+    interest. No overlapping late-credit category is emitted.
     """
     df = pd.DataFrame(
         [
@@ -149,16 +135,9 @@ def test_late_credit_interest_credit_never_refunded() -> None:
             )
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
     assert [r for r in rows if r["category"] == "credit_hold_interest"] == []
-    late_rows = [r for r in rows if r["category"] == "late_credit_interest"]
-    assert len(late_rows) == 1
-    row = late_rows[0]
-    assert row["invoice_ref"] == "KCR-0002"
-    assert row["days"] == 30
-    assert row["rate"] == pytest.approx(0.02)
-    assert row["indicative_amount"] == pytest.approx(round(0.02 * 100.00 * 30 / 365, 2), abs=0.01)
-    assert row["disclaimer"] == DISCLAIMER
+    assert rows == []  # The configured hold window has not elapsed.
 
 
 def test_refunded_credit_yields_no_interest_rows() -> None:
@@ -183,7 +162,7 @@ def test_refunded_credit_yields_no_interest_rows() -> None:
             ),
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
     assert rows == []
 
 
@@ -238,17 +217,20 @@ def test_no_excess_no_credit_returns_empty() -> None:
             ),
         ]
     )
-    assert estimate_compensation(df, config={"as_of": AS_OF}) == []
+    assert estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02}) == []
 
 
 def test_empty_df_returns_empty_list() -> None:
     """An empty dataframe returns an empty list."""
-    assert estimate_compensation(pd.DataFrame(), config={"as_of": AS_OF}) == []
+    assert (
+        estimate_compensation(pd.DataFrame(), config={"as_of": AS_OF, "credit_interest_rate": 0.02})
+        == []
+    )
 
 
 def test_none_df_returns_empty_list() -> None:
     """A None dataframe returns an empty list."""
-    assert estimate_compensation(None, config={"as_of": AS_OF}) == []  # type: ignore[arg-type]
+    assert estimate_compensation(None, config={"as_of": AS_OF, "credit_interest_rate": 0.02}) == []  # type: ignore[arg-type]
 
 
 # ---------- disclaimer ----------
@@ -281,8 +263,8 @@ def test_disclaimer_present_on_every_row() -> None:
             ),
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
-    assert len(rows) >= 3  # 1 excess + hold + late
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
+    assert len(rows) == 2  # 1 live excess allocation + 1 interest episode
     assert all(r["disclaimer"] == DISCLAIMER for r in rows)
 
 
@@ -315,14 +297,13 @@ def test_nan_amount_record_does_not_suppress_credit_rows() -> None:
             ),
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
-    assert len(rows) == 2
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
+    assert len(rows) == 1
     hold_rows = [r for r in rows if r["category"] == "credit_hold_interest"]
     late_rows = [r for r in rows if r["category"] == "late_credit_interest"]
     assert len(hold_rows) == 1
     assert hold_rows[0]["days"] == 30
-    assert len(late_rows) == 1
-    assert late_rows[0]["days"] == 120
+    assert late_rows == []
     assert {r["invoice_ref"] for r in rows} == {"KCR-0006"}
 
 
@@ -342,7 +323,7 @@ def test_nan_period_charge_emits_no_row() -> None:
             )
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
     assert rows == []
 
 
@@ -368,14 +349,14 @@ def test_same_day_refund_after_credit_suppresses_interest_rows() -> None:
             ),
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
     assert rows == []
 
 
 def test_same_day_refund_before_credit_is_documented_limitation() -> None:
     """Pins the documented limitation: a same-date refund listed BEFORE
     the credit row cannot be ordered by the data, so the credit is still
-    treated as unrefunded and the late-credit row fires."""
+    treated as an observed credit episode with one scenario amount."""
     df = pd.DataFrame(
         [
             _record(
@@ -394,7 +375,14 @@ def test_same_day_refund_before_credit_is_documented_limitation() -> None:
             ),
         ]
     )
-    rows = estimate_compensation(df, config={"as_of": AS_OF})
+    rows = estimate_compensation(df, config={"as_of": AS_OF, "credit_interest_rate": 0.02})
     late_rows = [r for r in rows if r["category"] == "late_credit_interest"]
-    assert len(late_rows) == 1
-    assert late_rows[0]["invoice_ref"] == "KCR-0009"
+    assert late_rows == []
+    assert len(rows) == 1
+    assert rows[0]["category"] == "credit_hold_interest"
+    assert rows[0]["invoice_ref"] == "KCR-0009"
+
+
+def test_interest_requires_explicit_opt_in() -> None:
+    df = pd.DataFrame([_record("KCR-opt-in", "01 Jan 2026", -100, "N/A", "N/A")])
+    assert estimate_compensation(df, config={"as_of": AS_OF}) == []

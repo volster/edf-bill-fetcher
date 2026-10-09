@@ -11,6 +11,13 @@ import pandas as pd
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps
 from edf_bill_fetcher.helpers.payment_figures import payment_amounts
+from edf_bill_fetcher.processors.preparation import (
+    balance_frame,
+    monthly_balance_frame,
+    normalize_frame,
+    number,
+    scope,
+)
 
 
 @dataclass
@@ -30,7 +37,10 @@ class PaymentAnalysis:  # noqa: D101
 
 def compute_payment_analysis(df: pd.DataFrame) -> PaymentAnalysis:
     """Compute payment/credit statistics for the analysis surfaces."""
-    payments = df[df["Entry Type"].isin(["Payment", "Credit"])].copy()
+    df = normalize_frame(df)
+    payments = df[
+        df["Entry Type"].isin(["Payment", "Credit"]) & df["Transaction Amount (£)"].notna()
+    ].copy()
     if payments.empty:
         return PaymentAnalysis(
             count=0,
@@ -119,7 +129,7 @@ class DataQualityReport:
 
 def compute_data_quality_report(df: pd.DataFrame) -> DataQualityReport:
     """Compute the canonical data-quality report on a copy of ``df``."""
-    df = df.copy()
+    df = normalize_frame(df)
     total_records = len(df)
     if total_records == 0:
         return DataQualityReport(
@@ -145,24 +155,39 @@ def compute_data_quality_report(df: pd.DataFrame) -> DataQualityReport:
     date_parsed = int(df["_dt_parsed"].notna().sum())
     date_failed = total_records - date_parsed
 
-    amt_complete = int(df["Amount (£)"].notna().sum())
+    amt_complete = int(df["Amount (£)"].map(number).notna().sum())
     amt_missing = total_records - amt_complete
 
     period_complete = (
-        int(((df["Period From"] != "N/A") & (df["Period To"] != "N/A")).sum())
+        int(
+            (
+                (df["Period From"].apply(parse_to_sort_date).notna())
+                & (df["Period To"].apply(parse_to_sort_date).notna())
+                & (
+                    df["Period To"].apply(parse_to_sort_date)
+                    >= df["Period From"].apply(parse_to_sort_date)
+                )
+            ).sum()
+        )
         if "Period From" in df.columns and "Period To" in df.columns
         else 0
     )
 
-    reading_classified = int((df["Reading"] != "N/A").sum()) if "Reading" in df.columns else 0
+    reading_classified = (
+        int(df["Reading"].isin(["Actual", "Smart", "Estimated"]).sum())
+        if "Reading" in df.columns
+        else 0
+    )
 
     ur_computable = (
-        int(df["Unit Rate (p/kWh)"].apply(lambda x: isinstance(x, int | float)).sum())
+        int(df["Unit Rate (p/kWh)"].map(number).notna().sum())
         if "Unit Rate (p/kWh)" in df.columns
         else 0
     )
 
-    duplicate_count = int(df.duplicated(subset=["Date", "Amount (£)"]).sum())
+    from edf_bill_fetcher.processors.preparation import prepare_evidence
+
+    duplicate_count = len(prepare_evidence(df.to_dict("records"), {"use_dedup": True}).duplicates)
 
     source_distribution = df["Source"].value_counts().to_dict()
     entry_type_distribution = (
@@ -227,14 +252,14 @@ def compute_statistical_analysis(df: pd.DataFrame) -> StatisticalAnalysis:
         _zscore_anomalies,
     )
 
-    work = df.copy()
+    work = balance_frame(df)
+    if len({scope(r) for r in work.to_dict("records")}) > 1:
+        work = work.iloc[:0]
     if "Date" in work.columns:
         work["_dt"] = work["Date"].apply(parse_to_sort_date)
         work = work.sort_values("_dt").reset_index(drop=True)
     raw = pd.to_numeric(work["Amount (£)"], errors="coerce").astype(float)
-    series = pd.Series(
-        raw.values, index=pd.to_datetime(work["Date"], dayfirst=True, errors="coerce")
-    )
+    series = pd.Series(raw.values, index=pd.to_datetime(work["_dt"]))
     n = int(raw.notna().sum())
 
     empty = StatisticalAnalysis(
@@ -379,18 +404,10 @@ def compute_forecast(df: pd.DataFrame) -> ForecastResult:
         _sanitised_returns,
     )
 
-    work = df.copy()
-    if "Date" in work.columns:
-        work["_dt"] = work["Date"].apply(parse_to_sort_date)
-        work = work.sort_values("_dt").reset_index(drop=True)
+    work = monthly_balance_frame(df)
     raw = pd.to_numeric(work["Amount (£)"], errors="coerce").astype(float)
-    series = pd.Series(
-        raw.values, index=pd.to_datetime(work["Date"], dayfirst=True, errors="coerce")
-    )
-    # ``n`` is the usable (non-NaN) amount count, matching the report's
-    # pre-extraction dropna() behaviour.  The ``series`` itself keeps NaN gaps
-    # so back-painted fitted values stay row-aligned with the sheet.
-    n = int(raw.notna().sum())
+    series = pd.Series(raw.values, index=pd.to_datetime(work["_dt"]))
+    n = int(raw.notna().sum()) if not series.isna().any() else 0
 
     def _empty() -> ForecastResult:
         return ForecastResult(
@@ -408,7 +425,7 @@ def compute_forecast(df: pd.DataFrame) -> ForecastResult:
             mape=None,
         )
 
-    if n < 3:
+    if n < 3 or series.isna().any():
         return _empty()
 
     forecast_steps = 6
@@ -434,7 +451,7 @@ def compute_forecast(df: pd.DataFrame) -> ForecastResult:
 
     mae = rmse = mape = None
     if n >= 7:
-        train = pd.Series(series.values[:-6])
+        train = series.iloc[:-6]
         actual = series.values[-6:]
         lin_hist = _linear_forecast_pair(train, 6)[1]
         if lin_hist is not None:
@@ -443,7 +460,7 @@ def compute_forecast(df: pd.DataFrame) -> ForecastResult:
             mae = float(np.mean(np.abs(lin_hist - actual)))
             rmse = float(np.sqrt(np.mean((lin_hist - actual) ** 2)))
             if len(denom) > 0:
-                mape = float(np.mean(np.abs((lin_hist[nonzero] - denom) / denom)) * 100)
+                mape = float(np.mean(np.abs((lin_hist[nonzero] - denom) / denom)))
 
     return ForecastResult(
         n=n,
@@ -501,88 +518,129 @@ class OfgemComparison:
         if self.exceed_count > 0:
             return "REVIEW REQUIRED"
         if self.unavailable_count > 0:
-            return "INCOMPLETE"
+            return "NOT ASSESSED"
         if self.carried_count > 0:
-            return "COMPLIANT (CARRIED)"
-        return "COMPLIANT"
+            return "PROVISIONAL BENCHMARK (CARRIED)"
+        return "NOT ASSESSED" if not self.rows else "BELOW BENCHMARK"
 
     @property
     def overall_diff(self) -> str:
         """Summary-diff string for the OVERALL row's Difference column."""
         if self.exceed_count > 0:
-            return f"{self.exceed_count} periods exceed cap"
+            return f"{self.exceed_count} periods above reference benchmark"
         if self.unavailable_count > 0:
             return f"{self.unavailable_count} period(s) not benchmarked"
         if self.carried_count > 0:
             return f"{self.carried_count} period(s) used carried-forward cap"
-        return "No exceedances"
+        return "No comparable evidence" if not self.rows else "No benchmark exceedances"
 
 
 def compute_ofgem_comparison(df: pd.DataFrame, config: dict | None = None) -> OfgemComparison:
-    """Compute per-quarter unit-rate comparison against the OFGEM price cap."""
-    del config
-    ofgem_caps, latest_known_cap = load_ofgem_caps(auto_carry=True)
+    """Compare extracted energy rates during consumption with a contextual benchmark.
 
-    work = df.copy()
-    if "_dt" not in work.columns:
-        work["_dt"] = work["Date"].apply(parse_to_sort_date)
-    work = work.sort_values("_dt").reset_index(drop=True)
-
-    valid_pc = work["Period Charge (£)"].notna() & (work["Period Charge (£)"] != "N/A")
-    valid_units = (
-        work["Units (kWh)"].notna() & (work["Units (kWh)"] != "N/A") & (work["Units (kWh)"] != "")
-    )
-    bills = work[valid_pc & valid_units].copy()
-    if bills.empty:
-        return OfgemComparison([], 0, 0, 0, None, None)
-
-    bills["_unit_rate"] = (
-        bills["Period Charge (£)"].astype(float) / bills["Units (kWh)"].astype(float) * 100
-    )
-    bills["_quarter"] = bills["_dt"].apply(_period_to_ofgem_quarter)
-
-    all_rates = bills["_unit_rate"].dropna()
-    overall_avg = float(all_rates.mean()) if not all_rates.empty else None
-    overall_median = float(all_rates.median()) if not all_rates.empty else None
-
-    rows: list[OfgemRow] = []
-    exceed_count = 0
-    unavailable_count = 0
-    carried_count = 0
-    for quarter in sorted(bills["_quarter"].dropna().unique()):
-        avg_rate = bills[bills["_quarter"] == quarter]["_unit_rate"].mean()
-        if pd.isna(avg_rate):
+    The bundled data is a GB-average direct-debit benchmark, not an account's
+    regional legal cap. Missing applicability or cap data remains unassessed.
+    """
+    cfg = config or {}
+    caps, _ = load_ofgem_caps(auto_carry=False)
+    work = normalize_frame(df)
+    observations: dict[str, list[tuple[float, float, bool]]] = {}
+    unknown = 0
+    for _, bill in work.iterrows():
+        if bill["Entry Type"] not in {"New Bill", "Ongoing Balance"}:
             continue
-        if quarter not in ofgem_caps:
-            if latest_known_cap:
-                carried_count += 1
-                cap_rate = latest_known_cap["unit_rate"]
-                diff = float(avg_rate) - cap_rate
-                if diff > 0:
-                    status = "EXCEEDS CAP (CAP CARRIED FORWARD)"
-                    exceed_count += 1
-                elif abs(diff) < 0.01:
-                    status = "AT CAP (CAP CARRIED FORWARD)"
-                else:
-                    status = "BELOW CAP (CAP CARRIED FORWARD)"
-                rows.append(OfgemRow(quarter, float(avg_rate), cap_rate, diff, status))
-            else:
-                unavailable_count += 1
-                rows.append(OfgemRow(quarter, float(avg_rate), None, None, "CAP DATA UNAVAILABLE"))
+        payment = (
+            str(bill.get("Payment Method") or cfg.get("payment_method", ""))
+            .lower()
+            .replace(" ", "")
+            .replace("-", "")
+        )
+        fuel = str(bill.get("Fuel") or cfg.get("fuel", "")).lower()
+        tariff_type = str(bill.get("Tariff Type") or cfg.get("tariff_type", "")).lower()
+        region = str(cfg.get("cap_region", "GB-average"))
+        applicable = (
+            payment == "directdebit"
+            and fuel == "electricity"
+            and tariff_type in {"variable", "default"}
+            and region == "GB-average"
+        )
+        spans = []
+        subperiods = bill.get("Sub Periods")
+        if isinstance(subperiods, list):
+            spans = [
+                (p.get("period_from"), p.get("period_to"), p.get("rate_p"), p.get("units_kwh"))
+                for p in subperiods
+            ]
+        elif isinstance(subperiods, str) and subperiods.strip():
+            for part in subperiods.split(";"):
+                fields = part.strip().split("|")
+                if len(fields) == 5:
+                    spans.append((fields[0], fields[1], fields[3], fields[2]))
+        if not spans:
+            spans = [
+                (
+                    bill["Period From"],
+                    bill["Period To"],
+                    bill["Energy Unit Rate (p/kWh)"],
+                    bill["Units (kWh)"],
+                )
+            ]
+        for start_raw, end_raw, rate_raw, units_raw in spans:
+            start, end = parse_to_sort_date(start_raw), parse_to_sort_date(end_raw)
+            rate, units = number(rate_raw), number(units_raw)
+            if pd.isna(start) or pd.isna(end) or end < start or rate is None or rate <= 0:
+                unknown += 1
+                continue
+            if end == start:
+                end += pd.Timedelta(days=1)
+            length = (end - start).days
+            cursor = start
+            while cursor < end:
+                quarter = _period_to_ofgem_quarter(cursor)
+                boundary = cursor.to_period("Q").end_time.normalize() + pd.Timedelta(days=1)
+                stop = min(end, boundary)
+                weight = (stop - cursor).days * (
+                    units / length if units is not None and units > 0 else 1
+                )
+                observations.setdefault(str(quarter), []).append((rate, weight, applicable))
+                cursor = stop
+    rows = []
+    exceeded = 0
+    unavailable = unknown
+    carried = 0
+    all_rates = []
+    for quarter, values in sorted(observations.items()):
+        rate = sum(v * w for v, w, _ in values) / sum(w for _, w, _ in values)
+        all_rates.append(rate)
+        cap = caps.get(quarter)
+        if cap is None:
+            unavailable += 1
+            rows.append(OfgemRow(quarter, rate, None, None, "BENCHMARK DATA UNAVAILABLE"))
             continue
-        cap_rate = ofgem_caps[quarter]["unit_rate"]
-        diff = float(avg_rate) - cap_rate
-        if diff > 0:
-            status = "EXCEEDS CAP"
-            exceed_count += 1
-        elif abs(diff) < 0.01:
-            status = "AT CAP"
+        cap_rate = float(cap["unit_rate"])
+        difference = rate - cap_rate
+        is_carried = bool(cap.get("is_carry", False))
+        carried += int(is_carried)
+        if not all(a for _, _, a in values):
+            unavailable += 1
+            status = "APPLICABILITY UNASSESSED — GB-average reference only"
+        elif is_carried:
+            status = "PROVISIONAL BENCHMARK (CARRIED)"
+        elif difference > 0.01:
+            exceeded += 1
+            status = "ABOVE GB-AVERAGE BENCHMARK — REVIEW"
+        elif abs(difference) <= 0.01:
+            status = "AT GB-AVERAGE BENCHMARK"
         else:
-            status = "BELOW CAP"
-        rows.append(OfgemRow(quarter, float(avg_rate), cap_rate, diff, status))
-
+            status = "BELOW GB-AVERAGE BENCHMARK"
+        rows.append(OfgemRow(quarter, rate, cap_rate, difference, status))
     return OfgemComparison(
-        rows, exceed_count, unavailable_count, carried_count, overall_avg, overall_median
+        rows,
+        exceeded,
+        unavailable,
+        carried,
+        float(np.mean(all_rates)) if all_rates else None,
+        float(np.median(all_rates)) if all_rates else None,
     )
 
 

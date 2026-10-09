@@ -172,7 +172,9 @@ def test_summary_sheet_verdict_text_present() -> None:
     for r in (4, 5, 6):
         verdict = summ.cell(row=r, column=7).value
         assert isinstance(verdict, str), f"row {r} verdict is not a string: {verdict!r}"
-        assert len(verdict) > 10, f"row {r} verdict too short ({verdict!r})"
+        assert verdict in {"REVIEW", "MATCHED", "NOT ASSESSED"}, (
+            f"row {r} verdict too short ({verdict!r})"
+        )
 
 
 def test_eater_typo_fixed_in_subtitle() -> None:

@@ -17,7 +17,10 @@ import pandas as pd
 
 from edf_bill_fetcher.helpers.date_utils import TimestampOrNaT, _safe_to_datetime
 from edf_bill_fetcher.helpers.excel_utils import build_evidence_index as _build_evidence_index
+from edf_bill_fetcher.helpers.identity import account_key
 from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
+from edf_bill_fetcher.processors.ledgers import invoice_reference, scoped_analysis
+from edf_bill_fetcher.processors.preparation import number
 from edf_bill_fetcher.processors.sap_parsers import _parse_amount_for_event
 
 # SAP match band constants — local definitions to keep module self-contained.
@@ -38,9 +41,13 @@ def _confidence_band(score: int) -> str | None:
 
 def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[str, int]:
     """Map match-key signatures to the Excel row on the Evidence Report."""
-    return _build_evidence_index(df, header_row_offset)
+    index = _build_evidence_index(df, header_row_offset)
+    for position, record in enumerate(df.to_dict("records"), header_row_offset + 1):
+        index["inv:" + invoice_reference(record, record.get("Invoice #", ""))] = position
+    return index
 
 
+@scoped_analysis
 def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
     """Infer contract periods from tariff transitions (spec \u00a73.4).
 
@@ -165,24 +172,9 @@ def match_sap_events_to_edf(
             continue
         pf = _safe_to_datetime(rec.get("Period From"))
         pt = _safe_to_datetime(rec.get("Period To"))
-        # Canonical amount axis: Period Charge (£) is the charge for the
-        # billing period; Amount (£) is the running balance. Prefer Period
-        # Charge, falling back to Amount only when it is N/A/unparseable.
-        period_charge_raw = rec.get("Period Charge (£)")
-        amt_raw = rec.get("Amount (£)")
-        try:
-            if pd.isna(period_charge_raw) or str(period_charge_raw).strip().upper() in (
-                "N/A",
-                "NONE",
-                "",
-            ):
-                raise ValueError("Period Charge is N/A")
-            amt = float(str(period_charge_raw).replace(",", "").lstrip("£").strip())
-        except (TypeError, ValueError):
-            try:
-                amt = float(str(amt_raw).replace(",", "").lstrip("£").strip())
-            except (TypeError, ValueError):
-                amt = 0.0
+        amt = number(rec.get("Period Charge (£)"))
+        if amt is None or amt <= 0:
+            continue
         parsed_edf.append((i, pf, pt, amt, invoice))
 
     matches: list[SapEdfMatch] = []
@@ -200,6 +192,16 @@ def match_sap_events_to_edf(
                 posting_ts = pd.Timestamp(p_ts)
                 break
         for idx, pf, pt, edf_amt, _invoice in parsed_edf:
+            accounts = {
+                account_key(
+                    r.get("Account") or r.get("Kraken ID") or r.get("SAP Account Number") or ""
+                )
+                for r in ev.rows
+            }
+            accounts.discard("")
+            account = account_key(edf_records[idx].get("Account", ""))
+            if accounts and account not in accounts:
+                continue
             # Compute the date delta in days vs Period To (or From fallback)
             if not pd.isna(pt):
                 date_delta_days = int(abs((ev_cd - pd.Timestamp(pt)).days))

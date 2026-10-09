@@ -6,8 +6,6 @@ linear and Holt-Winters forecasts + forecast chart.
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 
@@ -45,15 +43,23 @@ def write_forecast_sheet(ws, dfc):
     LGREY = "F0F0F0"
     DGREY = "888888"
 
-    dfc = dfc.copy()
+    from edf_bill_fetcher.processors.preparation import monthly_balance_frame
+
+    dfc = monthly_balance_frame(dfc)
     dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
     dfc = dfc.sort_values("_dt").reset_index(drop=True)
     amounts = dfc["Amount (£)"].astype(float).values
     dates = dfc["Date"].tolist()
     n = len(amounts)
 
-    if n < 3:
-        _hcell(ws, 1, 1, "Insufficient data for forecasting (need 3+ records)", bg=NAVY)
+    if n < 3 or dfc["Amount (£)"].isna().any():
+        _hcell(
+            ws,
+            1,
+            1,
+            "Forecast not assessed: need 3+ consecutive month-end balances for one account",
+            bg=NAVY,
+        )
         ws.column_dimensions["A"].width = 60
         return
 
@@ -80,7 +86,7 @@ def write_forecast_sheet(ws, dfc):
         "Linear Forecast (£)",
         "Holt-Winters (£)",
         "EMA Projection (£)",
-        "Confidence (±£)",
+        "Scenario band (±£)",
         "Forecast Δ (Actual − Linear)",
     ]
     for col, h in enumerate(headers, 1):
@@ -149,7 +155,7 @@ def write_forecast_sheet(ws, dfc):
 
     if not pd.isna(last_date):
         for i in range(1, forecast_steps + 1):
-            next_date = last_date + timedelta(days=30 * i)  # Approximate monthly
+            next_date = last_date + pd.offsets.MonthEnd(i)
             forecast_dates.append(next_date.strftime("%d/%m/%Y"))
     else:
         forecast_dates = [f"Forecast +{i + 1}" for i in range(forecast_steps)]
@@ -185,7 +191,7 @@ def write_forecast_sheet(ws, dfc):
     _section_hdr(ws, r, "MODEL COMPARISON")
     r += 1
     _text(ws, r, 1, "Linear Trend", bold=True)
-    _text(ws, r, 2, "Simple linear regression on time index")
+    _text(ws, r, 2, "Linear regression on consecutive month-end balances")
     r += 1
     _text(ws, r, 1, "Holt-Winters", bold=True)
     _text(
@@ -197,7 +203,7 @@ def write_forecast_sheet(ws, dfc):
     r += 1
     _text(ws, r, 1, "Historical Volatility", bold=True)
     _num(ws, r, 2, hist_vol, fmt="0.00%")
-    _text(ws, r, 3, "Monthly return std used for confidence bands")
+    _text(ws, r, 3, "Advisory ±2× monthly-return volatility; not a statistical confidence interval")
 
     # Accuracy metrics (in-sample)
     r += 1

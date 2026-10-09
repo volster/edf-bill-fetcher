@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6.1.0
@@ -54,7 +56,7 @@ jobs:
           # (see pyproject.toml), so the binary ships with PST scanning
           # and Holt-Winters forecasting built-in.  Build extra adds
           # PyInstaller on top.
-          pip install -e ".[build]"
+          pip install -e ".[build,msg]"
 
       - name: Build Executable
         shell: bash
@@ -99,6 +101,7 @@ jobs:
             --hidden-import=statsmodels \
             --hidden-import=statsmodels.tsa.holtwinters \
             --hidden-import=pypff \
+            --collect-all extract_msg \
             --collect-data edf_bill_fetcher \
             main.py
 
@@ -141,6 +144,10 @@ jobs:
           else
             echo "WARNING: No signed executable found to verify"
           fi
+
+      - name: Record build dependencies
+        shell: bash
+        run: python -m pip freeze --all > dist/build-dependencies.txt
 
       - name: Verify executable exists
         run: |

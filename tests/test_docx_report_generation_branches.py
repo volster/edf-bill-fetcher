@@ -8,6 +8,7 @@ edge guards (empty records / missing engine / absent columns).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -95,7 +96,7 @@ def test_generate_empty_records_raises(tmp_path: Any) -> None:
 def test_generate_section_failure_is_isolated(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A broken section builder degrades to a visible paragraph, not an abort."""
+    """A failed section preserves the previous output and reports failure."""
     import edf_bill_fetcher.io.reporters.docx_report as docx_mod
 
     def _boom(**kwargs: Any) -> None:
@@ -105,11 +106,10 @@ def test_generate_section_failure_is_isolated(
     records = _make_records(6)
     out = str(tmp_path / "isolated.docx")
     config = {"report_account_ref": "A-1", "report_sections": []}
-    result = generate_ombudsman_docx(records, out, config, None)
-    assert result == out
-    doc = Document(out)
-    texts = [p.text for p in doc.paragraphs]
-    assert any("Executive Summary failed" in t for t in texts)
+    Path(out).write_bytes(b"previous complete report")
+    with pytest.raises(RuntimeError, match="section exploded"):
+        generate_ombudsman_docx(records, out, config, None)
+    assert Path(out).read_bytes() == b"previous complete report"
 
 
 def test_generate_docx_from_gui_success(tmp_path: Any) -> None:

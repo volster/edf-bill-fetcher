@@ -1,18 +1,4 @@
-"""Spec 3 (stretch) edge-case regression: amalgamation when Pass-2 is the
-only dedup path.
-
-When the dedup walker fires Pass-2 (no-period same-amount ±60d windows)
-for a cluster that has no Pass-1 match, the amalgamate path's lookup
-via ``kept_pass1_index`` silently skips and falls back to bare-dedup
-behaviour (each sibling kept verbatim, no per-column merge).
-
-Per the spec toggle, amalgamation should produce a single hybrid row
-per cluster *regardless* of which pass detected the duplicates; the
-column-merging contract is identical to Pass-1's.
-
-Pin the contract: two no-period same-amount records that Pass-2
-collapses should hybridize when ``amalgamate_duplicates=True``.
-"""
+"""Known invoice duplicates may merge missing fields; different invoices stay distinct."""
 
 from __future__ import annotations
 
@@ -54,10 +40,10 @@ def _make_records() -> list[dict]:
         "Source": "Local PDF Folder",
         "Period From": "",
         "Period To": "N/A",
-        "Invoice #": "INV-001",
+        "Invoice #": "INV-002",
         "Money": 100.0,
         "Amount (£)": 100.0,
-        "Period Charge (£)": 0.0,
+        "Period Charge (£)": None,
         "Units (kWh)": "",
         "Reading": "",
         "Tariff": "N/A",
@@ -167,3 +153,13 @@ class TestAmalgamatePass2Coverage:
         assert dropped[0] in ("Local PDF Folder", "PST PDF Attachment"), (
             f"dropped source {dropped[0]!r} is not a known source label"
         )
+
+
+def test_different_invoice_numbers_remain_distinct(workdir: Path) -> None:
+    records = _make_records()
+    records[0]["Invoice #"] = "INV-001"
+    out = workdir / "distinct.xlsx"
+    export_to_excel(records, str(out), [], config=_config(amalgamate=True))
+    wb = load_workbook(out)
+    assert wb["EDF Evidence Report"].max_row == 3
+    assert "Duplicate Entries" not in wb.sheetnames

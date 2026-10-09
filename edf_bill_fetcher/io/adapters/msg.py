@@ -16,6 +16,7 @@ function body so that top-level imports of this module never fail.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
 
@@ -36,7 +37,7 @@ def _decode_html_body(raw: bytes | None) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def parse_msg_message(path: str | Path) -> dict[str, str | None]:
+def parse_msg_message(path: str | Path) -> dict[str, Any]:
     """Parse a ``.msg`` message file into the flat 5-key record dict.
 
     Opens the file with ``extract_msg.Message`` and reads ``sender``,
@@ -62,6 +63,11 @@ def parse_msg_message(path: str | Path) -> dict[str, str | None]:
         date_str = parse_to_display_date(msg.date.strftime("%d/%m/%Y %H:%M:%S")) if msg.date else ""
         body_html = _decode_html_body(msg.htmlBody)
         body_text = msg.body or ""
+        attachments = []
+        for attachment in getattr(msg, "attachments", []):
+            data = attachment.data
+            name = attachment.longFilename or attachment.shortFilename or "attachment"
+            attachments.append({"name": name, "data": data if isinstance(data, bytes) else b""})
     finally:
         msg.close()
 
@@ -71,4 +77,5 @@ def parse_msg_message(path: str | Path) -> dict[str, str | None]:
         "date_str": date_str,
         "body_html": body_html,
         "body_text": body_text,
+        "attachments": attachments,
     }

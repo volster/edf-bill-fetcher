@@ -57,14 +57,17 @@ def _synthetic_records() -> list[dict]:
     return [
         {
             "Date": "01/04/2023",
+            "Amount Kind": "Balance",
             "Amount (£)": 100.0,
         },
         {
             "Date": "01/05/2023",
+            "Amount Kind": "Balance",
             "Amount (£)": 110.0,
         },
         {
             "Date": "01/06/2023",
+            "Amount Kind": "Balance",
             "Amount (£)": 120.0,
         },
     ]
@@ -143,7 +146,7 @@ class TestWriteForecastSheet:
         for col in (
             "Linear Forecast (£)",
             "EMA Projection (£)",
-            "Confidence (±£)",
+            "Scenario band (±£)",
             "Forecast Δ (Actual − Linear)",
         ):
             assert col in df.columns, (
@@ -163,7 +166,10 @@ class TestWriteForecastSheet:
         """
         from openpyxl import Workbook
 
-        records = [{"Date": f"0{i}/01/2024", "Amount (£)": 100.0 + 10.0 * i} for i in range(1, 6)]
+        records = [
+            {"Date": f"01/{i:02}/2024", "Amount Kind": "Balance", "Amount (£)": 100.0 + 10.0 * i}
+            for i in range(1, 6)
+        ]
         # Series is exactly linear with slope 10 — the fitted
         # regression should reproduce the input values back-painted
         # at every historical index.

@@ -274,7 +274,7 @@ class TestAccountNumberFilter:
         # === Scenario 2: genuine standalone account ===
         engine = _build_engine()
         engine.process_text(
-            "Account number: 31 555 4444\nCurrent balance £240.50 in debit",
+            "Account number: 31\nCurrent balance £240.50 in debit",
             "PDF",
             "bill2.pdf",
             "01/01/2024",

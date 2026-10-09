@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import argparse
-import datetime
 import importlib.util
 import json
 import os
 import pickle
 import sys
 import traceback
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, cast
 
+from edf_bill_fetcher.helpers.artifacts import atomic_output, json_safe
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.processors.preparation import prepare_evidence
 
 try:
     import pypff
@@ -56,7 +59,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
         "pandas.core.frame": {"DataFrame"},
         "pandas": {"DataFrame", "Series", "Index", "StringDtype", "RangeIndex"},
         "pandas.arrays": {"ArrowStringArray"},
-        "pyarrow.lib": None,
+        "pyarrow.lib": {"DataType", "Table", "Array", "ChunkedArray", "StringArray"},
         "pandas.core.internals.managers": {"BlockManager"},
         "pandas._libs.internals": {"_unpickle_block"},
         "numpy.core.numeric": {"_frombuffer"},
@@ -119,8 +122,9 @@ def _safe_pickle_load(path: str) -> Any:
     )
 
 
+@atomic_output("path")
 def _safe_json_dump(state: dict[str, Any], path: str) -> None:
-    """Write engine state as versioned JSON: ``{"version": 1, ...}``.
+    """Write preserved engine state as version 2 JSON.
 
     The payload carries ``config``, ``filtered_records`` and
     ``error_log`` — the same serialization shape the ``--records-json``
@@ -129,14 +133,59 @@ def _safe_json_dump(state: dict[str, Any], path: str) -> None:
 
     Usage:  _safe_json_dump(state, "engine.json")
     """
-    payload = {
-        "version": 1,
-        "config": state.get("config", {}),
-        "filtered_records": state.get("filtered_records", []),
-        "error_log": state.get("error_log", []),
-    }
+    payload = dict(state)
+    payload["version"] = 2
+    payload.setdefault("extracted_at", datetime.now(timezone.utc).isoformat())
+    prepared = prepare_evidence(
+        payload.get("original_records", payload.get("records", [])), payload.get("config", {})
+    )
+    payload["config"] = prepared.config
+    payload["records"] = prepared.records
+    payload["duplicate_records"] = prepared.duplicates
+    payload["status"] = "review_required" if payload.get("error_log") else "complete"
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, default=str)
+        json.dump(json_safe(payload), f, indent=2, default=str, allow_nan=False)
+
+
+def _load_report_inputs(parsed):
+    """Restore records, configuration, source counts and diagnostics from JSON."""
+    with open(parsed.records, encoding="utf-8") as handle:
+        loaded = json.load(handle)
+    metadata = loaded if isinstance(loaded, dict) else {}
+    if metadata.get("version", 1) not in (1, 2):
+        raise ValueError("Unsupported evidence JSON version")
+    records = metadata.get("records", []) if metadata else loaded
+    if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
+        raise ValueError("Records must be a JSON list of objects")
+    if parsed.engine_data:
+        if os.path.splitext(parsed.engine_data)[1].lower() != ".json":
+            raise ValueError(
+                "Reports accept JSON engine data; legacy pickle is not a safe interchange format"
+            )
+        state = _safe_pickle_load(parsed.engine_data)
+        if not isinstance(state, dict) or state.get("version", 1) not in (1, 2):
+            raise ValueError("Unsupported engine JSON state")
+        metadata = {**metadata, **state}
+    config = dict(metadata.get("config") or {})
+    if parsed.config:
+        with open(parsed.config, encoding="utf-8") as handle:
+            overrides = json.load(handle)
+        if not isinstance(overrides, dict):
+            raise ValueError("Configuration must be a JSON object")
+        config.update(overrides)
+    engine = SimpleNamespace(
+        **{
+            **{
+                "pdf_count": 0,
+                "email_count": 0,
+                "error_log": [],
+                "filtered_records": [],
+                "source_manifest": {},
+            },
+            **metadata,
+        }
+    )
+    return records, config, engine, engine.filtered_records
 
 
 def run_cli_extract(args: list[str]) -> None:
@@ -162,10 +211,10 @@ def run_cli_extract(args: list[str]) -> None:
     parser.add_argument("--acc-filter", help="Filter by account number (e.g., A-12345678)")
     parser.add_argument(
         "--domain-filter",
-        default="edfenergy.com",
+        default=None,
         help="Comma-separated sender domains for PST filtering",
     )
-    parser.add_argument("--min-amount", type=float, default=50.0, help="Minimum amount threshold")
+    parser.add_argument("--min-amount", type=float, default=None, help="Minimum amount threshold")
     parser.add_argument("--no-dedup", action="store_true", help="Disable deduplication")
     parser.add_argument("--no-anchors", action="store_true", help="Disable smart context search")
     parser.add_argument("--no-large", action="store_true", help="Disable large amount fallback")
@@ -204,24 +253,49 @@ def run_cli_extract(args: list[str]) -> None:
             sys.stderr.write(f"ERROR: Failed to load config: {e}\n")
             sys.exit(1)
 
-    # Override with CLI args
-    config.update(
+    config = cast(
+        ConfigDict,
         {
-            "use_acc_filter": bool(parsed.acc_filter),
-            "acc_num": parsed.acc_filter or "",
+            "use_acc_filter": False,
+            "acc_num": "",
             "use_domain_filter": True,
-            "domain_filter": parsed.domain_filter,
-            "min_amount": parsed.min_amount,
-            "filter_below": not parsed.no_filter_below,
-            "use_dedup": not parsed.no_dedup,
-            "use_anchors": not parsed.no_anchors,
-            "use_large": not parsed.no_large,
-            "use_reading_classification": not parsed.no_reading_class,
-            "use_pdf_fields": not parsed.no_pdf_fields,
+            "domain_filter": "edfenergy.com",
+            "min_amount": 50.0,
+            "filter_below": False,
+            "use_dedup": True,
+            "use_anchors": True,
+            "use_large": True,
+            "use_reading_classification": True,
+            "use_pdf_fields": True,
             "save_filtered": True,
             "save_dups": True,
-        }
+            **config,
+        },
     )
+    if parsed.acc_filter is not None:
+        config.update({"use_acc_filter": bool(parsed.acc_filter), "acc_num": parsed.acc_filter})
+    if parsed.domain_filter is not None:
+        config.update({"use_domain_filter": True, "domain_filter": parsed.domain_filter})
+    if parsed.min_amount is not None:
+        config["min_amount"] = parsed.min_amount
+    for flag, key in (
+        ("no_dedup", "use_dedup"),
+        ("no_anchors", "use_anchors"),
+        ("no_large", "use_large"),
+        ("no_reading_class", "use_reading_classification"),
+        ("no_pdf_fields", "use_pdf_fields"),
+        ("no_filter_below", "filter_below"),
+    ):
+        if getattr(parsed, flag):
+            cast(dict[str, Any], config)[key] = False
+    try:
+        config = prepare_evidence([], config).config
+    except ValueError as error:
+        parser.error(str(error))
+
+    for source in (parsed.pst, parsed.htm, parsed.pdf_dir, parsed.eml_dir, parsed.msg_dir):
+        if source and not os.path.exists(source):
+            parser.error(f"Source does not exist: {source}")
 
     # Check PST dependency
     if parsed.pst and not HAS_PYPFF:
@@ -266,10 +340,59 @@ def run_cli_extract(args: list[str]) -> None:
             print(f"Scanning MSG folder: {parsed.msg_dir}")
             engine.process_msg_folder(parsed.msg_dir)
 
-        if not engine.records:
+        if not (
+            engine.records
+            or engine.sap_contract_rows
+            or engine.sap_meter_rows
+            or engine.sap_financial_rows
+        ):
             sys.stderr.write("WARNING: No billing records found\n")
             sys.exit(1 if parsed.strict else 0)
 
+        prepared = prepare_evidence(engine.records, config)
+        config = prepared.config
+        engine.config = config
+        # Save a separate source bundle for each extraction.
+        import tempfile
+        from pathlib import Path
+
+        from edf_bill_fetcher.io.writers.evidence_bundle import (
+            build_bundle_index,
+            save_evidence_files,
+        )
+
+        output_parent = Path(parsed.output).absolute().parent
+        bundle_dir = Path(
+            tempfile.mkdtemp(prefix=Path(parsed.output).stem + "_", dir=output_parent)
+        )
+        stats: dict[str, int] = {}
+        import pandas as pd
+
+        bundle_records = pd.concat(
+            [prepared.frame, pd.DataFrame(list(engine.source_manifest.values()))], ignore_index=True
+        )
+        saved: dict[str, str] = {}
+        if config.get("save_evidence_files", True):
+            saved = save_evidence_files(
+                bundle_records, engine.source_paths, str(bundle_dir / "evidence_files"), stats=stats
+            )
+            build_bundle_index(
+                bundle_records,
+                saved,
+                str(bundle_dir / "evidence_index.docx"),
+                account=str(config.get("acc_num", "")),
+            )
+        for key in ("missing", "ambiguous"):
+            if stats.get(key):
+                engine.log_error("Evidence bundle", f"{stats[key]} {key} source files")
+        for metadata in engine.source_manifest.values():
+            path = saved.get(metadata["Attachment Name"])
+            metadata["Saved Path"] = os.path.relpath(path, bundle_dir) if path else None
+        state = {
+            **engine.__getstate__(),
+            "original_records": engine.records,
+            "records": prepared.records,
+        }
         # Export to Excel
         print(f"Writing Excel report: {parsed.output}")
 
@@ -286,28 +409,18 @@ def run_cli_extract(args: list[str]) -> None:
                 "meter": engine.sap_meter_rows,
                 "financial": engine.sap_financial_rows,
             },
+            invoice_pdf_paths=saved,
         )
+
+        _safe_json_dump(state, str(bundle_dir / "records.json"))
 
         # Optionally save records as JSON
         if parsed.records_json:
-            output_data = {
-                "extracted_at": datetime.datetime.now().isoformat(),
-                "config": config,
-                "records": engine.records,
-                "filtered_records": engine.filtered_records,
-                "error_log": engine.error_log,
-            }
-            with open(parsed.records_json, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2, default=str)
+            _safe_json_dump(state, parsed.records_json)
             print(f"Records saved as JSON: {parsed.records_json}")
 
         # Optionally save engine state as versioned JSON
         if parsed.save_engine_json:
-            state = {
-                "config": config,
-                "filtered_records": engine.filtered_records,
-                "error_log": engine.error_log,
-            }
             _safe_json_dump(state, parsed.save_engine_json)
             print(f"Engine state saved as JSON: {parsed.save_engine_json}")
 
@@ -437,40 +550,12 @@ def run_cli_pdf_report(args: list[str]) -> None:
     parser.add_argument(
         "--engine-data",
         "-e",
-        help="Path to engine state file (.json preferred, .pkl legacy)",
+        help="Path to versioned engine state JSON",
     )
     parsed = parser.parse_args(args)
 
     try:
-        with open(parsed.records, encoding="utf-8") as f:
-            loaded = json.load(f)
-
-        # Accept either a bare list of records (preferred) or the wrapper
-        # object emitted by ``--extract --records-json``.  The wrapper
-        # shape is ``{"records": [...], ...meta}`` — unwrap it so both
-        # CLI entry points behave identically.
-        if isinstance(loaded, dict) and "records" in loaded:
-            records = loaded["records"]
-        else:
-            records = loaded
-
-        config: ConfigDict = {}
-        if parsed.config:
-            with open(parsed.config, encoding="utf-8") as f:
-                config = cast(ConfigDict, json.load(f))
-
-        engine = None
-        filtered = None
-        if parsed.engine_data:
-            # Use the restricted unpickler to prevent arbitrary code
-            # execution from crafted pickle files (see C1 fix).  A .json
-            # path yields the versioned JSON state dict instead of an
-            # engine instance; its filtered_records ride along the same way.
-            engine = _safe_pickle_load(parsed.engine_data)
-            if isinstance(engine, dict):
-                filtered = engine.get("filtered_records")
-            else:
-                filtered = getattr(engine, "filtered_records", None)
+        records, config, engine, filtered = _load_report_inputs(parsed)
 
         from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
 
@@ -510,39 +595,12 @@ def run_cli_docx_report(args: list[str]) -> None:
     parser.add_argument(
         "--engine-data",
         "-e",
-        help="Path to engine state file (.json preferred, .pkl legacy)",
+        help="Path to versioned engine state JSON",
     )
     parsed = parser.parse_args(args)
 
     try:
-        with open(parsed.records, encoding="utf-8") as f:
-            loaded = json.load(f)
-
-        # Accept either a bare list of records (preferred) or the wrapper
-        # object emitted by ``--extract --records-json``.  Mirrors the
-        # PDF CLI loader so both formats round-trip without extra steps.
-        if isinstance(loaded, dict) and "records" in loaded:
-            records = loaded["records"]
-        else:
-            records = loaded
-
-        config: ConfigDict = {}
-        if parsed.config:
-            with open(parsed.config, encoding="utf-8") as f:
-                config = cast(ConfigDict, json.load(f))
-
-        engine = None
-        filtered = None
-        if parsed.engine_data:
-            # Use the restricted unpickler to prevent arbitrary code
-            # execution from crafted pickle files (see C1 fix).  A .json
-            # path yields the versioned JSON state dict instead of an
-            # engine instance; its filtered_records ride along the same way.
-            engine = _safe_pickle_load(parsed.engine_data)
-            if isinstance(engine, dict):
-                filtered = engine.get("filtered_records")
-            else:
-                filtered = getattr(engine, "filtered_records", None)
+        records, config, engine, filtered = _load_report_inputs(parsed)
 
         from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
 
@@ -581,39 +639,12 @@ def run_cli_html_report(args: list[str]) -> None:
     parser.add_argument(
         "--engine-data",
         "-e",
-        help="Path to engine state file (.json preferred, .pkl legacy)",
+        help="Path to versioned engine state JSON",
     )
     parsed = parser.parse_args(args)
 
     try:
-        with open(parsed.records, encoding="utf-8") as f:
-            loaded = json.load(f)
-
-        # Accept either a bare list of records (preferred) or the wrapper
-        # object emitted by ``--extract --records-json``.  Mirrors the
-        # PDF/DOCX CLI loaders so all three formats round-trip identically.
-        if isinstance(loaded, dict) and "records" in loaded:
-            records = loaded["records"]
-        else:
-            records = loaded
-
-        config: ConfigDict = {}
-        if parsed.config:
-            with open(parsed.config, encoding="utf-8") as f:
-                config = cast(ConfigDict, json.load(f))
-
-        engine = None
-        filtered = None
-        if parsed.engine_data:
-            # Use the restricted unpickler to prevent arbitrary code
-            # execution from crafted pickle files (see C1 fix).  A .json
-            # path yields the versioned JSON state dict instead of an
-            # engine instance; its filtered_records ride along the same way.
-            engine = _safe_pickle_load(parsed.engine_data)
-            if isinstance(engine, dict):
-                filtered = engine.get("filtered_records")
-            else:
-                filtered = getattr(engine, "filtered_records", None)
+        records, config, engine, filtered = _load_report_inputs(parsed)
 
         from edf_bill_fetcher.io.reporters.html_report import generate_html_from_gui
 

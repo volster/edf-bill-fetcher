@@ -256,3 +256,11 @@ def _apply_amalgamate_to_kept_frame(
     hybrid_idx_set = {h.index[0] for h in hybrid_rows}
     non_hybrid_kept = df.loc[df[~is_dup].index.difference(hybrid_idx_set)]
     return pd.concat([non_hybrid_kept] + hybrid_rows).reset_index(drop=True)
+
+
+def report_date(value: Any) -> str:
+    """Format a valid report date without manufacturing a date for missing input."""
+    from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
+
+    parsed = parse_to_sort_date(value)
+    return parsed.strftime("%d/%m/%Y") if not pd.isna(parsed) else ""

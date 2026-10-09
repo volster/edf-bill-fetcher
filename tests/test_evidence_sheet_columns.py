@@ -1,11 +1,4 @@
-"""Column-letter invariants for the evidence sheet writer (F1 / SEV-1).
-
-Every COL_* in ``edf_bill_fetcher/io/writers/evidence.py`` is derived from
-the ``EVIDENCE_HEADERS`` list, and live formulas must reference the derived
-letters — not hard-coded columns.  In particular the Amount column is **G**
-(not E, which is Period To), so the ``% Change`` / ``Anomaly Flag`` formulas
-and the summary sheet's cross-sheet ``amt_col`` range must all use G.
-"""
+"""Workbook formulas use explicit balance columns and links to copied evidence."""
 
 from __future__ import annotations
 
@@ -51,7 +44,7 @@ def _col_letter(header: str) -> str:
     return str(get_column_letter(idx))
 
 
-def test_percent_change_formula_references_amount_column_g() -> None:
+def test_percent_change_formula_references_balance_column_u() -> None:
     """% Change must divide Amount (col G) deltas, not Period To (col E)."""
     assert _col_letter("Amount (£)") == "G", "fixture assumption: Amount is G"
     assert _col_letter("Period To") == "E", "fixture assumption: Period To is E"
@@ -66,12 +59,12 @@ def test_percent_change_formula_references_amount_column_g() -> None:
     formula = ws[f"{pct_col}3"].value
     assert isinstance(formula, str), f"% Change cell must be a formula, got: {formula!r}"
     assert formula.startswith("=IFERROR(("), formula
-    assert "(G3-G2)" in formula, f"% Change formula must use G, got: {formula}"
+    assert "(U3-U2)" in formula, f"% Change formula must use U, got: {formula}"
     assert "E2" not in formula, f"% Change formula must not reference E2, got: {formula}"
     assert "E3" not in formula, f"% Change formula must not reference E3, got: {formula}"
 
 
-def test_anomaly_flag_formula_references_amount_column_g() -> None:
+def test_anomaly_flag_formula_references_balance_column_u() -> None:
     """Anomaly Flag must compare Amount (col G) values, not Period To (col E)."""
     wb = Workbook()
     ws = wb.active
@@ -81,13 +74,13 @@ def test_anomaly_flag_formula_references_amount_column_g() -> None:
     formula = ws[f"{anomaly_col}3"].value
     assert isinstance(formula, str), f"Anomaly cell must be a formula, got: {formula!r}"
     assert formula.startswith("=IF(AND("), formula
-    assert "G2>0" in formula, f"Anomaly Flag formula must use G, got: {formula}"
-    assert "G3>G2*2" in formula, f"Anomaly Flag formula must use G, got: {formula}"
+    assert "U2>0" in formula, f"Anomaly Flag formula must use U, got: {formula}"
+    assert "U3>U2*2" in formula, f"Anomaly Flag formula must use U, got: {formula}"
     assert "E2" not in formula, f"Anomaly Flag formula must not reference E2, got: {formula}"
     assert "E3" not in formula, f"Anomaly Flag formula must not reference E3, got: {formula}"
 
 
-def test_summary_amt_col_references_amount_column_g() -> None:
+def test_summary_amt_col_references_balance_column_u() -> None:
     """Annual Summary cross-sheet formulas must aggregate evidence col G."""
     wb = Workbook()
     ws = wb.active
@@ -96,7 +89,7 @@ def test_summary_amt_col_references_amount_column_g() -> None:
     # B2 holds the balance-range formula built from amt_col (MAXIFS-MINIFS).
     b2 = ws["B2"].value
     assert isinstance(b2, str), f"summary B2 must be a formula, got: {b2!r}"
-    assert "$G$2:$G$" in b2, f"summary amt_col must reference G, got: {b2}"
+    assert "$U$2:$U$" in b2, f"summary balance range must reference U, got: {b2}"
     assert "$E$2:$E$" not in b2, f"summary amt_col must not reference col E, got: {b2}"
 
 
@@ -131,8 +124,19 @@ def test_attachment_name_cell_hyperlinks_to_evidence_file() -> None:
         ]
     )
     ws = Workbook().active
-    write_evidence_sheet(ws, df)
+    write_evidence_sheet(
+        ws,
+        df,
+        saved_paths={"671078701920_060241004086_20190416.pdf": "evidence_files/T78701920034.pdf"},
+    )
     att_col = [c.value for c in ws[1]].index("Attachment Name") + 1
     c = ws.cell(row=2, column=att_col)
     assert c.hyperlink is not None
     assert c.hyperlink.target == "evidence_files/T78701920034.pdf"
+
+
+def test_missing_saved_attachment_has_no_invented_link() -> None:
+    ws = Workbook().active
+    write_evidence_sheet(ws, _fixture_df())
+    att_col = EVIDENCE_HEADERS.index("Attachment Name") + 1
+    assert ws.cell(2, att_col).hyperlink is None

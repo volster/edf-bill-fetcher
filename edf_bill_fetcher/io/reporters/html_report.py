@@ -26,19 +26,24 @@ from typing import Any
 
 import pandas as pd
 
+from edf_bill_fetcher.helpers.artifacts import atomic_output
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.formatting import fmt_money, fmt_number
-from edf_bill_fetcher.io.reporters.pdf_report import (
-    REPORT_SECTIONS,
-    RenderContext,
-    _compute_balance_extremes,
-    _compute_financial_totals,
-    _compute_mean_daily,
-    _get_package_version,
-    fmt_date,
-)
+from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
+from edf_bill_fetcher.helpers.version import get_package_version as _get_package_version
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS, RenderContext
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
+from edf_bill_fetcher.processors.financial import (
+    balance_extremes as _compute_balance_extremes,
+)
+from edf_bill_fetcher.processors.financial import (
+    financial_totals as _compute_financial_totals,
+)
+from edf_bill_fetcher.processors.financial import (
+    mean_daily_rate as _compute_mean_daily,
+)
+from edf_bill_fetcher.processors.preparation import analysis_frame, prepare_evidence
 
 # =============================================================================
 # CONSTANTS
@@ -208,8 +213,8 @@ def create_executive_summary(
     fin_rows = [
         ["Metric", "Amount"],
         ["Total Charges (Debits)", fmt_money(total_charges)],
-        ["Total Payments/Credits", fmt_money(total_payments)],
-        ["Net Balance Increase", fmt_money(net_change)],
+        ["Net Payments/Credits (After Refunds)", fmt_money(total_payments)],
+        ["Recorded Net Movement", fmt_money(net_change)],
         [
             "Opening Balance (First Record)",
             fmt_money(opening_balance) if opening_balance is not None else "—",
@@ -227,8 +232,7 @@ def create_executive_summary(
         findings.append(
             f"{flag_count['HIGH']} HIGH-severity anomalies detected, including billing "
             "spikes exceeding 50% period-over-period, gaps over 120 days without "
-            "billing, and reconciliation mismatches suggesting unrecorded payments or "
-            "billing errors."
+            "billing, and missing or inconsistent ledger evidence requiring review."
         )
     if flag_count.get("MEDIUM", 0) > 0:
         findings.append(
@@ -239,7 +243,7 @@ def create_executive_summary(
     if flag_count.get("INFO", 0) > 0:
         findings.append(
             f"{flag_count['INFO']} informational items noted, primarily balance "
-            "reductions from payments/credits over £500."
+            "reductions requiring checks of the underlying transactions."
         )
     if not findings:
         findings.append("No significant anomalies detected in the billing data.")
@@ -251,13 +255,9 @@ def create_executive_summary(
 
     parts.append(
         "<h3>Conclusion</h3>"
-        "<p>Based on the systematic analysis of all available billing records, this "
-        "report identifies multiple instances where EDF Energy's billing practices "
-        "deviate from expected norms and regulatory requirements. The documented "
-        "anomalies—particularly the high-severity billing spikes, extended billing "
-        "gaps, and reconciliation failures—warrant formal investigation by the "
-        "Energy Ombudsman. The complainant requests a full billing audit for the "
-        "identified periods and appropriate redress for any overcharging.</p>"
+        "<p>This report summarizes the supplied evidence and highlights observations for review. "
+        "Balance changes and missing records alone do not establish overcharging or a regulatory breach. "
+        "Check the original documents, account context and applicable rules before making a claim.</p>"
     )
     parts.append("</div>")
     return "\n".join(parts)
@@ -283,7 +283,7 @@ def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> 
 
     summary_rows = [
         ["Severity", "Count", "Description"],
-        ["HIGH", str(len(high)), "Immediate concern — regulatory breach likely"],
+        ["HIGH", str(len(high)), "Review original evidence and account context"],
         ["MEDIUM", str(len(medium)), "Significant deviation — investigation warranted"],
         ["INFO", str(len(info)), "Informational — payments/credits noted"],
         ["TOTAL", str(len(flags)), "All automated findings"],
@@ -765,7 +765,7 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
             "A.4 Configuration Used",
             [
                 f"Minimum Amount Threshold: {fmt_money(config.get('min_amount', 500))}",
-                f"Analysis Threshold: {fmt_money(config.get('analysis_min', 500))}",
+                f"Analysis Threshold: {fmt_money(config.get('analysis_min', 0))}",
                 "Account Filter: "
                 f"{'Enabled' if config.get('use_acc_filter') else 'Disabled'} "
                 f"({config.get('acc_num', 'N/A')})",
@@ -933,6 +933,7 @@ def create_appendix_full_evidence(
 # =============================================================================
 
 
+@atomic_output()
 def generate_html_report(
     records: list[dict],
     output_path: str,
@@ -964,7 +965,11 @@ def generate_html_report(
     if not records:
         raise ValueError("No records to report on")
 
-    df = pd.DataFrame(records)
+    section_failures = []
+    prepared = prepare_evidence(records, config)
+    config = prepared.config
+    records = prepared.records
+    df = prepared.frame
     if df.empty:
         raise ValueError("Records DataFrame is empty")
 
@@ -978,9 +983,9 @@ def generate_html_report(
         engine = MinimalEngine()
 
     required_cols = {
-        "Date": "01/01/1970",
+        "Date": "N/A",
         "Source": "Unknown",
-        "Amount (£)": 0.0,
+        "Amount (£)": None,
         "Period From": "N/A",
         "Period To": "N/A",
         "Invoice #": "N/A",
@@ -1015,7 +1020,8 @@ def generate_html_report(
 
     if "_dt" not in df.columns:
         df["_dt"] = df["Date"].apply(parse_to_sort_date)
-    df_sorted = df.sort_values("_dt").reset_index(drop=True)
+    analysis_df = analysis_frame(df, config)
+    df_sorted = analysis_df
     mean_daily = _compute_mean_daily(df_sorted)
     flags, flag_counts = compute_dispute_flags(df_sorted, mean_daily)
 
@@ -1048,7 +1054,8 @@ def generate_html_report(
     if section_enabled("toc"):
         try:
             body_parts.append(create_table_of_contents(render_ctx))
-        except Exception as e:  # pragma: no cover - defensive mirror of PDF
+        except Exception as e:
+            section_failures.append(str(e))  # pragma: no cover - defensive mirror of PDF
             body_parts.append(_note(f"Table of Contents failed: {_esc(e)}"))
 
     # === SECTION DISPATCH (data-driven — keys/ordering live in REPORT_SECTIONS) ===
@@ -1142,6 +1149,7 @@ def generate_html_report(
             kwargs["ctx"] = render_ctx
             body_parts.append(invoke(kwargs))
         except Exception as e:
+            section_failures.append(str(e))
             body_parts.append(f'<p class="failed">{_esc(section.title)} failed: {_esc(e)}</p>')
 
     html_doc = (
@@ -1153,6 +1161,10 @@ def generate_html_report(
         '<div class="container">\n' + "\n".join(body_parts) + "\n</div>\n</body>\n</html>\n"
     )
 
+    if section_failures:
+        raise RuntimeError(
+            "Report incomplete; output was not published: " + "; ".join(section_failures)
+        )
     with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(html_doc)
     return output_path

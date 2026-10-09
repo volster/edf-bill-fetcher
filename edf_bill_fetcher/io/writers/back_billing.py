@@ -132,9 +132,9 @@ def write_back_billing_sheet(
     # Row 5: instruction
     inst = (
         "Each row identifies an invoice where EDF billed more than 12 "
-        "months retrospectively. The Excess Days column shows by how "
-        "many days beyond the Standard Licence Condition 7A (SLC 7A) "
-        "12-month limit the invoice went. Where a later invoice "
+        "months retrospectively using a nominal 365-day window. Amounts are indicative; "
+        "eligibility under Ofgem protections requires review of the original evidence. "
+        "Where a later invoice "
         "cancelled and re-billed an earlier one, the earlier invoice "
         "is excluded from this analysis (see the reconciliation "
         "worksheet) because the same consumption is re-covered by the "

@@ -27,6 +27,8 @@ from typing import Any
 
 import pandas as pd
 
+from edf_bill_fetcher.helpers.artifacts import atomic_output
+
 # ---------------------------------------------------------------------------
 # Section inference (Stream P5, spec §7.3)
 # ---------------------------------------------------------------------------
@@ -86,7 +88,7 @@ def _infer_section(attachment_name: str, fallback: str = "D") -> tuple[str, bool
 # Save referenced files into a flat dest dir
 # ---------------------------------------------------------------------------
 
-_WINDOWS_ILLEGAL_RE = re.compile(r'[<>:"/\\|?*]')
+_WINDOWS_ILLEGAL_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WS_RUN_RE = re.compile(r"\s+")
 
 
@@ -95,6 +97,10 @@ def sanitise_filename(name: str) -> str:
     base = str(name or "").strip()
     base = _WINDOWS_ILLEGAL_RE.sub("_", base)
     base = _WS_RUN_RE.sub("_", base).strip(" .")
+    if re.match(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", base, re.I):
+        base = "_" + base
+    stem, ext = os.path.splitext(base)
+    base = stem[:180] + ext[:20]
     return base or "attachment"
 
 
@@ -168,10 +174,12 @@ def save_evidence_files(
             dest_base = sanitise_filename(inv_num) + os.path.splitext(display_name)[1]
         stem, ext = os.path.splitext(dest_base)
         n = 2
-        while dest_base in used_names:
+        while dest_base.casefold() in used_names or os.path.exists(
+            os.path.join(dest_dir, dest_base)
+        ):
             dest_base = f"{stem}-{n}{ext}"
             n += 1
-        used_names.add(dest_base)
+        used_names.add(dest_base.casefold())
         dest_path = os.path.join(dest_dir, dest_base)
         shutil.copy2(src, dest_path)
         saved[att] = dest_path
@@ -197,6 +205,7 @@ def save_evidence_files(
 # ---------------------------------------------------------------------------
 
 
+@atomic_output()
 def build_bundle_index(
     evidence_df: pd.DataFrame,
     saved_files: dict[str, str],
@@ -217,7 +226,7 @@ def build_bundle_index(
     if account:
         h.add_run(f"  |  Account {account}")
     doc.add_paragraph(
-        "Every file referenced by the Evidence Report is reproduced in the "
+        "Successfully copied source files are reproduced in the "
         "`evidence_files/` subfolder. This index lists them grouped by the "
         "section letter assigned during inference."
     )

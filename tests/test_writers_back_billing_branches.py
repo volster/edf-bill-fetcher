@@ -65,6 +65,7 @@ def _row(
         "Period From": period_from,
         "Period To": period_to,
         "Amount (£)": amount,
+        "Period Charge (£)": amount,
         "Attachment Name": attachment,
     }
     if admitted is not None:
@@ -184,7 +185,7 @@ def test_detect_back_billing_single_long_period_with_admit_column() -> None:
     assert int(row["Excess Days"]) > 0
     assert int(row["12-Month Limit (days)"]) == 365
     assert float(row["Period Charge (£)"]) == 4401.07
-    assert row["Value Source"] == "Amount (fallback)"
+    assert row["Value Source"] == "Period Charge"
     assert bool(row["Cancel/Rebill Admitted"]) is True
     assert isinstance(row["Reason Assessment"], str)
     assert "admits a cancellation/reversal" in row["Reason Assessment"]
@@ -275,8 +276,7 @@ def test_detect_back_billing_unparseable_amount_falls_back_to_zero() -> None:
         ]
     )
     out = detect_back_billing(df)
-    assert len(out) == 1
-    assert float(out.iloc[0]["Period Charge (£)"]) == 0.0
+    assert out.empty  # Unknown money cannot support a compensation amount.
 
 
 def test_detect_back_billing_unparseable_bill_date_skips_row() -> None:

@@ -589,6 +589,13 @@ class TestOFGEMComparison:
             ]
         )
 
+        df["Entry Type"] = "New Bill"
+        df["Energy Unit Rate (p/kWh)"] = [40.0, 50.0, 400.0 / 700 * 100]
+        df["Period From"] = df["Date"]
+        df["Period To"] = df["Date"]
+        df["Fuel"] = "electricity"
+        df["Payment Method"] = "Direct Debit"
+        df["Tariff Type"] = "variable"
         elements = create_ofgem_comparison(df)
 
         # Find the comparison table by walking the elements — tables
@@ -613,7 +620,7 @@ class TestOFGEMComparison:
         # Cell 4 is ``Status``: must read exactly ``CAP DATA UNAVAILABLE``
         # so an OFGEM-grade reader can tell it apart from a row that
         # was benchmarked and came out "BELOW CAP".
-        assert q3_row[4] == "CAP DATA UNAVAILABLE"
+        assert q3_row[4] == "BENCHMARK DATA UNAVAILABLE"
         # Cells 2 (OFGEM Cap p/kWh) and 3 (Difference) must be the
         # "—" missing-sentinel so the table never pretends to know.
         assert q3_row[2] == "—"

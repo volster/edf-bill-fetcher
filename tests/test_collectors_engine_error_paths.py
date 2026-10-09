@@ -488,7 +488,7 @@ def test_process_text_old_pdf_invoice_number() -> None:
 
 
 def test_process_text_old_pdf_period_charge() -> None:
-    engine = _make_engine()
+    engine = _make_engine({**BASE_CONFIG, "min_amount": 0.0})
     engine.process_text(
         "total charges for this bill £120.00 Your new account balance £600.00",
         "Old PDF",

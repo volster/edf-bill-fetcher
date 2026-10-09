@@ -1,22 +1,17 @@
 """Date and time helpers for parsing, formatting, and comparing EDF billing dates.
 
-Dayfirst parsing assumption
----------------------------
-Date parsing in this module defaults to ``dayfirst=True`` because EDF's
-billing documents are UK-format dates (``DD/MM/YYYY``).  ``_safe_to_datetime``
-additionally has a best-effort ``dayfirst=False`` fallback for the handful of
-EDF date strings that only parse in US ordering — this fallback is a
-heuristic, NOT a correctness guarantee: ambiguous dates like ``05/06/2024``
-may be misparsed under it (here as 6 May instead of 5 June).  A warning is
-emitted whenever the fallback is triggered so downstream consumers can audit
-any affected dates; prefer ISO ``YYYY-MM-DD`` input to avoid the ambiguity
-entirely.
+Date parsing contract
+---------------------
+ISO dates retain ISO ordering, numeric dates use UK day/month/year, and
+missing or invalid dates remain missing. Scalar and vector paths share one
+parser; format inference never chooses the interpretation of a whole series.
 """
 
 from __future__ import annotations  # noqa: I001
 
 import re as _re
-import warnings as _w
+from datetime import date, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, TypeAlias
 
 import pandas as pd
@@ -63,7 +58,7 @@ def completeness_score(row: Any) -> int:
             pass
         if isinstance(v, str):
             s = v.strip()
-            return s != "" and s != "N/A"
+            return s.casefold() not in {"", "n/a", "unknown", "none", "nan", "<na>"}
         return True
 
     return sum(1 for f in COMPLETENESS_FIELDS if _is_populated(row.get(f)))
@@ -104,51 +99,39 @@ _ISO_DATE_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def parse_to_sort_date(date_input):
-    """Parse a date string into a pandas Timestamp suitable for sorting."""
-    s = str(date_input).strip() if date_input else ""
-    if not s or s in ("Unknown", "N/A", ""):
+    """Parse ISO, UK numeric, named-month, and email dates consistently."""
+    if isinstance(date_input, (datetime, date, pd.Timestamp)):
+        return pd.Timestamp(date_input).tz_localize(None)
+    if date_input is None:
+        return pd.NaT
+    s = str(date_input).strip()
+    if s.lower() in {"", "unknown", "n/a", "none", "nan", "nat", "<na>"}:
         return pd.NaT
     try:
-        if _ISO_DATE_RE.match(s):
-            return pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
-        dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
-        if pd.isna(dt):
-            dt = pd.to_datetime(s, dayfirst=False, errors="coerce")
-        return dt
-    except Exception:
-        return pd.NaT
+        if _re.match(r"^\d{4}-\d{2}-\d{2}(?:$|[T ])", s):
+            return pd.Timestamp(datetime.fromisoformat(s.replace("Z", "+00:00"))).tz_localize(None)
+        if _re.match(r"^\d{1,2}[/.-]\d{1,2}[/.-]\d{4}", s):
+            parts = _re.split(r"[/.-]", s.split()[0])
+            return pd.Timestamp(datetime(int(parts[2]), int(parts[1]), int(parts[0])))
+        try:
+            return pd.Timestamp(parsedate_to_datetime(s)).tz_localize(None)
+        except (TypeError, ValueError):
+            pass
+        if _re.search(r"[A-Za-z]", s):
+            return pd.to_datetime(s, dayfirst=True, errors="coerce")
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return pd.NaT
 
 
 def _safe_to_datetime(value: object, *, dayfirst: bool = True) -> pd.Timestamp | pd.Series:
-    if isinstance(value, pd.Series | pd.Index):
-        with _w.catch_warnings():
-            _w.simplefilter("ignore", UserWarning)
-            return pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
-    try:
-        with _w.catch_warnings():
-            # Same dayfirst-ambiguity UserWarning can fire for scalar YYYY-MM-DD
-            # inputs when dayfirst=True (matching the Series path above). Suppress
-            # so the warning does not bubble up to the test suite.
-            _w.simplefilter("ignore", UserWarning)
-            dt = pd.to_datetime(value, dayfirst=dayfirst, errors="coerce")
-    except (TypeError, ValueError):
-        return pd.NaT
-    if pd.isna(dt) and dayfirst:
-        try:
-            with _w.catch_warnings():
-                _w.simplefilter("ignore", UserWarning)
-                fallback_dt = pd.to_datetime(value, dayfirst=False, errors="coerce")
-        except (TypeError, ValueError):
-            return pd.NaT
-        if not pd.isna(fallback_dt):
-            _w.warn(
-                f"_safe_to_datetime: dayfirst parse failed for {value!r}; "
-                "falling back to dayfirst=False (best-effort heuristic for EDF "
-                "date formats — ambiguous dates may be misparsed; prefer ISO input).",
-                stacklevel=2,
-            )
-            dt = fallback_dt
-    return dt
+    """Parse scalar and mixed-format vectors with the same explicit date rules."""
+    if isinstance(value, (pd.Series, pd.Index)):
+        index = value.index if isinstance(value, pd.Series) else None
+        return pd.Series(
+            [parse_to_sort_date(v) for v in value], index=index, dtype="datetime64[ns]"
+        )
+    return parse_to_sort_date(value)
 
 
 def parse_to_display_date(date_input):
