@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -102,7 +103,7 @@ def to_snapshot_json(
 @cache
 def _model_hints(cls: type) -> dict:
     """Resolve annotations only for the fixed known model classes."""
-    return get_type_hints(cls)
+    return get_type_hints(cls, globalns={**vars(sys.modules[cls.__module__]), "pd": pd})
 
 
 def _valid_field(value: object, annotation: Any) -> bool:

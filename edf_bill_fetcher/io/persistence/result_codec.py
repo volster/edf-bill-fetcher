@@ -237,6 +237,45 @@ def decode_result(payload: object) -> AnalysisSnapshot:
         float(daily),
     )
     _validate_models(analysis["models"])
+    restored = from_snapshot_json(analysis["models"]["sap"]["payload"])
+    legacy = object_value(extraction.legacy_state)
+    financial_rows = legacy.get("sap_financial_rows", [])
+    for event, indexes in zip(restored["events"], restored["event_source_indexes"], strict=True):
+        if any(index >= len(financial_rows) for index in indexes):
+            raise ValueError("SAP event references a missing source row")
+        if any(row != financial_rows[index] for row, index in zip(event.rows, indexes, strict=True)):
+            raise ValueError("SAP event rows disagree with preserved source rows")
+    recon = analysis["models"]["reconciliation"]["payload"]
+    for detail in recon["details"]:
+        if not isinstance(detail, dict) or set(detail) != {"entity", "side", "index", "values"}:
+            raise ValueError("Malformed reconciliation detail")
+        entity, side, index = detail["entity"], detail["side"], detail["index"]
+        if (
+            entity not in {"Contract", "Meter Read", "Financial"}
+            or side not in {"sap", "edf"}
+            or type(index) is not int
+            or index < 0
+        ):
+            raise ValueError("Invalid reconciliation source reference")
+        if side == "sap":
+            limit = len(
+                legacy.get(
+                    {
+                        "Contract": "sap_contract_rows",
+                        "Meter Read": "sap_meter_rows",
+                        "Financial": "sap_financial_rows",
+                    }[entity],
+                    [],
+                )
+            )
+        else:
+            limit = (
+                len(restored["analyses"]["contracts"])
+                if entity == "Contract"
+                else len(rows_value(prepared.records))
+            )
+        if index >= limit:
+            raise ValueError("Reconciliation references a missing source row")
     return AnalysisSnapshot(
         prepared,
         financial,
