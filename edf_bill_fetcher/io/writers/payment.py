@@ -36,7 +36,7 @@ from edf_bill_fetcher.models.report_models import compute_payment_analysis
 # --- write_payment_analysis_sheet (was writers/__init__.py L1959-2172) ---
 
 
-def write_payment_analysis_sheet(ws, dfc):
+def write_payment_analysis_sheet(ws, dfc, *, payload=None):
     """Write Payment/Credit Analysis tab."""
     ws.title = "Payment Analysis"
 
@@ -45,7 +45,8 @@ def write_payment_analysis_sheet(ws, dfc):
     LGREY = "F0F0F0"
     DGREY = "888888"
 
-    payments = dfc[dfc["Entry Type"].isin(["Payment", "Credit"])].copy()
+    pat = payload if payload is not None else compute_payment_analysis(dfc)
+    payments = pat.chronology
     if payments.empty:
         _hcell(ws, 1, 1, "No payment/credit records found", bg=NAVY)
         ws.column_dimensions["A"].width = 50
@@ -56,7 +57,6 @@ def write_payment_analysis_sheet(ws, dfc):
 
     write_banner(ws, "EDF ENERGY DISPUTE  —  PAYMENT & CREDIT ANALYSIS", 3, color=ORANGE, row=1)
 
-    pat = compute_payment_analysis(dfc)
 
     r = 3
     _section_hdr(ws, r, "PAYMENT SUMMARY")

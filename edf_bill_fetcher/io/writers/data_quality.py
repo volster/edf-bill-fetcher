@@ -25,7 +25,7 @@ from edf_bill_fetcher.writers._helpers import _data_quality_report
 # --- write_data_quality_sheet (was writers/__init__.py L2425-2578) ---
 
 
-def write_data_quality_sheet(ws, df):
+def write_data_quality_sheet(ws, df, *, payload=None):
     """Write Data Quality Report tab."""
     ws.title = "Data Quality Report"
 
@@ -46,7 +46,7 @@ def write_data_quality_sheet(ws, df):
             x.border = CELL_BORDER
         ws.row_dimensions[r].height = 20
 
-    dq: dict[str, _Any] = _data_quality_report(df)
+    dq: dict[str, _Any] = payload.to_dict() if payload is not None else _data_quality_report(df)
 
     if not dq or dq.get("total_records", 0) == 0:
         _hcell(ws, 1, 1, "No data to analyze", bg=NAVY)
