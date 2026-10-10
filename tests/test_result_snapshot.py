@@ -1,5 +1,6 @@
 """Independent business examples and persistence/failure contracts for shared results."""
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -12,7 +13,7 @@ from edf_bill_fetcher.application.legacy_adapter import capture_legacy
 from edf_bill_fetcher.application.preparation_service import prepare_snapshot
 from edf_bill_fetcher.application.run_service import run
 from edf_bill_fetcher.domain.json_values import freeze_json, object_value, strict_loads
-from edf_bill_fetcher.domain.requests import RunRequest
+from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
 from edf_bill_fetcher.io.persistence.result_codec import decode_result, encode_result
 from edf_bill_fetcher.io.persistence.result_store import load_result, save_result
 from edf_bill_fetcher.models.report_view import RenderSelection, build_report_view
@@ -182,3 +183,33 @@ def test_cancel_between_stages_records_truthful_outcome_and_cleanup(tmp_path: Pa
     manifest = strict_loads((tmp_path / "run.json").read_text())
     assert isinstance(manifest, dict)
     assert manifest["status"] == "cancelled"
+
+
+@pytest.mark.parametrize("conflict", ["source", "result", "report"])
+def test_invalid_manifest_destination_preserves_existing_files(
+    tmp_path: Path, conflict: str
+) -> None:
+    paths = {key: tmp_path / key for key in ("source", "result", "report")}
+    for key, path in paths.items():
+        path.write_bytes(("previous " + key).encode())
+    cleaned = []
+    request = replace(_request(), sources=(SourceSelection("records_json", str(paths["source"])),))
+
+    def collect():
+        raise AssertionError("An invalid destination must abort before extraction")
+
+    outcome = run(
+        request,
+        {"html": str(paths["report"])},
+        result_path=str(paths["result"]),
+        manifest_path=str(paths[conflict]),
+        collect=collect,
+        cleanup=lambda: cleaned.append(True),
+    )
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.startswith("ValueError:")
+    assert cleaned == [True]
+    assert object_value(outcome.manifest)["result"] is None
+    for key, path in paths.items():
+        assert path.read_bytes() == ("previous " + key).encode()

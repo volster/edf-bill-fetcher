@@ -87,6 +87,7 @@ def run(
         "error": None,
     }
     error = None
+    destinations_valid = False
 
     def stage(name: str) -> None:
         check_cancelled(cancelled)
@@ -102,6 +103,7 @@ def run(
             raise ValueError("Artifact destinations must be distinct")
         if any(Path(source.path).resolve() in destinations for source in request.sources):
             raise ValueError("Artifact destination would overwrite a selected source")
+        destinations_valid = True
         render_selection = selection or RenderSelection(
             tuple(outputs),
             tuple(object_value(request.config)["report_sections"])
@@ -165,7 +167,8 @@ def run(
             error = (error + "; " if error else "") + f"Cleanup failed: {exc}"
             manifest["status"] = "failed"
         manifest["error"] = error
-        save_manifest(manifest, manifest_path)
+        if destinations_valid:
+            save_manifest(manifest, manifest_path)
     return RunOutcome(manifest["status"], snapshot, freeze_json(manifest), error)
 
 
