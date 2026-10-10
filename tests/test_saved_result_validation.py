@@ -223,3 +223,16 @@ def test_reanalysis_requires_and_records_a_new_request(
     ]
     assert result.summary.charges == snapshot.summary.charges
     assert destination.read_bytes() == original
+
+
+@pytest.mark.parametrize("as_of", ["2024-04-01", "2024-04-02"])
+def test_reanalysis_cannot_reuse_the_original_run_id(
+    snapshot: AnalysisSnapshot, tmp_path: Path, as_of: str
+) -> None:
+    destination = tmp_path / "result.json"
+    save_result(snapshot, destination, result_id="validation-result")
+    original = destination.read_bytes()
+    previous_id = snapshot.prepared.extraction.request.run_id
+    with pytest.raises(ValueError, match="new run ID"):
+        load_result(destination, reanalyse=True, legacy_request=request(previous_id, as_of))
+    assert destination.read_bytes() == original

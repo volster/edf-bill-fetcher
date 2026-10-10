@@ -30,6 +30,8 @@ def load_result(
             return result
         if legacy_request is None:
             raise ValueError("Explicit reanalysis requires a new captured request")
+        if legacy_request.run_id == result.prepared.extraction.request.run_id:
+            raise ValueError("Explicit reanalysis requires a new run ID")
         payload = {
             **payload["evidence"]["legacy_state"],
             "version": 2,

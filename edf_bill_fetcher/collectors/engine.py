@@ -975,8 +975,8 @@ class EvidenceEngine:
             return
         try:
             pst = pypff.file()
-            pst.open(path)
             try:
+                pst.open(path)
                 root = pst.get_root_folder()
                 self.crawl_pst(root)
             finally:
