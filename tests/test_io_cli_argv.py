@@ -1218,7 +1218,7 @@ class TestRunCliHtmlReport:
 
 
 class TestMainDispatch:
-    """Cover the ``main()`` argv dispatcher and the no-tkinter fallback."""
+    """Cover the ``main()`` argv dispatcher and the missing-Qt fallback."""
 
     def test_pdf_report_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = []
@@ -1294,67 +1294,29 @@ class TestMainDispatch:
         main()  # Should complete without raising SystemExit.
         assert len(stub_render_xlsx["calls"]) == 1
 
-    def test_no_tkinter_exits_2(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """``main()`` with no args and no tkinter writes an error and exits 2.
-
-        Covers lines 405-412 — the ``not HAS_TK`` branch, stderr write,
-        and ``sys.exit(2)``.
-        """
-        monkeypatch.setattr(cli_module, "HAS_TK", False)
+    def test_no_qt_exits_2(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli_module, "HAS_QT", False)
         monkeypatch.setattr(sys, "argv", ["edf-collector"])
-
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 2
-        err = capsys.readouterr().err
-        assert "tkinter is not available" in err
+        assert "PySide6 is not installed" in capsys.readouterr().err
 
-    def test_no_args_with_tkinter_launches_gui(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """``main()`` with no args and tkinter present launches the GUI.
-
-        Covers lines 414-420 — the ``import tkinter``, ``tk.Tk()``,
-        ``App(root)``, ``root.mainloop()`` path.  We stub all three so
-        no real display server is needed.
-        """
-        monkeypatch.setattr(cli_module, "HAS_TK", True)
-        monkeypatch.setattr(sys, "argv", ["edf-collector"])
-
-        mainloop_called: list[bool | str] = []
-
-        class _FakeRoot:
-            def mainloop(self) -> None:
-                """Record that mainloop was invoked."""
-                mainloop_called.append(True)
-
-        class _FakeTkModule:
-            @staticmethod
-            def Tk() -> _FakeRoot:
-                return _FakeRoot()
-
-        # Stub tkinter before main() imports it.
-        monkeypatch.setitem(sys.modules, "tkinter", _FakeTkModule)
-
-        # Stub the App import inside main().  main() does
-        # ``from edf_bill_fetcher.ui.app import App`` lazily, so we
-        # inject a fake ``edf_bill_fetcher.ui.app`` module.
+    def test_no_args_launches_qt_and_preserves_exit_code(self, monkeypatch):
         import types
 
-        fake_app_mod = types.ModuleType("edf_bill_fetcher.ui.app")
+        calls = []
+        fake_gui = types.ModuleType("edf_bill_fetcher.ui.qt_app")
 
-        def _fake_app(root: Any) -> None:
-            """Record that App was constructed."""
-            mainloop_called.append("app_constructed")
+        def launch():
+            calls.append("launched")
+            return 7
 
-        fake_app_mod.App = _fake_app  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "edf_bill_fetcher.ui.app", fake_app_mod)
-
-        main()
-        assert "app_constructed" in mainloop_called
-        assert True in mainloop_called
+        fake_gui.__dict__["launch"] = launch
+        monkeypatch.setattr(cli_module, "HAS_QT", True)
+        monkeypatch.setattr(sys, "argv", ["edf-collector"])
+        monkeypatch.setitem(sys.modules, "edf_bill_fetcher.ui.qt_app", fake_gui)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 7
+        assert calls == ["launched"]

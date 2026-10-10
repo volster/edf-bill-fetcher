@@ -28,7 +28,7 @@ how each finding was produced.
 - **SAP financial-ledger integration**: when `scan_sap_dumps` is on (default), the engine also digests EDF's three SAP-CSV-in-PDF dumps (`*_Contract-History.pdf`, `*_Meter-Readings.pdf`, `*_Financial-Transactions.pdf`) and renders three source sheets + two analyser sheets (`SAP Back-billing Events` and `SAP ↔ EDF Matched Events`) + a cross-source `Reconciliation` sheet. See the *SAP ledger integration* section below for the full design.
 - **PDF, DOCX and HTML output**: 15 selectable sections. Numbering derives from `models/report_sections.py` so headings and contents agree for the selected sections.
 - **Indicative compensation scenarios**: supported bill-period allocations and configured credit-interest scenarios feed the workbook and reports. Interest has no assumed statutory rate; eligibility requires assessment of the original evidence. Back-billing age detection uses a nominal 365-day window.
-- **GUI interface**: tkinter-based desktop application with progress tracking.
+- **Qt desktop workspace**: separate extraction, saved-report and preference flows, with visible progress, cancellation and review notes.
   - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
   - **Unique run folders**: each extraction reserves its own directory for workbook, requested reports, source copies, JSON and run status. Repeated runs preserve earlier bundles.
   - **Auto-generate report**: produce the workbook and selected document formats in the same run folder.
@@ -49,7 +49,7 @@ The codebase has been split from its original monolith into the `edf_bill_fetche
 | `edf_bill_fetcher.io.writers`   | openpyxl          | Excel sheet builders — one submodule per sheet (13 writers)                    |
 | `edf_bill_fetcher.io.reporters` | format libraries | PDF, DOCX and self-contained HTML renderers                                    |
 | `edf_bill_fetcher.io.adapters`  | libpff-python      | PST/OST archive adapter                                                        |
-| `edf_bill_fetcher.ui`            | tkinter           | GUI: `App`, `ReportOptionsDialog`                                              |
+| `edf_bill_fetcher.ui`            | PySide6 / Qt       | Default GUI: `qt_app.EvidenceWindow`; legacy Tk classes retain their public API |
 | `edf_bill_fetcher.models`       | dataclasses       | Event / data models                                                            |
 | `edf_bill_fetcher.writers`      | internal facade  | Re-exports `writers._helpers` analysis helpers; canonical writer entry points live in `edf_bill_fetcher.io.writers` |
 
@@ -85,6 +85,9 @@ pip install -e ".[dev,build]"   # recommended for contributors
   in a particular environment.
 - GUI use requires a desktop display. Headless Linux test runs use Xvfb; use
   CLI mode for servers and automation.
+- The desktop uses PySide6 Essentials (Qt Core, Gui and Widgets); WebEngine is
+  not required. On Debian/Ubuntu, Qt's X11 backend also needs
+  `libxcb-cursor0`, `libxkbcommon-x11-0` and `libegl1`.
 - macOS and Windows packaged builds are produced by CI. Local PyInstaller
   builds require the `[build]` extra.
 
@@ -92,6 +95,7 @@ What `pip install -e .` actually pulls in (current version):
 
 | Library            | Used for                                                                      |
 | ------------------ | ----------------------------------------------------------------------------- |
+| PySide6 Essentials | Qt desktop widgets, layouts, accessibility and background job signals.        |
 | pandas / numpy     | DataFrame plumbing across extraction, dedup, statistical analysis, export.    |
 | pdfplumber         | Reading text + tables out of EDF bill PDFs.                                     |
 | beautifulsoup4     | Stripping HTML into text body for PST / HTM ingestion.                         |
@@ -123,6 +127,25 @@ python main.py
 ```
 
 Or run the built executable `EDF_Evidence_Collector.exe`.
+
+The Qt workspace has three pages:
+
+- **Build evidence pack**: choose PDF and email folders, an Outlook archive,
+  or an account-history export. Set an output folder and pack name, then
+  create the workbook, saved analysis and optional reports. Each run uses a
+  fresh folder so earlier exports remain available.
+- **Generate reports**: open `result.json` from an earlier run to preserve
+  its original calculations and valuation date. Excel imports are also
+  supported, with explicit review notes about their limited provenance.
+  Report settings remember the chosen formats and sections.
+- **Preferences**: account and sender filters, extraction methods, duplicate
+  handling and SAP reconciliation. Existing settings are restored from
+  `~/.edf_collector/config.json`.
+
+The action area stays visible while content scrolls. Cancellation waits for
+the current processing step and cleanup; failed exports retain any analysis
+and files that were successfully saved. Use **Details** to inspect review
+notes and **Open folder** to find the run's output.
 
 1. **Select Sources** (at least one required):
    - **PST/OST File**: Outlook email archive containing EDF emails (`.pst` / `.ost` are read via `libpff-python`; the `process_pst_file` wrapper auto-logs an error if the lib is missing, so the rest of the pipeline still runs)
@@ -281,7 +304,7 @@ A `tests/test_dispatch_parity.py` structural test pins the invariant that the PD
 ### Adding a new section
 
 1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/models/report_sections.py` with `key`, `title`, and optionally `is_appendix`.
-2. Add the matching key to `ReportOptionsDialog.SECTIONS` in `edf_bill_fetcher/ui/app.py` so it shows up in the GUI options dialog.
+2. The Qt report dialog reads the shared section registry automatically. Keep `ReportOptionsDialog.SECTIONS` in `edf_bill_fetcher/ui/app.py` in sync for legacy Tk clients.
 3. Add a `def create_<name>(...)` builder function in `edf_bill_fetcher/io/reporters/pdf_report.py`.
 4. Wire the builder into the `section_builders` dispatch dict in `render_pdf`, `render_docx` and `render_html`. Forgetting this raises a clear `RuntimeError` at report-render time — that's the loud-failure mode that keeps the dispatch in lockstep with the registry.
 
@@ -408,9 +431,8 @@ The full design spec is preserved at
 ## Requirements
 
 - Python 3.10+
-- tkinter (bundled with most Python installers)
 - Runtime (all installed by `pip install -e .`):
-  pandas, numpy, pdfplumber, beautifulsoup4, openpyxl, reportlab,
+  PySide6 Essentials, pandas, numpy, pdfplumber, beautifulsoup4, openpyxl, reportlab,
   python-docx, scipy, **libpff-python**, **statsmodels**.
 - Toolchain (only for contributors / packagers, install via
   `pip install -e ".[dev,build]"`):
@@ -453,6 +475,11 @@ Tests are organised into three lake levels:
   no real EDF data).
 
 Tkinter checks require a display server. Headless Linux needs the Xvfb system binary as well as the `pytest-xvfb` plugin in the dev extra. The plugin is opt-out (`--no-xvfb`); installing it does not install the system binary.
+
+Qt desktop tests use the `offscreen` platform and real widgets and worker
+threads. They cover input capture, remembered settings, cancellation,
+saved-analysis reuse, workbook imports and truthful output status. Legacy
+Tk checks still run to protect the retained public API.
 
 ### Linting / formatting / type-checking
 

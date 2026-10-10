@@ -5,6 +5,7 @@
 
 # === Runtime (Excel + PDF + DOCX + PST + Holt-Winters) ===
 # Every documented feature works without opting into extras.
+PySide6-Essentials>=6.7,<7
 pandas>=2.0,<3
 pdfplumber>=0.10,<1
 beautifulsoup4>=4.12,<5

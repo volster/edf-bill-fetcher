@@ -25,7 +25,7 @@ try:
 except ImportError:
     HAS_PYPFF = False
 
-HAS_TK = importlib.util.find_spec("tkinter") is not None
+HAS_QT = importlib.util.find_spec("PySide6") is not None
 
 
 class _RestrictedUnpickler(pickle.Unpickler):
@@ -701,22 +701,18 @@ def main() -> None:
             run_cli_diff(sys.argv[2:])
             return
 
-    if not HAS_TK:
+    if not HAS_QT:
         sys.stderr.write(
-            "ERROR: tkinter is not available in this Python build. "
+            "ERROR: PySide6 is not installed. "
             "Launch a CLI command instead (e.g. --extract, --pdf-report, "
-            "--docx-report, --html-report, --diff) or run on a system with Tk installed."
+            "--docx-report, --html-report, --diff) or install the project's runtime dependencies."
         )
         sys.stderr.write("\n")
         sys.exit(2)
 
-    import tkinter as tk  # noqa: F401
+    from edf_bill_fetcher.ui.qt_app import launch
 
-    root = tk.Tk()
-    from edf_bill_fetcher.ui.app import App  # noqa: F402,E402
-
-    App(root)
-    root.mainloop()
+    sys.exit(launch())
 
 
 if __name__ == "__main__":

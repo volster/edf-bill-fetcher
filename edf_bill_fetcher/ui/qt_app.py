@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl, Slot
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -586,9 +586,10 @@ class EvidenceWindow(QMainWindow):
             self.checks["use_dedup"].isChecked() and self.checks["save_dups"].isChecked()
         )
         formats = FORMATS[self.report_options["format"]]
+        section_count = len(self.report_options["sections"])
         self.report_summary.setText(
             " · ".join(fmt.upper() if fmt != "docx" else "Word" for fmt in formats)
-            + f" · {len(self.report_options['sections'])} sections"
+            + f" · {section_count} section{'s' if section_count != 1 else ''}"
         )
         self.saved_report_summary.setText(self.report_summary.text())
         if self._busy:
@@ -651,12 +652,16 @@ class EvidenceWindow(QMainWindow):
                 field.setText(value.removesuffix(".xlsx") if key == "output_name" else value)
         self.include_reports.setChecked(values.get("auto_generate_report") is True)
         options = payload.get("report_options")
-        if isinstance(options, dict) and options.get("format") in FORMATS:
+        if (
+            isinstance(options, dict)
+            and isinstance(options.get("format"), str)
+            and options["format"] in FORMATS
+        ):
             selected = options.get("sections", [key for key, _ in SECTIONS])
             if (
                 isinstance(selected, list)
                 and selected
-                and all(key in dict(SECTIONS) for key in selected)
+                and all(isinstance(key, str) and key in dict(SECTIONS) for key in selected)
             ):
                 self.report_options = {
                     "format": options["format"],
@@ -764,6 +769,8 @@ class EvidenceWindow(QMainWindow):
             not stem
             or stem in {".", ".."}
             or any(char in stem for char in '/\\<>:"|?*')
+            or any(ord(char) < 32 for char in stem)
+            or len(stem) > 180
             or stem.endswith((".", " "))
         ):
             raise ValueError("Use a pack name without folder paths or special filename characters.")
@@ -778,7 +785,7 @@ class EvidenceWindow(QMainWindow):
             raise ValueError("Choose a different pack name; this name is reserved by Windows.")
         destination = str(self._field_value("output_folder"))
         first = Path(inputs[0].path)
-        base = Path(destination) if destination else first if first.is_dir() else first.parent
+        base = Path(destination) if destination else first.parent
         base.mkdir(parents=True, exist_ok=True)
         run_directory = tempfile.mkdtemp(
             prefix=stem + "_" + date.today().strftime("%Y%m%d") + "_", dir=base
@@ -841,17 +848,21 @@ class EvidenceWindow(QMainWindow):
         worker.finished.connect(self._worker_finished)
         worker.start()
 
+    @Slot(str)
     def _on_progress(self, text: str) -> None:
         self.status.setText(text)
         self.progress.setRange(0, 0)
 
+    @Slot(int)
     def _on_percentage(self, value: int) -> None:
         self.progress.setRange(0, 100)
         self.progress.setValue(value)
 
+    @Slot(object)
     def _receive_outcome(self, outcome: RunOutcome) -> None:
         self._pending_outcome = outcome
 
+    @Slot()
     def _worker_finished(self) -> None:
         worker = self.worker
         self.worker = None

@@ -23,6 +23,7 @@ classifiers = [
     "Topic :: Office/Business :: Financial",
 ]
 dependencies = [
+    "PySide6-Essentials>=6.7,<7",  # Qt desktop controls; no WebEngine dependency
     # === Runtime core (required for any functional report — Excel + PDF + DOCX) ===
     "pandas>=2.0,<3",
     "pdfplumber>=0.10,<1",

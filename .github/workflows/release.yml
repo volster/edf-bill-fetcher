@@ -43,6 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-tk tk-dev python3-dev
           sudo apt-get install -y build-essential autoconf automake libtool pkg-config
+          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
@@ -64,6 +65,9 @@ jobs:
           # follow dynamic (find_spec/importlib) imports — see the
           # docstring in matrix_build.yml for the full rationale.
           pyinstaller --onefile --windowed --name EDF_Evidence_Collector \
+            --hidden-import=PySide6.QtCore \
+            --hidden-import=PySide6.QtGui \
+            --hidden-import=PySide6.QtWidgets \
             --hidden-import=reportlab \
             --hidden-import=reportlab.platypus \
             --hidden-import=reportlab.lib \

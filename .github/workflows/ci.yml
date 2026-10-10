@@ -15,6 +15,9 @@ permissions:
   actions: read
   contents: read
 
+env:
+  QT_QPA_PLATFORM: offscreen
+
 jobs:
   test:
     name: Test (Python ${{ matrix.python-version }}, ${{ matrix.os }})
@@ -312,6 +315,7 @@ jobs:
           # Headless Linux runners have no X server; the GUI tests
           # need a virtual framebuffer to instantiate tkinter.Tk().
           sudo apt-get install -y xvfb
+          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
