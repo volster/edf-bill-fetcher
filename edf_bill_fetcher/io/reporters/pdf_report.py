@@ -1042,7 +1042,7 @@ def create_timeline_section(
 
 def create_ofgem_comparison(
     df: pd.DataFrame, config: dict | None = None, ctx: RenderContext | None = None
-) -> list:
+, *, payload: Any = None) -> list:
     """Create OFGEM price cap comparison section."""
     from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
 
@@ -1064,7 +1064,7 @@ def create_ofgem_comparison(
     )
     elements.append(Spacer(1, 0.3 * cm))
 
-    comparison = compute_ofgem_comparison(df, config)
+    comparison = payload if payload is not None else compute_ofgem_comparison(df, config)
 
     if not comparison.rows:
         elements.append(
@@ -1157,7 +1157,7 @@ def create_ofgem_comparison(
 # =============================================================================
 
 
-def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
+def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
     """Create statistical analysis section."""
     from edf_bill_fetcher.models.report_models import compute_statistical_analysis
 
@@ -1169,7 +1169,7 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    sa = compute_statistical_analysis(dfc)
+    sa = payload if payload is not None else compute_statistical_analysis(dfc)
     n = sa.count
 
     if n < 3:
@@ -1255,7 +1255,7 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
 # =============================================================================
 
 
-def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
+def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
     """Create payment & credit analysis section."""
     elements = []
     if ctx is None:
@@ -1267,7 +1267,7 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
 
     from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
-    pa = compute_payment_analysis(dfc)
+    pa = payload if payload is not None else compute_payment_analysis(dfc)
     if not pa.chronology.empty:
         elements.append(Paragraph("<b>Payment Summary</b>", STYLES["SubSectionHeader"]))
 
@@ -1322,7 +1322,7 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None)
 # =============================================================================
 
 
-def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
+def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
     """Create forecast & projection section."""
     from edf_bill_fetcher.models.report_models import compute_forecast
 
@@ -1344,7 +1344,7 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
     )
     elements.append(Spacer(1, 0.3 * cm))
 
-    fc = compute_forecast(dfc)
+    fc = payload if payload is not None else compute_forecast(dfc)
     if fc.n < 3:
         elements.append(
             Paragraph(
@@ -1408,7 +1408,7 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None)
 # =============================================================================
 
 
-def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = None) -> list:
+def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
     """Create data quality assessment section."""
     from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
@@ -1420,7 +1420,7 @@ def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = No
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    dq = compute_data_quality_report(df)
+    dq = payload if payload is not None else compute_data_quality_report(df)
     total = dq.total_records
     date_parsed = dq.date_parsed
     amt_complete = dq.amt_complete
@@ -1514,7 +1514,7 @@ def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = No
 # =============================================================================
 
 
-def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = None) -> list:
+def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
     """Create tariff impact analysis section."""
     from edf_bill_fetcher.models.report_models import compute_tariff_analysis
 
@@ -1526,7 +1526,7 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    analysis = compute_tariff_analysis(dfc)
+    analysis = payload if payload is not None else compute_tariff_analysis(dfc)
 
     if "Tariff" not in dfc.columns or dfc["Tariff"].isna().all():
         elements.append(
@@ -1583,7 +1583,7 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
 
 def create_compensation_section(
     dfc: pd.DataFrame, config: dict[str, Any] | None = None, ctx: RenderContext | None = None
-) -> list:
+, *, payload: Any = None) -> list:
     """Create the Compensation Analysis section.
 
     Renders the indicative-compensation claims from
@@ -1599,7 +1599,7 @@ def create_compensation_section(
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    rows = estimate_compensation(dfc, config)
+    rows = payload if payload is not None else estimate_compensation(dfc, config)
 
     if not rows:
         elements.append(
@@ -2249,6 +2249,8 @@ def render_pdf(view: ReportView, output_path: str) -> str:
         try:
             kwargs = arg_factory()
             kwargs["ctx"] = render_ctx
+            if section.key in ('ofgem', 'statistical', 'payment', 'forecast', 'data_quality', 'tariff', 'compensation'):
+                kwargs["payload"] = view.model(section.key)
             elements.extend(invoke(kwargs))
         except Exception as e:
             section_failures.append(str(e))
