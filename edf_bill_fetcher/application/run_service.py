@@ -169,15 +169,21 @@ def run(
     return RunOutcome(manifest["status"], snapshot, freeze_json(manifest), error)
 
 
-def collect_engine(engine: Any, request: RunRequest) -> tuple[list[dict], dict]:
+def collect_engine(
+    engine: Any, request: RunRequest, *, pff_module: Any = None
+) -> tuple[list[dict], dict]:
     """Adapt existing source collectors, closing PST resources on every outcome."""
     for source in request.sources:
-        if engine.cancel_event is not None and engine.cancel_event.is_set():
+        cancel_event = getattr(engine, "cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
             raise RunCancelled("Run cancelled during collection")
         if source.kind in {"pst", "ost"}:
-            import pypff
+            if pff_module is None:
+                import pypff
 
-            constructor = getattr(pypff, "file", None) or getattr(pypff, "File", None)
+                pff_module = pypff
+
+            constructor = getattr(pff_module, "file", None) or getattr(pff_module, "File", None)
             if constructor is None:
                 raise RuntimeError("pypff has no file constructor")
             archive = constructor()

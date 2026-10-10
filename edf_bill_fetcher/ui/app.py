@@ -1235,7 +1235,9 @@ class App:
                 outputs,
                 result_path=os.path.join(run_dir, "result.json"),
                 manifest_path=os.path.join(run_dir, "run.json"),
-                collect=lambda: collect_engine(engine, request),
+                collect=lambda: collect_engine(
+                    engine, request, pff_module=pypff if HAS_PYPFF else None
+                ),
                 copy_sources=lambda prepared: bundle_engine_sources(
                     engine, prepared, run_dir, legacy_paths=(os.path.join(run_dir, "records.json"),)
                 ),

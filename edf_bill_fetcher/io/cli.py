@@ -365,7 +365,9 @@ def run_cli_extract(args: list[str]) -> None:
             {"xlsx": parsed.output},
             result_path=str(bundle_dir / "result.json"),
             manifest_path=str(bundle_dir / "run.json"),
-            collect=lambda: collect_engine(engine, request),
+            collect=lambda: collect_engine(
+                engine, request, pff_module=pypff if HAS_PYPFF else None
+            ),
             copy_sources=lambda prepared: bundle_engine_sources(
                 engine, prepared, str(bundle_dir), legacy_paths=legacy_paths
             ),
@@ -377,7 +379,9 @@ def run_cli_extract(args: list[str]) -> None:
             sys.exit(1 if parsed.strict else 0)
         if outcome.status not in {"complete", "review_required"}:
             raise RuntimeError(outcome.error or outcome.status)
-        print(f"Extraction {outcome.status}. Workbook: {parsed.output}")
+        print(f"Extraction complete! Status: {outcome.status}. Workbook: {parsed.output}")
+        if engine.error_log:
+            print(f"Parse errors: {len(engine.error_log)}")
         print(f"Saved analysis: {bundle_dir / 'result.json'}")
         for path in legacy_paths:
             print(f"Compatibility records: {path}")

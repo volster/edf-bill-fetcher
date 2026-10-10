@@ -2072,7 +2072,7 @@ def render_pdf(view: ReportView, output_path: str) -> str:
     filtered = engine.filtered_records
     df = view.frame()
     if df.empty:
-        raise ValueError("Records DataFrame is empty")
+        raise ValueError("No records to report on")
 
     # Validate required parameters — create a minimal engine if not provided
     # (CLI usage without --engine-data should still work)

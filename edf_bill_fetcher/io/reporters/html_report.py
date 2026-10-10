@@ -1008,7 +1008,7 @@ def render_html(view: ReportView, output_path: str) -> str:
     filtered = engine.filtered_records
     df = view.frame()
     if df.empty:
-        raise ValueError("Records DataFrame is empty")
+        raise ValueError("No records to report on")
 
     if engine is None:
 
