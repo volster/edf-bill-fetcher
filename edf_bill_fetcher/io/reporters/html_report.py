@@ -33,17 +33,8 @@ from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
 from edf_bill_fetcher.helpers.version import get_package_version as _get_package_version
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS, RenderContext
+from edf_bill_fetcher.models.report_view import ReportView, capture_report_view
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
-from edf_bill_fetcher.processors.financial import (
-    balance_extremes as _compute_balance_extremes,
-)
-from edf_bill_fetcher.processors.financial import (
-    financial_totals as _compute_financial_totals,
-)
-from edf_bill_fetcher.processors.financial import (
-    mean_daily_rate as _compute_mean_daily,
-)
-from edf_bill_fetcher.processors.preparation import analysis_frame, prepare_evidence
 
 # =============================================================================
 # CONSTANTS
@@ -933,7 +924,6 @@ def create_appendix_full_evidence(
 # =============================================================================
 
 
-@atomic_output()
 def generate_html_report(
     records: list[dict],
     output_path: str,
@@ -942,34 +932,18 @@ def generate_html_report(
     filtered: list | None = None,
     report_sections: list[str] | set[str] | None = None,
 ) -> str:
-    """Generate an HTML report from the supplied records.
+    """Capture legacy inputs once, then render their accepted result."""
+    view = capture_report_view(records, dict(config), engine, filtered, formats=("html",), sections=tuple(report_sections) if report_sections is not None else None)
+    return render_html(view, output_path)
 
-    The output sections are derived from ``REPORT_SECTIONS`` via the
-    dispatcher wired up below.  Section selection follows the PDF/DOCX
-    convention (``config["report_sections"]``); the explicit
-    ``report_sections`` argument overrides config when provided.
 
-    Args:
-        records: List of extracted billing records.
-        output_path: Path to save the HTML document.
-        config: Configuration dictionary.
-        engine: EvidenceEngine instance (for metadata).
-        filtered: Filtered-out records (below threshold).
-        report_sections: Optional explicit section selection; when
-            ``None`` the selection is read from ``config``.
-
-    Returns:
-        Path to the generated HTML file.
-
-    """
-    if not records:
-        raise ValueError("No records to report on")
-
+@atomic_output()
+def render_html(view: ReportView, output_path: str) -> str:
+    """Render the accepted result using the existing HTML layout."""
     section_failures = []
-    prepared = prepare_evidence(records, config)
-    config = prepared.config
-    records = prepared.records
-    df = prepared.frame
+    records, config, engine = view.records, view.config, view.engine
+    filtered = engine.filtered_records
+    df = view.frame()
     if df.empty:
         raise ValueError("Records DataFrame is empty")
 
@@ -1013,29 +987,13 @@ def generate_html_report(
     period_start = fmt_date(valid_dates.min()) if not valid_dates.empty else "Unknown"
     period_end = fmt_date(valid_dates.max()) if not valid_dates.empty else "Unknown"
 
-    charges, payments = _compute_financial_totals(df)
-    opening_balance, closing_balance = _compute_balance_extremes(df)
+    charges, payments = view.snapshot.summary.charges, view.snapshot.summary.net_credits
+    opening_balance, closing_balance = view.snapshot.summary.opening_balance, view.snapshot.summary.closing_balance
 
-    from edf_bill_fetcher.processors.analysis import compute_dispute_flags
+    dispute = view.model("dispute")
+    flags, flag_counts = dispute.flags, dispute.counts
 
-    if "_dt" not in df.columns:
-        df["_dt"] = df["Date"].apply(parse_to_sort_date)
-    analysis_df = analysis_frame(df, config)
-    df_sorted = analysis_df
-    mean_daily = _compute_mean_daily(df_sorted)
-    flags, flag_counts = compute_dispute_flags(df_sorted, mean_daily)
-
-    # Section selection: explicit argument wins, then config, then all
-    # implementable sections (backward compatibility, as in the PDF).
-    # Derive the full set from the registry + framing keys so it can never
-    # drift out of sync with REPORT_SECTIONS (previously omitted "compensation").
-    all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}
-    if report_sections is not None:
-        enabled_sections = set(report_sections)
-    else:
-        enabled_sections = set(config.get("report_sections", []))
-    if not enabled_sections:
-        enabled_sections = all_sections
+    enabled_sections = view.context.selected
 
     def section_enabled(key: str) -> bool:
         return key in enabled_sections
