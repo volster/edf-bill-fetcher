@@ -648,7 +648,7 @@ def create_ofgem_comparison(
     df: pd.DataFrame,
     config: dict | None = None,
     ctx: RenderContext | None = None,
-) -> None:
+    *, payload: Any = None) -> None:
     """Create OFGEM price cap comparison section (shared compute via model)."""
     from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps
     from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
@@ -664,7 +664,7 @@ def create_ofgem_comparison(
         style=styles["BodyText"],
     )
 
-    comparison = compute_ofgem_comparison(df, config)
+    comparison = payload if payload is not None else compute_ofgem_comparison(df, config)
 
     if not comparison.rows:
         doc.add_paragraph(
@@ -752,7 +752,7 @@ def create_ofgem_comparison(
 
 def create_statistical_analysis(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-) -> None:
+, *, payload: Any = None) -> None:
     """Create statistical analysis section."""
     from edf_bill_fetcher.models.report_models import compute_statistical_analysis
 
@@ -760,7 +760,7 @@ def create_statistical_analysis(
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("statistical"), style=styles["SectionHeader"])
 
-    sa = compute_statistical_analysis(df)
+    sa = payload if payload is not None else compute_statistical_analysis(df)
     if sa.count >= 3:
         doc.add_paragraph("Bill Amount Statistics:", style=styles["SubSectionHeader"])
 
@@ -788,7 +788,7 @@ def create_statistical_analysis(
 
 def create_payment_analysis(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-) -> None:
+, *, payload: Any = None) -> None:
     """Create payment & credit analysis section."""
     if ctx is None:
         ctx = RenderContext()
@@ -799,7 +799,7 @@ def create_payment_analysis(
     # DOCX side must match so credit notes appear in the totals.
     from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
-    pa = compute_payment_analysis(df)
+    pa = payload if payload is not None else compute_payment_analysis(df)
     if pa.count > 0:
         doc.add_paragraph(f"Number of payments: {pa.count}", style=styles["BodyText"])
         doc.add_paragraph(f"Total paid: {fmt_money(pa.total_paid)}", style=styles["BodyText"])
@@ -817,7 +817,7 @@ def create_payment_analysis(
 
 def create_forecast_section(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-) -> None:
+, *, payload: Any = None) -> None:
     """Create forecast & projection section."""
     from edf_bill_fetcher.models.report_models import compute_forecast
 
@@ -832,7 +832,7 @@ def create_forecast_section(
         style=styles["BodyText"],
     )
 
-    fc = compute_forecast(df)
+    fc = payload if payload is not None else compute_forecast(df)
     if fc.n < 3:
         doc.add_paragraph(
             "Insufficient data for forecasting (need at least 3 periods).",
@@ -873,7 +873,7 @@ def create_forecast_section(
 
 def create_data_quality_section(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-) -> None:
+, *, payload: Any = None) -> None:
     """Create data quality assessment section."""
     from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
@@ -881,7 +881,7 @@ def create_data_quality_section(
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("data_quality"), style=styles["SectionHeader"])
 
-    dq = compute_data_quality_report(df)
+    dq = payload if payload is not None else compute_data_quality_report(df)
     total = dq.total_records
     date_parsed = dq.date_parsed
     amt_complete = dq.amt_complete
@@ -968,7 +968,7 @@ def create_data_quality_section(
 
 def create_tariff_impact_section(
     doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-) -> None:
+, *, payload: Any = None) -> None:
     """Create tariff impact analysis section."""
     from edf_bill_fetcher.models.report_models import compute_tariff_analysis
 
@@ -985,7 +985,7 @@ def create_tariff_impact_section(
         doc.add_page_break()
         return
 
-    analysis = compute_tariff_analysis(df)
+    analysis = payload if payload is not None else compute_tariff_analysis(df)
 
     if analysis.empty:
         doc.add_paragraph("No valid tariff records found.", style=styles["BodyText"])
@@ -1026,13 +1026,13 @@ def create_tariff_impact_section(
 
 def create_compensation_section(
     doc: Any, styles: Any, df: pd.DataFrame, config: Any = None, ctx: RenderContext | None = None
-) -> None:
+, *, payload: Any = None) -> None:
     """Create the Compensation Analysis section."""
     if ctx is None:
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("compensation"), style=styles["SectionHeader"])
 
-    rows = estimate_compensation(df, config)
+    rows = payload if payload is not None else estimate_compensation(df, config)
 
     if not rows:
         doc.add_paragraph(
@@ -1628,6 +1628,8 @@ def render_docx(view: ReportView, output_path: str) -> str:
         try:
             kwargs = arg_factory()
             kwargs["ctx"] = render_ctx
+            if spec.key in ('ofgem', 'statistical', 'payment', 'forecast', 'data_quality', 'tariff', 'compensation'):
+                kwargs["payload"] = view.model(spec.key)
             invoke(kwargs)
         except Exception as e:
             section_failures.append(str(e))
