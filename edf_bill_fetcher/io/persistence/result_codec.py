@@ -243,7 +243,9 @@ def decode_result(payload: object) -> AnalysisSnapshot:
     for event, indexes in zip(restored["events"], restored["event_source_indexes"], strict=True):
         if any(index >= len(financial_rows) for index in indexes):
             raise ValueError("SAP event references a missing source row")
-        if any(row != financial_rows[index] for row, index in zip(event.rows, indexes, strict=True)):
+        if any(
+            row != financial_rows[index] for row, index in zip(event.rows, indexes, strict=True)
+        ):
             raise ValueError("SAP event rows disagree with preserved source rows")
     recon = analysis["models"]["reconciliation"]["payload"]
     for detail in recon["details"]:
