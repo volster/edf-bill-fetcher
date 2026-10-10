@@ -15,6 +15,31 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def forbid_unmocked_dialogs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail on an uncontrolled modal instead of hanging CI waiting for a click.
+
+    Tests that exercise dialogs must replace the specific boundary with a
+    recorder or deterministic answer and assert the observed result.
+    """
+    from tkinter import messagebox
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError(f"Unmocked modal dialog: {args!r}")
+
+    for name in (
+        "showinfo",
+        "showwarning",
+        "showerror",
+        "askquestion",
+        "askokcancel",
+        "askyesno",
+        "askyesnocancel",
+        "askretrycancel",
+    ):
+        monkeypatch.setattr(messagebox, name, unexpected)
+
+
 def _save_eml(tmp_path: Path, name: str, msg: EmailMessage) -> Path:
     """Serialize a synthetic EmailMessage to an .eml file under tmp_path."""
     path = tmp_path / name
