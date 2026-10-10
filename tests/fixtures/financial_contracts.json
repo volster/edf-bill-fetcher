@@ -1,0 +1,823 @@
+{
+  "fixture_version": 1,
+  "description": "Synthetic independently specified protection cases. Do not regenerate expected values from a candidate implementation. All identifiers are invented.",
+  "cases": [
+    {
+      "id": "F01",
+      "name": "Charge is not account balance",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "source-1"
+        }
+      ],
+      "expected": {
+        "record_count": 1,
+        "charges": "100.00",
+        "net_credits": "0.00",
+        "opening_balance": "250.00",
+        "closing_balance": "250.00",
+        "mean_daily": 3.3333333333333335
+      },
+      "row_checks": [
+        {
+          "select": {
+            "Invoice #": "KI-001"
+          },
+          "values": {
+            "Balance (\u00a3)": 250.0,
+            "Transaction Amount (\u00a3)": 100.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "F02",
+      "name": "Net credits differ from gross payment analysis",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "05/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Charge",
+          "Amount Kind": "Transaction",
+          "Amount (\u00a3)": 100,
+          "Transaction ID": "charge-1"
+        },
+        {
+          "Source": "Local PDF Folder",
+          "Date": "06/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Payment",
+          "Amount (\u00a3)": 75,
+          "Transaction ID": "pay-1"
+        },
+        {
+          "Source": "Local PDF Folder",
+          "Date": "07/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Credit",
+          "Amount (\u00a3)": 20,
+          "Transaction ID": "credit-1"
+        },
+        {
+          "Source": "Local PDF Folder",
+          "Date": "08/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Refund",
+          "Amount (\u00a3)": 10,
+          "Transaction ID": "refund-1"
+        }
+      ],
+      "expected": {
+        "record_count": 4,
+        "charges": "100.00",
+        "net_credits": "85.00",
+        "payment_count": 2,
+        "gross_payments_credits": "95.00",
+        "opening_balance": null,
+        "closing_balance": null
+      },
+      "row_checks": [
+        {
+          "select": {
+            "Transaction ID": "refund-1"
+          },
+          "values": {
+            "Transaction Amount (\u00a3)": 10.0
+          }
+        },
+        {
+          "select": {
+            "Transaction ID": "pay-1"
+          },
+          "values": {
+            "Transaction Amount (\u00a3)": -75.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "F03",
+      "name": "Balance-only bill cannot create charge",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Amount (\u00a3)": 250,
+          "Invoice #": "KI-MISSING"
+        }
+      ],
+      "expected": {
+        "charges": "0.00",
+        "net_credits": "0.00"
+      },
+      "row_checks": [
+        {
+          "select": {
+            "Invoice #": "KI-MISSING"
+          },
+          "values": {
+            "Period Charge (\u00a3)": null,
+            "Transaction Amount (\u00a3)": null,
+            "Balance (\u00a3)": 250.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "F04",
+      "name": "Known zero remains known",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Amount (\u00a3)": 0,
+          "Period Charge (\u00a3)": 0,
+          "Invoice #": "KI-ZERO"
+        }
+      ],
+      "expected": {
+        "charges": "0.00"
+      },
+      "row_checks": [
+        {
+          "select": {
+            "Invoice #": "KI-ZERO"
+          },
+          "values": {
+            "Period Charge (\u00a3)": 0.0,
+            "Transaction Amount (\u00a3)": 0.0,
+            "Balance (\u00a3)": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "F05",
+      "name": "Same-day same-value payments are separate",
+      "group": "identity",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Payment",
+          "Amount (\u00a3)": 75,
+          "Source ID": "statement",
+          "Source Row": "1"
+        },
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Payment",
+          "Amount (\u00a3)": 75,
+          "Source ID": "statement",
+          "Source Row": "2"
+        }
+      ],
+      "expected": {
+        "record_count": 2,
+        "duplicate_count": 0,
+        "net_credits": "150.00",
+        "payment_count": 2
+      }
+    },
+    {
+      "id": "F06",
+      "name": "Supported duplicate preserves admissions and sources",
+      "group": "identity",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "source-1",
+          "Cancel/Rebill Admitted": false
+        },
+        {
+          "Source": "HTM Account History",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "source-2",
+          "Cancel/Rebill Admitted": true
+        }
+      ],
+      "expected": {
+        "record_count": 1,
+        "duplicate_count": 1,
+        "charges": "100.00"
+      },
+      "row_checks": [
+        {
+          "select": {
+            "Invoice #": "KI-001"
+          },
+          "values": {
+            "Cancel/Rebill Admitted": true
+          },
+          "source_ids": [
+            "source-1",
+            "source-2"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "F07",
+      "name": "Same invoice in different accounts stays separate",
+      "group": "identity",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "source-1"
+        },
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-002",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "other"
+        }
+      ],
+      "expected": {
+        "record_count": 2,
+        "charges": "200.00",
+        "opening_balance": null,
+        "closing_balance": null
+      }
+    },
+    {
+      "id": "F08",
+      "name": "Conflicting invoice IDs stay separate",
+      "group": "identity",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "source-1"
+        },
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-002",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "other"
+        }
+      ],
+      "expected": {
+        "record_count": 2,
+        "duplicate_count": 0,
+        "charges": "200.00"
+      }
+    },
+    {
+      "id": "F09",
+      "name": "A statement identifier is not a transaction ID",
+      "group": "identity",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Charge",
+          "Amount Kind": "Transaction",
+          "Amount (\u00a3)": 100,
+          "Invoice #": "STATEMENT-001",
+          "Logic Used": "Reconciliation Statement",
+          "Transaction ID": "T1"
+        },
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Charge",
+          "Amount Kind": "Transaction",
+          "Amount (\u00a3)": 100,
+          "Invoice #": "STATEMENT-001",
+          "Logic Used": "Reconciliation Statement",
+          "Transaction ID": "T2"
+        }
+      ],
+      "expected": {
+        "record_count": 2,
+        "charges": "200.00"
+      }
+    },
+    {
+      "id": "F10",
+      "name": "Invalid amounts remain unavailable",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Amount (\u00a3)": "NaN",
+          "Period Charge (\u00a3)": "N/A",
+          "Invoice #": "KI-INVALID"
+        }
+      ],
+      "expected": {
+        "record_count": 1,
+        "charges": "0.00"
+      },
+      "row_checks": [
+        {
+          "select": {
+            "Invoice #": "KI-INVALID"
+          },
+          "values": {
+            "Amount (\u00a3)": null,
+            "Period Charge (\u00a3)": null,
+            "Transaction Amount (\u00a3)": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "F11",
+      "name": "Whole-bill rate is not extracted energy rate",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "source-1",
+          "Units (kWh)": 100,
+          "Unit Rate (p/kWh)": 100
+        }
+      ],
+      "expected": {
+        "charges": "100.00"
+      },
+      "row_checks": [
+        {
+          "select": {
+            "Invoice #": "KI-001"
+          },
+          "values": {
+            "Energy Unit Rate (p/kWh)": null,
+            "Unit Rate (p/kWh)": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "F12",
+      "name": "Extracted rate keeps its precision",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/01/2024",
+          "Period To": "31/01/2024",
+          "Source ID": "source-1",
+          "Energy Unit Rate (p/kWh)": 25.7891,
+          "Unrecognised diagnostic": {
+            "token": "keep",
+            "list": [
+              1,
+              null
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "charges": "100.00"
+      },
+      "row_checks": [
+        {
+          "select": {
+            "Invoice #": "KI-001"
+          },
+          "values": {
+            "Energy Unit Rate (p/kWh)": 25.7891,
+            "Unrecognised diagnostic": {
+              "token": "keep",
+              "list": [
+                1,
+                null
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "F13",
+      "name": "Leap-year day difference stays compatible",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "01/02/2024",
+          "Period To": "01/03/2024",
+          "Source ID": "source-1"
+        }
+      ],
+      "expected": {
+        "mean_daily": 3.4482758620689653
+      }
+    },
+    {
+      "id": "F14",
+      "name": "Same-day period means one day",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 10,
+          "Period From": "01/01/2024",
+          "Period To": "01/01/2024",
+          "Source ID": "source-1"
+        }
+      ],
+      "expected": {
+        "mean_daily": 10.0
+      }
+    },
+    {
+      "id": "F15",
+      "name": "Reversed period has no daily charge analysis",
+      "group": "money",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "Local PDF Folder",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "New Bill",
+          "Invoice #": "KI-001",
+          "Amount (\u00a3)": 250,
+          "Period Charge (\u00a3)": 100,
+          "Period From": "31/01/2024",
+          "Period To": "01/01/2024",
+          "Source ID": "source-1"
+        }
+      ],
+      "expected": {
+        "mean_daily": 0.0
+      }
+    },
+    {
+      "id": "F16",
+      "name": "Three consecutive month-end balances",
+      "group": "forecast",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "HTM Account History",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Statement Reconciliation",
+          "Amount (\u00a3)": 0,
+          "Amount Kind": "Balance"
+        },
+        {
+          "Source": "HTM Account History",
+          "Date": "29/02/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Statement Reconciliation",
+          "Amount (\u00a3)": 100,
+          "Amount Kind": "Balance"
+        },
+        {
+          "Source": "HTM Account History",
+          "Date": "31/03/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Statement Reconciliation",
+          "Amount (\u00a3)": 200,
+          "Amount Kind": "Balance"
+        }
+      ],
+      "expected": {
+        "forecast_n": 3,
+        "opening_balance": "0.00",
+        "closing_balance": "200.00"
+      }
+    },
+    {
+      "id": "F17",
+      "name": "Missing month blocks forecast",
+      "group": "forecast",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "HTM Account History",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Statement Reconciliation",
+          "Amount (\u00a3)": 0,
+          "Amount Kind": "Balance"
+        },
+        {
+          "Source": "HTM Account History",
+          "Date": "31/03/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Statement Reconciliation",
+          "Amount (\u00a3)": 200,
+          "Amount Kind": "Balance"
+        }
+      ],
+      "expected": {
+        "forecast_n": 0
+      }
+    },
+    {
+      "id": "F18",
+      "name": "Mixed ledgers block combined forecast",
+      "group": "forecast",
+      "config": {
+        "as_of": "2024-04-01",
+        "analysis_min": 0.0,
+        "use_dedup": true
+      },
+      "records": [
+        {
+          "Source": "HTM Account History",
+          "Date": "31/01/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Statement Reconciliation",
+          "Amount (\u00a3)": 0,
+          "Amount Kind": "Balance"
+        },
+        {
+          "Source": "HTM Account History",
+          "Date": "29/02/2024",
+          "Account": "A-002",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Statement Reconciliation",
+          "Amount (\u00a3)": 100,
+          "Amount Kind": "Balance"
+        },
+        {
+          "Source": "HTM Account History",
+          "Date": "31/03/2024",
+          "Account": "A-001",
+          "Fuel": "electricity",
+          "Meter": "M1",
+          "Register": "R1",
+          "Entry Type": "Statement Reconciliation",
+          "Amount (\u00a3)": 200,
+          "Amount Kind": "Balance"
+        }
+      ],
+      "expected": {
+        "forecast_n": 0,
+        "opening_balance": null,
+        "closing_balance": null
+      }
+    }
+  ]
+}
