@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from edf_bill_fetcher.application.analysis_service import analyse_prepared
 from edf_bill_fetcher.application.legacy_adapter import capture_legacy
@@ -168,7 +169,7 @@ def run(
     return RunOutcome(manifest["status"], snapshot, freeze_json(manifest), error)
 
 
-def collect_engine(engine, request: RunRequest) -> tuple[list[dict], dict]:
+def collect_engine(engine: Any, request: RunRequest) -> tuple[list[dict], dict]:
     """Adapt existing source collectors, closing PST resources on every outcome."""
     for source in request.sources:
         if engine.cancel_event is not None and engine.cancel_event.is_set():
@@ -199,7 +200,7 @@ def collect_engine(engine, request: RunRequest) -> tuple[list[dict], dict]:
 
 
 def bundle_engine_sources(
-    engine, prepared: PreparedSnapshot, bundle_dir: str, *, legacy_paths: tuple[str, ...] = ()
+    engine: Any, prepared: PreparedSnapshot, bundle_dir: str, *, legacy_paths: tuple[str, ...] = ()
 ) -> dict:
     """Copy sources and emit explicit v2 compatibility files from existing preparation."""
     import os

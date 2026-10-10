@@ -65,6 +65,7 @@ def _compatible(left: dict, right: dict) -> bool:
 def _reconciliation(state: dict, frame: pd.DataFrame, contracts: pd.DataFrame) -> dict:
     """Port the legacy one-to-one matching rule, storing source indexes, not cells."""
     evidence = frame.to_dict("records")
+    value: str | float | None
     meter: list[dict] = []
     transactions: list[dict] = []
     inferred_contract: list[dict] = []
@@ -111,7 +112,7 @@ def _reconciliation(state: dict, frame: pd.DataFrame, contracts: pd.DataFrame) -
             if entity == "Financial" and value is not None:
                 kind = str(sap.get("Document Type", "")).lower()
                 if "payment" in kind or "credit" in kind:
-                    value = -abs(value)
+                    value = -abs(float(value))
             matches = []
             for idx in remaining:
                 record = inferred[idx]
@@ -122,7 +123,7 @@ def _reconciliation(state: dict, frame: pd.DataFrame, contracts: pd.DataFrame) -
                 equal = (
                     value == record["_value"]
                     if entity == "Contract"
-                    else value is not None and abs(value - record["_value"]) <= 0.005
+                    else value is not None and abs(float(value) - record["_value"]) <= 0.005
                 )
                 if delta <= 7 and equal:
                     matches.append((delta, idx))

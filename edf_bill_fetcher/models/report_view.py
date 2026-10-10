@@ -59,7 +59,9 @@ class ReportView:
         """Resolve registry numbering for the selected sections."""
         selected = self.selection.sections
         return RenderContext(
-            ({s.key for s in REPORT_SECTIONS} | {"cover", "toc"}) if selected is None else selected
+            ({s.key for s in REPORT_SECTIONS} | {"cover", "toc"})
+            if selected is None
+            else list(selected)
         )
 
     @property

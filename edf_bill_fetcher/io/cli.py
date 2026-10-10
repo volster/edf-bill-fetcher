@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 
+from edf_bill_fetcher.domain.analysis import AnalysisSnapshot
 from edf_bill_fetcher.helpers.artifacts import atomic_output, json_safe
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.preparation import prepare_evidence
@@ -484,7 +485,7 @@ def run_cli_diff(args: list[str]) -> None:
         print(f"Diff workbook written: {parsed.diff_output}")
 
 
-def _render_cli_report(parsed, fmt: str) -> None:
+def _render_cli_report(parsed: argparse.Namespace, fmt: str) -> None:
     """Restore accepted analysis or explicitly create a revised result for overrides."""
     from dataclasses import replace
     from pathlib import Path
@@ -502,6 +503,7 @@ def _render_cli_report(parsed, fmt: str) -> None:
     )
     if not isinstance(overrides, dict):
         raise ValueError("Configuration must be a JSON object")
+    snapshot: AnalysisSnapshot | None = None
     if isinstance(payload, dict) and "schema_version" in payload:
         snapshot = decode_result(payload)
         if parsed.engine_data:
