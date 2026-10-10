@@ -30,7 +30,7 @@ from edf_bill_fetcher.writers._helpers import _analyze_tariff_impact
 # --- write_tariff_analysis_sheet (was writers/__init__.py L2581-2651) ---
 
 
-def write_tariff_analysis_sheet(ws, dfc):
+def write_tariff_analysis_sheet(ws, dfc, *, payload=None):
     """Write Tariff Impact Analysis tab."""
     ws.title = "Tariff Analysis"
 
@@ -38,7 +38,7 @@ def write_tariff_analysis_sheet(ws, dfc):
     ORANGE = "FE5716"
     LGREY = "F0F0F0"
 
-    tariff_info = _analyze_tariff_impact(dfc)
+    tariff_info = ({"tariff_stats": payload.stats, "num_tariffs": payload.num_tariffs, "tariff_changes": payload.tariff_changes} if payload is not None and not payload.empty else {} if payload is not None else _analyze_tariff_impact(dfc))
 
     if not tariff_info:
         _hcell(ws, 1, 1, "No tariff data available in records", bg=NAVY)

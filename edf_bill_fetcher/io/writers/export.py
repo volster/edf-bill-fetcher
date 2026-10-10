@@ -1130,7 +1130,7 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
     write_data_quality_sheet(wb.create_sheet(title="Data Quality Report"), df, payload=view.model("data_quality"))
 
     # Tariff Analysis (if data available)
-    write_tariff_analysis_sheet(wb.create_sheet(title="Tariff Analysis"), dfc)
+    write_tariff_analysis_sheet(wb.create_sheet(title="Tariff Analysis"), df, payload=view.model("tariff"))
 
     # ------------------------------------------------------------------
     # Phase-2 analysis tabs (back-billing, rebilling, meter rollover,
@@ -1242,7 +1242,7 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
 
     # Indicative compensation claims (Wave 6d): emit a Compensation tab
     # only when the estimator yields at least one row.
-    comp_rows = estimate_compensation(dfc, dict(config))
+    comp_rows = view.model("compensation")
     if comp_rows:
         write_compensation_sheet(wb.create_sheet(title="Compensation"), comp_rows)
 
