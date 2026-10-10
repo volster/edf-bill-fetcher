@@ -12,9 +12,27 @@ FIXTURE = "tests/fixtures/ofgem_caps_minimal.json"
 def test_loader_returns_expected_shape_from_fixture():
     caps, latest = load_ofgem_caps(path=FIXTURE)
     assert set(caps) == {"2024-Q1", "2024-Q2", "2024-Q3"}
-    assert caps["2024-Q1"] == {"unit_rate": 28.62, "standing_charge": 53.35}
-    assert caps["2024-Q2"] == {"unit_rate": 24.50, "standing_charge": 60.10}
-    assert caps["2024-Q3"] == {"unit_rate": 24.50, "standing_charge": 60.10}
+    assert caps["2024-Q1"] == {
+        "unit_rate": 28.62,
+        "standing_charge": 53.35,
+        "is_carry": False,
+        "source": "test fixture",
+        "as_of": "2024-Q3",
+    }
+    assert caps["2024-Q2"] == {
+        "unit_rate": 24.50,
+        "standing_charge": 60.10,
+        "is_carry": False,
+        "source": "test fixture",
+        "as_of": "2024-Q3",
+    }
+    assert caps["2024-Q3"] == {
+        "unit_rate": 24.50,
+        "standing_charge": 60.10,
+        "is_carry": True,
+        "source": "test fixture",
+        "as_of": "2024-Q3",
+    }
     assert latest == caps["2024-Q3"]
 
 
@@ -85,4 +103,9 @@ def test_packaged_resource_default_loads_real_table():
     caps, latest = load_ofgem_caps()
     assert len(caps) >= 30
     assert latest == caps[max(caps.keys())]
-    assert caps["2026-Q3"] == {"unit_rate": 26.11, "standing_charge": 57.19}
+    quarter = caps["2026-Q3"]
+    assert quarter["unit_rate"] == 26.11
+    assert quarter["standing_charge"] == 57.19
+    assert quarter["is_carry"] is False
+    assert quarter["as_of"] == "2026-Q3"
+    assert quarter["source"].startswith("OFGEM Default Tariff Cap")

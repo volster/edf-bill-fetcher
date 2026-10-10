@@ -81,6 +81,7 @@ class TestSourcePrecedence:
         # them by Amount (£) regardless of which one wins.
         tie_buckets = [
             ("Email Body", "Email Body (RTF)"),
+            ("PST PDF Attachment", "EML PDF Attachment", "MSG PDF Attachment"),
             ("Local PDF Folder", "Statement Reconciliation"),
         ]
         seen: dict[int, list[str]] = {}

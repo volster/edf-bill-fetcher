@@ -49,17 +49,17 @@ def test_balance_in_debit_still_parses():
 
 def test_balance_in_credit_is_now_parsed():
     """The #15-sibling fix: a credit-labelled statement should populate
-    Amount and Period Charge the same as a debit-labelled one."""
+    negative Amount and Period Charge for a credit-labelled balance."""
     fields = extract_new_invoice_fields(
         _with_balance_clause(
             "Total charges for this period £240.50 credit\nCurrent balance £240.50 credit\n"
         )
     )
-    assert fields["amount"] == 240.50, (
+    assert fields["amount"] == -240.50, (
         f"credit-labelled Current balance should still populate amount, "
         f"got: {fields.get('amount')!r}"
     )
-    assert fields["period_charge"] == 240.50, (
+    assert fields["period_charge"] == -240.50, (
         f"credit-labelled period charge should still populate, got: {fields.get('period_charge')!r}"
     )
     assert fields.get("amount_side") == "credit"

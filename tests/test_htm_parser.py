@@ -38,7 +38,7 @@ class TestHTMParserCharge:
     EDF charges us for electricity used in a billing period. The HTM
     export records each charge as a line with the period start, period
     end, units (kWh) and the running balance. Our parser turns each
-    one into an ``Entry Type == "Ongoing Balance"`` record storing the
+    one into an ``Entry Type == "New Bill"`` record storing the
     charge amount under ``"Period Charge (£)"`` and the running
     balance under ``"Amount (£)"`` (because ``Amount`` is the column
     that downstream sorters pick on).
@@ -66,7 +66,7 @@ class TestHTMParserCharge:
         assert r["Period From"] == "01/02/2026"
         assert r["Period To"] == "28/02/2026"
         # Classifier for this row type.
-        assert r["Entry Type"] == "Ongoing Balance"
+        assert r["Entry Type"] == "New Bill"
         assert r["Logic Used"] == "HTM Charge"
 
     def test_charge_without_kwh_uses_na(self):
@@ -169,7 +169,7 @@ class TestHTMParserMixed:
 
         assert len(records) == 3
         types = [r["Entry Type"] for r in records]
-        assert types == ["Ongoing Balance", "Payment", "Credit"], (
+        assert types == ["New Bill", "Payment", "Credit"], (
             "expect charge first, then payment, then credit (matches input order)"
         )
 
@@ -224,7 +224,7 @@ class TestHTMCreditBalance:
         records = parse_htm_account_history(text)
         assert len(records) == 1
         r = records[0]
-        assert r["Entry Type"] == "Ongoing Balance"
+        assert r["Entry Type"] == "New Bill"
         # Balance carried into the Amount column regardless of debit/credit.
         assert r["Amount (£)"] == -250.0
         assert r["Period Charge (£)"] == 50.0

@@ -9,6 +9,15 @@ from edf_bill_fetcher.models.config import ConfigDict
 class TestEvidenceEngineCore:
     """Tests for EvidenceEngine core processing methods."""
 
+    def test_unknown_amount_is_retained_without_inventing_its_meaning(self):
+        engine = EvidenceEngine({"filter_below": True, "min_amount": 500}, lambda _: None)
+        engine._add_record({"Amount (£)": 5, "Entry Type": "Unknown"})
+        assert len(engine.records) == 1
+        assert engine.records[0]["Amount (£)"] == 5
+        assert engine.records[0]["Balance (£)"] is None
+        assert engine.records[0]["Transaction Amount (£)"] is None
+        assert engine.filtered_records == []
+
     def test_find_billing_period(self):
         config: ConfigDict = {
             "use_anchors": True,
@@ -62,6 +71,7 @@ class TestEvidenceEngineCore:
                 "Source": "Test",
                 "Date": "01/01/2024",
                 "Amount (£)": 100.0,  # Below min_amount
+                "Amount Kind": "Balance",
                 "Details": "Test record",
                 "Logic Used": "Test",
             }
@@ -95,6 +105,7 @@ class TestEvidenceEngineCore:
                 "Source": "Test",
                 "Date": "01/01/2024",
                 "Amount (£)": 1000.0,  # Above min_amount
+                "Amount Kind": "Balance",
                 "Details": "Test record",
                 "Logic Used": "Test",
             }
@@ -130,6 +141,7 @@ class TestEvidenceEngineCore:
                 "Source": "Test",
                 "Date": "01/01/2024",
                 "Amount (£)": "N/A",
+                "Amount Kind": "Balance",
                 "Details": "Test record",
                 "Logic Used": "Test",
             }
@@ -137,7 +149,7 @@ class TestEvidenceEngineCore:
 
         assert len(engine.records) == 1
         assert len(engine.filtered_records) == 0
-        assert engine.records[0]["Amount (£)"] == "N/A"
+        assert engine.records[0]["Amount (£)"] is None
 
     def test_add_record_coerces_numeric_string_amount(self):
         """M-1: a numeric string amount is coerced to float for the filter check,
@@ -165,6 +177,7 @@ class TestEvidenceEngineCore:
                 "Source": "Test",
                 "Date": "01/01/2024",
                 "Amount (£)": "100",  # below min_amount, but string-typed
+                "Amount Kind": "Balance",
                 "Details": "Test record",
                 "Logic Used": "Test",
             }
@@ -239,6 +252,7 @@ class TestEvidenceEngineCore:
                 "Source": "PST",
                 "Date": "01/01/2024",
                 "Amount (£)": -5.0,  # Small-magnitude negative
+                "Entry Type": "Refund",
                 "Details": "Trivial refund",
                 "Logic Used": "Test",
             }

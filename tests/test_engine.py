@@ -59,6 +59,7 @@ class TestEvidenceEngineConfig:
                 "Source": "Test",
                 "Date": "01/01/2024",
                 "Amount (£)": 500.0,  # Below min_amount
+                "Amount Kind": "Balance",
                 "Details": "Test record",
                 "Logic Used": "Test",
             }
@@ -91,6 +92,7 @@ class TestEvidenceEngineConfig:
                 "Source": "Test",
                 "Date": "01/01/2024",
                 "Amount (£)": 500.0,  # Below min_amount but filter disabled
+                "Amount Kind": "Balance",
                 "Details": "Test record",
                 "Logic Used": "Test",
             }

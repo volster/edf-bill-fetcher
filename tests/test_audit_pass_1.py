@@ -331,6 +331,7 @@ class TestDataQualityReport:
                 "Reading": ["Actual", "N/A", "Actual"],
                 "Source": ["Local PDF Folder", "Local PDF Folder", "HTM Account History"],
                 "Unit Rate (p/kWh)": ["N/A", 24.5, 24.5],
+                "Unit Rate Basis": ["Unavailable", "Extracted", "Extracted"],
                 "Period From": ["01/02/2026", "N/A", "01/04/2026"],
                 "Period To": ["28/02/2026", "N/A", "30/04/2026"],
             }

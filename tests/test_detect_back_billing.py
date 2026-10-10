@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from edf_bill_fetcher.processors.detection import detect_back_billing
 
@@ -17,6 +18,8 @@ def _row(
 ) -> dict:
     out = {
         "Invoice #": invoice,
+        "Entry Type": "New Bill",
+        "Amount Kind": "Transaction",
         "Date": date,
         "Period From": period_from,
         "Period To": period_to,
@@ -33,6 +36,13 @@ def _row(
 def test_empty_df_returns_empty_df() -> None:
     out = detect_back_billing(pd.DataFrame())
     assert out.empty
+
+
+@pytest.mark.parametrize("amount_kind", ["Balance", "Unknown"])
+def test_account_total_does_not_supply_a_missing_billed_charge(amount_kind: str) -> None:
+    row = _row(date="01 Jan 2025", period_from="01 Jan 2020", period_to="01 Feb 2020")
+    row["Amount Kind"] = amount_kind
+    assert detect_back_billing(pd.DataFrame([row])).empty
 
 
 def test_short_period_invoice_not_flagged() -> None:
@@ -352,6 +362,8 @@ def test_detect_back_billing_pulls_period_charge() -> None:
         [
             {
                 "Invoice #": "T99",
+                "Entry Type": "New Bill",
+                "Amount Kind": "Transaction",
                 "Date": "2022-06-15",  # >365 days after Period To
                 "Period From": "2020-01-01",
                 "Period To": "2021-06-01",
@@ -375,6 +387,8 @@ def test_detect_back_billing_fallback_to_amount() -> None:
         [
             {
                 "Invoice #": "T99",
+                "Entry Type": "New Bill",
+                "Amount Kind": "Transaction",
                 "Date": "2022-06-15",  # >365 days after Period To
                 "Period From": "2020-01-01",
                 "Period To": "2021-06-01",
@@ -386,7 +400,7 @@ def test_detect_back_billing_fallback_to_amount() -> None:
     result = detect_back_billing(df)
     assert len(result) == 1
     assert result.iloc[0]["Period Charge (£)"] == 100.0
-    assert "fallback" in result.iloc[0]["Value Source"].lower()
+    assert result.iloc[0]["Value Source"] == "Transaction Amount"
 
 
 # ---------------------------------------------------------------------------

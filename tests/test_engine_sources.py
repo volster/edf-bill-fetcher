@@ -62,6 +62,7 @@ class TestEvidenceEnginePDF:
 
         # Mock the file read
         with patch("builtins.open", mock_open(read_data=b"fake pdf content")):
+            engine.config["filter_below"] = False
             engine.process_pdf_file("test.pdf", "Test", "test.pdf", "01/01/2024")
 
         assert len(engine.records) == 1
@@ -85,7 +86,8 @@ class TestEvidenceEnginePDF:
 
         assert len(engine.records) == 1
         assert engine.records[0]["Entry Type"] == "Credit"
-        assert engine.records[0]["Amount (£)"] == 150.00
+        assert engine.records[0]["Amount (£)"] == -150.00
+        assert engine.records[0]["Transaction Amount (£)"] == -150.00
 
     @patch("edf_bill_fetcher.collectors.engine.pdfplumber.open")
     def test_process_old_format_pdf(self, mock_pdf_open):
@@ -171,7 +173,7 @@ class TestEvidenceEngineHTM:
         }
         return EvidenceEngine(config, lambda x: None)
 
-    def test_process_htm_file(self):
+    def test_process_htm_file(self, tmp_path):
         engine = self._make_engine()
 
         htm_content = """
@@ -179,11 +181,13 @@ class TestEvidenceEngineHTM:
         01 Feb 2024 You paid us £200.00 Balance £1,034.56 in debit
         """
 
-        with patch("builtins.open", mock_open(read_data=htm_content)):
-            engine.process_htm_file("test.htm")
+        source = tmp_path / "test.htm"
+        source.write_text(htm_content, encoding="utf-8")
+        engine.config["filter_below"] = False
+        engine.process_htm_file(str(source))
 
         assert len(engine.records) == 2
-        assert engine.records[0]["Entry Type"] == "Ongoing Balance"
+        assert engine.records[0]["Entry Type"] == "New Bill"
         assert engine.records[1]["Entry Type"] == "Payment"
 
     def test_process_htm_file_not_found(self):

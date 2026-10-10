@@ -10,7 +10,7 @@ The fixture is structured so that EvidenceEngine.process_pdf_file
 extracts ONE deterministic record with the following fields:
 
     Amount         = 240.50
-    Period Charge  = 240.50
+    Period Charge  = -240.50 (credit)
     Entry Type     = 'New Bill'
     Logic Used     = 'New Invoice Format'
     Date           = contains '/03/2026'
@@ -115,7 +115,9 @@ class TestIntegrationSmoke:
 
         rec = engine.records[0]
         assert rec["Amount (£)"] == 240.50, f"Amount mismatch: {rec['Amount (£)']!r}"
-        assert rec["Period Charge (£)"] == 240.50
+        assert rec["Period Charge (£)"] == -240.50
+        assert rec["Balance (£)"] == 240.50
+        assert rec["Transaction Amount (£)"] == -240.50
         assert rec["Entry Type"] == "New Bill"
         # Date normalisation can shift format by region; yy/MM/dd or
         # dd/MM/yyyy are both fine, we just need March 2026.
