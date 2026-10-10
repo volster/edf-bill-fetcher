@@ -31,7 +31,7 @@ except ImportError:
 try:
     import pypff
 
-    HAS_PYPFF = True
+    HAS_PYPFF = pypff is not None
 except ImportError:
     HAS_PYPFF = False
 
@@ -1142,8 +1142,29 @@ class App:
         run_dir = tempfile.mkdtemp(
             prefix=stem + "_" + datetime.now().strftime("%Y%m%d") + "_", dir=base_dir
         )
+        from datetime import timezone
+        from uuid import uuid4
+
+        from edf_bill_fetcher.domain.json_values import freeze_json
+        from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
+
+        source_pairs = (
+            ("pst", paths["pst_path"]),
+            ("pdf_dir", paths["pdf_dir"]),
+            ("htm", paths["htm_path"]),
+            ("eml_dir", paths["eml_msg_dir"]),
+            ("msg_dir", paths["eml_msg_dir"]),
+        )
+        request = RunRequest(
+            uuid4().hex,
+            datetime.now(timezone.utc),
+            date.fromisoformat(config["as_of"]),
+            tuple(SourceSelection(kind, path) for kind, path in source_pairs if path),
+            freeze_json(dict(config)),
+        )
         return {
             "config": copy.deepcopy(config),
+            "request": request,
             "paths": paths,
             "stem": stem,
             "run_dir": run_dir,
@@ -1180,214 +1201,82 @@ class App:
         self.root.withdraw()
 
     def _run(self):
-        config = copy.deepcopy(self._run_request["config"])
+        """Translate a captured request and shared coordinator outcome onto the UI queue."""
+        from edf_bill_fetcher.application.run_service import (
+            bundle_engine_sources,
+            collect_engine,
+            run,
+        )
+        from edf_bill_fetcher.collectors.engine import EvidenceEngine
+        from edf_bill_fetcher.models.report_view import RenderSelection
 
-        from edf_bill_fetcher.collectors.engine import EvidenceEngine  # noqa: F402,E402
-
+        captured = self._run_request
+        request = captured["request"]
+        config = copy.deepcopy(captured["config"])
         engine = EvidenceEngine(config, self.set_status, self.set_progress, self.cancel_event)
         self.engine = engine
-        run_status = "running"
-        run_error = ""
-
-        try:
-            pst_path = self._run_request["paths"]["pst_path"]
-            if pst_path and os.path.exists(pst_path) and not self.cancel_event.is_set():
-                if not HAS_PYPFF:
-                    self._show("warning", "PST", "pypff not installed — PST/OST scanning skipped.")
-                else:
-                    self.set_status("Scanning PST/OST…")
-                    try:
-                        pff = pypff.file()
-                    except AttributeError:
-                        pff = getattr(pypff, "File", None)
-                        if pff is None:
-                            raise AttributeError(
-                                "pypff module has no 'file' or 'File' attribute"
-                            ) from None
-                        pff = pff()
-                    pff.open(os.path.abspath(pst_path))
-                    try:
-                        engine.crawl_pst(pff.get_root_folder())
-                    finally:
-                        pff.close()
-
-            htm_path = self._run_request["paths"]["htm_path"]
-            if htm_path and os.path.exists(htm_path) and not self.cancel_event.is_set():
-                self.set_status("Parsing HTM account history…")
-                engine.process_htm_file(htm_path)
-
-            pdf_path = self._run_request["paths"]["pdf_dir"]
-            if pdf_path and os.path.exists(pdf_path) and not self.cancel_event.is_set():
-                engine.crawl_local_pdfs(pdf_path)
-
-            eml_msg_path = self._run_request["paths"]["eml_msg_dir"]
-            if eml_msg_path and os.path.exists(eml_msg_path) and not self.cancel_event.is_set():
-                self.set_status("Scanning EML/MSG folder…")
-                engine.process_eml_folder(eml_msg_path)
-                engine.process_msg_folder(eml_msg_path)
-
-            if self.cancel_event.is_set():
-                run_status = "cancelled"
-                self._show("warning", "Cancelled", "Extraction cancelled.")
-                return
-
-            if (
-                engine.records
-                or engine.sap_contract_rows
-                or engine.sap_meter_rows
-                or engine.sap_financial_rows
+        stem, run_dir = captured["stem"], captured["run_dir"]
+        outputs = {"xlsx": os.path.join(run_dir, stem + ".xlsx")}
+        options = captured["report_options"]
+        sections = tuple(options.get("sections", [s[0] for s in ReportOptionsDialog.SECTIONS]))
+        if captured["auto_report"]:
+            fmt = options.get("format", "both")
+            for name, available in (
+                ("pdf", HAS_PDF_REPORT),
+                ("docx", HAS_DOCX_REPORT),
+                ("html", HAS_HTML_REPORT),
             ):
-                self.set_status("Writing Excel report…")
-                stem = self._run_request["stem"]
-                xlsx_path = os.path.join(self._run_request["run_dir"], stem + ".xlsx")
-                from edf_bill_fetcher.processors.preparation import prepare_evidence
-
-                prepared = prepare_evidence(engine.records, config)
-                config = prepared.config
-                # Stream P5: save evidence files + themed DOCX bundle index
-                # into a sibling ``evidence_files/`` folder when the toggle is
-                # set on (default True). Runs BEFORE the workbook export so
-                # the Superseded Reconciliation sheet can link to the actual
-                # saved PDFs (``save_evidence_files`` returns the
-                # attachment-name -> destination-path mapping).
-                saved = None
-                bundle_summary = ""
-                if config.get("save_evidence_files", True):
-                    try:
-                        import pandas as pd
-
-                        from edf_bill_fetcher.io.writers.evidence_bundle import (
-                            build_bundle_index,
-                            save_evidence_files,
-                        )
-
-                        out_dir = os.path.dirname(xlsx_path) or os.getcwd()
-                        ev_dir = os.path.join(out_dir, "evidence_files")
-                        dfc = pd.concat(
-                            [
-                                pd.DataFrame(engine.records),
-                                pd.DataFrame(list(engine.source_manifest.values())),
-                            ],
-                            ignore_index=True,
-                        )
-                        # Build the source-paths reverse-lookup from the
-                        # crawl attribute the engine carries internally.
-                        source_paths = getattr(engine, "source_paths", {}) or {}
-                        bundle_stats: dict[str, int] = {}
-                        saved = save_evidence_files(dfc, source_paths, ev_dir, stats=bundle_stats)
-                        for metadata in engine.source_manifest.values():
-                            path = saved.get(metadata["Attachment Name"])
-                            metadata["Saved Path"] = (
-                                os.path.relpath(path, out_dir) if path else None
-                            )
-                        index_docx = os.path.join(out_dir, "evidence_index.docx")
-                        build_bundle_index(
-                            dfc, saved, index_docx, account=str(config.get("acc_num", ""))
-                        )
-                        bundle_summary = (
-                            f"\n\nSaved {len(saved)} evidence files to:\n{ev_dir}"
-                            f"\nBundle index:\n{index_docx}"
-                        )
-                        if bundle_stats.get("missing"):
-                            bundle_summary += (
-                                f"\nWarning: {bundle_stats['missing']} referenced "
-                                f"evidence file(s) could not be copied"
-                            )
-                        if bundle_stats.get("ambiguous"):
-                            bundle_summary += (
-                                f"\nWarning: {bundle_stats['ambiguous']} attachment "
-                                f"name(s) are ambiguous (referenced by multiple invoices)"
-                            )
-                    except Exception as bundle_err:
-                        engine.log_error("Evidence bundle", str(bundle_err))
-                        # Don't lose the run if the bundle step blows up --
-                        # log it loudly but still keep the XLSX.
-                        self._show(
-                            "warning",
-                            "Bundle step failed",
-                            (
-                                f"Evidence file save failed:\n{bundle_err}"
-                                f"\n\nThe XLSX workbook will still be saved at:\n{xlsx_path}"
-                            ),
-                        )
-
-                if self.cancel_event.is_set():
-                    return
-                from edf_bill_fetcher.io.writers.export import export_to_excel
-
-                export_to_excel(
-                    engine.records,
-                    xlsx_path,
-                    engine.error_log,
-                    config,
-                    filtered=engine.filtered_records,
-                    sap_rows={
-                        "contract": engine.sap_contract_rows,
-                        "meter": engine.sap_meter_rows,
-                        "financial": engine.sap_financial_rows,
-                    },
-                    invoice_pdf_paths=saved,
-                )
-                from edf_bill_fetcher.io.cli import _safe_json_dump
-
-                _safe_json_dump(
-                    {**engine.__getstate__(), "original_records": engine.records},
-                    os.path.join(self._run_request["run_dir"], "records.json"),
-                )
+                if fmt in (name, "both") and available:
+                    outputs[name] = os.path.join(run_dir, stem + "_Report." + name)
+        try:
+            outcome = run(
+                request,
+                outputs,
+                result_path=os.path.join(run_dir, "result.json"),
+                manifest_path=os.path.join(run_dir, "run.json"),
+                collect=lambda: collect_engine(engine, request),
+                copy_sources=lambda prepared: bundle_engine_sources(
+                    engine, prepared, run_dir, legacy_paths=(os.path.join(run_dir, "records.json"),)
+                ),
+                cleanup=engine.cleanup,
+                cancelled=self.cancel_event.is_set,
+                progress=lambda event: self.set_status(event.message),
+                selection=RenderSelection(tuple(outputs), sections),
+            )
+            self._last_result = outcome.snapshot
+            if outcome.status in {"complete", "review_required"}:
                 summary = (
-                    f"Extraction complete.\n\n"
-                    f"  Emails matched: {engine.email_count}\n"
-                    f"  PDFs processed: {engine.pdf_count}\n"
-                    f"  Records found:  {len(engine.records)}\n"
+                    f"Extraction {outcome.status}.\nPDFs: {engine.pdf_count} | Emails: {engine.email_count} | Records: {len(engine.records)}\n\n"
+                    + "\n".join(outputs.values())
                 )
-                if engine.error_log:
-                    summary += f"\n  Parse errors: {len(engine.error_log)} (see Parse Errors tab)"
-                summary += f"\n\nSaved to:\n{xlsx_path}"
-                if bundle_summary:
-                    summary += bundle_summary
-
-                if self._run_request["auto_report"]:
-                    report_paths = self._run_auto_report(engine, stem, None)
-                    if report_paths:
-                        summary += "\n\nReports:\n" + "\n".join(report_paths)
-
-                run_status = "review_required" if engine.error_log else "complete"
+                summary += f"\n\nSaved analysis and run status:\n{run_dir}"
                 self._show(
-                    "warning" if engine.error_log else "info",
-                    "Review Required" if engine.error_log else "Success",
+                    "warning" if outcome.status == "review_required" else "info",
+                    "Review Required" if outcome.status == "review_required" else "Success",
                     summary,
                 )
-            else:
-                run_status = "empty"
+            elif outcome.status == "empty":
                 self._show(
                     "warning",
                     "No Data",
-                    "No billing amounts found.\n\nTips:\n"
-                    "• Uncheck the Account Filter\n"
-                    "• Lower the minimum threshold\n"
-                    "• Check your source files contain EDF billing data",
+                    "No billing records found. Check your sources and filters.",
                 )
-
+            elif outcome.status == "cancelled":
+                self._show(
+                    "warning",
+                    "Cancelled",
+                    "Run cancelled. Completed artifacts remain in the run folder.",
+                )
+            else:
+                self._show(
+                    "error",
+                    "Run Failed",
+                    f"{outcome.error}\n\nCompleted artifacts and run status:\n{run_dir}",
+                )
         except Exception:
-            run_status = "failed"
-            run_error = traceback.format_exc()
-            self._show("error", "Error", f"An error occurred:\n\n{run_error}")
-        finally:
-            from edf_bill_fetcher.helpers.artifacts import write_json
-
-            try:
-                write_json(
-                    {
-                        "status": "cancelled" if self.cancel_event.is_set() else run_status,
-                        "error": run_error,
-                        "config": config,
-                        "error_log": engine.error_log,
-                    },
-                    os.path.join(self._run_request["run_dir"], "run.json"),
-                )
-            except OSError as error:
-                self._show("warning", "Run status", f"Run status could not be saved: {error}")
             engine.cleanup()
+            self._show("error", "Error", traceback.format_exc())
+        finally:
             self._events.put(self._finish)
 
     def _run_auto_report(self, engine, stem, batch_n):
