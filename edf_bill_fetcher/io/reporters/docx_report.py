@@ -37,17 +37,8 @@ from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
 from edf_bill_fetcher.helpers.version import get_package_version as _get_package_version
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS, RenderContext
+from edf_bill_fetcher.models.report_view import ReportView, capture_report_view
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
-from edf_bill_fetcher.processors.financial import (
-    balance_extremes as _compute_balance_extremes,
-)
-from edf_bill_fetcher.processors.financial import (
-    financial_totals as _compute_financial_totals,
-)
-from edf_bill_fetcher.processors.financial import (
-    mean_daily_rate as _compute_mean_daily,
-)
-from edf_bill_fetcher.processors.preparation import analysis_frame, prepare_evidence
 
 # =============================================================================
 # CONSTANTS
@@ -1419,7 +1410,6 @@ def create_appendix_full_evidence(
 # =============================================================================
 
 
-@atomic_output()
 def generate_ombudsman_docx(
     records: list[dict],
     output_path: str,
@@ -1427,31 +1417,18 @@ def generate_ombudsman_docx(
     engine: Any,
     filtered: list | None = None,
 ) -> str:
-    """Generate a DOCX report from the supplied records.
+    """Capture legacy inputs once, then render their accepted result."""
+    view = capture_report_view(records, dict(config), engine, filtered, formats=("docx",))
+    return render_docx(view, output_path)
 
-    The output sections are derived from ``edf_report.REPORT_SECTIONS``
-    via the dispatcher wired up below; the section keys selected via
-    ``config["report_sections"]`` control which sections render.
 
-    Args:
-        records: List of extracted billing records
-        output_path: Path to save the DOCX
-        config: Configuration dictionary
-        engine: EvidenceEngine instance (for metadata)
-        filtered: Filtered-out records (below threshold)
-
-    Returns:
-        Path to generated DOCX
-
-    """
-    if not records:
-        raise ValueError("No records to report on")
-
+@atomic_output()
+def render_docx(view: ReportView, output_path: str) -> str:
+    """Render the accepted result using the existing DOCX layout."""
     section_failures = []
-    prepared = prepare_evidence(records, config)
-    config = dict(prepared.config)
-    records = prepared.records
-    df = prepared.frame
+    records, config, engine = view.records, view.config, view.engine
+    filtered = engine.filtered_records
+    df = view.frame()
     if df.empty:
         raise ValueError("Records DataFrame is empty")
 
@@ -1505,34 +1482,17 @@ def generate_ombudsman_docx(
     # sign (the column is a positive cumulative balance, not a signed
     # delta).  Same helper the PDF report uses, so the two surfaces
     # can never diverge.
-    charges, payments = _compute_financial_totals(df)
+    charges, payments = view.snapshot.summary.charges, view.snapshot.summary.net_credits
     # Same helper supplies opening/closing balance to the DOCX table
     # (which historically omitted those rows entirely; see
     # ``_compute_balance_extremes`` for the "no — placeholders" rule).
-    opening_balance, closing_balance = _compute_balance_extremes(df)
+    opening_balance, closing_balance = view.snapshot.summary.opening_balance, view.snapshot.summary.closing_balance
 
     # Compute dispute flags from the data
-    from edf_bill_fetcher.processors.analysis import compute_dispute_flags
+    dispute = view.model("dispute")
+    flags, flag_counts = dispute.flags, dispute.counts
 
-    # Ensure _dt column exists for the analysis
-    if "_dt" not in df.columns:
-        df["_dt"] = df["Date"].apply(parse_to_sort_date)
-    analysis_df = analysis_frame(df, config)
-    df_sorted = analysis_df
-
-    # Mean daily rate — shared logic (imported from pdf_report).
-    mean_daily = _compute_mean_daily(df_sorted)
-
-    flags, flag_counts = compute_dispute_flags(df_sorted, mean_daily)
-
-    # Section selection: only include sections in config["report_sections"]
-    enabled_sections = set(config.get("report_sections", []))
-    # Backward compatibility: if not specified, enable all
-    # Derive the full set from the registry + framing keys so it can never
-    # drift out of sync with REPORT_SECTIONS (previously omitted "compensation").
-    all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}
-    if not enabled_sections:
-        enabled_sections = all_sections
+    enabled_sections = view.context.selected
 
     def section_enabled(key: str) -> bool:
         return key in enabled_sections
