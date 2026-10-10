@@ -3,17 +3,23 @@ name: Release
 on:
   push:
     tags:
-      # Minor releases (v0.1.0, v0.2.0, ...) trigger a full build +
-      # GitHub Release. Patch tags (v0.0.X) skip this workflow —
-      # they're handled by ci.yml's test-only tag trigger.
-      - 'v0.*.0'
-    branches: [how-its-going]
+      - 'v*'
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
+  validation:
+    name: Validate tagged revision
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
   build:
     name: Build release executables (${{ matrix.os }})
+    needs: validation
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.validation.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +28,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5.0.1
+        with:
+          ref: ${{ needs.validation.outputs.validated_sha }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v6.1.0
@@ -118,7 +126,12 @@ jobs:
 
       - name: Record build dependencies
         shell: bash
-        run: python -m pip freeze --all > dist/build-dependencies.txt
+        env:
+          VALIDATED_SHA: ${{ needs.validation.outputs.validated_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$VALIDATED_SHA"
+          python -m pip freeze --all > dist/build-dependencies.txt
+          python -c 'import json, os; json.dump({"sha": os.environ["VALIDATED_SHA"], "validation": "required-ci-passed"}, open("dist/build-provenance.json", "w"))'
 
       - name: Verify executable exists
         run: |
@@ -139,12 +152,12 @@ jobs:
             # macOS: zip the whole .app bundle (preserves symlinks so the
             # ad-hoc signature survives) plus the raw binary.
             zip -q -r "EDF_Evidence_Collector-macos-${TAG}.zip" \
-              dist/EDF_Evidence_Collector.app dist/EDF_Evidence_Collector dist/build-dependencies.txt
+              dist/EDF_Evidence_Collector.app dist/EDF_Evidence_Collector dist/build-dependencies.txt dist/build-provenance.json
           elif [ "$RUNNER_OS" = "Windows" ]; then
             # Windows: PowerShell Compress-Archive to avoid zip quirks.
-            powershell -Command "Compress-Archive -Path dist/EDF_Evidence_Collector.exe,dist/build-dependencies.txt -DestinationPath 'EDF_Evidence_Collector-windows-${TAG}.zip' -Force"
+            powershell -Command "Compress-Archive -Path dist/EDF_Evidence_Collector.exe,dist/build-dependencies.txt,dist/build-provenance.json -DestinationPath 'EDF_Evidence_Collector-windows-${TAG}.zip' -Force"
           else
-            zip -q "EDF_Evidence_Collector-ubuntu-${TAG}.zip" dist/EDF_Evidence_Collector dist/build-dependencies.txt
+            zip -q "EDF_Evidence_Collector-ubuntu-${TAG}.zip" dist/EDF_Evidence_Collector dist/build-dependencies.txt dist/build-provenance.json
           fi
           ls -la ./*.zip
 
@@ -159,7 +172,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [validation, build]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

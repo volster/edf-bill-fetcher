@@ -3,12 +3,11 @@ name: CI
 on:
   push:
     branches: [How-it-started, things-got-out-of-hand, how-its-going]
-    # Patch-tag CI: runs on every 0.0.X tag (patch releases) on the
-    # how-its-going branch only — that's the release line.
-    # v0.X.0 (minor) tags are handled by release.yml (build + GitHub
-    # Release) instead.
-    tags:
-      - 'v0.0.*'
+  workflow_call:
+    outputs:
+      validated_sha:
+        description: Revision accepted by every required CI matrix leg
+        value: ${{ jobs.validation.outputs.validated_sha }}
   pull_request:
     branches: [How-it-started, things-got-out-of-hand, how-its-going]
 
@@ -373,3 +372,21 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  validation:
+    name: Required validation
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      validated_sha: ${{ steps.revision.outputs.sha }}
+    steps:
+      - name: Require every matrix leg to succeed
+        env:
+          MATRIX_RESULT: ${{ needs.test.result }}
+        run: test "$MATRIX_RESULT" = success
+      - name: Record validated revision
+        id: revision
+        env:
+          VALIDATED_SHA: ${{ github.sha }}
+        run: echo "sha=$VALIDATED_SHA" >> "$GITHUB_OUTPUT"
