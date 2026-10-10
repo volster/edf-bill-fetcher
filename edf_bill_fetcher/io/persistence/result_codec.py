@@ -199,3 +199,47 @@ def decode_result(payload: object) -> AnalysisSnapshot:
         freeze_json(analysis["methods"]),
         analysis["input_fingerprint"],
     )
+
+
+def migrate_legacy(payload: object, request: RunRequest | None = None) -> AnalysisSnapshot:
+    """Analyse preserved legacy evidence, recording unavailable historical context."""
+    from edf_bill_fetcher.application.analysis_service import analyse_prepared
+    from edf_bill_fetcher.application.legacy_adapter import capture_legacy
+    from edf_bill_fetcher.application.preparation_service import prepare_snapshot
+
+    if isinstance(payload, list):
+        state: dict = {"records": payload}
+    elif isinstance(payload, dict):
+        state = dict(payload)
+        version = state.get("version", 1)
+        if type(version) is not int or version not in (1, 2) or "schema_version" in state:
+            raise ValueError("Unsupported legacy evidence version")
+        if "records" not in state:
+            raise ValueError("Legacy evidence must contain records")
+    else:
+        raise ValueError("Legacy evidence must be an object or records array")
+    records = state.get("original_records", state["records"])
+    if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
+        raise ValueError("Legacy records must be objects")
+    cfg = state.get("config", {})
+    if not isinstance(cfg, dict):
+        raise ValueError("Legacy configuration must be an object")
+    if request is None:
+        if not cfg.get("as_of") or not state.get("extracted_at"):
+            raise ValueError("Legacy input lacks captured date/context; supply legacy_request")
+        raw_created = _string(state["extracted_at"])
+        run_id = "legacy-" + hashlib.sha256(canonical_text(payload).encode()).hexdigest()
+        request = RunRequest(
+            run_id,
+            datetime.fromisoformat(raw_created),
+            date.fromisoformat(cfg["as_of"]),
+            (),
+            freeze_json(cfg),
+        )
+    notes = ["Analysis recomputed using current legacy methods; historical methodology unavailable"]
+    if "original_records" not in state:
+        notes.append("Canonical-only input: original extraction observations unavailable")
+    if not state.get("source_manifest"):
+        notes.append("Original source manifest unavailable; no source links inferred")
+    state["migration_notes"] = notes
+    return analyse_prepared(prepare_snapshot(capture_legacy(records, state, request)))
