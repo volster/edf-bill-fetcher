@@ -67,6 +67,20 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QDialog { background: #F4F6FA; }
 QToolTip { background: #18283F; color: white; padding: 7px; border: none; }
+QComboBox, QSpinBox { background: white; border: 1px solid #C6CFDC;
+    border-radius: 6px; padding: 7px; min-height: 20px; }
+QTableView { background: white; alternate-background-color: #F4F6FA;
+    border: 1px solid #DCE3EC; border-radius: 6px; gridline-color: #E7ECF3; }
+QTableView::item { padding: 5px; }
+QTableView::item:selected { background: #D6E5F5; color: #18283F; }
+QHeaderView::section { background: #EEF3FA; border: none; border-bottom: 1px solid #DCE3EC;
+    padding: 8px; font-weight: 600; }
+QPlainTextEdit { background: white; border: 1px solid #DCE3EC; padding: 7px; }
+QTabWidget::pane { border: none; }
+QTabBar::tab { background: #E8EDF4; padding: 8px 10px; }
+QTabBar::tab:selected { background: white; color: #AF451E; }
+QLabel#pdfCanvas { background: #E5EAF0; color: #637086; padding: 6px; }
+QSplitter::handle { background: #DCE3EC; }
 """
 
 

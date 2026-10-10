@@ -89,6 +89,7 @@ jobs:
             --hidden-import=PySide6.QtCore \
             --hidden-import=PySide6.QtGui \
             --hidden-import=PySide6.QtWidgets \
+            --hidden-import=pypdfium2 \
             --hidden-import=reportlab \
             --hidden-import=reportlab.platypus \
             --hidden-import=reportlab.lib \

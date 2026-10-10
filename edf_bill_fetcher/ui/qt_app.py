@@ -42,6 +42,7 @@ from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
 from edf_bill_fetcher.helpers.artifacts import write_json
 from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS
 from edf_bill_fetcher.ui.qt_jobs import DesktopJob, RunWorker
+from edf_bill_fetcher.ui.qt_review import EvidenceReviewPage
 from edf_bill_fetcher.ui.qt_theme import apply_theme
 from edf_bill_fetcher.ui.qt_widgets import Card, PathField, button, label
 
@@ -217,6 +218,7 @@ class EvidenceWindow(QMainWindow):
         self.current_job: DesktopJob | None = None
         self.last_outcome: RunOutcome | None = None
         self._pending_outcome: RunOutcome | None = None
+        self._review_pending: tuple | None = None
         self.report_options: dict = {"format": "both", "sections": [key for key, _ in SECTIONS]}
         self.checks: dict[str, QCheckBox] = {}
         self.fields: dict[str, QLineEdit | QDoubleSpinBox] = {}
@@ -245,11 +247,14 @@ class EvidenceWindow(QMainWindow):
         navigation.addWidget(label("Evidence\nworkspace", "brand"))
         navigation.addSpacing(32)
         self.nav_buttons = []
-        for index, text in enumerate(["Build evidence pack", "Generate reports", "Preferences"]):
+        for index, text in enumerate(
+            ["Build evidence pack", "Generate reports", "Preferences", "Review evidence"]
+        ):
             action = button(text, lambda checked=False, index=index: self._navigate(index), "nav")
             action.setCheckable(True)
             self.nav_buttons.append(action)
-            navigation.addWidget(action)
+        for index in (0, 3, 1, 2):
+            navigation.addWidget(self.nav_buttons[index])
         navigation.addStretch()
         navigation.addWidget(label("LOCAL WORKSPACE", "eyebrow"))
         navigation.addWidget(
@@ -263,6 +268,10 @@ class EvidenceWindow(QMainWindow):
         self.pages.addWidget(self._build_sources())
         self.pages.addWidget(self._build_reports())
         self.pages.addWidget(self._build_preferences())
+        self.review_page = EvidenceReviewPage(self)
+        self.review_page.changed.connect(self._refresh_state)
+        self.review_page.idle.connect(self._review_idle)
+        self.pages.addWidget(self.review_page)
         workspace.addWidget(self.pages, 1)
         workspace.addWidget(self._build_footer())
         shell.addLayout(workspace, 1)
@@ -505,6 +514,16 @@ class EvidenceWindow(QMainWindow):
         for selected, action in enumerate(self.nav_buttons):
             action.setChecked(selected == index)
         self._refresh_state()
+        if index == 3:
+            self.feedback.hide()
+            self.details_button.hide()
+            self.open_folder_button.hide()
+            if self._review_pending is not None and self.review_page.loader is None:
+                snapshot, directory, path = self._review_pending
+                self._review_pending = None
+                self.review_page.load_analysis(path, snapshot=snapshot, directory=directory)
+        elif self.last_outcome is not None:
+            self._present_outcome(self.last_outcome)
 
     def _adapt_layout(self) -> None:
         wide = self.width() >= 1080
@@ -595,7 +614,16 @@ class EvidenceWindow(QMainWindow):
         if self._busy:
             return
         page = self.pages.currentIndex()
-        if page == 2:
+        if page == 3:
+            self.run_button.setText("Open saved analysis")
+            self.run_button.setEnabled(self.review_page.loader is None)
+            self.status.setText("Read-only evidence review")
+            self.readiness.setText(
+                "Opening and verifying evidence…"
+                if self.review_page.loader is not None
+                else "Search saved records and inspect their original sources."
+            )
+        elif page == 2:
             self.run_button.setText("Back to workspace")
             self.run_button.setEnabled(True)
             self.readiness.setText("Preferences are saved automatically.")
@@ -815,6 +843,10 @@ class EvidenceWindow(QMainWindow):
             self.run_button.setEnabled(False)
             self.status.setText("Finishing the current step…")
             return
+        if self.pages.currentIndex() == 3:
+            self._review_pending = None
+            self.review_page.pick_analysis()
+            return
         if self.pages.currentIndex() == 2:
             self._navigate(0)
             return
@@ -876,6 +908,19 @@ class EvidenceWindow(QMainWindow):
         if self._pending_outcome is not None:
             self.last_outcome = self._pending_outcome
             self._present_outcome(self.last_outcome)
+            if self.last_outcome.snapshot is not None and self.current_job is not None:
+                job = self.current_job
+                directory = (
+                    str(Path(job.input_path).parent)
+                    if job.mode == "saved_result"
+                    else job.directory
+                )
+                path = (
+                    job.input_path
+                    if job.mode == "saved_result"
+                    else str(Path(job.directory) / "result.json")
+                )
+                self._review_pending = (self.last_outcome.snapshot, directory, path)
         if worker is not None:
             worker.deleteLater()
         if self._closing:
@@ -969,14 +1014,24 @@ class EvidenceWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Keep the worker alive until cancellation and cleanup finish."""
+        self.review_page.shutdown()
         if self.worker is not None and self.worker.isRunning():
             self._closing = True
             self._start_or_cancel()
             event.ignore()
             return
+        if self.review_page.has_workers():
+            self._closing = True
+            event.ignore()
+            return
         self._save_timer.stop()
         self.save_settings()
         event.accept()
+
+    @Slot()
+    def _review_idle(self) -> None:
+        if self._closing:
+            self.close()
 
 
 def launch(argv: list[str] | None = None) -> int:

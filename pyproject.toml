@@ -27,6 +27,7 @@ dependencies = [
     # === Runtime core (required for any functional report — Excel + PDF + DOCX) ===
     "pandas>=2.0,<3",
     "pdfplumber>=0.10,<1",
+    "pypdfium2>=4.18,<6",       # Original PDF page previews in the evidence review workspace
     "beautifulsoup4>=4.12,<5",
     "openpyxl>=3.1,<4",
     "numpy>=1.24,<2",           # Pin <2 — see scipy pin below; numpy-2 stubs require PEP-695 mypy parses.

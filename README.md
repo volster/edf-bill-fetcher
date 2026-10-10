@@ -96,6 +96,7 @@ What `pip install -e .` actually pulls in (current version):
 | Library            | Used for                                                                      |
 | ------------------ | ----------------------------------------------------------------------------- |
 | PySide6 Essentials | Qt desktop widgets, layouts, accessibility and background job signals.        |
+| pypdfium2          | Renders original PDF pages in the evidence review screen.                      |
 | pandas / numpy     | DataFrame plumbing across extraction, dedup, statistical analysis, export.    |
 | pdfplumber         | Reading text + tables out of EDF bill PDFs.                                     |
 | beautifulsoup4     | Stripping HTML into text body for PST / HTM ingestion.                         |
@@ -128,12 +129,21 @@ python main.py
 
 Or run the built executable `EDF_Evidence_Collector.exe`.
 
-The Qt workspace has three pages:
+The Qt workspace has four pages:
 
 - **Build evidence pack**: choose PDF and email folders, an Outlook archive,
   or an account-history export. Set an output folder and pack name, then
   create the workbook, saved analysis and optional reports. Each run uses a
   fresh folder so earlier exports remain available.
+- **Review evidence**: search records, bills, payments, findings, duplicates
+  and filtered rows beside their original PDF pages. **Source files** also
+  exposes originals that have no ordinary bill rows, including SAP dumps.
+  Open `result.json` from
+  an earlier pack or review the latest run. Previewing preserves the saved
+  calculations and valuation date; it creates no files and edits no sources.
+  Source IDs, hashes and page ranges keep merged PDFs and moved packs traceable.
+  Findings with only a saved date offer explicitly labelled related records,
+  rather than claiming a source relationship that was never recorded.
 - **Generate reports**: open `result.json` from an earlier run to preserve
   its original calculations and valuation date. Excel imports are also
   supported, with explicit review notes about their limited provenance.
