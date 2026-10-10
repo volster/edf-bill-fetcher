@@ -1,14 +1,14 @@
 """Wave 3 coverage: dialog handlers, thread-marshalling, _run, config branches.
 
-Drives ``edf_bill_fetcher/ui/app.py`` from 43% toward >=95% by exercising
+Exercises ``edf_bill_fetcher/ui/app.py`` through observable UI and artifact behavior:
 modal handlers via boundary mocks (filedialog/messagebox), the EXTRACT
 workflow state machine, thread-marshalling branches, the full ``_run``
 worker, ``load_spreadsheet_and_report``, ``_resolve_output_path``,
 ``_run_auto_report``, ``ReportOptionsDialog``, and ``_load_config`` edges.
 
 Boundary-mock strategy: patch ONLY the filedialog/messagebox call, then
-assert STATE mutations on tk vars / button text. Never assert mock
-call_count or call_args.
+assert UI state, preserved evidence and truthful run manifests. Collector and
+renderer mocks expose external calls without bypassing the coordinator.
 """
 
 from __future__ import annotations
@@ -19,9 +19,12 @@ import tkinter as tk
 from collections.abc import Callable, Generator
 from datetime import date
 from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from edf_bill_fetcher.ui import app as app_module
@@ -480,34 +483,69 @@ class TestResolveOutputPath:
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_engine(records: list | None = None) -> MagicMock:
-    """Build a MagicMock that quacks like EvidenceEngine with populated attrs."""
-    engine = MagicMock()
-    engine.records = records if records is not None else [{"Amount": 100}]
-    engine.error_log = []
-    engine.email_count = 0
-    engine.pdf_count = 1
-    engine.filtered_records = []
-    engine.sap_contract_rows = []
-    engine.sap_meter_rows = []
-    engine.sap_financial_rows = []
-    engine.source_paths = {}
-    engine.source_manifest = {}
-    engine.config = {"as_of": "2026-06-01", "analysis_min": 0}
-    engine.__getstate__ = lambda self: {
-        "records": engine.records,
-        "config": engine.config,
-        "error_log": engine.error_log,
-        "filtered_records": engine.filtered_records,
-        "email_count": engine.email_count,
-        "pdf_count": engine.pdf_count,
-        "sap_contract_rows": [],
-        "sap_meter_rows": [],
-        "sap_financial_rows": [],
-        "source_paths": {},
-        "source_manifest": {},
-    }
-    return engine
+class _DataEngine:
+    """Explicit collector data; runtime primitives never enter saved evidence."""
+
+    def __init__(self, records: list | None = None) -> None:
+        self.records = records if records is not None else _bill_records()
+        self.error_log: list[str] = []
+        self.email_count = 0
+        self.pdf_count = 1
+        self.filtered_records: list[dict] = []
+        self.sap_contract_rows: list[dict] = []
+        self.sap_meter_rows: list[dict] = []
+        self.sap_financial_rows: list[dict] = []
+        self.source_paths: dict = {}
+        self.source_manifest: dict = {}
+        self.config = {"as_of": "2026-06-01", "analysis_min": 0}
+        self.cancel_event = Event()
+        self.cleanup = MagicMock()
+        self.crawl_pst = MagicMock()
+        self.process_htm_file = MagicMock()
+        self.crawl_local_pdfs = MagicMock()
+        self.process_eml_folder = MagicMock()
+        self.process_msg_folder = MagicMock()
+
+    def __getstate__(self) -> dict:
+        return {
+            key: getattr(self, key)
+            for key in (
+                "records",
+                "config",
+                "error_log",
+                "filtered_records",
+                "email_count",
+                "pdf_count",
+                "sap_contract_rows",
+                "sap_meter_rows",
+                "sap_financial_rows",
+                "source_paths",
+                "source_manifest",
+            )
+        }
+
+
+def _bill_records() -> list[dict]:
+    return [
+        {
+            "Date": "31/01/2026",
+            "Account": "A-TEST",
+            "Fuel": "Electricity",
+            "Entry Type": "New Bill",
+            "Invoice #": "KI-TEST",
+            "Amount (£)": 100,
+            "Amount Kind": "Balance",
+            "Period Charge (£)": 60,
+        }
+    ]
+
+
+def _make_mock_engine(records: list | None = None) -> _DataEngine:
+    return _DataEngine(records)
+
+
+def _run_manifest(app: App) -> dict:
+    return cast(dict, json.loads((Path(app._run_request["run_dir"]) / "run.json").read_text()))
 
 
 def _run_worker(app: App) -> None:
@@ -517,262 +555,264 @@ def _run_worker(app: App) -> None:
     app._poll_events()
 
 
-def _auto_report(app: App, engine: MagicMock, stem: str, batch_n: int) -> list[str]:
+def _auto_report(app: App, engine: _DataEngine, stem: str, batch_n: int) -> list[str]:
     app._run_request = app._snapshot_request()
     return cast(list[str], app._run_auto_report(engine, stem, batch_n))
 
 
 class TestRunWorker:
-    """Drive _run directly (it's the thread target) with mocked dependencies.
-
-    The autouse ``_suppress_messagebox`` fixture patches all three
-    ``messagebox.show*`` calls and exposes them as ``self.mock_info``,
-    ``self.mock_warn``, ``self.mock_err`` so no real modal dialog can block
-    and individual tests can assert on the recorded calls.
-    """
+    """Exercise the actual coordinator, storage and UI state; mock only external I/O."""
 
     @pytest.fixture(autouse=True)
-    def _suppress_messagebox(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boundaries(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.mock_info = MagicMock()
         self.mock_warn = MagicMock()
         self.mock_err = MagicMock()
-        monkeypatch.setattr("tkinter.messagebox.showinfo", self.mock_info)
-        monkeypatch.setattr("tkinter.messagebox.showwarning", self.mock_warn)
-        monkeypatch.setattr("tkinter.messagebox.showerror", self.mock_err)
+        for kind, mock in (
+            ("info", self.mock_info),
+            ("warning", self.mock_warn),
+            ("error", self.mock_err),
+        ):
+            monkeypatch.setattr("tkinter.messagebox.show" + kind, mock)
+        self.rendered: dict[str, Any] = {}
+        for fmt, module in (
+            ("xlsx", "edf_bill_fetcher.io.writers.export"),
+            ("pdf", "edf_bill_fetcher.io.reporters.pdf_report"),
+            ("docx", "edf_bill_fetcher.io.reporters.docx_report"),
+            ("html", "edf_bill_fetcher.io.reporters.html_report"),
+        ):
 
-    def test_cancel_before_run_shows_cancelled_warning(self, app: App, root: tk.Tk) -> None:
-        app.pst_path.set("/tmp/none.pst")
+            def render(view, path, fmt=fmt):
+                self.rendered[fmt] = view
+                Path(path).write_bytes(b"complete renderer output")
+
+            monkeypatch.setattr(module + ".render_" + fmt, render)
+
+    def test_cancel_before_run_shows_cancelled_warning(self, app: App) -> None:
         app.cancel_event.set()
+        engine = _make_mock_engine()
+        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
+            _run_worker(app)
+        assert _run_manifest(app)["status"] == "cancelled"
+        assert _run_manifest(app)["result"] is None
+        assert self.mock_warn.call_args[0][0] == "Cancelled"
+        assert not self.rendered
+        engine.cleanup.assert_called_once()
+
+    def test_missing_pypff_records_failed_run(
+        self, app: App, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+
+        app.pst_path.set("/tmp/fake.pst")
+        monkeypatch.setattr(app_module, "HAS_PYPFF", False)
+        monkeypatch.setitem(sys.modules, "pypff", None)
+        engine = _make_mock_engine(records=[])
+        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
+            _run_worker(app)
+        assert _run_manifest(app)["status"] == "failed"
+        assert "pypff" in _run_manifest(app)["error"]
+        assert self.mock_err.call_args[0][0] == "Run Failed"
+        engine.cleanup.assert_called_once()
+
+    def test_pypff_File_fallback_closes_archive(
+        self, app: App, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app.pst_path.set("/tmp/fake.pst")
+        monkeypatch.setattr(app_module, "HAS_PYPFF", True)
+        archive = MagicMock()
+        constructor = MagicMock(return_value=archive)
+        engine = _make_mock_engine(records=[])
+        with patch("edf_bill_fetcher.ui.app.pypff", SimpleNamespace(File=constructor)):
+            with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
+                _run_worker(app)
+        constructor.assert_called_once()
+        archive.open.assert_called_once_with("/tmp/fake.pst")
+        engine.crawl_pst.assert_called_once_with(archive.get_root_folder.return_value)
+        archive.close.assert_called_once()
+        assert _run_manifest(app)["status"] == "empty"
+
+    def test_pypff_missing_constructors_records_failure(
+        self, app: App, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app.pst_path.set("/tmp/fake.pst")
+        monkeypatch.setattr(app_module, "HAS_PYPFF", True)
+        with patch("edf_bill_fetcher.ui.app.pypff", SimpleNamespace()):
+            with patch(
+                "edf_bill_fetcher.collectors.engine.EvidenceEngine",
+                return_value=_make_mock_engine([]),
+            ):
+                _run_worker(app)
+        assert _run_manifest(app)["status"] == "failed"
+        assert "no file constructor" in _run_manifest(app)["error"]
+        self.mock_err.assert_called_once()
+
+    def test_empty_run_preserves_result_and_shows_no_data(self, app: App) -> None:
+        with patch(
+            "edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=_make_mock_engine([])
+        ):
+            _run_worker(app)
+        manifest = _run_manifest(app)
+        assert manifest["status"] == "empty"
+        assert manifest["result"]["sha256"]
+        assert manifest["artifacts"] == {}
+        assert self.mock_warn.call_args[0][0] == "No Data"
+
+    def test_records_export_snapshot_and_reset_controls(self, app: App) -> None:
+        engine = _make_mock_engine()
+        app._set_extract_running()
+        app.load_report_btn.config(state="disabled")
+        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
+            with patch.object(app, "_save_config") as saved:
+                _run_worker(app)
+        saved.assert_called_once()
+        assert self.mock_info.call_args[0][0] == "Success"
+        assert _run_manifest(app)["status"] == "complete"
+        assert set(_run_manifest(app)["artifacts"]) == {"xlsx"}
+        assert self.rendered["xlsx"].snapshot.summary.charges == 60
+        assert str(app.run_btn["text"]) == "EXTRACT TO EXCEL"
+        assert str(app.load_report_btn["state"]) == "normal"
+        engine.cleanup.assert_called_once()
+
+    def test_collection_errors_require_review_and_are_preserved(self, app: App) -> None:
+        engine = _make_mock_engine()
+        engine.error_log = ["parse error 1"]
+        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
+            _run_worker(app)
+        assert self.mock_warn.call_args[0][0] == "Review Required"
+        assert _run_manifest(app)["status"] == "review_required"
+        saved = json.loads((Path(app._run_request["run_dir"]) / "result.json").read_text())
+        assert saved["evidence"]["legacy_state"]["error_log"] == ["parse error 1"]
+
+    def test_bundle_copies_sources_and_builds_index(self, app: App) -> None:
+        app.save_evidence_files_var.set(True)
+        with patch(
+            "edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=_make_mock_engine()
+        ):
+            with patch(
+                "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files", return_value={}
+            ) as copy:
+                with patch(
+                    "edf_bill_fetcher.io.writers.evidence_bundle.build_bundle_index"
+                ) as index:
+                    _run_worker(app)
+        copy.assert_called_once()
+        index.assert_called_once()
+        assert not copy.call_args[0][0].empty
+        assert _run_manifest(app)["status"] == "complete"
+
+    def test_bundle_failure_stops_before_analysis(self, app: App) -> None:
+        app.save_evidence_files_var.set(True)
+        engine = _make_mock_engine()
+        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
+            with patch(
+                "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files",
+                side_effect=OSError("bundle full"),
+            ):
+                _run_worker(app)
+        manifest = _run_manifest(app)
+        assert manifest["status"] == "failed"
+        assert manifest["stage"] == "copying_sources"
+        assert manifest["result"] is None
+        assert not self.rendered
+        engine.cleanup.assert_called_once()
+
+    def test_auto_reports_use_same_saved_analysis(
+        self, app: App, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app.auto_generate_report.set(True)
+        app._report_options = {"format": "both", "sections": ["exec_summary"]}
+        for flag in ("HAS_PDF_REPORT", "HAS_DOCX_REPORT", "HAS_HTML_REPORT"):
+            monkeypatch.setattr(app_module, flag, True)
         with patch(
             "edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=_make_mock_engine()
         ):
             _run_worker(app)
-            root.update()
-            root.update()
-        self.mock_warn.assert_called_once()
-        assert self.mock_warn.call_args[0][0] == "Cancelled"
+        assert set(self.rendered) == {"xlsx", "pdf", "docx", "html"}
+        assert len({id(view.snapshot) for view in self.rendered.values()}) == 1
+        assert set(_run_manifest(app)["artifacts"]) == set(self.rendered)
 
-    def test_no_pypff_shows_warning(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("widget", "path", "method"),
+        [
+            ("htm_path", "/tmp/export.htm", "process_htm_file"),
+            ("pdf_dir", "/tmp/pdfs", "crawl_local_pdfs"),
+            ("eml_msg_dir", "/tmp/mail", "process_eml_folder"),
+        ],
+    )
+    def test_selected_source_reaches_collector(
+        self, app: App, widget: str, path: str, method: str
     ) -> None:
-        monkeypatch.setattr(os.path, "exists", lambda p: True)
-        app.pst_path.set("/tmp/fake.pst")
-        monkeypatch.setattr(app_module, "HAS_PYPFF", False)
-        engine = _make_mock_engine(records=[])
+        getattr(app, widget).set(path)
+        engine = _make_mock_engine([])
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
             _run_worker(app)
-            root.update()
-            root.update()
-        calls = self.mock_warn.call_args_list
-        assert any(c[0][0] == "PST" for c in calls)
+        getattr(engine, method).assert_called_once_with(path)
+        assert _run_manifest(app)["status"] == "empty"
 
-    def test_pypff_attribute_error_fallback_to_File(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(os.path, "exists", lambda p: True)
-        app.pst_path.set("/tmp/fake.pst")
-        monkeypatch.setattr(app_module, "HAS_PYPFF", True)
-
-        fake_pff_instance = MagicMock()
-        fake_pff_instance.get_root_folder.return_value = MagicMock()
-
-        class _FakePypff:
-            def file(self) -> None:
-                raise AttributeError("no file attr")
-
-            File = MagicMock(return_value=fake_pff_instance)
-
-        fake_pypff = _FakePypff()
-        engine = _make_mock_engine(records=[])
-        with patch("edf_bill_fetcher.ui.app.pypff", fake_pypff):
-            with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-                _run_worker(app)
-                root.update()
-                root.update()
-        fake_pypff.File.assert_called_once()
-
-    def test_pypff_file_and_File_both_missing_raises(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(os.path, "exists", lambda p: True)
-        app.pst_path.set("/tmp/fake.pst")
-        monkeypatch.setattr(app_module, "HAS_PYPFF", True)
-
-        class _EmptyPypff:
-            pass
-
-        engine = _make_mock_engine(records=[])
-        with patch("edf_bill_fetcher.ui.app.pypff", _EmptyPypff()):
-            with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-                _run_worker(app)
-                root.update()
-                root.update()
-        self.mock_err.assert_called_once()
-        assert "Error" in self.mock_err.call_args[0][0]
-
-    def test_records_empty_shows_no_data_warning(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        app.pdf_dir.set("/tmp/pdfs")
-        monkeypatch.setattr(os.path, "exists", lambda p: True)
-        engine = _make_mock_engine(records=[])
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            _run_worker(app)
-            root.update()
-            root.update()
-        calls = self.mock_warn.call_args_list
-        assert any(c[0][0] == "No Data" for c in calls)
-
-    def test_records_present_exports_excel_and_shows_summary(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        app.output_folder.set(str(tmp_path))
-        app.output_name.set("TestEvidence.xlsx")
-        engine = _make_mock_engine(records=[{"Amount": 100}, {"Amount": 200}])
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            with patch("edf_bill_fetcher.io.writers.export.export_to_excel") as mock_export:
-                with patch.object(app, "_save_config") as mock_save:
-                    _run_worker(app)
-                    root.update()
-                    root.update()
-                    mock_export.assert_called_once()
-                    mock_save.assert_called_once()
-        self.mock_info.assert_called_once()
-        assert self.mock_info.call_args[0][0] == "Success"
-
-    def test_records_present_with_error_log_in_summary(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        app.output_folder.set(str(tmp_path))
-        engine = _make_mock_engine(records=[{"Amount": 100}])
-        engine.error_log = ["parse error 1"]
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            with patch("edf_bill_fetcher.io.writers.export.export_to_excel"):
-                _run_worker(app)
-                root.update()
-                root.update()
-        summary = self.mock_warn.call_args[0][1]
-        assert "Parse errors: 1" in summary
-
-    def test_save_evidence_files_bundle_path(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        app.output_folder.set(str(tmp_path))
-        app.save_evidence_files_var.set(True)
-        engine = _make_mock_engine(records=[{"Amount": 100}])
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            with patch("edf_bill_fetcher.io.writers.export.export_to_excel"):
-                with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
-                    mock_pd.DataFrame.return_value = MagicMock()
-                    with patch(
-                        "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files",
-                        return_value={"a": "b"},
-                    ) as mock_save_ev:
-                        with patch(
-                            "edf_bill_fetcher.io.writers.evidence_bundle.build_bundle_index"
-                        ) as mock_build:
-                            _run_worker(app)
-                            root.update()
-                            root.update()
-                            mock_save_ev.assert_called_once()
-                            mock_build.assert_called_once()
-
-    def test_save_evidence_files_bundle_failure_shows_warning(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        app.output_folder.set(str(tmp_path))
-        app.save_evidence_files_var.set(True)
-        engine = _make_mock_engine(records=[{"Amount": 100}])
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            with patch("edf_bill_fetcher.io.writers.export.export_to_excel"):
-                with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
-                    mock_pd.DataFrame.return_value = MagicMock()
-                    with patch(
-                        "edf_bill_fetcher.io.writers.evidence_bundle.save_evidence_files",
-                        side_effect=RuntimeError("boom"),
-                    ):
-                        _run_worker(app)
-                        root.update()
-                        root.update()
-        calls = self.mock_warn.call_args_list
-        assert any(c[0][0] == "Bundle step failed" for c in calls)
-
-    def test_auto_report_path_when_toggle_on(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        app.output_folder.set(str(tmp_path))
-        app.auto_generate_report.set(True)
-        monkeypatch.setattr(app_module, "HAS_PDF_REPORT", True)
-        monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", True)
-        engine = _make_mock_engine(records=[{"Amount": 100}])
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            with patch("edf_bill_fetcher.io.writers.export.export_to_excel"):
-                with patch.object(
-                    app, "_run_auto_report", return_value=["/tmp/r.pdf"]
-                ) as mock_auto:
-                    _run_worker(app)
-                    root.update()
-                    root.update()
-                    mock_auto.assert_called_once_with(engine, "EDF_Dispute_Evidence", None)
-        summary = self.mock_info.call_args[0][1]
-        assert "Reports:" in summary
-
-    def test_htm_branch_processes(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(os.path, "exists", lambda p: True)
-        app.htm_path.set("/tmp/export.htm")
-        engine = _make_mock_engine(records=[])
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            _run_worker(app)
-            root.update()
-            root.update()
-            engine.process_htm_file.assert_called_once_with("/tmp/export.htm")
-
-    def test_pdf_branch_crawls(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(os.path, "exists", lambda p: True)
-        app.pdf_dir.set("/tmp/pdfs")
-        engine = _make_mock_engine(records=[])
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            _run_worker(app)
-            root.update()
-            root.update()
-            engine.crawl_local_pdfs.assert_called_once_with("/tmp/pdfs")
-
-    def test_output_folder_fallback_to_source_dir_when_empty(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        pst_file = tmp_path / "archive.pst"
-        pst_file.write_text("")
-        app.pst_path.set(str(pst_file))
+    def test_output_folder_falls_back_to_source_directory(self, app: App, tmp_path: Path) -> None:
+        source = tmp_path / "export.htm"
+        source.write_text("")
+        app.htm_path.set(str(source))
         app.output_folder.set("")
-        app.output_name.set("Out.xlsx")
-        # Suppress the PST branch so pypff doesn't try to open the fake file.
-        monkeypatch.setattr(app_module, "HAS_PYPFF", False)
-        engine = _make_mock_engine(records=[{"Amount": 100}])
-        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            with patch("edf_bill_fetcher.io.writers.export.export_to_excel"):
-                _run_worker(app)
-                root.update()
-                root.update()
-                assert Path(app._run_request["run_dir"]).parent == tmp_path
+        with patch(
+            "edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=_make_mock_engine()
+        ):
+            _run_worker(app)
+        assert Path(app._run_request["run_dir"]).parent == tmp_path
+        assert _run_manifest(app)["status"] == "complete"
 
-    def test_stem_strips_xlsx_suffix(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        app.output_folder.set(str(tmp_path))
+    def test_capture_isolated_from_widget_changes_and_repeated_runs(self, app: App) -> None:
         app.output_name.set("MyReport.xlsx")
-        engine = _make_mock_engine(records=[{"Amount": 100}])
+        app.analysis_min.set(0)
+        first = app._snapshot_request()
+        app.analysis_min.set(999999)
+        app.output_name.set("Changed.xlsx")
+        app._run_request = first
+        with patch(
+            "edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=_make_mock_engine()
+        ):
+            app._run()
+            app._poll_events()
+        manifest = _run_manifest(app)
+        assert self.rendered["xlsx"].config["analysis_min"] == 0
+        assert Path(manifest["artifacts"]["xlsx"]["path"]).name == "MyReport.xlsx"
+        previous = {p: p.read_bytes() for p in Path(first["run_dir"]).iterdir() if p.is_file()}
+        with patch(
+            "edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=_make_mock_engine()
+        ):
+            _run_worker(app)
+        assert app._run_request["run_dir"] != first["run_dir"]
+        assert all(p.read_bytes() == content for p, content in previous.items())
+
+    def test_renderer_failure_preserves_analysis_and_resets_controls(
+        self, app: App, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(view, path):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("edf_bill_fetcher.io.writers.export.render_xlsx", fail)
+        app._set_extract_running()
+        engine = _make_mock_engine()
         with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
-            with patch("edf_bill_fetcher.io.writers.export.export_to_excel") as mock_export:
-                _run_worker(app)
-                root.update()
-                root.update()
-                xlsx_path = mock_export.call_args[0][1]
-                assert "MyReport_" in xlsx_path
-                assert not xlsx_path.endswith(".xlsx.xlsx")
+            _run_worker(app)
+        manifest = _run_manifest(app)
+        assert manifest["status"] == "failed"
+        assert manifest["result"]["sha256"]
+        assert manifest["artifacts"] == {}
+        assert self.mock_err.call_args[0][0] == "Run Failed"
+        assert str(app.run_btn["text"]) == "EXTRACT TO EXCEL"
+        engine.cleanup.assert_called_once()
+
+    def test_constructor_failure_resets_controls(self, app: App) -> None:
+        app._set_extract_running()
+        with patch(
+            "edf_bill_fetcher.collectors.engine.EvidenceEngine",
+            side_effect=OSError("engine unavailable"),
+        ):
+            _run_worker(app)
+        assert self.mock_err.call_args[0] == ("Run Failed", "engine unavailable")
+        assert str(app.run_btn["text"]) == "EXTRACT TO EXCEL"
 
 
 # ---------------------------------------------------------------------------
@@ -929,6 +969,9 @@ class _SyncThread:
     def join(self, timeout: float | None = None) -> None:
         pass
 
+    def is_alive(self) -> bool:
+        return False
+
 
 class TestLoadSpreadsheetAndReport:
     def test_no_report_libs_shows_error(self, app: App, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -961,69 +1004,54 @@ class TestLoadSpreadsheetAndReport:
                     mock_warn.assert_called_once()
                     assert mock_warn.call_args[0][0] == "No Data"
 
-    def test_happy_path_generates_reports(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    @pytest.mark.parametrize("fmt", ["both", "html"])
+    def test_real_workbook_import_preserves_limitations(
+        self, app: App, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fmt: str
     ) -> None:
-        monkeypatch.setattr(app_module, "HAS_PDF_REPORT", True)
-        monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", True)
-        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", False)
-        app._report_options = {"format": "both", "sections": ["exec_summary"]}
-        app.output_folder.set(str(tmp_path))
-        fake_xlsx = tmp_path / "source.xlsx"
-        fake_xlsx.write_text("")
+        for flag in ("HAS_PDF_REPORT", "HAS_DOCX_REPORT", "HAS_HTML_REPORT"):
+            monkeypatch.setattr(app_module, flag, True)
+        app._report_options = {"format": fmt, "sections": ["exec_summary"]}
+        source = tmp_path / "source.xlsx"
+        with pd.ExcelWriter(source) as workbook:
+            pd.DataFrame(_bill_records()).to_excel(
+                workbook, sheet_name="EDF Evidence Report", index=False
+            )
+            pd.DataFrame([["as_of", "2026-01-31"]]).to_excel(
+                workbook, sheet_name="Provenance", header=False, index=False
+            )
+        original = source.read_bytes()
+        rendered = []
 
+        def render(view, path):
+            rendered.append(view)
+            Path(path).write_bytes(b"complete report")
+
+        for report_fmt in ("pdf", "docx", "html"):
+            monkeypatch.setattr(
+                f"edf_bill_fetcher.io.reporters.{report_fmt}_report.render_{report_fmt}", render
+            )
         with patch.object(app_module.threading, "Thread", _SyncThread):
-            with patch("tkinter.filedialog.askopenfilename", return_value=str(fake_xlsx)):
-                with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
-                    mock_df = MagicMock()
-                    mock_df.empty = False
-                    mock_df.to_dict.return_value = [{"Amount": 100}]
-                    mock_pd.read_excel.return_value = mock_df
-                    with patch(
-                        "edf_bill_fetcher.io.reporters.pdf_report.generate_pdf_from_gui",
-                        return_value=(True, "PDF done"),
-                    ):
-                        with patch(
-                            "edf_bill_fetcher.io.reporters.docx_report.generate_docx_from_gui",
-                            return_value=(True, "DOCX done"),
-                        ):
-                            with patch("tkinter.messagebox.showinfo") as mock_info:
-                                app.load_spreadsheet_and_report()
-                                app._poll_events()
-                                root.update()
-                                root.update()
-                                assert mock_info.called
-                                assert mock_info.call_args[0][0] == "Reports Generated"
-
-    def test_html_format_generates_html(
-        self, app: App, root: tk.Tk, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setattr(app_module, "HAS_PDF_REPORT", False)
-        monkeypatch.setattr(app_module, "HAS_DOCX_REPORT", False)
-        monkeypatch.setattr(app_module, "HAS_HTML_REPORT", True)
-        app._report_options = {"format": "html", "sections": ["exec_summary"]}
-        app.output_folder.set(str(tmp_path))
-        fake_xlsx = tmp_path / "source.xlsx"
-        fake_xlsx.write_text("")
-
-        with patch.object(app_module.threading, "Thread", _SyncThread):
-            with patch("tkinter.filedialog.askopenfilename", return_value=str(fake_xlsx)):
-                with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
-                    mock_df = MagicMock()
-                    mock_df.empty = False
-                    mock_df.to_dict.return_value = [{"Amount": 100}]
-                    mock_pd.read_excel.return_value = mock_df
-                    with patch(
-                        "edf_bill_fetcher.io.reporters.html_report.generate_html_from_gui",
-                        return_value=(True, "HTML done"),
-                    ):
-                        with patch("tkinter.messagebox.showinfo") as mock_info:
-                            app.load_spreadsheet_and_report()
-                            app._poll_events()
-                            root.update()
-                            root.update()
-                            assert mock_info.called
-                            assert mock_info.call_args[0][0] == "Reports Generated"
+            with patch("tkinter.filedialog.askopenfilename", return_value=str(source)):
+                with patch("tkinter.messagebox.showwarning") as warning:
+                    app.load_spreadsheet_and_report()
+                    app._poll_events()
+        assert warning.call_args[0][0] == "Reports Generated — Workbook Import"
+        assert "limited provenance" in warning.call_args[0][1]
+        run_dir = next(tmp_path.glob("source_report_*"))
+        manifest = json.loads((run_dir / "run.json").read_text())
+        result = json.loads((run_dir / "result.json").read_text())
+        assert manifest["status"] == "review_required"
+        assert set(manifest["artifacts"]) == (
+            {"html"} if fmt == "html" else {"pdf", "docx", "html"}
+        )
+        state = result["evidence"]["legacy_state"]
+        assert state["provenance"] == "lossy_workbook_import"
+        assert state["source_manifest"] == {}
+        assert result["request"]["as_of"] == "2026-01-31"
+        assert state["error_log"]
+        assert len({id(view.snapshot) for view in rendered}) == 1
+        assert source.read_bytes() == original
+        assert str(app.load_report_btn["state"]) == "normal"
 
     def test_no_report_paths_resolved_warning(
         self, app: App, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
