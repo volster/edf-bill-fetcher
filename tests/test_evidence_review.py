@@ -472,7 +472,7 @@ def test_browse_and_explicit_open_original_callback(window, application, pack, m
     assert not urls
     window.review_page.open_source.click()
     wait_until(application, lambda: not window.review_page.has_workers())
-    assert urls[0].toLocalFile() == str(original)
+    assert Path(urls[0].toLocalFile()) == original
     original.write_bytes(b"changed after preview")
     window.review_page.open_source.click()
     wait_until(application, lambda: not window.review_page.has_workers())

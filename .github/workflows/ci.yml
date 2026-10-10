@@ -361,14 +361,52 @@ jobs:
         run: |
           # Headless Linux CI has no X server; xvfb-run spawns a
           # virtual framebuffer so tkinter can create a Tk root.
-          xvfb-run -a pytest --cov=. --cov-report=xml --cov-report=term-missing
+          xvfb-run -a pytest --cov=. --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
 
       - name: Run tests with coverage (macOS / Windows)
         if: runner.os != 'Linux'
         run: |
           # macOS Cocoa provides a display by default.
           # Windows conda env ships a complete Tcl/Tk.
-          pytest --cov=. --cov-report=xml --cov-report=term-missing
+          pytest --cov=. --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
+
+      - name: Publish test failures in the job summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import html
+          import os
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          results = Path("test-results.xml")
+          if results.is_file():
+              suites = ElementTree.parse(results).getroot()
+              cases = list(suites.iter("testcase"))
+              failures = [
+                  (case, problem)
+                  for case in cases
+                  for problem in case
+                  if problem.tag in {"failure", "error"}
+              ]
+              skipped = sum(case.find("skipped") is not None for case in cases)
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(
+                      f"### Test results\n\n{len(cases)} tests · "
+                      f"{len(failures)} failures/errors · {skipped} skipped\n\n"
+                  )
+                  for case, problem in failures[:20]:
+                      test_id = case.get("classname", "") + "::" + case.get("name", "")
+                      name = html.escape(test_id)
+                      detail = html.escape((problem.text or problem.get("message", ""))[:6000])
+                      summary.write(f"<details><summary>{name}</summary><pre>{detail}</pre></details>\n\n")
+                      annotation = test_id + ": " + problem.get("message", "Test failed")[:1200]
+                      annotation = annotation.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                      print("::error title=Test failure::" + annotation)
+                  if len(failures) > 20:
+                      summary.write("Additional failures are listed in the pytest log.\n")
+          PY
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

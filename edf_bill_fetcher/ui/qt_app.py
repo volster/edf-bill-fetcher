@@ -44,7 +44,7 @@ from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS
 from edf_bill_fetcher.ui.qt_jobs import DesktopJob, RunWorker
 from edf_bill_fetcher.ui.qt_review import EvidenceReviewPage
 from edf_bill_fetcher.ui.qt_theme import apply_theme
-from edf_bill_fetcher.ui.qt_widgets import Card, PathField, button, label
+from edf_bill_fetcher.ui.qt_widgets import Card, PathField, WrappedCheckBox, button, label
 
 SECTIONS = [
     ("cover", "Cover page"),
@@ -123,7 +123,7 @@ class ReportDialog(QDialog):
             radio.setChecked(key == options.get("format", "both"))
             item = QVBoxLayout()
             item.addWidget(radio)
-            item.addWidget(label(hint, "hint"))
+            item.addWidget(label(hint, "hint", wrap=True))
             grid.addLayout(item, index // 2, index % 2)
         if self.formats.checkedId() < 0:
             self.formats.button(0).setChecked(True)
@@ -142,7 +142,7 @@ class ReportDialog(QDialog):
         self.section_grid = QGridLayout()
         self.section_grid.setHorizontalSpacing(20)
         for index, (key, title) in enumerate(SECTIONS):
-            check = QCheckBox(title.replace("&", "&&"))
+            check = WrappedCheckBox(title)
             check.setChecked(key in selected)
             check.toggled.connect(self._update_count)
             self.section_checks[key] = check
@@ -324,7 +324,7 @@ class EvidenceWindow(QMainWindow):
         self.output_card.body.addWidget(
             self._check("save_evidence_files", "Include original source files")
         )
-        self.include_reports = QCheckBox("Include PDF, Word or HTML reports")
+        self.include_reports = WrappedCheckBox("Include PDF, Word or HTML reports")
         self.output_card.body.addWidget(self.include_reports)
         self.report_summary = label("", "hint", wrap=True)
         self.output_card.body.addWidget(self.report_summary)
@@ -378,7 +378,7 @@ class EvidenceWindow(QMainWindow):
         )
         self.saved_report_summary = label("", "hint", wrap=True)
         options.body.addWidget(self.saved_report_summary)
-        self.report_excel = QCheckBox("Also create an Excel workbook")
+        self.report_excel = WrappedCheckBox("Also create an Excel workbook")
         self.report_excel.toggled.connect(self._refresh_state)
         options.body.addWidget(self.report_excel)
         options.body.addWidget(
@@ -393,7 +393,7 @@ class EvidenceWindow(QMainWindow):
         return page
 
     def _check(self, key: str, text: str) -> QCheckBox:
-        check = QCheckBox(text)
+        check = WrappedCheckBox(text)
         check.setChecked(DEFAULTS[key])
         self.checks[key] = check
         return check
@@ -496,7 +496,8 @@ class EvidenceWindow(QMainWindow):
         self.readiness = label("Choose at least one source to get started.", "hint", wrap=True)
         status.addWidget(self.status)
         status.addWidget(self.readiness)
-        actions.addLayout(status, 1)
+        layout.addLayout(status)
+        actions.addStretch(1)
         self.details_button = button("Details…", self._show_details)
         self.details_button.hide()
         actions.addWidget(self.details_button)

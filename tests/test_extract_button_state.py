@@ -29,7 +29,7 @@ class _NoThread:
 
 
 @pytest.fixture
-def app(monkeypatch):
+def app(monkeypatch, tmp_path):
     root = tk.Tk()
     root.withdraw()
     try:
@@ -37,7 +37,10 @@ def app(monkeypatch):
         from edf_bill_fetcher.ui import app as _app_module
 
         monkeypatch.setattr(_app_module.threading, "Thread", _NoThread)
-        yield App(root)
+        widget = App(root)
+        widget.pst_path.set(str(tmp_path / "nonexistent.pst"))
+        widget.output_folder.set(str(tmp_path))
+        yield widget
     finally:
         root.destroy()
 
@@ -55,14 +58,12 @@ class TestExtractButtonStates:
         )
 
     def test_start_thread_flips_to_running(self, app):
-        app.pst_path.set("/tmp/nonexistent.pst")
         app.cancel_event.clear()
         app.start_thread()
         assert app.run_btn.cget("text") == "Cancel"
         assert app.run_btn.cget("bg") == EDF_NAVY
 
     def test_cancel_flips_to_cancelling(self, app):
-        app.pst_path.set("/tmp/nonexistent.pst")
         app.cancel_event.clear()
         app.start_thread()
         app._cancel()
@@ -70,7 +71,6 @@ class TestExtractButtonStates:
         assert app.run_btn.cget("bg") == MEDIUM_GREY
 
     def test_finish_flips_back_to_idle(self, app):
-        app.pst_path.set("/tmp/nonexistent.pst")
         app.cancel_event.clear()
         app.start_thread()
         app._cancel()
@@ -81,7 +81,6 @@ class TestExtractButtonStates:
 
     def test_finish_after_no_cancel_stays_idle(self, app):
         """Finish from plain Running state should still go to Idle."""
-        app.pst_path.set("/tmp/nonexistent.pst")
         app.cancel_event.clear()
         app.start_thread()
         app._finish()

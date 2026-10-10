@@ -2,13 +2,17 @@
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +34,48 @@ def button(text: str, action: Callable, role: str = "") -> QPushButton:
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
     widget.clicked.connect(lambda checked=False: action())
     return widget
+
+
+class WrappedCheckBox(QCheckBox):
+    """Keep long option labels readable without forcing a horizontal scrollbar."""
+
+    def __init__(self, text: str) -> None:
+        """Use a native indicator and a wrapping caption in one clickable control."""
+        super().__init__()
+        self.caption = label(text, wrap=True)
+        self.caption.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAccessibleName(text)
+        self.setToolTip(text)
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        indicator = self.style().pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth, option, self)
+        spacing = self.style().pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing, option, self)
+        self.body = QHBoxLayout(self)
+        self.body.setContentsMargins(indicator + spacing, 5, 0, 5)
+        self.body.addWidget(self.caption)
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def text(self) -> str:
+        """Return the full caption for callers inspecting this native checkbox."""
+        return self.caption.text()
+
+    def sizeHint(self) -> QSize:
+        """Include the caption and native indicator in the preferred size."""
+        return self.body.sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        """Allow the caption to wrap instead of requiring its full line width."""
+        return self.body.minimumSize()
+
+    def heightForWidth(self, width: int) -> int:
+        """Reserve enough height for every line at the actual available width."""
+        return self.body.heightForWidth(width)
+
+    def hitButton(self, position: QPoint) -> bool:
+        """Clicking the caption toggles the same control as the indicator."""
+        return self.rect().contains(position)
 
 
 class Card(QFrame):

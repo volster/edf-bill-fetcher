@@ -15,6 +15,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt, QTimer  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QDialog,
@@ -52,7 +53,18 @@ def application():
 
 
 @pytest.fixture
-def window(application, tmp_path):
+def font_metrics(application, request):
+    stylesheet = application.styleSheet()
+    application.setStyleSheet(
+        stylesheet + f"\nQWidget {{ font-size: {getattr(request, 'param', 13)}px; }}"
+    )
+    yield
+    application.setStyleSheet(stylesheet)
+    application.processEvents()
+
+
+@pytest.fixture
+def window(application, font_metrics, tmp_path):
     widget = EvidenceWindow(tmp_path / "preferences.json")
     widget.show()
     application.processEvents()
@@ -129,6 +141,7 @@ def execute(job, application):
 
 
 @pytest.mark.parametrize(("width", "height"), [(1160, 720), (820, 600), (920, 640)])
+@pytest.mark.parametrize("font_metrics", [13, 20], indirect=True)
 def test_action_stays_visible_and_source_steps_adapt(window, application, width, height):
     window.resize(width, height)
     application.processEvents()
@@ -200,7 +213,8 @@ def test_report_picker_and_saved_choices_update_both_summaries(window, monkeypat
     assert window.report_options == {"format": "html", "sections": ["payment"]}
 
 
-def test_report_dialog_requires_content_remembers_choices_and_scrolls(application):
+@pytest.mark.parametrize("font_metrics", [13, 20], indirect=True)
+def test_report_dialog_requires_content_remembers_choices_and_scrolls(application, font_metrics):
     options = {"format": "docx", "sections": ["payment", "timeline"]}
     dialog = ReportDialog(options)
     dialog.resize(560, 460)
@@ -642,6 +656,7 @@ def test_precancelled_worker_reports_no_exports(window, tmp_path):
     ("status", "has_result", "files"),
     [("review_required", True, 1), ("cancelled", True, 1), ("failed", False, 0)],
 )
+@pytest.mark.parametrize("font_metrics", [13, 20], indirect=True)
 def test_terminal_status_does_not_hide_partial_outputs(
     window, application, tmp_path, status, has_result, files
 ):
@@ -673,6 +688,22 @@ def test_terminal_status_does_not_hide_partial_outputs(
         assert "saved analysis is available" not in window.feedback.text()
 
 
+def test_long_option_caption_click_and_keyboard_toggle_the_captured_setting(window, application):
+    window.resize(820, 600)
+    window._navigate(2)
+    application.processEvents()
+    check = window.checks["use_large"]
+    initial = check.isChecked()
+    assert check.accessibleName() == "Use amount fallback when bill fields are missing"
+    QTest.mouseClick(check.caption, Qt.MouseButton.LeftButton)
+    assert check.isChecked() != initial
+    assert window._configuration()["use_large"] != initial
+    check.setFocus()
+    QTest.keyClick(check, Qt.Key.Key_Space)
+    assert check.isChecked() == initial
+    assert window._configuration()["use_large"] == initial
+
+
 def test_details_are_readonly_and_folder_is_opened_only_on_request(window, tmp_path, monkeypatch):
     source_folder(window, tmp_path)
     window.current_job = window.capture_job()
@@ -680,14 +711,14 @@ def test_details_are_readonly_and_folder_is_opened_only_on_request(window, tmp_p
     opened = []
 
     def open_url(url):
-        opened.append(url.toLocalFile())
+        opened.append(Path(url.toLocalFile()))
         return False
 
     monkeypatch.setattr(qt_app.QDesktopServices, "openUrl", open_url)
     window._present_outcome(window.last_outcome)
     assert opened == []
     window.open_folder_button.click()
-    assert opened == [window.current_job.directory]
+    assert opened == [Path(window.current_job.directory)]
     assert window.current_job.directory in window.feedback.text()
     captured = []
 
