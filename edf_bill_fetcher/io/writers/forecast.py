@@ -31,7 +31,7 @@ from edf_bill_fetcher.processors.forecasting import HAS_STATSMODELS
 # --- write_forecast_sheet (was writers/__init__.py L2175-2422) ---
 
 
-def write_forecast_sheet(ws, dfc):
+def write_forecast_sheet(ws, dfc, *, payload=None):
     """Write Forecast/Projection tab with multiple forecasting methods."""
     from edf_bill_fetcher.models.report_models import compute_forecast
 
@@ -45,7 +45,8 @@ def write_forecast_sheet(ws, dfc):
 
     from edf_bill_fetcher.processors.preparation import monthly_balance_frame
 
-    dfc = monthly_balance_frame(dfc)
+    if payload is None:
+        dfc = monthly_balance_frame(dfc)
     dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
     dfc = dfc.sort_values("_dt").reset_index(drop=True)
     amounts = dfc["Amount (£)"].astype(float).values
@@ -63,7 +64,7 @@ def write_forecast_sheet(ws, dfc):
         ws.column_dimensions["A"].width = 60
         return
 
-    fc = compute_forecast(dfc)
+    fc = payload if payload is not None else compute_forecast(dfc)
     linear_fitted = fc.linear_fitted
     linear_fc = fc.linear_forecast
     hw_fitted = fc.hw_fitted

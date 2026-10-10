@@ -38,7 +38,7 @@ _HAS_SCIPY = importlib.util.find_spec("scipy") is not None
 # --- write_statistical_analysis_sheet (was writers/__init__.py L1721-1956) ---
 
 
-def write_statistical_analysis_sheet(ws, dfc, config):
+def write_statistical_analysis_sheet(ws, dfc, config, *, payload=None):
     """Write Statistical Analysis tab with advanced pandas analytics."""
     from edf_bill_fetcher.models.report_models import compute_statistical_analysis
 
@@ -50,14 +50,13 @@ def write_statistical_analysis_sheet(ws, dfc, config):
     LGREY = "F0F0F0"
     DGREY = "888888"
 
-    # Prepare data
-    from edf_bill_fetcher.processors.preparation import balance_frame, scope
-
-    dfc = balance_frame(dfc)
-    if len({scope(r) for r in dfc.to_dict("records")}) > 1:
-        dfc = dfc.iloc[:0]
-    dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
-    dfc = dfc.sort_values("_dt").reset_index(drop=True)
+    if payload is None:
+        from edf_bill_fetcher.processors.preparation import balance_frame, scope
+        dfc = balance_frame(dfc)
+        if len({scope(r) for r in dfc.to_dict("records")}) > 1:
+            dfc = dfc.iloc[:0]
+        dfc["_dt"] = dfc["Date"].apply(parse_to_sort_date)
+        dfc = dfc.sort_values("_dt").reset_index(drop=True)
     n = len(dfc)
 
     if n < 3:
@@ -65,7 +64,7 @@ def write_statistical_analysis_sheet(ws, dfc, config):
         ws.column_dimensions["A"].width = 50
         return
 
-    sa = compute_statistical_analysis(dfc)
+    sa = payload if payload is not None else compute_statistical_analysis(dfc)
 
     # Headers
     headers = [

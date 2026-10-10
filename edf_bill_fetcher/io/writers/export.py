@@ -1118,13 +1118,13 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
     # =====================================================================
 
     # Statistical Analysis
-    write_statistical_analysis_sheet(wb.create_sheet(title="Statistical Analysis"), dfc, config)
+    write_statistical_analysis_sheet(wb.create_sheet(title="Statistical Analysis"), view.frame("statistical"), config, payload=view.model("statistical"))
 
     # Payment Analysis
     write_payment_analysis_sheet(wb.create_sheet(title="Payment Analysis"), df, payload=view.model("payment"))
 
     # Forecast & Projection
-    write_forecast_sheet(wb.create_sheet(title="Forecast & Projection"), dfc)
+    write_forecast_sheet(wb.create_sheet(title="Forecast & Projection"), view.frame("monthly"), payload=view.model("forecast"))
 
     # Data Quality Report
     write_data_quality_sheet(wb.create_sheet(title="Data Quality Report"), df, payload=view.model("data_quality"))
