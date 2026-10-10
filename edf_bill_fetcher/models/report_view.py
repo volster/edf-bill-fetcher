@@ -1,0 +1,140 @@
+"""Presentation selection and fresh decoded views of accepted analysis."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
+from typing import Any
+from uuid import uuid4
+
+import pandas as pd
+
+from edf_bill_fetcher.domain.analysis import AnalysisSnapshot
+from edf_bill_fetcher.domain.json_values import object_value, rows_value
+from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS, RenderContext
+from edf_bill_fetcher.models.snapshot_adapter import from_snapshot_json
+
+
+@dataclass(frozen=True)
+class RenderSelection:
+    """Absent sections mean defaults; an explicit empty tuple means no sections."""
+
+    formats: tuple[str, ...] = ("xlsx",)
+    sections: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        """Reject mutable selections, duplicate or unknown choices."""
+        if (
+            type(self.formats) is not tuple
+            or len(set(self.formats)) != len(self.formats)
+            or any(value not in {"xlsx", "pdf", "docx", "html"} for value in self.formats)
+        ):
+            raise ValueError("Invalid output formats")
+        allowed = {section.key for section in REPORT_SECTIONS} | {"cover", "toc"}
+        if self.sections is not None and (
+            type(self.sections) is not tuple
+            or len(set(self.sections)) != len(self.sections)
+            or any(value not in allowed for value in self.sections)
+        ):
+            raise ValueError("Invalid report sections")
+
+
+@dataclass(frozen=True)
+class ReportView:
+    """No computation: each access returns detached presentation objects."""
+
+    snapshot: AnalysisSnapshot
+    selection: RenderSelection
+
+    @property
+    def config(self) -> dict:
+        """Return a detached effective configuration with explicit presentation choices."""
+        cfg = object_value(self.snapshot.prepared.effective_config)
+        cfg["report_sections"] = list(self.context.selected)
+        return cfg
+
+    @property
+    def context(self) -> RenderContext:
+        """Resolve registry numbering for the selected sections."""
+        selected = self.selection.sections
+        return RenderContext(
+            ({s.key for s in REPORT_SECTIONS} | {"cover", "toc"}) if selected is None else selected
+        )
+
+    @property
+    def records(self) -> list[dict]:
+        """Return fresh canonical rows."""
+        return rows_value(self.snapshot.prepared.records)
+
+    @property
+    def duplicates(self) -> list[dict]:
+        """Return fresh duplicate decisions."""
+        return rows_value(self.snapshot.prepared.duplicates)
+
+    @property
+    def engine(self) -> SimpleNamespace:
+        """Expose data-only legacy metadata to the compatibility layout builders."""
+        state = {
+            "pdf_count": 0,
+            "email_count": 0,
+            "error_log": [],
+            "filtered_records": [],
+            "source_manifest": {},
+            **object_value(self.snapshot.prepared.extraction.legacy_state),
+        }
+        return SimpleNamespace(**state)
+
+    def model(self, key: str) -> Any:
+        """Decode a fixed model without fitting or financial processing."""
+        return from_snapshot_json(object_value(self.snapshot.models)[key]["payload"])
+
+    def frame(self, key: str = "evidence") -> pd.DataFrame:
+        """Return a new precomputed frame stored with the analytical payload."""
+        return self.model("sap")["frames"][key]
+
+
+def build_report_view(snapshot: AnalysisSnapshot, selection: RenderSelection) -> ReportView:
+    """Build a presentation view without changing its financial fingerprint."""
+    return ReportView(snapshot, selection)
+
+
+def capture_report_view(
+    records: list[dict],
+    config: dict,
+    engine: Any = None,
+    filtered: list | None = None,
+    *,
+    formats: tuple[str, ...],
+    sections: tuple[str, ...] | None = None,
+) -> ReportView:
+    """Compatibility boundary: capture and compute once before delegating to rendering."""
+    from edf_bill_fetcher.application.analysis_service import analyse_prepared
+    from edf_bill_fetcher.application.legacy_adapter import capture_legacy
+    from edf_bill_fetcher.application.preparation_service import prepare_snapshot
+    from edf_bill_fetcher.domain.json_values import freeze_json
+    from edf_bill_fetcher.domain.requests import RunRequest
+
+    cfg = dict(config)
+    cfg.setdefault("as_of", date.today().isoformat())
+    if sections is None and "report_sections" in cfg:
+        sections = tuple(cfg["report_sections"])
+    state = (
+        {}
+        if engine is None
+        else (engine.__getstate__() if hasattr(engine, "__getstate__") else vars(engine))
+    )
+    state = dict(state or {})
+    state["filtered_records"] = (
+        filtered if filtered is not None else state.get("filtered_records", [])
+    )
+    originals = state.get("original_records", records)
+    request = RunRequest(
+        uuid4().hex,
+        datetime.now(timezone.utc),
+        date.fromisoformat(cfg["as_of"]),
+        (),
+        freeze_json(cfg),
+    )
+    result = analyse_prepared(prepare_snapshot(capture_legacy(originals, state, request)))
+    return build_report_view(result, RenderSelection(formats, sections))
