@@ -7,10 +7,10 @@ plus the restricted-pickle ``find_class`` branches and the
 
 Every test drives the public CLI functions through ``sys.argv``
 or a direct call with a synthetic ``args`` list, stubbing
-``EvidenceEngine`` and the report exporters so no real file I/O
-or PDF/DOCX rendering happens.  Observable behaviour (stdout/stderr
+``EvidenceEngine`` and the rendering boundaries. The real coordinator and JSON persistence write
+artifacts under tmp_path; source parsing is isolated in a data-only engine.  Observable behaviour (stdout/stderr
 content, exit codes, files written, config passed to stubs) is
-asserted — never call counts.
+asserted, including saved analysis and terminal manifests.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from edf_bill_fetcher.domain.json_values import object_value
 from edf_bill_fetcher.io import cli as cli_module
 from edf_bill_fetcher.io.cli import (
     _RestrictedUnpickler,
@@ -33,6 +34,7 @@ from edf_bill_fetcher.io.cli import (
     run_cli_html_report,
     run_cli_pdf_report,
 )
+from edf_bill_fetcher.io.persistence.result_store import load_result
 
 # ---------------------------------------------------------------------------
 # Synthetic records + engine stub
@@ -166,7 +168,7 @@ def stub_engine(monkeypatch: pytest.MonkeyPatch) -> _StubEngine:
 
 
 @pytest.fixture
-def stub_export_to_excel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, list[Any]]:
+def stub_render_xlsx(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, list[Any]]:
     """Stub ``export_to_excel`` to record calls without writing a workbook.
 
     ``run_cli_extract`` imports ``export_to_excel`` lazily from
@@ -176,24 +178,26 @@ def stub_export_to_excel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dic
 
     calls: dict[str, list[Any]] = {"calls": []}
 
-    def _fake_export(
-        data, output_path, error_log, config, filtered=None, sap_rows=None, invoice_pdf_paths=None
-    ):
-        """Record the call and touch the output path so callers see a file."""
+    def _fake_export(view, output_path):
         calls["calls"].append(
             {
-                "data": data,
+                "data": view.records,
+                "originals": [
+                    object_value(row.raw) for row in view.snapshot.prepared.extraction.observations
+                ],
                 "output_path": output_path,
-                "error_log": error_log,
-                "config": config,
-                "filtered": filtered,
-                "sap_rows": sap_rows,
+                "error_log": view.engine.error_log,
+                "config": view.config,
+                "filtered": view.engine.filtered_records,
+                "sap_rows": {
+                    key: getattr(view.engine, "sap_" + key + "_rows", [])
+                    for key in ("contract", "meter", "financial")
+                },
             }
         )
-        Path(output_path).touch()
-        return None
+        Path(output_path).write_bytes(b"complete workbook")
 
-    monkeypatch.setattr(export_mod, "export_to_excel", _fake_export)
+    monkeypatch.setattr(export_mod, "render_xlsx", _fake_export)
     return calls
 
 
@@ -314,7 +318,7 @@ class TestRunCliExtract:
     def test_pdf_dir_happy_path_writes_xlsx_and_prints_summary(
         self,
         stub_engine: _StubEngine,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -335,25 +339,26 @@ class TestRunCliExtract:
         # The stub engine was driven.
         assert stub_engine.crawl_local_pdfs_calls == [str(pdf_dir)]
         # export_to_excel was called with the stub records + config.
-        assert len(stub_export_to_excel["calls"]) == 1
-        call = stub_export_to_excel["calls"][0]
+        assert len(stub_render_xlsx["calls"]) == 1
+        call = stub_render_xlsx["calls"][0]
         assert call["output_path"] == str(out_xlsx)
-        assert call["data"] == stub_engine.records
+        assert call["originals"] == stub_engine.records
+        assert call["data"][0]["Period Charge (£)"] == 240.50
         assert call["filtered"] == stub_engine.filtered_records
         assert call["sap_rows"]["contract"] == stub_engine.sap_contract_rows
         # The output file was touched by the stub.
         assert out_xlsx.exists()
         # Stdout carries the summary narrative.
         out = capsys.readouterr().out
-        assert "Writing Excel report" in out
+        assert "Rendering Xlsx" in out
         assert "Extraction complete" in out
         assert "PDFs processed: 1" in out
-        assert "Records found:  1" in out
+        assert "records: 1" in out
 
     def test_records_json_flag_writes_wrapper_json(
         self,
         stub_engine: _StubEngine,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -396,7 +401,7 @@ class TestRunCliExtract:
     def test_save_engine_json_flag_writes_versioned_state(
         self,
         stub_engine: _StubEngine,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -457,7 +462,7 @@ class TestRunCliExtract:
     def test_no_records_found_exits_0_by_default(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -479,7 +484,7 @@ class TestRunCliExtract:
     def test_no_records_found_strict_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -497,7 +502,7 @@ class TestRunCliExtract:
     def test_error_log_printed_when_nonempty(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -568,7 +573,7 @@ class TestRunCliExtract:
     def test_htm_source_drives_process_htm_file(
         self,
         stub_engine: _StubEngine,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -582,12 +587,12 @@ class TestRunCliExtract:
         run_cli_extract(["--htm", str(htm_path), "-o", str(tmp_path / "o.xlsx")])
         assert stub_engine.process_htm_file_calls == [str(htm_path)]
         out = capsys.readouterr().out
-        assert "Parsing HTM" in out
+        assert "Collecting" in out
 
     def test_config_file_loaded_when_provided(
         self,
         stub_engine: _StubEngine,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
     ) -> None:
         """A config file is loaded and merged into the engine config.
@@ -602,7 +607,7 @@ class TestRunCliExtract:
         run_cli_extract(
             ["--pdf-dir", str(pdf_dir), "-o", str(tmp_path / "o.xlsx"), "-c", str(config_path)]
         )
-        call = stub_export_to_excel["calls"][0]
+        call = stub_render_xlsx["calls"][0]
         assert call["config"]["custom_key"] == "custom_value"
         # CLI overrides still apply on top of the loaded config.
         assert call["config"]["use_dedup"] is True
@@ -611,7 +616,7 @@ class TestRunCliExtract:
     def test_cli_flags_propagate_into_config(
         self,
         stub_engine: _StubEngine,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
     ) -> None:
         """The ``--no-*`` flags and ``--acc-filter`` flip config booleans.
@@ -641,7 +646,7 @@ class TestRunCliExtract:
                 "example.com",
             ]
         )
-        call = stub_export_to_excel["calls"][0]
+        call = stub_render_xlsx["calls"][0]
         cfg = call["config"]
         assert cfg["use_acc_filter"] is True
         assert cfg["acc_num"] == "A-12345678"
@@ -666,24 +671,30 @@ class TestRunCliPdfReport:
     def _patch_pdf_generator(
         self, monkeypatch: pytest.MonkeyPatch, returns: tuple[bool, str]
     ) -> dict[str, list[Any]]:
-        """Stub ``generate_pdf_from_gui`` to record calls and return ``returns``."""
+        """Inject a PDF renderer that writes a report or raises a real failure."""
         import edf_bill_fetcher.io.reporters.pdf_report as pdf_mod
 
         calls: dict[str, list[Any]] = {"calls": []}
 
-        def _fake_generate(records, output_path, config, engine, filtered=None):
+        def _fake_generate(view, output_path):
             calls["calls"].append(
                 {
-                    "records": records,
+                    "records": view.records,
+                    "originals": [
+                        object_value(row.raw)
+                        for row in view.snapshot.prepared.extraction.observations
+                    ],
                     "output_path": output_path,
-                    "config": config,
-                    "engine": engine,
-                    "filtered": filtered,
+                    "config": view.config,
+                    "engine": view.engine,
+                    "filtered": view.engine.filtered_records,
                 }
             )
-            return returns
+            if not returns[0]:
+                raise OSError(returns[1])
+            Path(output_path).write_bytes(b"complete report")
 
-        monkeypatch.setattr(pdf_mod, "generate_pdf_from_gui", _fake_generate)
+        monkeypatch.setattr(pdf_mod, "render_pdf", _fake_generate)
         return calls
 
     def test_bare_list_records_success_path(
@@ -706,8 +717,8 @@ class TestRunCliPdfReport:
             run_cli_pdf_report(["-i", str(records_json), "-o", str(tmp_path / "r.pdf")])
         assert exc.value.code == 0
         out = capsys.readouterr().out
-        assert "Report written" in out
-        assert calls["calls"][0]["records"] == records
+        assert "PDF report generated" in out
+        assert calls["calls"][0]["originals"] == records
         assert calls["calls"][0]["engine"].pdf_count == 0
         assert calls["calls"][0]["filtered"] == []
 
@@ -728,7 +739,7 @@ class TestRunCliPdfReport:
 
         with pytest.raises(SystemExit):
             run_cli_pdf_report(["-i", str(records_json), "-o", str(tmp_path / "r.pdf")])
-        assert calls["calls"][0]["records"] == records
+        assert calls["calls"][0]["originals"] == records
 
     def test_failure_path_exits_1(
         self,
@@ -748,7 +759,12 @@ class TestRunCliPdfReport:
         with pytest.raises(SystemExit) as exc:
             run_cli_pdf_report(["-i", str(records_json), "-o", str(tmp_path / "r.pdf")])
         assert exc.value.code == 1
-        assert "ERROR: rendering failed" in capsys.readouterr().err
+        assert "ERROR: OSError: rendering failed" in capsys.readouterr().err
+        result = load_result(tmp_path / "r.pdf.result.json")
+        assert result.summary.charges == 240.50
+        manifest = json.loads((tmp_path / "r.pdf.run.json").read_text())
+        assert manifest["status"] == "failed"
+        assert manifest["artifacts"] == {}
 
     def test_config_file_loaded(
         self,
@@ -849,24 +865,30 @@ class TestRunCliDocxReport:
     def _patch_docx_generator(
         self, monkeypatch: pytest.MonkeyPatch, returns: tuple[bool, str]
     ) -> dict[str, list[Any]]:
-        """Stub ``generate_docx_from_gui`` to record calls and return ``returns``."""
+        """Inject a DOCX renderer that writes a report or raises a real failure."""
         import edf_bill_fetcher.io.reporters.docx_report as docx_mod
 
         calls: dict[str, list[Any]] = {"calls": []}
 
-        def _fake_generate(records, output_path, config, engine, filtered=None):
+        def _fake_generate(view, output_path):
             calls["calls"].append(
                 {
-                    "records": records,
+                    "records": view.records,
+                    "originals": [
+                        object_value(row.raw)
+                        for row in view.snapshot.prepared.extraction.observations
+                    ],
                     "output_path": output_path,
-                    "config": config,
-                    "engine": engine,
-                    "filtered": filtered,
+                    "config": view.config,
+                    "engine": view.engine,
+                    "filtered": view.engine.filtered_records,
                 }
             )
-            return returns
+            if not returns[0]:
+                raise OSError(returns[1])
+            Path(output_path).write_bytes(b"complete report")
 
-        monkeypatch.setattr(docx_mod, "generate_docx_from_gui", _fake_generate)
+        monkeypatch.setattr(docx_mod, "render_docx", _fake_generate)
         return calls
 
     def test_bare_list_success_path(
@@ -888,8 +910,8 @@ class TestRunCliDocxReport:
         with pytest.raises(SystemExit) as exc:
             run_cli_docx_report(["-i", str(records_json), "-o", str(tmp_path / "r.docx")])
         assert exc.value.code == 0
-        assert "DOCX written" in capsys.readouterr().out
-        assert calls["calls"][0]["records"] == records
+        assert "DOCX report generated" in capsys.readouterr().out
+        assert calls["calls"][0]["originals"] == records
 
     def test_wrapper_dict_unwrapped(
         self,
@@ -908,7 +930,7 @@ class TestRunCliDocxReport:
 
         with pytest.raises(SystemExit):
             run_cli_docx_report(["-i", str(records_json), "-o", str(tmp_path / "r.docx")])
-        assert calls["calls"][0]["records"] == records
+        assert calls["calls"][0]["originals"] == records
 
     def test_failure_path_exits_1(
         self,
@@ -928,7 +950,12 @@ class TestRunCliDocxReport:
         with pytest.raises(SystemExit) as exc:
             run_cli_docx_report(["-i", str(records_json), "-o", str(tmp_path / "r.docx")])
         assert exc.value.code == 1
-        assert "ERROR: docx rendering failed" in capsys.readouterr().err
+        assert "ERROR: OSError: docx rendering failed" in capsys.readouterr().err
+        result = load_result(tmp_path / "r.docx.result.json")
+        assert result.summary.charges == 240.50
+        manifest = json.loads((tmp_path / "r.docx.run.json").read_text())
+        assert manifest["status"] == "failed"
+        assert manifest["artifacts"] == {}
 
     def test_config_file_loaded(
         self,
@@ -1026,24 +1053,30 @@ class TestRunCliHtmlReport:
     def _patch_html_generator(
         self, monkeypatch: pytest.MonkeyPatch, returns: tuple[bool, str]
     ) -> dict[str, list[Any]]:
-        """Stub ``generate_html_from_gui`` to record calls and return ``returns``."""
+        """Inject an HTML renderer that writes a report or raises a real failure."""
         import edf_bill_fetcher.io.reporters.html_report as html_mod
 
         calls: dict[str, list[Any]] = {"calls": []}
 
-        def _fake_generate(records, output_path, config, engine, filtered=None):
+        def _fake_generate(view, output_path):
             calls["calls"].append(
                 {
-                    "records": records,
+                    "records": view.records,
+                    "originals": [
+                        object_value(row.raw)
+                        for row in view.snapshot.prepared.extraction.observations
+                    ],
                     "output_path": output_path,
-                    "config": config,
-                    "engine": engine,
-                    "filtered": filtered,
+                    "config": view.config,
+                    "engine": view.engine,
+                    "filtered": view.engine.filtered_records,
                 }
             )
-            return returns
+            if not returns[0]:
+                raise OSError(returns[1])
+            Path(output_path).write_bytes(b"complete report")
 
-        monkeypatch.setattr(html_mod, "generate_html_from_gui", _fake_generate)
+        monkeypatch.setattr(html_mod, "render_html", _fake_generate)
         return calls
 
     def test_bare_list_success_path(
@@ -1061,8 +1094,8 @@ class TestRunCliHtmlReport:
         with pytest.raises(SystemExit) as exc:
             run_cli_html_report(["-i", str(records_json), "-o", str(tmp_path / "r.html")])
         assert exc.value.code == 0
-        assert "HTML written" in capsys.readouterr().out
-        assert calls["calls"][0]["records"] == records
+        assert "HTML report generated" in capsys.readouterr().out
+        assert calls["calls"][0]["originals"] == records
         assert calls["calls"][0]["engine"].pdf_count == 0
         assert calls["calls"][0]["filtered"] == []
 
@@ -1080,7 +1113,7 @@ class TestRunCliHtmlReport:
 
         with pytest.raises(SystemExit):
             run_cli_html_report(["-i", str(records_json), "-o", str(tmp_path / "r.html")])
-        assert calls["calls"][0]["records"] == records
+        assert calls["calls"][0]["originals"] == records
 
     def test_failure_path_exits_1(
         self,
@@ -1097,7 +1130,12 @@ class TestRunCliHtmlReport:
         with pytest.raises(SystemExit) as exc:
             run_cli_html_report(["-i", str(records_json), "-o", str(tmp_path / "r.html")])
         assert exc.value.code == 1
-        assert "ERROR: html rendering failed" in capsys.readouterr().err
+        assert "ERROR: OSError: html rendering failed" in capsys.readouterr().err
+        result = load_result(tmp_path / "r.html.result.json")
+        assert result.summary.charges == 240.50
+        manifest = json.loads((tmp_path / "r.html.run.json").read_text())
+        assert manifest["status"] == "failed"
+        assert manifest["artifacts"] == {}
 
     def test_config_file_loaded(
         self,
@@ -1182,116 +1220,56 @@ class TestRunCliHtmlReport:
 class TestMainDispatch:
     """Cover the ``main()`` argv dispatcher and the no-tkinter fallback."""
 
-    def test_pdf_report_dispatch(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        """``main()`` with ``--pdf-report`` dispatches to ``run_cli_pdf_report``.
+    def test_pdf_report_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured = []
 
-        Covers lines 394-397 — the ``--pdf-report`` branch.
-        """
-        records = _synthetic_records()
-        records_json = tmp_path / "records.json"
-        records_json.write_text(json.dumps(records), encoding="utf-8")
+        def selected(args):
+            captured.append(args)
+            raise SystemExit(0)
 
-        import edf_bill_fetcher.io.reporters.pdf_report as pdf_mod
-
-        monkeypatch.setattr(
-            pdf_mod,
-            "generate_pdf_from_gui",
-            lambda **kw: (True, "ok"),
-        )
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "edf-collector",
-                "--pdf-report",
-                "-i",
-                str(records_json),
-                "-o",
-                str(tmp_path / "r.pdf"),
-            ],
-        )
-
-        with pytest.raises(SystemExit):
+        monkeypatch.setattr(cli_module, "run_cli_pdf_report", selected)
+        args = ["-i", "input.json", "-o", "output.pdf"]
+        monkeypatch.setattr(sys, "argv", ["edf-collector", "--pdf-report", *args])
+        with pytest.raises(SystemExit) as exc:
             main()
+        assert exc.value.code == 0
+        assert captured == [args]
 
-    def test_docx_report_dispatch(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        """``main()`` with ``--docx-report`` dispatches to ``run_cli_docx_report``.
+    def test_docx_report_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured = []
 
-        Covers lines 398-400 — the ``--docx-report`` branch.
-        """
-        records = _synthetic_records()
-        records_json = tmp_path / "records.json"
-        records_json.write_text(json.dumps(records), encoding="utf-8")
+        def selected(args):
+            captured.append(args)
+            raise SystemExit(0)
 
-        import edf_bill_fetcher.io.reporters.docx_report as docx_mod
-
-        monkeypatch.setattr(
-            docx_mod,
-            "generate_docx_from_gui",
-            lambda **kw: (True, "ok"),
-        )
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "edf-collector",
-                "--docx-report",
-                "-i",
-                str(records_json),
-                "-o",
-                str(tmp_path / "r.docx"),
-            ],
-        )
-
-        with pytest.raises(SystemExit):
+        monkeypatch.setattr(cli_module, "run_cli_docx_report", selected)
+        args = ["-i", "input.json", "-o", "output.docx"]
+        monkeypatch.setattr(sys, "argv", ["edf-collector", "--docx-report", *args])
+        with pytest.raises(SystemExit) as exc:
             main()
+        assert exc.value.code == 0
+        assert captured == [args]
 
-    def test_html_report_dispatch(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        """``main()`` with ``--html-report`` dispatches to ``run_cli_html_report``."""
-        records = _synthetic_records()
-        records_json = tmp_path / "records.json"
-        records_json.write_text(json.dumps(records), encoding="utf-8")
+    def test_html_report_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured = []
 
-        import edf_bill_fetcher.io.reporters.html_report as html_mod
+        def selected(args):
+            captured.append(args)
+            raise SystemExit(0)
 
-        monkeypatch.setattr(
-            html_mod,
-            "generate_html_from_gui",
-            lambda **kw: (True, "ok"),
-        )
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "edf-collector",
-                "--html-report",
-                "-i",
-                str(records_json),
-                "-o",
-                str(tmp_path / "r.html"),
-            ],
-        )
-
-        with pytest.raises(SystemExit):
+        monkeypatch.setattr(cli_module, "run_cli_html_report", selected)
+        args = ["-i", "input.json", "-o", "output.html"]
+        monkeypatch.setattr(sys, "argv", ["edf-collector", "--html-report", *args])
+        with pytest.raises(SystemExit) as exc:
             main()
+        assert exc.value.code == 0
+        assert captured == [args]
 
     def test_extract_dispatch(
         self,
         monkeypatch: pytest.MonkeyPatch,
         stub_engine: _StubEngine,
-        stub_export_to_excel: dict[str, list[Any]],
+        stub_render_xlsx: dict[str, list[Any]],
         tmp_path: Path,
     ) -> None:
         """``main()`` with ``--extract`` dispatches to ``run_cli_extract``.
@@ -1314,7 +1292,7 @@ class TestMainDispatch:
         )
 
         main()  # Should complete without raising SystemExit.
-        assert len(stub_export_to_excel["calls"]) == 1
+        assert len(stub_render_xlsx["calls"]) == 1
 
     def test_no_tkinter_exits_2(
         self,
