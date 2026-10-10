@@ -1,6 +1,6 @@
 # EDF Energy Billing Evidence Collector
 
-A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, local PDF bills, and HTM account history exports. It produces a self-documenting, multi-sheet Excel evidence workbook and a PDF **or** DOCX report suitable for dispute preparation and Energy Ombudsman submission.
+A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, message files, local PDF bills, and HTM account history exports. It produces a multi-sheet Excel evidence workbook and PDF, DOCX or HTML reports for dispute preparation and review.
 
 The project is designed for evidence discovery, not legal advice. It preserves
 source material and deterministic analysis outputs so a reviewer can inspect
@@ -15,7 +15,7 @@ how each finding was produced.
    forecasts, tariffs, meter rollovers, contracts, back-billing, and rebilling.
 4. Optionally parses EDF SAP contract-history, meter-reading, and
    financial-transaction PDFs and reconciles them against EDF invoice evidence.
-5. Writes Excel, PDF, and DOCX outputs with provenance, hyperlinks, and
+5. Writes Excel, PDF, DOCX and HTML outputs with provenance, hyperlinks, and
    configuration details captured for later review.
 
 ## Features
@@ -23,15 +23,15 @@ how each finding was produced.
 - **Multi-source extraction**: PST/OST email files, EML/MSG message files, local PDF folders, HTM account exports.
 - **Dual format support**: Parses both old-style and new-style (KI/KCR) EDF invoice formats.
 - **Smart amount detection**: Prioritized regex patterns with configurable fallback.
-- **Cross-source deduplication**: Two-pass dedup — Period To + Amount (primary), Amount within a 60-day window (secondary). Within a duplicate cluster the *most complete* row wins (substantive field fill-rate), with source precedence as the tie-breaker. Set `amalgamate_duplicates=True` to merge columns across all duplicate siblings into a single hybrid kept row (each sibling still surfaces on the Duplicate Entries sheet for audit).
+- **Cross-source deduplication**: compatible account/fuel/meter/register identity and supported invoice, transaction or source-row relationships determine duplicate membership. Equal dates and amounts alone do not establish the same event. Completeness selects the kept row, with source precedence as a tie-breaker. Optional amalgamation fills missing fields; original siblings and source occurrences remain available for audit.
 - **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets — see the *Output Sheets* section for the full conditional-emission list.
 - **SAP financial-ledger integration**: when `scan_sap_dumps` is on (default), the engine also digests EDF's three SAP-CSV-in-PDF dumps (`*_Contract-History.pdf`, `*_Meter-Readings.pdf`, `*_Financial-Transactions.pdf`) and renders three source sheets + two analyser sheets (`SAP Back-billing Events` and `SAP ↔ EDF Matched Events`) + a cross-source `Reconciliation` sheet. See the *SAP ledger integration* section below for the full design.
-- **Professional PDF + DOCX output**: 14 dynamically-numbered sections. Numbering is **derived from `REPORT_SECTIONS` so the Table of Contents and body always agree**, regardless of which sections a user selects in the report options dialog.
-- **Deterministic compensation estimator**: estimates indicative compensation claims (SLC 7A back-billing excess, credit-hold interest, late-credit interest) from the evidence records, feeding both the Excel `Compensation` sheet and the report's Compensation Analysis section.
+- **PDF, DOCX and HTML output**: 15 selectable sections. Numbering derives from `models/report_sections.py` so headings and contents agree for the selected sections.
+- **Indicative compensation scenarios**: supported bill-period allocations and configured credit-interest scenarios feed the workbook and reports. Interest has no assumed statutory rate; eligibility requires assessment of the original evidence. Back-billing age detection uses a nominal 365-day window.
 - **GUI interface**: tkinter-based desktop application with progress tracking.
   - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
-  - **Sequential file naming**: `<stem>_<YYYY-MM-DD>_<N>.xlsx` (and `_Report.pdf` / `_Report.docx` variants). Counter is per-day per-folder and shared across all outputs in one batch.
-  - **Auto-generate report**: a checkbox in Section 2 to produce xlsx + PDF + DOCX from a single EXTRACT run, sharing the same batch counter.
+  - **Unique run folders**: each extraction reserves its own directory for workbook, requested reports, source copies, JSON and run status. Repeated runs preserve earlier bundles.
+  - **Auto-generate report**: produce the workbook and selected document formats in the same run folder.
   - **Three-state EXTRACT button**: `EXTRACT TO EXCEL → Cancel → Cancelling... → EXTRACT TO EXCEL` — the EXTRACT and Cancel buttons are collapsed into one.
   - **Config persistence**: GUI state and report options stored at `~/.edf_collector/config.json` (atomic write, `0o600`); deleting the file resets state cleanly.
   - **Amalgamate toggle**: the `amalgamate_duplicates` checkbox surfaces as a nested child under Deduplication (enabled only when both *Drop duplicates* and *Record dropped duplicates* are on; default OFF).
@@ -39,15 +39,15 @@ how each finding was produced.
 
 ## Package layout (post-modularization)
 
-The codebase has been refactored from a single 10,645-line `edf_collector.py` monolith into a hexagonal `edf_bill_fetcher/` package. The full layout with layering rules is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the short version:
+The codebase has been split from its original monolith into the `edf_bill_fetcher/` package. Actual responsibilities and remaining processor/writer coupling are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the short version:
 
 | Subpackage             | Layer            | Responsibility                                                                 |
 | ---------------------- | ---------------- | ------------------------------------------------------------------------------ |
-| `edf_bill_fetcher.helpers`      | pure stdlib       | Date math, formatting, theme constants, excel helpers                          |
+| `edf_bill_fetcher.helpers`      | utilities       | Date math, formatting, artifacts and Excel helpers; some depend on pandas/openpyxl |
 | `edf_bill_fetcher.processors`   | stdlib + pandas   | Business logic: dedup, pattern detection, reconciliation, forecasting        |
 | `edf_bill_fetcher.collectors`   | framework boundary| `EvidenceEngine` orchestrator; ingests PDF / HTM / PST                          |
 | `edf_bill_fetcher.io.writers`   | openpyxl          | Excel sheet builders — one submodule per sheet (13 writers)                    |
-| `edf_bill_fetcher.io.reporters` | reportlab + docx  | PDF + DOCX report renderers                                                    |
+| `edf_bill_fetcher.io.reporters` | format libraries | PDF, DOCX and self-contained HTML renderers                                    |
 | `edf_bill_fetcher.io.adapters`  | libpff-python      | PST/OST archive adapter                                                        |
 | `edf_bill_fetcher.ui`            | tkinter           | GUI: `App`, `ReportOptionsDialog`                                              |
 | `edf_bill_fetcher.models`       | dataclasses       | Event / data models                                                            |
@@ -61,10 +61,11 @@ Backward-compat note: the legacy `edf_collector.py` / `edf_report.py` / `edf_rep
 git clone https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
 
-# Single install covers every documented feature:
+# Runtime install (MSG support uses the optional extra below):
 # GUI, CLI, PST/OST archive parsing, Holt-Winters forecasting,
 # Excel + PDF + DOCX report generation.
 pip install -e .
+pip install -e ".[msg]"       # optional Outlook MSG parsing
 
 # Optional toolchains (only needed if you are contributing or
 # packaging binaries — the default extras-as-runtime policy above
@@ -131,8 +132,8 @@ Or run the built executable `EDF_Evidence_Collector.exe`.
 2. **Configure Options**:
    - **Account Filter**: Filter by EDF account number (e.g., `A-12345678` or `123 456 789 012`). Both compact and grouped-digit renderings are matched against the bill — `extract_new_invoice_fields` accepts the spaceless `A-NNNNNNNN` shape and the bank-row-style `NNN NNN NNN NNN` shape.
    - **Domain Filter**: Filter PST emails by sender domain (default: edfenergy.com)
-   - **Minimum Amount**: Filter out records below this threshold (default: £50)
-   - **Analysis Threshold**: Minimum bill amount for analysis tabs (default: £500)
+   - **Minimum Amount**: Optional magnitude filter; filtered evidence is retained separately
+   - **Analysis Threshold**: Minimum bill magnitude for analysis selection (default: £0); payments/credits and nominal old-consumption cases are retained
    - **Report Account Ref**: Override account reference in report header
 3. **Click "EXTRACT TO EXCEL"** — produces the evidence workbook. The same button toggles to `Cancel` while running and `Cancelling...` after you click Cancel; it returns to `EXTRACT TO EXCEL` when the worker exits.
 4. **Optional: pick Output Folder** (Section 1) — defaults to the source-file directory; override to send xlsx + reports elsewhere.
@@ -451,19 +452,18 @@ Tests are organised into three lake levels:
   missing — a fully-synthetic, deterministic dataset (FAFA policy,
   no real EDF data).
 
-The tkinter-dependent tests require a display server. On headless Linux CI / dev environments, the `pytest-xvfb` plugin (in the `dev` extras) auto-activates a virtual X server — install with `pip install -e ".[dev]"` and the GUI tests run green without any manual xvfb setup. The plugin is **opt-out** (use `--no-xvfb` to disable).
+Tkinter checks require a display server. Headless Linux needs the Xvfb system binary as well as the `pytest-xvfb` plugin in the dev extra. The plugin is opt-out (`--no-xvfb`); installing it does not install the system binary.
 
 ### Linting / formatting / type-checking
 
 ```bash
 ruff check .
-ruff format .
+ruff format --check .
 mypy .
 ```
 
 All three are enforced in CI on Python 3.10 / 3.11 / 3.12 ×
-ubuntu / windows / macos — see `.github/workflows/ci.yml`. A
-release is one CI green away from shippable.
+ubuntu / windows / macos — see `.github/workflows/ci.yml`. Packaged runtime and source/evidence checks are also needed before distribution.
 
 ### Test coverage
 
@@ -497,9 +497,4 @@ This tool was created for personal use in an EDF billing dispute. It is provided
 
 ## Release & Test Status
 
-Goes green on the full CI matrix (Python 3.10 / 3.11 / 3.12 ×
-ubuntu / windows / macos) — see `.github/workflows/ci.yml`.  The
-local test baseline runs `pytest -v`, `ruff check .`, `ruff format
---check .`, and `mypy .` end-to-end; the "Test Status" code path is
-documented in *Development* above.  See
-[CHANGELOG.md](CHANGELOG.md) for the per-pass audit trail.
+CI defines Python 3.10 / 3.11 / 3.12 across Ubuntu, Windows and macOS. Check results for the actual revision; this document does not certify that matrix. Recorded local review checks and their limits are in [docs/REVIEW_FIXES.md](docs/REVIEW_FIXES.md). See [CHANGELOG.md](CHANGELOG.md) for the historical audit trail.
