@@ -17,6 +17,7 @@ Companion to ``tests/test_save_dups_toggle.py``.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import cast
 
 import pandas as pd
@@ -178,7 +179,7 @@ def test_gui_toggles_are_written_into_evidence_engine_config_dict() -> None:
     assert e.config["save_evidence_files"] is True
 
 
-def test_sap_sheets_can_be_enabled_without_reconciliation(tmp_path) -> None:
+def test_sap_sheets_can_be_enabled_without_reconciliation(tmp_path: Path) -> None:
     path = str(tmp_path / "sap_without_reconciliation.xlsx")
     export_to_excel(
         _sample_data(),
