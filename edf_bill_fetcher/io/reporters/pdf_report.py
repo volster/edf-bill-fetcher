@@ -44,8 +44,8 @@ from edf_bill_fetcher.helpers.formatting import (
     fmt_number,
 )
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.report_view import ReportView, capture_report_view
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
-from edf_bill_fetcher.processors.preparation import analysis_frame, prepare_evidence
 
 # =============================================================================
 # COLOR PALETTE & CONSTANTS
@@ -2035,7 +2035,6 @@ def create_appendix_glossary(ctx: RenderContext | None = None) -> list:
 # =============================================================================
 
 
-@atomic_output()
 def generate_ombudsman_pdf(
     records: list[dict],
     output_path: str,
@@ -2043,31 +2042,18 @@ def generate_ombudsman_pdf(
     engine: Any,
     filtered: list | None = None,
 ) -> str:
-    """Generate a PDF report from the supplied records.
+    """Capture legacy inputs once, then render their accepted result."""
+    view = capture_report_view(records, dict(config), engine, filtered, formats=("pdf",))
+    return render_pdf(view, output_path)
 
-    The output sections are derived from ``REPORT_SECTIONS`` via the
-    dispatcher wired up below; the section keys selected via
-    ``config["report_sections"]`` control which sections render.
 
-    Args:
-        records: List of extracted billing records
-        output_path: Path to save the PDF
-        config: Configuration dictionary
-        engine: EvidenceEngine instance (for metadata)
-        filtered: Filtered-out records (below threshold)
-
-    Returns:
-        Path to generated PDF
-
-    """
-    if not records:
-        raise ValueError("No records to report on")
-
+@atomic_output()
+def render_pdf(view: ReportView, output_path: str) -> str:
+    """Render the accepted result using the existing PDF layout."""
     section_failures = []
-    prepared = prepare_evidence(records, config)
-    config = dict(prepared.config)
-    records = prepared.records
-    df = prepared.frame
+    records, config, engine = view.records, view.config, view.engine
+    filtered = engine.filtered_records
+    df = view.frame()
     if df.empty:
         raise ValueError("Records DataFrame is empty")
 
@@ -2119,48 +2105,22 @@ def generate_ombudsman_pdf(
     # Financial totals — see ``_compute_financial_totals`` for why we
     # route off Entry Type rather than splitting ``Amount (£)`` on sign
     # (the column is a positive cumulative balance, not a signed delta).
-    charges, payments = _compute_financial_totals(df)
+    charges, payments = view.snapshot.summary.charges, view.snapshot.summary.net_credits
     # Opening/closing balance — see ``_compute_balance_extremes`` for why
     # we no longer ship ``"—"`` placeholders to the ombudsman-facing
     # executive summary.  When the dataframe has at least one dated
     # record with a numeric balance we emit real numbers; otherwise the
     # helper returns ``(None, None)`` and the table renders ``"—"``,
     # which is now an honest fallback rather than the steady state.
-    opening_balance, closing_balance = _compute_balance_extremes(df)
+    opening_balance, closing_balance = view.snapshot.summary.opening_balance, view.snapshot.summary.closing_balance
 
     # Compute dispute flags from the data
-    from edf_bill_fetcher.processors.analysis import compute_dispute_flags
+    analysis_df = view.frame("analysis")
+    dispute = view.model("dispute")
+    flags, flag_counts = dispute.flags, dispute.counts
 
-    # Ensure _dt column exists for the analysis
-    if "_dt" not in df.columns:
-        df["_dt"] = df["Date"].apply(parse_to_sort_date)
-    analysis_df = analysis_frame(df, config)
-    df_sorted = analysis_df
+    enabled_sections = view.context.selected
 
-    # Mean daily rate — shared logic (see _compute_mean_daily in this file).
-    mean_daily = _compute_mean_daily(df_sorted)
-
-    flags, flag_counts = compute_dispute_flags(df_sorted, mean_daily)
-
-    # Section selection: only include sections in config["report_sections"]
-    enabled_sections = set(config.get("report_sections", []))
-    # Backward compatibility: if not specified, enable all of the
-    # *implementable* sections. ``appendix_filtered`` is intentionally
-    # absent: the report used to expose it as a candidate but the
-    # builder never existed, so a no-op section was silently dropped
-    # by the dispatcher. Keep things honest — only show keys the
-    # renderer actually knows how to draw.
-    # Derive the full set from the registry + the framing keys (cover/toc)
-    # so it can never drift out of sync with REPORT_SECTIONS again (the
-    # previous hand-listed set silently omitted "compensation").
-    all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}
-    if not enabled_sections:
-        enabled_sections = all_sections
-
-    # === DISCIPLINED SECTION DISPATCH ===
-    # Walk every enabled section in REGISTRY ORDER so TOC and body always
-    # agree on numbering. Each branch is a one-liner that delegates to the
-    # appropriate ``create_*`` function plus its RenderContext.
     def section_enabled(key: str) -> bool:
         return key in enabled_sections
 
