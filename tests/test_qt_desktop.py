@@ -14,7 +14,7 @@ import pytest
 # Set the backend before the first QApplication; no desktop session is needed.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt, QTimer  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, QTimer  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QDialog,
@@ -37,13 +37,17 @@ from edf_bill_fetcher.ui.qt_app import EvidenceWindow, ReportDialog  # noqa: E40
 from edf_bill_fetcher.ui.qt_theme import apply_theme  # noqa: E402
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def application():
     app = QApplication.instance() or QApplication([])
     assert isinstance(app, QApplication)
     app.setQuitOnLastWindowClosed(False)
     apply_theme(app)
     yield app
+    for widget in app.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
 
 
@@ -59,6 +63,7 @@ def window(application, tmp_path):
         application.processEvents()
     widget.close()
     widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     application.processEvents()
 
 
@@ -436,6 +441,57 @@ def test_saved_result_renders_without_reanalysis_or_modifying_original(
     assert path.read_bytes() == original
     assert load_result(Path(job.directory) / "result.json") == snapshot
     assert "Last Payment Amount" in Path(job.outputs["html"]).read_text()
+
+
+@pytest.mark.parametrize("change", ["moved", "missing", "modified"])
+def test_saved_workbook_links_resolve_moved_evidence_without_recalculating(
+    window, application, tmp_path, monkeypatch, change
+):
+    import openpyxl
+
+    source = source_folder(window, tmp_path)
+    shutil.copy2(Path(__file__).parent / "fixtures/sample_bill.pdf", source / "bill.pdf")
+    window.run_button.click()
+    wait_until(application, lambda: not window._busy)
+    original_snapshot = window.last_outcome.snapshot
+    old_directory = Path(window.current_job.directory)
+    relocated = tmp_path / "relocated"
+    shutil.move(str(old_directory), relocated)
+    originals = list((relocated / "evidence_files").glob("*.pdf"))
+    assert len(originals) == 1
+    if change == "missing":
+        originals[0].unlink()
+    elif change == "modified":
+        originals[0].write_bytes(b"different evidence")
+    original_result = (relocated / "result.json").read_bytes()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Re-rendering must preserve accepted calculations")
+
+    monkeypatch.setattr("edf_bill_fetcher.application.run_service.analyse_prepared", forbidden)
+    monkeypatch.setattr("edf_bill_fetcher.application.run_service.prepare_snapshot", forbidden)
+    window._navigate(1)
+    window.report_input.entry.setText(str(relocated / "result.json"))
+    window.report_options = {"format": "html", "sections": ["payment"]}
+    window.report_excel.setChecked(True)
+    job = window.capture_job()
+    outcome = execute(job, application)
+    assert outcome.snapshot == original_snapshot
+    assert (relocated / "result.json").read_bytes() == original_result
+    workbook = openpyxl.load_workbook(job.outputs["xlsx"])
+    try:
+        ws = workbook["EDF Evidence Report"]
+        column = [cell.value for cell in ws[1]].index("Attachment Name") + 1
+        cell = ws.cell(2, column)
+        if change == "moved":
+            assert outcome.status == "complete", outcome.error
+            assert (Path(job.directory) / cell.hyperlink.target).resolve() == originals[0]
+        else:
+            assert outcome.status == "review_required", outcome.error
+            assert cell.hyperlink is None
+            assert object_value(outcome.manifest)["warnings"]
+    finally:
+        workbook.close()
 
 
 @pytest.mark.parametrize("content", ['{"version":999}', '{"amount":NaN}', "not JSON"])

@@ -147,6 +147,15 @@ the current processing step and cleanup; failed exports retain any analysis
 and files that were successfully saved. Use **Details** to inspect review
 notes and **Open folder** to find the run's output.
 
+Evidence packs include `evidence_manifest.json`, which maps source IDs and
+original filenames to the actual copied files, their SHA-256 hashes, invoice
+references and page ranges. The Word index links to those files and displays
+the filename mapping. A merged PDF is copied whole once, even when several
+invoice rows refer to it. Single-invoice PDFs may be renamed to the invoice
+number; workbook links follow the saved mapping. Missing, ambiguous or changed
+source files produce review notes instead of invented links. Recursive scans
+skip recognised output folders from earlier runs.
+
 1. **Select Sources** (at least one required):
    - **PST/OST File**: Outlook email archive containing EDF emails (`.pst` / `.ost` are read via `libpff-python`; the `process_pst_file` wrapper auto-logs an error if the lib is missing, so the rest of the pipeline still runs)
    - **EML/MSG File**: individual Outlook/email message files (`.eml` / `.msg`) containing EDF emails

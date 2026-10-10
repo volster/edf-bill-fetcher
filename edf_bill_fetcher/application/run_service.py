@@ -73,6 +73,7 @@ def run(
     store: Callable = save_result,
     accepted_result: AnalysisSnapshot | None = None,
     selection: RenderSelection | None = None,
+    warnings: tuple[str, ...] = (),
 ) -> RunOutcome:
     """Collect once, preserve one analysis and render requested artifacts independently."""
     snapshot = accepted_result
@@ -85,6 +86,7 @@ def run(
         "artifacts": {},
         "result": None,
         "error": None,
+        "warnings": list(warnings),
     }
     error = None
     destinations_valid = False
@@ -153,7 +155,9 @@ def run(
                 manifest["artifacts"][fmt] = artifact_record(path)
                 save_manifest(manifest, manifest_path)
             check_cancelled(cancelled)
-            manifest["status"] = "review_required" if state.get("error_log") else "complete"
+            manifest["status"] = (
+                "review_required" if state.get("error_log") or warnings else "complete"
+            )
     except RunCancelled as exc:
         error = str(exc)
         manifest["status"] = "cancelled"
@@ -218,14 +222,23 @@ def bundle_engine_sources(
 
     from edf_bill_fetcher.domain.json_values import rows_value
     from edf_bill_fetcher.helpers.artifacts import write_json
-    from edf_bill_fetcher.io.writers.evidence_bundle import build_bundle_index, save_evidence_files
+    from edf_bill_fetcher.io.writers.evidence_bundle import (
+        build_bundle_index,
+        build_bundle_manifest,
+        save_evidence_files,
+    )
 
     config = object_value(prepared.effective_config)
     engine.config = config
     state = object_value(prepared.extraction.legacy_state)
     records = rows_value(prepared.records)
     bundle_records = pd.concat(
-        [pd.DataFrame(records), pd.DataFrame(list(engine.source_manifest.values()))],
+        [
+            pd.DataFrame(records),
+            pd.DataFrame(rows_value(prepared.duplicates)),
+            pd.DataFrame(state.get("filtered_records", [])),
+            pd.DataFrame(list(engine.source_manifest.values())),
+        ],
         ignore_index=True,
     )
     saved: dict[str, str] = {}
@@ -236,7 +249,9 @@ def bundle_engine_sources(
             engine.source_paths,
             str(Path(bundle_dir) / "evidence_files"),
             stats=stats,
+            log=lambda text: engine.log_error("Evidence bundle", text),
         )
+        build_bundle_manifest(bundle_records, saved, bundle_dir)
         build_bundle_index(
             bundle_records,
             saved,
@@ -246,13 +261,18 @@ def bundle_engine_sources(
     for key in ("missing", "ambiguous"):
         if stats.get(key):
             engine.log_error("Evidence bundle", f"{stats[key]} {key} source files")
-    for metadata in engine.source_manifest.values():
+    saved_aliases = dict(saved)
+    for source_id, metadata in engine.source_manifest.items():
         copied = saved.get(metadata["Attachment Name"])
-        metadata["Saved Path"] = os.path.relpath(copied, bundle_dir) if copied else None
+        metadata["Saved Path"] = (
+            os.path.relpath(copied, bundle_dir).replace(os.sep, "/") if copied else None
+        )
+        if copied:
+            saved_aliases[source_id] = copied
     state.update(to_snapshot_json(engine.__getstate__(), path="$.legacy_state"))
     state.update(
         {
-            "saved_evidence_paths": saved,
+            "saved_evidence_paths": saved_aliases,
             "source_bundle_path": str(Path(bundle_dir).absolute()),
             "original_records": [object_value(row.raw) for row in prepared.extraction.observations],
         }

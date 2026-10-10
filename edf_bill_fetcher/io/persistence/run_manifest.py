@@ -42,3 +42,21 @@ def load_manifest(path: str) -> dict:
     if manifest.get("status") not in TERMINAL:
         manifest["status"] = "interrupted"
     return manifest
+
+
+def is_run_directory(path: str) -> bool:
+    """Recognise this application's output folders before recursive source scanning."""
+    try:
+        manifest = load_manifest(str(Path(path) / "run.json"))
+    except (OSError, ValueError):
+        return False
+    requested = manifest.get("requested")
+    return (
+        type(manifest.get("manifest_version")) is int
+        and isinstance(manifest.get("run_id"), str)
+        and bool(manifest["run_id"])
+        and isinstance(requested, dict)
+        and bool(requested)
+        and set(requested) <= {"xlsx", "pdf", "docx", "html"}
+        and isinstance(manifest.get("artifacts"), dict)
+    )

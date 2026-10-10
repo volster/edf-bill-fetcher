@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, replace
 from datetime import date
+from functools import partial
 from pathlib import Path
 from threading import Event
 from typing import cast
@@ -14,6 +15,7 @@ from edf_bill_fetcher.application.run_service import (
     bundle_engine_sources,
     check_cancelled,
     collect_engine,
+    default_renderers,
     run,
 )
 from edf_bill_fetcher.domain.json_values import freeze_json, object_value
@@ -113,9 +115,20 @@ class RunWorker(QThread):
             check_cancelled(self.cancel_event.is_set)
             accepted = None
             imported = None
+            renderers = None
+            warnings: tuple[str, ...] = ()
             if job.mode == "saved_result":
                 self.progress.emit("Opening saved analysis…")
                 accepted = load_result(job.input_path)
+                from edf_bill_fetcher.io.writers.evidence_bundle import resolve_bundle_paths
+                from edf_bill_fetcher.io.writers.export import render_xlsx
+
+                paths, warnings = resolve_bundle_paths(
+                    object_value(accepted.prepared.extraction.legacy_state),
+                    str(Path(job.input_path).parent),
+                )
+                renderers = default_renderers()
+                renderers["xlsx"] = partial(render_xlsx, evidence_paths=paths)
                 cfg = object_value(accepted.prepared.effective_config)
                 request = replace(
                     request,
@@ -179,6 +192,8 @@ class RunWorker(QThread):
                 ),
                 accepted_result=accepted,
                 selection=RenderSelection(job.formats, job.sections),
+                renderers=renderers,
+                warnings=warnings,
             )
         except Exception as error:
             status = "cancelled" if isinstance(error, RunCancelled) else "failed"

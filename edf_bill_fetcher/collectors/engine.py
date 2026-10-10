@@ -52,6 +52,7 @@ from edf_bill_fetcher.io.adapters.eml import parse_eml_message
 from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
 from edf_bill_fetcher.io.adapters.msg import HAS_EXTRACT_MSG, parse_msg_message
 from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pages
+from edf_bill_fetcher.io.persistence.run_manifest import is_run_directory
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.models.records import BillingRecord
 from edf_bill_fetcher.processors.detection import detect_pdf_format
@@ -1137,7 +1138,11 @@ class EvidenceEngine:
         # submissions where a missing bill undoes the entire
         # argument.
         pdf_files: list[tuple[str, str]] = []
-        for root, _dirs, files in os.walk(path):
+        for root, dirs, files in os.walk(path):
+            if is_run_directory(root):
+                dirs.clear()
+                self.update_ui("Skipping earlier evidence pack: " + root)
+                continue
             for f in files:
                 if f.lower().endswith(".pdf"):
                     pdf_files.append((root, f))
@@ -1197,12 +1202,17 @@ class EvidenceEngine:
         if not path or not os.path.exists(path):
             return
         try:
-            files = sorted(
-                os.path.relpath(os.path.join(base, f), path)
-                for base, _, names in os.walk(path)
-                for f in names
-                if f.lower().endswith(extension)
-            )
+            files: list[str] = []
+            for base, dirs, names in os.walk(path):
+                if is_run_directory(base):
+                    dirs.clear()
+                    self.update_ui("Skipping earlier evidence pack: " + base)
+                    continue
+                files.extend(
+                    os.path.relpath(os.path.join(base, name), path)
+                    for name in names
+                    if name.lower().endswith(extension)
+                )
         except OSError as e:
             self.log_error(f"{source_name} folder: {path}", str(e))
             return

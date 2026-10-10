@@ -954,6 +954,7 @@ class EvidenceWindow(QMainWindow):
         details = QPlainTextEdit()
         details.setReadOnly(True)
         lines = [self.last_outcome.error or ""]
+        lines.extend(object_value(self.last_outcome.manifest).get("warnings", []))
         if self.last_outcome.snapshot is not None:
             state = object_value(self.last_outcome.snapshot.prepared.extraction.legacy_state)
             lines.extend(str(note) for note in state.get("error_log", []))

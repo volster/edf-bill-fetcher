@@ -347,13 +347,17 @@ def export_to_excel(
 
 
 @atomic_output()
-def render_xlsx(view: ReportView, output_path: str) -> None:
+def render_xlsx(
+    view: ReportView, output_path: str, *, evidence_paths: dict[str, str] | None = None
+) -> None:
     """Build the workbook from one accepted analysis and captured metadata."""
     config, engine = view.config, view.engine
     error_log, filtered = engine.error_log, engine.filtered_records
     state = vars(engine)
     sap_rows = {key: state.get(f"sap_{key}_rows", []) for key in ("contract", "meter", "financial")}
-    invoice_pdf_paths = state.get("saved_evidence_paths", {})
+    invoice_pdf_paths = (
+        state.get("saved_evidence_paths", {}) if evidence_paths is None else evidence_paths
+    )
     df = view.frame()
     dup_df = pd.DataFrame(view.duplicates) if config.get("save_dups", True) else pd.DataFrame()
 
@@ -397,7 +401,9 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
         errors="ignore",
     )
     saved_links = {
-        key: os.path.relpath(path, os.path.dirname(os.path.abspath(output_path)))
+        key: os.path.relpath(path, os.path.dirname(os.path.abspath(output_path))).replace(
+            os.sep, "/"
+        )
         for key, path in (invoice_pdf_paths or {}).items()
     }
     write_evidence_sheet(ws_main, evidence_df, is_duplicate=False, saved_paths=saved_links)
@@ -422,7 +428,7 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
             errors="ignore",
         )
         ws_dup = wb.create_sheet(title="Duplicate Entries")
-        write_evidence_sheet(ws_dup, dup_df_for_report, is_duplicate=True)
+        write_evidence_sheet(ws_dup, dup_df_for_report, is_duplicate=True, saved_paths=saved_links)
 
     # Tab 4: Filtered
     if filtered and config.get("save_filtered", True):
@@ -1203,10 +1209,13 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
             target = qualified if qualified in targets else inv
             if target not in targets:
                 continue
-            saved_path = invoice_pdf_paths.get(str(record.get("Attachment Name", "")))
+            saved_path = invoice_pdf_paths.get(
+                str(record.get("Source ID", ""))
+            ) or invoice_pdf_paths.get(str(record.get("Attachment Name", "")))
             if saved_path:
                 recon_pdf_paths.setdefault(
-                    target, os.path.relpath(os.path.abspath(saved_path), out_dir)
+                    target,
+                    os.path.relpath(os.path.abspath(saved_path), out_dir).replace(os.sep, "/"),
                 )
     # The reconciliation writer is called FIRST so it can report the
     # survivor -> KILLER-header row map it actually emitted; that map is
