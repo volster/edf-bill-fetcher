@@ -262,7 +262,7 @@ class TestRenderContextDispatchGuard:
     def _make_minimal_engine(self):
         from types import SimpleNamespace
 
-        return SimpleNamespace(pdf_count=0, email_count=0, records=[], filtered_records=[])
+        return SimpleNamespace(pdf_count=0, email_count=0, filtered_records=[])
 
     def test_pdf_dispatcher_raises_when_registry_missing_builder(self, tmp_path, monkeypatch):
         """Adding a section to ``REPORT_SECTIONS`` without wiring it
@@ -291,6 +291,11 @@ class TestRenderContextDispatchGuard:
                 ],
             )
 
+            import edf_bill_fetcher.models.report_sections as registry
+            import edf_bill_fetcher.models.report_view as views
+
+            monkeypatch.setattr(registry, "REPORT_SECTIONS", edf_report.REPORT_SECTIONS)
+            monkeypatch.setattr(views, "REPORT_SECTIONS", edf_report.REPORT_SECTIONS)
             with pytest.raises(RuntimeError) as exc_info:
                 edf_report.generate_ombudsman_pdf(
                     records=self._build_minimal_records(),

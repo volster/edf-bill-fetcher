@@ -178,25 +178,19 @@ def test_gui_toggles_are_written_into_evidence_engine_config_dict() -> None:
     assert e.config["save_evidence_files"] is True
 
 
-def test_static_check_sap_and_recon_toggles_are_read_inside_export(
-    tmp_path: object,
-) -> None:
-    """Pin the toggles being read inside ``export_to_excel`` so a
-    regression that drops the gate surfaces fast.
-    Mirrors ``test_save_dups_kwarg_match_dedup_branch_in_export``."""
-    import inspect
-
-    from edf_bill_fetcher.io.writers import export_to_excel as _export_to_excel
-
-    src = inspect.getsource(_export_to_excel)
-    # The export body must consult both toggles to gate the SAP /
-    # reconciliation sheet writes.
-    assert 'config.get("scan_sap_dumps"' in src, (
-        "export_to_excel must consult config['scan_sap_dumps'] to gate the SAP sheets"
+def test_sap_sheets_can_be_enabled_without_reconciliation(tmp_path) -> None:
+    path = str(tmp_path / "sap_without_reconciliation.xlsx")
+    export_to_excel(
+        _sample_data(),
+        path,
+        [],
+        {"scan_sap_dumps": True, "generate_reconciliation_sheet": False},
+        sap_rows=_sap_rows(),
     )
-    assert 'config.get("generate_reconciliation_sheet"' in src, (
-        "export_to_excel must consult config['generate_reconciliation_sheet'] to gate Reconciliation"
-    )
+    names = _sheet_names(path)
+    assert {"SAP Contract History", "SAP Meter Readings", "SAP Financial Transactions"} <= names
+    assert "Reconciliation" not in names
+    assert "Reconciliation Drill-down" not in names
 
 
 # ---------------------------------------------------------------------------

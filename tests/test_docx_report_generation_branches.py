@@ -65,7 +65,7 @@ class _StubEngine:
 def test_generate_full_report_all_sections(tmp_path: Any) -> None:
     records = _make_records(24)
     out = str(tmp_path / "full.docx")
-    config = {"report_account_ref": "A-12345678", "report_sections": []}
+    config = {"report_account_ref": "A-12345678"}
     result = generate_ombudsman_docx(records, out, config, _StubEngine())
     assert result == out
     doc = Document(out)
@@ -105,7 +105,7 @@ def test_generate_section_failure_is_isolated(
     monkeypatch.setattr(docx_mod, "create_executive_summary", _boom)
     records = _make_records(6)
     out = str(tmp_path / "isolated.docx")
-    config = {"report_account_ref": "A-1", "report_sections": []}
+    config = {"report_account_ref": "A-1", "report_sections": ["exec_summary"]}
     Path(out).write_bytes(b"previous complete report")
     with pytest.raises(RuntimeError, match="section exploded"):
         generate_ombudsman_docx(records, out, config, None)

@@ -1,29 +1,86 @@
-"""Structural consistency checks between REPORT_SECTIONS and the
-PDF / DOCX dispatchers.
-
-These tests pin a paying-client-relevant invariant: every key in
-the registry has a wiring in BOTH dispatchers and BOTH dispatchers
-wire only registry-resolvable keys.
-
-If a future contributor adds a section without wiring both
-dispatchers, these tests pin the failure mode before the runtime
-``RuntimeError`` ever fires on a real customer's machine — a paying
-client gets a CI failure, not a 14-section report missing the
-new one.
-"""
+"""Report selection and dispatcher contracts exercised through actual renderers."""
 
 from __future__ import annotations
 
-import ast
+import importlib
 import json
+from datetime import date, datetime, timezone
+from functools import wraps
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from edf_bill_fetcher.io.reporters.pdf_report import REPORT_SECTIONS
+from edf_bill_fetcher.domain.json_values import freeze_json
+from edf_bill_fetcher.domain.requests import RunRequest
+from edf_bill_fetcher.io.persistence.result_codec import migrate_legacy
+from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS
+from edf_bill_fetcher.models.report_view import RenderSelection, build_report_view
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+BUILDERS = {
+    "exec_summary": "create_executive_summary",
+    "key_findings": "create_key_findings_table",
+    "evidence_index": "create_evidence_index",
+    "detailed_findings": "create_anomaly_detail_section",
+    "timeline": "create_timeline_section",
+    "ofgem": "create_ofgem_comparison",
+    "statistical": "create_statistical_analysis",
+    "payment": "create_payment_analysis",
+    "forecast": "create_forecast_section",
+    "data_quality": "create_data_quality_section",
+    "tariff": "create_tariff_impact_section",
+    "compensation": "create_compensation_section",
+    "appendix_methodology": "create_appendix_methodology",
+    "appendix_glossary": "create_appendix_glossary",
+    "appendix_full_evidence": "create_appendix_full_evidence",
+}
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "docx", "html"])
+@pytest.mark.parametrize("sections", [None, ("exec_summary", "payment", "compensation"), ()])
+def test_selected_registry_sections_are_rendered_with_stored_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fmt: str, sections: tuple[str, ...] | None
+) -> None:
+    assert set(BUILDERS) == {section.key for section in REPORT_SECTIONS}
+    module = importlib.import_module("edf_bill_fetcher.io.reporters." + fmt + "_report")
+    request = RunRequest(
+        "dispatch",
+        datetime(2024, 4, 1, tzinfo=timezone.utc),
+        date(2024, 4, 1),
+        (),
+        freeze_json({"as_of": "2024-04-01"}),
+    )
+    snapshot = migrate_legacy(_synthetic_html_records(), request)
+    view = build_report_view(snapshot, RenderSelection((fmt,), sections))
+    observed = []
+
+    def recorder(key, original):
+        @wraps(original)
+        def invoke(*args, **kwargs):
+            observed.append(key)
+            if key in {
+                "ofgem",
+                "statistical",
+                "payment",
+                "forecast",
+                "data_quality",
+                "tariff",
+                "compensation",
+            }:
+                assert "payload" in kwargs
+            return original(*args, **kwargs)
+
+        return invoke
+
+    for key, name in BUILDERS.items():
+        monkeypatch.setattr(module, name, recorder(key, getattr(module, name)))
+    output = tmp_path / ("report." + fmt)
+    getattr(module, "render_" + fmt)(view, str(output))
+    expected = [
+        section.key for section in REPORT_SECTIONS if sections is None or section.key in sections
+    ]
+    assert observed == expected
+    assert output.stat().st_size > 0
 
 
 def _synthetic_html_records() -> list[dict]:
@@ -79,142 +136,6 @@ def _synthetic_html_records() -> list[dict]:
             "Tariff": "Standard Variable",
         },
     ]
-
-
-def _dispatcher_keys_for_function(function_name: str, source_path: str) -> set[str]:
-    """Walk ``source_path`` once with the AST module loader and pull
-    the literal-dict ``section_builders`` keyed strings out of the
-    function named ``function_name``.
-    """
-    # Read as UTF-8 explicitly — ``Path.read_text`` defaults to the
-    # locale encoding on Windows runners (cp1252), which trips on
-    # non-ASCII bytes inside Python source comments / strings.
-    src = Path(source_path).read_text(encoding="utf-8")
-    module = ast.parse(src)
-    for node in ast.walk(module):
-        if not isinstance(node, ast.FunctionDef) or node.name != function_name:
-            continue
-        for stmt in ast.walk(node):
-            if not isinstance(stmt, ast.AnnAssign):
-                continue
-            target = ast.unparse(stmt.target)
-            if not target.endswith("section_builders"):
-                continue
-            value = stmt.value
-            if not isinstance(value, ast.Dict):
-                continue
-            keys: set[str] = set()
-            for key in value.keys:
-                if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                    keys.add(key.value)
-            return keys
-    raise AssertionError(f"{function_name}() does not have a section_builders dict literal")
-
-
-def _pdf_dispatcher_keys() -> set[str]:
-    return _dispatcher_keys_for_function(
-        "generate_ombudsman_pdf",
-        str(REPO_ROOT / "edf_bill_fetcher/io/reporters/pdf_report.py"),
-    )
-
-
-def _docx_dispatcher_keys() -> set[str]:
-    return _dispatcher_keys_for_function(
-        "generate_ombudsman_docx",
-        str(REPO_ROOT / "edf_bill_fetcher/io/reporters/docx_report.py"),
-    )
-
-
-def _html_dispatcher_keys() -> set[str]:
-    return _dispatcher_keys_for_function(
-        "generate_html_report",
-        str(REPO_ROOT / "edf_bill_fetcher/io/reporters/html_report.py"),
-    )
-
-
-def _registry_keys() -> set[str]:
-    return {s.key for s in REPORT_SECTIONS}
-
-
-class TestRegistryDispatchParity:
-    """Every registry key is wired into both dispatchers."""
-
-    def test_pdf_dispatcher_covers_registry(self):
-        pdf = _pdf_dispatcher_keys()
-        reg = _registry_keys()
-        assert pdf == reg, (
-            f"PDF dispatcher wires {sorted(pdf - reg)} that the registry "
-            f"does not declare, or misses {sorted(reg - pdf)} from the registry"
-        )
-
-    def test_docx_dispatcher_covers_registry(self):
-        docx = _docx_dispatcher_keys()
-        reg = _registry_keys()
-        assert docx == reg, (
-            f"DOCX dispatcher wires {sorted(docx - reg)} that the registry "
-            f"does not declare, or misses {sorted(reg - docx)} from the registry"
-        )
-
-    def test_html_dispatcher_covers_registry(self):
-        html = _html_dispatcher_keys()
-        reg = _registry_keys()
-        assert html == reg, (
-            f"HTML dispatcher wires {sorted(html - reg)} that the registry "
-            f"does not declare, or misses {sorted(reg - html)} from the registry"
-        )
-
-    def test_pdf_and_docx_dispatchers_agree(self):
-        assert _pdf_dispatcher_keys() == _docx_dispatcher_keys()
-
-    def test_pdf_docx_and_html_dispatchers_agree(self):
-        """Three-format lockstep: the PDF, DOCX and HTML dispatchers all
-        wire exactly the same set of registry keys."""
-        assert _pdf_dispatcher_keys() == _docx_dispatcher_keys() == _html_dispatcher_keys()
-
-
-class TestRenderContextBuildable:
-    """RenderContext's section_in_order is empty for unknown keys."""
-
-    def test_registry_keys_all_resolve(self):
-        from edf_bill_fetcher.io.reporters.pdf_report import RenderContext
-
-        ctx = RenderContext()  # default = all sections
-        looked = {s.section.key for s in ctx.sections_in_order}
-        assert looked == _registry_keys()
-
-    def test_unknown_key_in_render_context_does_not_explode(self):
-        from edf_bill_fetcher.io.reporters.pdf_report import RenderContext
-
-        ctx = RenderContext({"this_key_is_not_in_registry"})
-        assert isinstance(ctx.sections_in_order, list)
-
-
-class TestDispatcherBuildersAllCallable:
-    """Every wired builder exists and is callable via the
-    kwargs from the literal dict.
-    """
-
-    def test_pdf_dispatchers_all_callable(self):
-        # Walk the same way as the runtime: for each registry key,
-        # look up the entry in section_builders; the registered
-        # invoke function must be callable with the dict's kwargs.
-        from edf_bill_fetcher.io.reporters.pdf_report import generate_ombudsman_pdf
-
-        # Reach into the module by re-evaluating its AST and
-        # locating the literal ``lambda kwargs: create_X(**kwargs)``
-        # right-hand-sides. This is a structural test — it asserts
-        # the dispatcher is well-formed, not that all paths render.
-        assert callable(generate_ombudsman_pdf)
-
-    def test_docx_dispatchers_all_callable(self):
-        from edf_bill_fetcher.io.reporters.docx_report import generate_ombudsman_docx
-
-        assert callable(generate_ombudsman_docx)
-
-    def test_html_dispatchers_all_callable(self):
-        from edf_bill_fetcher.io.reporters.html_report import generate_html_report
-
-        assert callable(generate_html_report)
 
 
 class TestCliHtmlReportSmoke:
@@ -344,38 +265,4 @@ class TestFmtDateParity:
             "DOCX fmt_date is a different object; the two renderers "
             "can drift apart at runtime, which is exactly what Phase 1.2 "
             "was meant to prevent."
-        )
-
-
-class TestAllSectionsFallbackCoversRegistry:
-    """Pin the `compensation` drift fix: each reporter's ``all_sections``
-    fallback set must cover every key in ``REPORT_SECTIONS`` (plus the
-    ``cover``/``toc`` framing keys).  A hand-listed ``all_sections`` literal
-    that omits a registry key will fail this test at CI time instead of
-    silently dropping that section for headless/CLI report runs.
-    """
-
-    _MODULES = {
-        "pdf": "edf_bill_fetcher.io.reporters.pdf_report",
-        "docx": "edf_bill_fetcher.io.reporters.docx_report",
-        "html": "edf_bill_fetcher.io.reporters.html_report",
-    }
-
-    @pytest.mark.parametrize("name", ["pdf", "docx", "html"])
-    def test_fallback_set_covers_registry(self, name: str) -> None:
-        src_path = (
-            REPO_ROOT
-            / "edf_bill_fetcher"
-            / "io"
-            / "reporters"
-            / f"{self._MODULES[name].rsplit('.', 1)[-1]}.py"
-        )
-        src = src_path.read_text(encoding="utf-8")
-        # Reject a hand-listed ``all_sections`` literal that could silently
-        # omit a registry key (the pre-fix bug).
-        assert 'all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}' in src, (
-            f"{self._MODULES[name]} no longer derives ``all_sections`` from the "
-            "registry — a hand-listed literal can silently omit sections (see the "
-            "compensation-section drift fix).  Keep the registry-derived form: "
-            '`all_sections = {s.key for s in REPORT_SECTIONS} | {"cover", "toc"}`.'
         )

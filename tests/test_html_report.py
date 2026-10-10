@@ -228,10 +228,10 @@ def test_report_sections_argument_overrides_config(
     assert "Key Findings Summary" not in html
 
 
-def test_placeholder_sections_render_note(
+def test_analytical_sections_render_stored_metrics(
     tmp_path: Path, sample_records: list[dict[str, Any]], sample_config: ConfigDict
 ) -> None:
-    """Chart-heavy sections render the 'not implemented in HTML' note."""
+    """Analytical sections expose metrics and unavailable values."""
     from edf_bill_fetcher.io.reporters.html_report import generate_html_report
 
     out_path = tmp_path / "report3.html"
@@ -242,7 +242,10 @@ def test_placeholder_sections_render_note(
         report_sections=["statistical", "payment", "forecast"],
     )
     html = out_path.read_text(encoding="utf-8")
-    assert html.count("not implemented in HTML") >= 3
+    assert "not implemented in HTML" not in html
+    assert "Mean" in html
+    assert "Total Paid" in html
+    assert "Unavailable" in html
     assert "Statistical Analysis" in html
     assert "Payment &amp; Credit Analysis" in html
     assert "Forecast &amp; Projection" in html
@@ -267,6 +270,11 @@ def test_missing_builder_raises_runtime_error(
                 ReportSectionMeta(key="__test_orphan_section__", title="Orphan Test Section"),
             ],
         )
+        import edf_bill_fetcher.models.report_sections as registry
+        import edf_bill_fetcher.models.report_view as views
+
+        monkeypatch.setattr(registry, "REPORT_SECTIONS", html_module.REPORT_SECTIONS)
+        monkeypatch.setattr(views, "REPORT_SECTIONS", html_module.REPORT_SECTIONS)
         with pytest.raises(RuntimeError) as exc_info:
             generate_html_report(
                 records=sample_records,
