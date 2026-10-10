@@ -533,6 +533,101 @@ def run_cli_diff(args: list[str]) -> None:
         print(f"Diff workbook written: {parsed.diff_output}")
 
 
+def _render_cli_report(parsed, fmt: str) -> None:
+    """Restore accepted analysis or explicitly create a revised result for overrides."""
+    from dataclasses import replace
+    from pathlib import Path
+    from uuid import uuid4
+
+    from edf_bill_fetcher.application.run_service import run
+    from edf_bill_fetcher.domain.json_values import freeze_json, object_value, strict_loads
+    from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
+    from edf_bill_fetcher.io.persistence.result_codec import decode_result, migrate_legacy
+    from edf_bill_fetcher.models.report_view import RenderSelection
+
+    payload = strict_loads(Path(parsed.records).read_text(encoding="utf-8"))
+    overrides = (
+        strict_loads(Path(parsed.config).read_text(encoding="utf-8")) if parsed.config else {}
+    )
+    if not isinstance(overrides, dict):
+        raise ValueError("Configuration must be a JSON object")
+    if isinstance(payload, dict) and "schema_version" in payload:
+        snapshot = decode_result(payload)
+        if parsed.engine_data:
+            raise ValueError("A v3 result already contains its engine metadata; omit --engine-data")
+        cfg = object_value(snapshot.prepared.effective_config)
+        changes = {key: value for key, value in overrides.items() if cfg.get(key) != value}
+        cfg.update(overrides)
+        if set(changes) <= {"report_sections", "report_account_ref"}:
+            snapshot = replace(
+                snapshot, prepared=replace(snapshot.prepared, effective_config=freeze_json(cfg))
+            )
+        else:
+            state = payload["evidence"]["legacy_state"]
+            payload = {
+                **state,
+                "version": 2,
+                "records": payload["evidence"]["prepared_records"],
+                "original_records": [row["raw"] for row in payload["evidence"]["observations"]],
+            }
+            snapshot = None
+    else:
+        snapshot = None
+        if isinstance(payload, list):
+            payload = {"records": payload}
+        if not isinstance(payload, dict):
+            raise ValueError("Records must be an evidence object or array")
+        if parsed.engine_data:
+            if Path(parsed.engine_data).suffix.lower() != ".json":
+                raise ValueError(
+                    "Reports accept JSON engine data; pickle is not an interchange format"
+                )
+            state = strict_loads(Path(parsed.engine_data).read_text(encoding="utf-8"))
+            if not isinstance(state, dict) or state.get("version", 1) not in (1, 2):
+                raise ValueError("Unsupported engine JSON state")
+            for key in ("records", "original_records"):
+                if key in state and key in payload and state[key] != payload[key]:
+                    raise ValueError("Conflicting evidence and engine records")
+            payload = {**payload, **state}
+        cfg = dict(payload.get("config") or {})
+        cfg.update(overrides)
+    if snapshot is None:
+        cfg.setdefault("as_of", datetime.now(timezone.utc).date().isoformat())
+        captured = RunRequest(
+            uuid4().hex,
+            datetime.now(timezone.utc),
+            datetime.fromisoformat(cfg["as_of"]).date(),
+            (SourceSelection("records_json", str(Path(parsed.records).absolute())),),
+            freeze_json(cfg),
+        )
+        snapshot = migrate_legacy(payload, captured)
+    request = snapshot.prepared.extraction.request
+    selection = RenderSelection(
+        (fmt,), tuple(cfg["report_sections"]) if "report_sections" in cfg else None
+    )
+    result_path, manifest_path = parsed.output + ".result.json", parsed.output + ".run.json"
+    protected = {
+        Path(path).resolve() for path in (parsed.records, parsed.engine_data, parsed.config) if path
+    }
+    if any(
+        Path(path).resolve() in protected for path in (parsed.output, result_path, manifest_path)
+    ):
+        raise ValueError("Report output would overwrite an input file")
+    outcome = run(
+        request,
+        {fmt: parsed.output},
+        result_path=result_path,
+        manifest_path=manifest_path,
+        accepted_result=snapshot,
+        selection=selection,
+    )
+    if outcome.status not in {"complete", "review_required"}:
+        raise RuntimeError(outcome.error or "No records to report on")
+    sys.stdout.write(
+        f"{fmt.upper()} report generated: {parsed.output}\nSaved analysis: {result_path}\n"
+    )
+
+
 def run_cli_pdf_report(args: list[str]) -> None:
     """Run PDF report generation from command line."""
     parser = argparse.ArgumentParser(
@@ -555,23 +650,8 @@ def run_cli_pdf_report(args: list[str]) -> None:
     parsed = parser.parse_args(args)
 
     try:
-        records, config, engine, filtered = _load_report_inputs(parsed)
-
-        from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
-
-        success, msg = generate_pdf_from_gui(
-            records=records,
-            output_path=parsed.output,
-            config=config,
-            engine=engine,
-            filtered=filtered,
-        )
-        if success:
-            sys.stdout.write(msg + "\n")
-            sys.exit(0)
-        else:
-            sys.stderr.write(f"ERROR: {msg}\n")
-            sys.exit(1)
+        _render_cli_report(parsed, "pdf")
+        sys.exit(0)
 
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
@@ -600,23 +680,9 @@ def run_cli_docx_report(args: list[str]) -> None:
     parsed = parser.parse_args(args)
 
     try:
-        records, config, engine, filtered = _load_report_inputs(parsed)
+        _render_cli_report(parsed, "docx")
+        sys.exit(0)
 
-        from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
-
-        success, msg = generate_docx_from_gui(
-            records=records,
-            output_path=parsed.output,
-            config=config,
-            engine=engine,
-            filtered=filtered,
-        )
-        if success:
-            sys.stdout.write(msg + "\n")
-            sys.exit(0)
-        else:
-            sys.stderr.write(f"ERROR: {msg}\n")
-            sys.exit(1)
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
         sys.exit(1)
@@ -644,23 +710,9 @@ def run_cli_html_report(args: list[str]) -> None:
     parsed = parser.parse_args(args)
 
     try:
-        records, config, engine, filtered = _load_report_inputs(parsed)
+        _render_cli_report(parsed, "html")
+        sys.exit(0)
 
-        from edf_bill_fetcher.io.reporters.html_report import generate_html_from_gui
-
-        success, msg = generate_html_from_gui(
-            records=records,
-            output_path=parsed.output,
-            config=config,
-            engine=engine,
-            filtered=filtered,
-        )
-        if success:
-            sys.stdout.write(msg + "\n")
-            sys.exit(0)
-        else:
-            sys.stderr.write(f"ERROR: {msg}\n")
-            sys.exit(1)
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
         sys.exit(1)
