@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from importlib import resources
-from typing import Any
 
 import pandas as pd
 
@@ -66,7 +65,9 @@ def _compatible(left: dict, right: dict) -> bool:
 def _reconciliation(state: dict, frame: pd.DataFrame, contracts: pd.DataFrame) -> dict:
     """Port the legacy one-to-one matching rule, storing source indexes, not cells."""
     evidence = frame.to_dict("records")
-    meter, transactions, inferred_contract = [], [], []
+    meter: list[dict] = []
+    transactions: list[dict] = []
+    inferred_contract: list[dict] = []
     for idx, record in enumerate(evidence):
         for key, target in (
             ("Register Reading (kWh)", meter),
@@ -96,14 +97,15 @@ def _reconciliation(state: dict, frame: pd.DataFrame, contracts: pd.DataFrame) -
         ("Meter Read", state.get("sap_meter_rows", []), meter, "Meter Read Date", "Reading (kWh)"),
         ("Financial", state.get("sap_financial_rows", []), transactions, "Posting Date", "Amount"),
     )
-    summaries, details = [], []
+    summaries: list[dict] = []
+    details: list[dict] = []
     for entity, sap_items, inferred, date_key, value_key in specs:
         remaining = list(range(len(inferred)))
         matched = unmatched_sap = 0
         start = len(details)
         for source_idx, sap in enumerate(sap_items):
             sap_date = parse_to_sort_date(sap.get(date_key))
-            value: Any = (
+            value = (
                 identity(sap.get(value_key)) if entity == "Contract" else number(sap.get(value_key))
             )
             if entity == "Financial" and value is not None:

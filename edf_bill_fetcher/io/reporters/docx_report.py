@@ -1452,7 +1452,8 @@ def generate_ombudsman_docx(
 ) -> str:
     """Capture legacy inputs once, then render their accepted result."""
     view = capture_report_view(records, dict(config), engine, filtered, formats=("docx",))
-    return render_docx(view, output_path)
+    render_docx(view, output_path)
+    return output_path
 
 
 @atomic_output()

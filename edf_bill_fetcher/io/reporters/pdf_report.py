@@ -2062,7 +2062,8 @@ def generate_ombudsman_pdf(
 ) -> str:
     """Capture legacy inputs once, then render their accepted result."""
     view = capture_report_view(records, dict(config), engine, filtered, formats=("pdf",))
-    return render_pdf(view, output_path)
+    render_pdf(view, output_path)
+    return output_path
 
 
 @atomic_output()

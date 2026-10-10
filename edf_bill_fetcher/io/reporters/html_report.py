@@ -995,7 +995,8 @@ def generate_html_report(
         formats=("html",),
         sections=tuple(report_sections) if report_sections is not None else None,
     )
-    return render_html(view, output_path)
+    render_html(view, output_path)
+    return output_path
 
 
 @atomic_output()
