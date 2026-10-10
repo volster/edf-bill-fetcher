@@ -6,7 +6,9 @@ import math
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from functools import cache
+from types import UnionType
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 import numpy as np
 import pandas as pd
@@ -97,6 +99,39 @@ def to_snapshot_json(
     raise ValueError(f"Unsupported snapshot value at {path}: {type(value).__name__}")
 
 
+@cache
+def _model_hints(cls: type) -> dict:
+    """Resolve annotations only for the fixed known model classes."""
+    return get_type_hints(cls)
+
+
+def _valid_field(value: object, annotation: Any) -> bool:
+    """Validate model scalar/container shapes; unavailable numeric metrics stay null."""
+    if annotation is Any:
+        return True
+    origin, args = get_origin(annotation), get_args(annotation)
+    if origin in (Union, UnionType):
+        return any(_valid_field(value, item) for item in args)
+    if annotation is float:
+        return value is None or type(value) in (int, float)
+    if annotation in (int, bool, str, type(None)):
+        return type(value) is annotation
+    if origin is list:
+        return isinstance(value, list) and all(_valid_field(item, args[0]) for item in value)
+    if origin is dict:
+        return isinstance(value, dict) and all(
+            _valid_field(key, args[0]) and _valid_field(item, args[1])
+            for key, item in value.items()
+        )
+    if origin is tuple:
+        return (
+            isinstance(value, tuple)
+            and len(value) == len(args)
+            and all(_valid_field(item, kind) for item, kind in zip(value, args, strict=True))
+        )
+    return isinstance(value, annotation)
+
+
 def from_snapshot_json(value: object) -> Any:
     """Restore only fixed computed-model types and fresh frames, without analysis."""
     if isinstance(value, list):
@@ -116,6 +151,10 @@ def from_snapshot_json(value: object) -> Any:
             not isinstance(row, list) or len(row) != len(value["columns"]) for row in value["rows"]
         ):
             raise ValueError("Stored frame dimensions disagree")
+        if any(not isinstance(column, str) for column in value["columns"]) or len(
+            set(value["columns"])
+        ) != len(value["columns"]):
+            raise ValueError("Stored frame columns must be unique strings")
         frame = pd.DataFrame(value["rows"], columns=value["columns"], index=value["index"])
         for column in ("_dt", "_dt_parsed"):
             if column in frame:
@@ -136,5 +175,10 @@ def from_snapshot_json(value: object) -> Any:
             for key in ("clearing_date",):
                 data[key] = pd.Timestamp(data[key]) if data[key] is not None else pd.NaT
             data["posting_date_range"] = tuple(data["posting_date_range"])
+        for field_name, annotation in _model_hints(cls).items():
+            if not _valid_field(data[field_name], annotation):
+                raise ValueError(f"Invalid stored {cls.__name__}.{field_name}")
+            if annotation is int and data[field_name] < 0:
+                raise ValueError(f"Negative stored count: {field_name}")
         return cls(**data)
     return {key: from_snapshot_json(item) for key, item in value.items()}

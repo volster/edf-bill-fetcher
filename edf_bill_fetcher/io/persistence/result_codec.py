@@ -60,7 +60,16 @@ def _money(value: Any, nullable: bool = False) -> Decimal | None:
 
 def _validate_models(value: Any) -> None:
     models = _object(value, set(MODEL_KEYS))
-    for entry in models.values():
+    expected = {
+        "payment": "PaymentAnalysis",
+        "data_quality": "DataQualityReport",
+        "statistical": "StatisticalAnalysis",
+        "forecast": "ForecastResult",
+        "ofgem": "OfgemComparison",
+        "tariff": "TariffAnalysis",
+        "dispute": "DisputeAnalysis",
+    }
+    for key, entry in models.items():
         _object(entry, {"availability", "reason_code", "payload"})
         if entry["availability"] not in {"available", "partial", "unavailable", "not_applicable"}:
             raise ValueError("Invalid model availability")
@@ -69,7 +78,43 @@ def _validate_models(value: Any) -> None:
             raise ValueError("Invalid model reason")
         if entry["availability"] in {"unavailable", "partial"} and reason is None:
             raise ValueError("Unavailable/partial analysis needs a reason")
-        from_snapshot_json(entry["payload"])
+        payload = entry["payload"]
+        if key in expected and (
+            not isinstance(payload, dict)
+            or payload.get("type") != "model"
+            or payload.get("name") != expected[key]
+        ):
+            raise ValueError(f"Stored {key} payload has the wrong model type")
+        restored = from_snapshot_json(payload)
+        if key == "compensation" and (
+            not isinstance(restored, list) or any(not isinstance(row, dict) for row in restored)
+        ):
+            raise ValueError("Compensation rows must be objects")
+        if key == "sap":
+            if not isinstance(restored, dict) or not {
+                "analyses",
+                "events",
+                "matches",
+                "position",
+                "frames",
+                "timeline",
+                "event_source_indexes",
+                "union_total",
+                "domination",
+            } <= set(restored):
+                raise ValueError("SAP payload is incomplete")
+            events = restored["events"]
+            if not isinstance(events, list) or len(events) != len(restored["event_source_indexes"]):
+                raise ValueError("SAP event source membership disagrees")
+            for event, indexes in zip(events, restored["event_source_indexes"], strict=True):
+                if len(event.rows) != len(indexes) or any(
+                    type(idx) is not int or idx < 0 for idx in indexes
+                ):
+                    raise ValueError("Invalid SAP source index")
+        if key == "reconciliation" and (
+            not isinstance(restored, dict) or set(restored) != {"summaries", "details"}
+        ):
+            raise ValueError("Invalid reconciliation payload")
 
 
 def encode_result(result: AnalysisSnapshot, result_id: str) -> dict:
