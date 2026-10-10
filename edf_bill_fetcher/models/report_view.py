@@ -117,7 +117,10 @@ def capture_report_view(
     from edf_bill_fetcher.domain.json_values import freeze_json
     from edf_bill_fetcher.domain.requests import RunRequest
 
-    if not records:
+    if not records and not any(
+        isinstance(getattr(engine, key, None), list) and getattr(engine, key)
+        for key in ("sap_contract_rows", "sap_meter_rows", "sap_financial_rows")
+    ):
         raise ValueError("No records to report on")
     cfg = dict(config)
     cfg.setdefault("as_of", date.today().isoformat())
