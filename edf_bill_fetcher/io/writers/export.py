@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -91,18 +92,16 @@ from edf_bill_fetcher.io.writers.tariff import (  # noqa: E402,F401
     write_tariff_analysis_sheet,
 )
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.report_view import ReportView, capture_report_view
 from edf_bill_fetcher.processors.compensation import (  # noqa: E402,F401
     estimate_compensation,
 )
 from edf_bill_fetcher.processors.detection import (  # noqa: E402,F401
     compute_transitive_domination,
 )
-from edf_bill_fetcher.processors.financial import bill_daily_rates, mean_daily_rate
 from edf_bill_fetcher.processors.matching import _build_bb_clusters
 from edf_bill_fetcher.processors.preparation import (
     analysis_frame,
-    balance_frame,
-    prepare_evidence,
     scope,
 )
 from edf_bill_fetcher.writers._helpers import (  # noqa: E402,F401,I001
@@ -317,7 +316,6 @@ def _reorder_sheets(wb: openpyxl.Workbook) -> None:
 # ---------------------------------------------------------------------------
 
 
-@atomic_output()
 def export_to_excel(
     data: list[dict[str, Any]] | pd.DataFrame,
     output_path: str,
@@ -339,10 +337,23 @@ def export_to_excel(
     omitted, file links remain unavailable.
     """
     records = data.to_dict("records") if isinstance(data, pd.DataFrame) else data
-    prepared = prepare_evidence(records, config)
-    config = prepared.config
-    df = prepared.frame
-    dup_df = pd.DataFrame(prepared.duplicates) if config.get("save_dups", True) else pd.DataFrame()
+    state = {"error_log": error_log, "filtered_records": filtered or [], "saved_evidence_paths": invoice_pdf_paths or {}}
+    for key, value in (sap_rows or {}).items():
+        state[f"sap_{key}_rows"] = value
+    view = capture_report_view(records, dict(config), SimpleNamespace(**state), filtered, formats=("xlsx",))
+    render_xlsx(view, output_path)
+
+
+@atomic_output()
+def render_xlsx(view: ReportView, output_path: str) -> None:
+    """Build the workbook from one accepted analysis and captured metadata."""
+    config, engine = view.config, view.engine
+    error_log, filtered = engine.error_log, engine.filtered_records
+    state = vars(engine)
+    sap_rows = {key: state.get(f"sap_{key}_rows", []) for key in ("contract", "meter", "financial")}
+    invoice_pdf_paths = state.get("saved_evidence_paths", {})
+    df = view.frame()
+    dup_df = pd.DataFrame(view.duplicates) if config.get("save_dups", True) else pd.DataFrame()
 
     # Years for summary tab
     years = sorted(y for y in df["_dt"].dropna().dt.year.astype(int).unique())
@@ -445,12 +456,12 @@ def export_to_excel(
     df_an["_dt"] = pd.to_datetime(df_an["Date"].apply(parse_to_sort_date))
     df_an = df_an.sort_values("_dt").reset_index(drop=True)
 
-    dfc = _prepare_analysis_frame(df_an, config)
+    dfc = view.frame("analysis")
     dfc["year"] = dfc["_dt"].dt.year
     dfc["month"] = dfc["_dt"].dt.month
 
     full_analysis = dfc
-    dfc = balance_frame(dfc)
+    dfc = view.frame("balance")
     dfc["year"] = dfc["_dt"].dt.year
     dfc["month"] = dfc["_dt"].dt.month
     if len(dfc) >= 2 and len({scope(r) for r in dfc.to_dict("records")}) == 1:
@@ -458,16 +469,7 @@ def export_to_excel(
         dates_lbl = dfc["Date"].tolist()
         n = len(amounts)
 
-        yearly = (
-            dfc.groupby("year")
-            .agg(
-                count=("Amount (£)", "count"),
-                avg_bal=("Amount (£)", "mean"),
-                peak=("Amount (£)", "max"),
-                low=("Amount (£)", "min"),
-            )
-            .reset_index()
-        )
+        yearly = view.frame("yearly")
 
         # ----- TAB A: KEY STATISTICS -----
         ws_ks = wb.create_sheet(title="Key Statistics")
@@ -655,7 +657,7 @@ def export_to_excel(
             ws_ks,
             r,
             "Annualized actual daily charge ×365",
-            mean_daily_rate(full_analysis) * 365,
+            view.snapshot.summary.mean_daily_charge * 365,
             fmt="£",
             bold=True,
             alt=True,
@@ -942,13 +944,13 @@ def export_to_excel(
             _hcell(ws_pc, 1, ci, h, bg=NAVY)
         ws_pc.row_dimensions[1].height = 22
 
-        mean_daily = mean_daily_rate(full_analysis)
+        mean_daily = view.snapshot.summary.mean_daily_charge
         pc_rows_data: list[tuple[str, float]] = []
 
         pc_r = 2
         pc_rows_data = []
-        mean_daily = mean_daily_rate(full_analysis)
-        for _, bill in bill_daily_rates(full_analysis).iterrows():
+        mean_daily = view.snapshot.summary.mean_daily_charge
+        for _, bill in view.frame("daily_rates").iterrows():
             days = int(bill["_days"])
             charge = float(bill["Period Charge (£)"])
             daily = float(bill["_daily"])
@@ -1047,7 +1049,8 @@ def export_to_excel(
         for ci, h in enumerate(["#", "Date", "Balance (£)", "Flag Type", "Detail", "Severity"], 1):
             _hcell(ws_df, hdr_row, ci, h, bg=NAVY)
 
-        flags, counts = compute_dispute_flags(full_analysis, mean_daily)
+        dispute = view.model("dispute")
+        flags, counts = dispute.flags, dispute.counts
 
         sev_fill = {"HIGH": RED, "MEDIUM": AMBER, "INFO": GREEN}
         for fi, (ftype, flag_date, amt, detail, sev) in enumerate(flags, hdr_row + 1):
@@ -1091,100 +1094,7 @@ def export_to_excel(
         for ci, h in enumerate(["Date", "Event Type", "Description"], 1):
             _hcell(ws_tl, 4, ci, h, bg=NAVY)
 
-        timeline_events = []
-
-        # Bookend: first record
-        timeline_events.append(
-            (dates_lbl[0], "ACCOUNT START", f"First bill on record. Balance: £{amounts[0]:,.2f}.")
-        )
-
-        # Top 5 largest balance jumps
-        jumps = []
-        for i in range(1, n):
-            delta = float(amounts[i]) - float(amounts[i - 1])
-            days = (dfc.iloc[i]["_dt"] - dfc.iloc[i - 1]["_dt"]).days
-            if delta > 0:
-                jumps.append((delta, i, days))
-        jumps.sort(key=lambda x: x[0], reverse=True)
-        for delta, idx, days in jumps[:5]:
-            timeline_events.append(
-                (
-                    dfc.iloc[idx]["Date"],
-                    "LARGE INCREASE",
-                    f"Balance rose £{delta:,.2f} in {days} days "
-                    f"(from £{amounts[idx - 1]:,.2f} to £{amounts[idx]:,.2f}).",
-                )
-            )
-
-        # Billing gaps > 60 days
-        for i in range(1, n):
-            days = (dfc.iloc[i]["_dt"] - dfc.iloc[i - 1]["_dt"]).days
-            if days > 60:
-                timeline_events.append(
-                    (
-                        dfc.iloc[i]["Date"],
-                        "BILLING GAP",
-                        f"{days} days without a bill (previous: {dfc.iloc[i - 1]['Date']}). "
-                        f"Balance accumulated unchecked.",
-                    )
-                )
-
-        # Estimated reading runs (reuse existing detection)
-        if "Reading" in dfc.columns:
-            run = 0
-            run_start_date = None
-            for i, rv in enumerate(dfc["Reading"].tolist()):
-                if str(rv).lower() in ("estimated", "est."):
-                    run += 1
-                    if run == 1:
-                        run_start_date = dfc.iloc[i]["Date"]
-                else:
-                    if run >= 3:
-                        timeline_events.append(
-                            (
-                                run_start_date,
-                                "ESTIMATED READINGS",
-                                f"{run} consecutive bills used estimated meter readings.",
-                            )
-                        )
-                    run = 0
-                    run_start_date = None
-            if run >= 3:
-                timeline_events.append(
-                    (
-                        run_start_date,
-                        "ESTIMATED READINGS",
-                        f"{run} consecutive estimated readings (ongoing).",
-                    )
-                )
-
-        # Payment events (balance reductions)
-        for i in range(1, n):
-            delta = float(amounts[i]) - float(amounts[i - 1])
-            if delta < -200:
-                timeline_events.append(
-                    (
-                        dfc.iloc[i]["Date"],
-                        "PAYMENT/CREDIT",
-                        f"Balance reduced by £{abs(delta):,.2f} "
-                        f"(from £{amounts[i - 1]:,.2f} to £{amounts[i]:,.2f}).",
-                    )
-                )
-
-        # Reconciliation mismatches (from flags)
-        for ftype, fdate, _famt, fdetail, _fsev in flags:
-            if ftype == "RECONCILIATION MISMATCH":
-                timeline_events.append((fdate, "RECONCILIATION", fdetail))
-
-        # Bookend: latest record
-        timeline_events.append(
-            (
-                dates_lbl[-1],
-                "CURRENT STATE",
-                f"Latest bill on record. Balance: £{amounts[-1]:,.2f}. "
-                f"Total increase from first record: £{amounts[-1] - amounts[0]:,.2f}.",
-            )
-        )
+        timeline_events = view.model("sap")["timeline"]
 
         # Sort by date and write
         timeline_events.sort(key=lambda e: parse_to_sort_date(e[0]) or pd.Timestamp.min)
