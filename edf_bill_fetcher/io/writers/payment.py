@@ -57,7 +57,6 @@ def write_payment_analysis_sheet(ws, dfc, *, payload=None):
 
     write_banner(ws, "EDF ENERGY DISPUTE  —  PAYMENT & CREDIT ANALYSIS", 3, color=ORANGE, row=1)
 
-
     r = 3
     _section_hdr(ws, r, "PAYMENT SUMMARY")
 

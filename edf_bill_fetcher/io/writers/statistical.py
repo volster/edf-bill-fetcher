@@ -52,6 +52,7 @@ def write_statistical_analysis_sheet(ws, dfc, config, *, payload=None):
 
     if payload is None:
         from edf_bill_fetcher.processors.preparation import balance_frame, scope
+
         dfc = balance_frame(dfc)
         if len({scope(r) for r in dfc.to_dict("records")}) > 1:
             dfc = dfc.iloc[:0]

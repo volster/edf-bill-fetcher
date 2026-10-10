@@ -96,11 +96,11 @@ def run(
 
     try:
         destinations = [
-            Path(path).absolute() for path in [result_path, manifest_path, *outputs.values()]
+            Path(path).resolve() for path in [result_path, manifest_path, *outputs.values()]
         ]
         if len(set(destinations)) != len(destinations):
             raise ValueError("Artifact destinations must be distinct")
-        if any(Path(source.path).absolute() in destinations for source in request.sources):
+        if any(Path(source.path).resolve() in destinations for source in request.sources):
             raise ValueError("Artifact destination would overwrite a selected source")
         render_selection = selection or RenderSelection(
             tuple(outputs),

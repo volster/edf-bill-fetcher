@@ -63,7 +63,8 @@ def write_back_billing_sheet(
     evidence_index: dict[str, int] | None = None,
     domination_map: dict[str, tuple[str, bool]] | None = None,
     view_superseded_row: dict[str, int] | None = None,
-    *, union_total: float | None = None,
+    *,
+    union_total: float | None = None,
 ) -> None:
     """Render the Back-billing Analysis tab.
 
