@@ -13,12 +13,13 @@ pip install -e .
 
 # Dev install: runtime + test + lint + type-check toolchain:
 pip install -e ".[dev]"
+pip install -e ".[dev,msg]"  # include optional Outlook MSG parsing
 
 # Build install: + PyInstaller for one-file executables:
 pip install -e ".[dev,build]"
 ```
 
-The `edf` conda env on the maintainer's machine already has everything installed. If you're contributing from a fresh checkout, `pip install -e ".[dev]"` is sufficient for the test/lint/type-check workflow.
+Reuse a working environment where available. Tkinter and the Xvfb binary on headless Linux are system prerequisites; pip extras do not install them. Native PST/OST builds may require compiler/autotools headers when no compatible wheel is available.
 
 ## Running tests
 
@@ -26,12 +27,12 @@ The `edf` conda env on the maintainer's machine already has everything installed
 pytest -v
 ```
 
-That's the entire command. The full suite runs green on:
+CI declares the following matrix; inspect results for the actual revision before claiming it passes:
 
 - **Linux**: Python 3.10 / 3.11 / 3.12
 - **macOS**: same
 - **Windows**: same (tkinter ships with the standard Python installer on Windows)
-- **Headless Linux** (CI / containers): `pytest-xvfb` (in the `dev` extras) auto-activates a virtual X server so the tkinter-dependent tests run green without a manual xvfb setup
+- **Headless Linux** (CI / containers): install the Xvfb system binary; `pytest-xvfb` in the dev extra can then activate a virtual display
 
 `pytest-xvfb` is **opt-out**, not opt-in. If you want to debug a tkinter test on a real display (i.e. your laptop), pass `--no-xvfb` to disable the plugin for that run:
 
@@ -78,10 +79,10 @@ pytest -m "not slow"                      # by marker
 ruff check .           # PEP 8 + PEP 257 + import-ordering — fast
 ruff format --check .   # formatting check (no write)
 ruff format .           # apply formatting
-mypy edf_bill_fetcher   # strict type-check
+mypy .                 # matches the current CI invocation
 ```
 
-All three are enforced in CI. A PR that fails any gate cannot merge. See `.github/workflows/ci.yml` for the exact invocation.
+All three are enforced by the CI workflow. See `.github/workflows/ci.yml` for the exact invocation; do not infer branch protection or successful checks from this document.
 
 ### Ruff rule selection
 
@@ -106,7 +107,7 @@ Tests (`tests/*`) remain exempt from all `D` rules via per-file-ignores.
 ## Type checking
 
 ```bash
-mypy edf_bill_fetcher
+mypy .
 ```
 
 Configured in `pyproject.toml [tool.mypy]`:
@@ -137,17 +138,17 @@ See [`docs/COVERAGE.md`](COVERAGE.md) for the full coverage protocol. The short 
 
 ### A new PDF/DOCX report section
 
-1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/io/reporters/pdf_report.py` with `key`, `title`, and optionally `is_appendix`.
+1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/models/report_sections.py` with `key`, `title`, and optionally `is_appendix`.
 2. Add the matching key to `ReportOptionsDialog.SECTIONS` in `edf_bill_fetcher/ui/app.py`.
 3. Add a `def create_<name>(...)` builder function in `edf_bill_fetcher/io/reporters/pdf_report.py`.
-4. Wire the builder into the `section_builders` dispatch dict in **both** `generate_ombudsman_pdf` and `generate_ombudsman_docx`. Forgetting this raises a clear `RuntimeError` at report-render time.
+4. Wire the builder into PDF, DOCX and HTML dispatchers. Missing sections fail the artifact rather than publishing a partial success.
 5. The structural parity test `tests/test_dispatch_parity.py` will catch missing dispatcher wiring in CI.
 
 ### A new detector (processors layer)
 
 1. Add the detector function in `edf_bill_fetcher/processors/<area>.py` (e.g. `detection.py` for billing-pattern detection, `matching.py` for account/contract matching).
 2. Detectors receive DataFrames as function arguments — never pull from module-scope state.
-3. NO framework imports at module scope in `processors/`. Pure stdlib + pandas + sibling processors + helpers. If you need openpyxl, you're at the wrong layer — the detector returns a result; the writer formats it.
+3. New detectors should return data for writers to format. Existing processors still import some writer-facade helpers; strict dependency inversion is not currently enforced. Avoid adding renderer dependencies to analytical code.
 4. Add the detector to `run_analysers` in `io/writers/analysis.py` if it should be one-shot available.
 5. Add unit tests in `tests/test_<area>.py` calling the detector with synthetic DataFrames covering each branch.
 
@@ -155,7 +156,7 @@ See [`docs/COVERAGE.md`](COVERAGE.md) for the full coverage protocol. The short 
 
 See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) for:
 - The full package layout
-- The hexagonal layering rules (which layer can import what)
+- Actual dependencies and remaining processor/writer coupling
 - The public import API (flat `from edf_bill_fetcher.io.writers import X` and submodule-scoped `from edf_bill_fetcher.io.writers.export import export_to_excel`)
 - The maintenance rule (no backward-compat shims remain: top-level `edf_collector.py` / `edf_report*.py` were removed in the modularization, as were the temporary `writers` / `io.writers` PEP 562 layers — new symbols re-export eagerly via `io/writers/__init__.py`'s `__all__`)
 
@@ -179,7 +180,7 @@ CI runs on every push and every PR. The matrix is Python 3.10 / 3.11 / 3.12 × u
 
 1. `ruff check .`
 2. `ruff format --check .`
-3. `mypy edf_bill_fetcher`
-4. `pytest -v`
+3. `mypy .`
+4. `pytest --cov=. --cov-report=xml --cov-report=term-missing` (Linux uses `xvfb-run -a`)
 
-A release is one CI green away from shippable.
+CI is a regression gate. Functional extraction, saved-state reload, all requested exports, source links, GUI lifecycle and packaged runtime capabilities also need verification. Record focused checks separately from full matrix results.
