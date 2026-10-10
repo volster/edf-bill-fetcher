@@ -184,3 +184,21 @@ CI runs on every push and every PR. The matrix is Python 3.10 / 3.11 / 3.12 × u
 4. `pytest --cov=. --cov-report=xml --cov-report=term-missing` (Linux uses `xvfb-run -a`)
 
 CI is a regression gate. Functional extraction, saved-state reload, all requested exports, source links, GUI lifecycle and packaged runtime capabilities also need verification. Record focused checks separately from full matrix results.
+
+## Shared result architecture
+
+`domain/` contains standard-library-only immutable request, evidence and analysis types. Nested data uses canonical `FrozenJSON`; thawing or model decoding creates fresh objects. Money at the result boundary uses finite Decimal values and canonical two-decimal JSON strings. Missing values remain unavailable.
+
+The service pipeline is `capture_legacy` → `prepare_snapshot` → `analyse_prepared`. The shared analysis stores all ten model entries, availability reasons, analytical frames, the workbook timeline and SAP source indexes. Keep financial calculations here. `ReportView` exposes fresh decoded frames/models; `render_xlsx`, `render_pdf`, `render_docx` and `render_html` format these values. Legacy public generator functions capture/analyse once and delegate. A new analytical section needs a stored model and explicit renderer wiring; it must not calculate inside the renderer.
+
+`io/persistence/result_codec.py` implements the exact v3 envelope; `result_store.py` provides strict reads and atomic publication. V3 loading does not prepare or recalculate. Legacy migration preserves unknown fields and original/canonical distinctions and records historical provenance gaps. Changing analytical configuration creates a new accepted result, rather than editing a previously accepted file.
+
+`application/run_service.py` coordinates injected collection, source-copy, result-storage and renderer functions. It records atomic stage manifests with hashes of published result/report bytes, preserves successful artifacts after failure, checks cancellation between stages and always cleans resources. The CLI supplies explicit destinations; the GUI reserves unique folders before launching a non-daemon worker. UI widget values are captured on the main thread, and progress/messages return through the event queue.
+
+When extending this pipeline, verify an independently calculated money example, a strict persistence round trip, failure preservation and a rerender with calculation functions disabled. Exercise real Tk for worker/cancel/close changes. Keep the CI matrix, coverage threshold and lint/type checks intact; successful local examples do not establish cross-platform support.
+
+## Validation and release provenance
+
+CI has one required aggregate validation job which succeeds only if every Python/OS matrix leg succeeds. Tag releases call that same reusable CI workflow for their own revision. Release build and publication depend on validation; checkout and build provenance use its validated SHA. All `v*` tags use this gate. Branch CI still triggers automatic executable builds after aggregate success. Manual executable builds record `manual-unvalidated` provenance and never publish a release.
+
+Changing workflow YAML requires reviewing the dependency graph and proving that a failing sibling matrix leg blocks publication. Remote workflow results remain the evidence for actual cross-platform builds; syntax validation alone is insufficient. Do not tag or publish as a side effect of implementation work.

@@ -456,8 +456,9 @@ def create_ofgem_comparison(
     parts.append(
         "<p>The following analysis compares the effective unit rates charged on EDF "
         "bills against the OFGEM Default Tariff Cap (Price Cap) for the "
-        "corresponding periods. Any charges exceeding the cap may indicate "
-        "regulatory non-compliance.</p>"
+        "corresponding consumption periods. This GB-average direct-debit electricity "
+        "benchmark requires known variable/default tariff context; an exceedance is "
+        "a review signal, rather than a determination of the account’s legal cap.</p>"
     )
 
     comparison = payload if payload is not None else compute_ofgem_comparison(df, config)
@@ -800,15 +801,15 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
         (
             "A.3 Deduplication",
             [
-                "Multi-pass deduplication matches the same bill across sources:",
-                "• Pass 1: Exact match on Period To date + Amount.",
-                "• Pass 2: For records without period info, match by Amount within a "
-                "60-day window of any kept record.",
+                "Duplicates require compatible account, fuel, meter and register identities.",
+                "Bills merge only with supporting invoice/period identity and consistent amounts; repeated payments remain separate unless transaction identity supports a duplicate.",
+                "Original observations, duplicate decisions and source identities are preserved in the accompanying saved result.",
             ],
         ),
         (
             "A.4 Configuration Used",
             [
+                f"Valuation date: {config.get('as_of', 'Unavailable')}",
                 f"Minimum Amount Threshold: {fmt_money(config.get('min_amount', 500))}",
                 f"Analysis Threshold: {fmt_money(config.get('analysis_min', 0))}",
                 "Account Filter: "

@@ -1062,7 +1062,7 @@ def create_ofgem_comparison(
         Paragraph(
             "The following analysis compares the effective unit rates charged on EDF bills "
             "against the OFGEM Default Tariff Cap (Price Cap) for the corresponding periods. "
-            "Any charges exceeding the cap may indicate regulatory non-compliance.",
+            "This is a contextual GB-average benchmark; an exceedance requires review of the account’s applicable rate and is not a legal determination.",
             STYLES["BodyText"],
         )
     )
@@ -1739,12 +1739,9 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
         (
             "A.3 Deduplication",
             [
-                "Multi-pass deduplication matches the same bill across sources:",
-                "• Pass 1: Exact match on <b>Period To date + Amount</b> (catches HTM ↔ PST ↔ PDF).",
-                "• Pass 2: For records without period info (e.g., local PDFs), match by Amount "
-                "within 60-day window of any kept record.",
-                "Source priority for keeping: HTM Account History &gt; PST PDF Attachment &gt; "
-                "Email Body &gt; Local PDF Folder.",
+                "Duplicates require compatible account, fuel, meter and register identities.",
+                "Bills merge only with supporting invoice/period identity and consistent amounts; repeated payments remain separate unless transaction identity supports a duplicate.",
+                "Original observations, duplicate decisions and source identities are preserved in the accompanying saved result.",
             ],
         ),
         (
@@ -1759,6 +1756,7 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
         (
             "A.5 Configuration Used",
             [
+                f"Valuation date: {config.get('as_of', 'Unavailable')}",
                 f"Minimum Amount Threshold: {fmt_money(config.get('min_amount', 500))}",
                 f"Analysis Threshold: {fmt_money(config.get('analysis_min', 0))}",
                 f"Account Filter: {'Enabled' if config.get('use_acc_filter') else 'Disabled'} "

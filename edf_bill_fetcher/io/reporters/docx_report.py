@@ -660,9 +660,9 @@ def create_ofgem_comparison(
     doc.add_paragraph(ctx.heading("ofgem"), style=styles["SectionHeader"])
 
     doc.add_paragraph(
-        "This section compares extracted unit rates against OFGEM price caps "
-        "for the relevant periods. Note: OFGEM caps apply to standard variable "
-        "tariffs; fixed tariffs may differ.",
+        "This section compares extracted consumption-period rates with a GB-average "
+        "direct-debit electricity benchmark where variable/default tariff context is known. "
+        "Exceedances require review of the account’s applicable rate; missing context is unassessed.",
         style=styles["BodyText"],
     )
 
@@ -1129,6 +1129,9 @@ def create_appendix_methodology(
     if ctx is None:
         ctx = RenderContext()
     doc.add_paragraph(ctx.heading("appendix_methodology"), style=styles["SectionHeader"])
+    doc.add_paragraph(
+        f"Valuation date: {config.get('as_of', 'Unavailable')}", style=styles["BodyText"]
+    )
 
     doc.add_paragraph(
         "All billing records were extracted from three primary source types:",
@@ -1152,8 +1155,9 @@ def create_appendix_methodology(
     doc.add_paragraph(
         "Amount extraction uses a tiered anchor-based approach with fallback to "
         "large-amount detection. Date extraction prioritizes bill/invoice date markers. "
-        "Record deduplication uses Period To + Amount matching and a ±60-day amount "
-        "bucket. SHA-256 hashing is used for file-level duplicate PDF detection.",
+        "Duplicates require compatible ledger identities plus supporting bill or transaction "
+        "identity and consistent amounts. Repeated payments remain separate without "
+        "transaction identity. SHA-256 hashing detects repeated PDF files.",
         style=styles["BodyText"],
     )
 

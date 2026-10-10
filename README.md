@@ -216,7 +216,7 @@ config = {
     "use_domain_filter": True,
     "domain_filter": "edfenergy.com",
     # report_sections tells the report generator which sections to include.
-    # If absent, every section in `edf_bill_fetcher.io.reporters.pdf_report.REPORT_SECTIONS` is selected.
+    # If absent, every section in `edf_bill_fetcher.models.report_sections.REPORT_SECTIONS` is selected.
     "report_sections": [
         "exec_summary",
         "key_findings",
@@ -267,7 +267,7 @@ generate_docx_from_gui(
 
 ## Report Section Layout
 
-The PDF and DOCX reports are both built from a single section-registry so the titles and numbering always line up. The registry lives in `edf_bill_fetcher.io.reporters.pdf_report.REPORT_SECTIONS`:
+The PDF and DOCX reports are both built from a single section-registry so the titles and numbering always line up. The registry lives in `edf_bill_fetcher.models.report_sections.REPORT_SECTIONS`:
 
 | Class          | Sections                                                                                                                                                                                                              |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -280,10 +280,10 @@ A `tests/test_dispatch_parity.py` structural test pins the invariant that the PD
 
 ### Adding a new section
 
-1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/io/reporters/pdf_report.py` with `key`, `title`, and optionally `is_appendix`.
+1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/models/report_sections.py` with `key`, `title`, and optionally `is_appendix`.
 2. Add the matching key to `ReportOptionsDialog.SECTIONS` in `edf_bill_fetcher/ui/app.py` so it shows up in the GUI options dialog.
 3. Add a `def create_<name>(...)` builder function in `edf_bill_fetcher/io/reporters/pdf_report.py`.
-4. Wire the builder into the `section_builders` dispatch dict in **both** `generate_ombudsman_pdf` and `generate_ombudsman_docx`. Forgetting this raises a clear `RuntimeError` at report-render time — that's the loud-failure mode that keeps the dispatch in lockstep with the registry.
+4. Wire the builder into the `section_builders` dispatch dict in `render_pdf`, `render_docx` and `render_html`. Forgetting this raises a clear `RuntimeError` at report-render time — that's the loud-failure mode that keeps the dispatch in lockstep with the registry.
 
 Removing a section: same steps in reverse.
 
@@ -485,7 +485,7 @@ Key options:
 - `use_domain_filter`: filter PST emails by sender domain
 - `scan_sap_dumps`: (default `True`) emit the three SAP source sheets + the two new SAP analyser sheets when a SAP-dump PDF is supplied. See *SAP ledger integration*.
 - `generate_reconciliation_sheet`: (default `True`) emit the cross-source Reconciliation sheet. Independent of `scan_sap_dumps` for cases where the SAP sheets alone are wanted.
-- `report_sections`: list of registry keys to include in PDF/DOCX reports — if absent or empty, every section is included
+- `report_sections`: list of registry keys to include in PDF/DOCX/HTML reports — absent enables every section; an explicit empty list enables none
 
 ## License
 
@@ -498,3 +498,19 @@ This tool was created for personal use in an EDF billing dispute. It is provided
 ## Release & Test Status
 
 CI defines Python 3.10 / 3.11 / 3.12 across Ubuntu, Windows and macOS. Check results for the actual revision; this document does not certify that matrix. Recorded local review checks and their limits are in [docs/REVIEW_FIXES.md](docs/REVIEW_FIXES.md). See [CHANGELOG.md](CHANGELOG.md) for the historical audit trail.
+
+### Saved analysis and rerendering
+
+Every CLI/GUI extraction saves `result.json` (schema v3) and `run.json` in its unique run/source-bundle folder. The v3 result preserves original observations, prepared rows, duplicate decisions, captured configuration and valuation date, analytical methods, reference-data hash and all calculated models. Reports consume that saved analysis. JSON loading rejects duplicate keys, nonfinite numbers, inconsistent identities/dates and unsupported versions.
+
+The existing `--records-json` and `--save-engine-json` flags explicitly retain **v2 compatibility JSON**. Report commands accept v3 results, v1/v2 exports and bare record lists. Legacy input is recomputed using a newly captured context when historical information is missing, with migration limitations recorded. A changed analytical configuration creates a separate result revision; accepted input files remain unchanged.
+
+```bash
+python main.py --pdf-report --records /path/to/run/result.json --output report.pdf
+python main.py --docx-report --records /path/to/run/result.json --output report.docx
+python main.py --html-report --records /path/to/run/result.json --output report.html
+```
+
+Each command also saves `report.<format>.result.json` and `report.<format>.run.json`. A v3 rerender restores the saved calculations. A report failure leaves the saved analysis and earlier completed artifacts available, with a failed run manifest. Cancellation is checked between stages and while supported collectors run; an active document render completes before the next cancellation check.
+
+Workbook imports preserve available rows and metadata, label provenance as lossy, and create a new run. They cannot recover original source files or extraction decisions.
