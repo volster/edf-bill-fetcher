@@ -1041,8 +1041,12 @@ def create_timeline_section(
 
 
 def create_ofgem_comparison(
-    df: pd.DataFrame, config: dict | None = None, ctx: RenderContext | None = None
-, *, payload: Any = None) -> list:
+    df: pd.DataFrame,
+    config: dict | None = None,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> list:
     """Create OFGEM price cap comparison section."""
     from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
 
@@ -1157,7 +1161,9 @@ def create_ofgem_comparison(
 # =============================================================================
 
 
-def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
+def create_statistical_analysis(
+    dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> list:
     """Create statistical analysis section."""
     from edf_bill_fetcher.models.report_models import compute_statistical_analysis
 
@@ -1255,7 +1261,9 @@ def create_statistical_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = N
 # =============================================================================
 
 
-def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
+def create_payment_analysis(
+    dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> list:
     """Create payment & credit analysis section."""
     elements = []
     if ctx is None:
@@ -1322,7 +1330,9 @@ def create_payment_analysis(dfc: pd.DataFrame, ctx: RenderContext | None = None,
 # =============================================================================
 
 
-def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
+def create_forecast_section(
+    dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> list:
     """Create forecast & projection section."""
     from edf_bill_fetcher.models.report_models import compute_forecast
 
@@ -1408,7 +1418,9 @@ def create_forecast_section(dfc: pd.DataFrame, ctx: RenderContext | None = None,
 # =============================================================================
 
 
-def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
+def create_data_quality_section(
+    df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> list:
     """Create data quality assessment section."""
     from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
@@ -1514,7 +1526,9 @@ def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = No
 # =============================================================================
 
 
-def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> list:
+def create_tariff_impact_section(
+    dfc: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> list:
     """Create tariff impact analysis section."""
     from edf_bill_fetcher.models.report_models import compute_tariff_analysis
 
@@ -1582,8 +1596,12 @@ def create_tariff_impact_section(dfc: pd.DataFrame, ctx: RenderContext | None = 
 
 
 def create_compensation_section(
-    dfc: pd.DataFrame, config: dict[str, Any] | None = None, ctx: RenderContext | None = None
-, *, payload: Any = None) -> list:
+    dfc: pd.DataFrame,
+    config: dict[str, Any] | None = None,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> list:
     """Create the Compensation Analysis section.
 
     Renders the indicative-compensation claims from
@@ -2112,7 +2130,10 @@ def render_pdf(view: ReportView, output_path: str) -> str:
     # record with a numeric balance we emit real numbers; otherwise the
     # helper returns ``(None, None)`` and the table renders ``"—"``,
     # which is now an honest fallback rather than the steady state.
-    opening_balance, closing_balance = view.snapshot.summary.opening_balance, view.snapshot.summary.closing_balance
+    opening_balance, closing_balance = (
+        view.snapshot.summary.opening_balance,
+        view.snapshot.summary.closing_balance,
+    )
 
     # Compute dispute flags from the data
     analysis_df = view.frame("analysis")
@@ -2249,7 +2270,15 @@ def render_pdf(view: ReportView, output_path: str) -> str:
         try:
             kwargs = arg_factory()
             kwargs["ctx"] = render_ctx
-            if section.key in ('ofgem', 'statistical', 'payment', 'forecast', 'data_quality', 'tariff', 'compensation'):
+            if section.key in (
+                "ofgem",
+                "statistical",
+                "payment",
+                "forecast",
+                "data_quality",
+                "tariff",
+                "compensation",
+            ):
                 kwargs["payload"] = view.model(section.key)
             elements.extend(invoke(kwargs))
         except Exception as e:

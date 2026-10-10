@@ -648,7 +648,9 @@ def create_ofgem_comparison(
     df: pd.DataFrame,
     config: dict | None = None,
     ctx: RenderContext | None = None,
-    *, payload: Any = None) -> None:
+    *,
+    payload: Any = None,
+) -> None:
     """Create OFGEM price cap comparison section (shared compute via model)."""
     from edf_bill_fetcher.helpers.ofgem_caps import load_ofgem_caps
     from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
@@ -751,8 +753,13 @@ def create_ofgem_comparison(
 
 
 def create_statistical_analysis(
-    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-, *, payload: Any = None) -> None:
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> None:
     """Create statistical analysis section."""
     from edf_bill_fetcher.models.report_models import compute_statistical_analysis
 
@@ -787,8 +794,13 @@ def create_statistical_analysis(
 
 
 def create_payment_analysis(
-    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-, *, payload: Any = None) -> None:
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> None:
     """Create payment & credit analysis section."""
     if ctx is None:
         ctx = RenderContext()
@@ -816,8 +828,13 @@ def create_payment_analysis(
 
 
 def create_forecast_section(
-    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-, *, payload: Any = None) -> None:
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> None:
     """Create forecast & projection section."""
     from edf_bill_fetcher.models.report_models import compute_forecast
 
@@ -872,8 +889,13 @@ def create_forecast_section(
 
 
 def create_data_quality_section(
-    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-, *, payload: Any = None) -> None:
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> None:
     """Create data quality assessment section."""
     from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
@@ -967,8 +989,13 @@ def create_data_quality_section(
 
 
 def create_tariff_impact_section(
-    doc: Any, styles: Any, df: pd.DataFrame, ctx: RenderContext | None = None
-, *, payload: Any = None) -> None:
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> None:
     """Create tariff impact analysis section."""
     from edf_bill_fetcher.models.report_models import compute_tariff_analysis
 
@@ -1025,8 +1052,14 @@ def create_tariff_impact_section(
 
 
 def create_compensation_section(
-    doc: Any, styles: Any, df: pd.DataFrame, config: Any = None, ctx: RenderContext | None = None
-, *, payload: Any = None) -> None:
+    doc: Any,
+    styles: Any,
+    df: pd.DataFrame,
+    config: Any = None,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> None:
     """Create the Compensation Analysis section."""
     if ctx is None:
         ctx = RenderContext()
@@ -1486,7 +1519,10 @@ def render_docx(view: ReportView, output_path: str) -> str:
     # Same helper supplies opening/closing balance to the DOCX table
     # (which historically omitted those rows entirely; see
     # ``_compute_balance_extremes`` for the "no — placeholders" rule).
-    opening_balance, closing_balance = view.snapshot.summary.opening_balance, view.snapshot.summary.closing_balance
+    opening_balance, closing_balance = (
+        view.snapshot.summary.opening_balance,
+        view.snapshot.summary.closing_balance,
+    )
 
     # Compute dispute flags from the data
     dispute = view.model("dispute")
@@ -1628,7 +1664,15 @@ def render_docx(view: ReportView, output_path: str) -> str:
         try:
             kwargs = arg_factory()
             kwargs["ctx"] = render_ctx
-            if spec.key in ('ofgem', 'statistical', 'payment', 'forecast', 'data_quality', 'tariff', 'compensation'):
+            if spec.key in (
+                "ofgem",
+                "statistical",
+                "payment",
+                "forecast",
+                "data_quality",
+                "tariff",
+                "compensation",
+            ):
                 kwargs["payload"] = view.model(spec.key)
             invoke(kwargs)
         except Exception as e:

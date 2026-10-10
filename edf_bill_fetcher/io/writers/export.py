@@ -333,10 +333,16 @@ def export_to_excel(
     omitted, file links remain unavailable.
     """
     records = data.to_dict("records") if isinstance(data, pd.DataFrame) else data
-    state = {"error_log": error_log, "filtered_records": filtered or [], "saved_evidence_paths": invoice_pdf_paths or {}}
+    state = {
+        "error_log": error_log,
+        "filtered_records": filtered or [],
+        "saved_evidence_paths": invoice_pdf_paths or {},
+    }
     for key, value in (sap_rows or {}).items():
         state[f"sap_{key}_rows"] = value
-    view = capture_report_view(records, dict(config), SimpleNamespace(**state), filtered, formats=("xlsx",))
+    view = capture_report_view(
+        records, dict(config), SimpleNamespace(**state), filtered, formats=("xlsx",)
+    )
     render_xlsx(view, output_path)
 
 
@@ -1114,19 +1120,34 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
     # =====================================================================
 
     # Statistical Analysis
-    write_statistical_analysis_sheet(wb.create_sheet(title="Statistical Analysis"), view.frame("statistical"), config, payload=view.model("statistical"))
+    write_statistical_analysis_sheet(
+        wb.create_sheet(title="Statistical Analysis"),
+        view.frame("statistical"),
+        config,
+        payload=view.model("statistical"),
+    )
 
     # Payment Analysis
-    write_payment_analysis_sheet(wb.create_sheet(title="Payment Analysis"), df, payload=view.model("payment"))
+    write_payment_analysis_sheet(
+        wb.create_sheet(title="Payment Analysis"), df, payload=view.model("payment")
+    )
 
     # Forecast & Projection
-    write_forecast_sheet(wb.create_sheet(title="Forecast & Projection"), view.frame("monthly"), payload=view.model("forecast"))
+    write_forecast_sheet(
+        wb.create_sheet(title="Forecast & Projection"),
+        view.frame("monthly"),
+        payload=view.model("forecast"),
+    )
 
     # Data Quality Report
-    write_data_quality_sheet(wb.create_sheet(title="Data Quality Report"), df, payload=view.model("data_quality"))
+    write_data_quality_sheet(
+        wb.create_sheet(title="Data Quality Report"), df, payload=view.model("data_quality")
+    )
 
     # Tariff Analysis (if data available)
-    write_tariff_analysis_sheet(wb.create_sheet(title="Tariff Analysis"), df, payload=view.model("tariff"))
+    write_tariff_analysis_sheet(
+        wb.create_sheet(title="Tariff Analysis"), df, payload=view.model("tariff")
+    )
 
     # ------------------------------------------------------------------
     # Phase-2 analysis tabs (back-billing, rebilling, meter rollover,
@@ -1281,9 +1302,11 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
             if dfc is not None and not dfc.empty:
                 edf_records_for_bb = dfc.to_dict(orient="records")
             bb_events, bb_matches = sap_model["events"], sap_model["matches"]
-            source_index_map = {id(row): source_idx + 4
-                                for event, indexes in zip(bb_events, sap_model["event_source_indexes"], strict=True)
-                                for row, source_idx in zip(event.rows, indexes, strict=True)}
+            source_index_map = {
+                id(row): source_idx + 4
+                for event, indexes in zip(bb_events, sap_model["event_source_indexes"], strict=True)
+                for row, source_idx in zip(event.rows, indexes, strict=True)
+            }
             write_sap_back_billing_sheets(
                 wb,
                 bb_events,
@@ -1297,6 +1320,7 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
             )
             if config.get("generate_reconciliation_sheet", True):
                 from edf_bill_fetcher.io.writers.sap import write_sap_back_billing_position_sheet
+
                 sap_bb_position = sap_model["position"]
                 write_sap_back_billing_position_sheet(wb, sap_bb_position, account=account_label)
         if config.get("generate_reconciliation_sheet", True):
@@ -1313,7 +1337,7 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
                 df,
                 account=account_label,
                 payload=view.model("reconciliation"),
-)
+            )
 
     _reorder_sheets(wb)
 

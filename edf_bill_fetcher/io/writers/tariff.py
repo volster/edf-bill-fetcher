@@ -38,7 +38,17 @@ def write_tariff_analysis_sheet(ws, dfc, *, payload=None):
     ORANGE = "FE5716"
     LGREY = "F0F0F0"
 
-    tariff_info = ({"tariff_stats": payload.stats, "num_tariffs": payload.num_tariffs, "tariff_changes": payload.tariff_changes} if payload is not None and not payload.empty else {} if payload is not None else _analyze_tariff_impact(dfc))
+    tariff_info = (
+        {
+            "tariff_stats": payload.stats,
+            "num_tariffs": payload.num_tariffs,
+            "tariff_changes": payload.tariff_changes,
+        }
+        if payload is not None and not payload.empty
+        else {}
+        if payload is not None
+        else _analyze_tariff_impact(dfc)
+    )
 
     if not tariff_info:
         _hcell(ws, 1, 1, "No tariff data available in records", bg=NAVY)

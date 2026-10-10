@@ -439,8 +439,12 @@ def create_timeline_section(df: pd.DataFrame, flags: list, ctx: RenderContext | 
 
 
 def create_ofgem_comparison(
-    df: pd.DataFrame, config: dict | None = None, ctx: RenderContext | None = None
-, *, payload: Any = None) -> str:
+    df: pd.DataFrame,
+    config: dict | None = None,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> str:
     """Create the OFGEM price cap comparison section."""
     from edf_bill_fetcher.models.report_models import compute_ofgem_comparison
 
@@ -494,64 +498,84 @@ def create_ofgem_comparison(
     return "\n".join(parts)
 
 
-def create_statistical_analysis(df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> str:
+def create_statistical_analysis(
+    df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> str:
     """Render the shared statistical model."""
     if ctx is None:
         ctx = RenderContext()
     if payload is None:
         from edf_bill_fetcher.models.report_models import compute_statistical_analysis
+
         payload = compute_statistical_analysis(df)
     rows = [["Metric", "Value"]]
     from dataclasses import fields
+
     for field in fields(payload):
         value = getattr(payload, field.name)
         if isinstance(value, pd.DataFrame):
             continue
         if isinstance(value, list):
             value = "; ".join(str(item) for item in value)
-        rows.append([field.name.replace("_", " ").title(), "Unavailable" if value is None else value])
+        rows.append(
+            [field.name.replace("_", " ").title(), "Unavailable" if value is None else value]
+        )
     return f'<div id="sec-statistical"><h2 class="section">{_esc(ctx.heading("statistical"))}</h2>{_table(rows)}</div>'
 
 
-def create_payment_analysis(df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> str:
+def create_payment_analysis(
+    df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> str:
     """Render the shared payment model."""
     if ctx is None:
         ctx = RenderContext()
     if payload is None:
         from edf_bill_fetcher.models.report_models import compute_payment_analysis
+
         payload = compute_payment_analysis(df)
     rows = [["Metric", "Value"]]
     from dataclasses import fields
+
     for field in fields(payload):
         value = getattr(payload, field.name)
         if isinstance(value, pd.DataFrame):
             continue
         if isinstance(value, list):
             value = "; ".join(str(item) for item in value)
-        rows.append([field.name.replace("_", " ").title(), "Unavailable" if value is None else value])
+        rows.append(
+            [field.name.replace("_", " ").title(), "Unavailable" if value is None else value]
+        )
     return f'<div id="sec-payment"><h2 class="section">{_esc(ctx.heading("payment"))}</h2>{_table(rows)}</div>'
 
 
-def create_forecast_section(df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> str:
+def create_forecast_section(
+    df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> str:
     """Render the shared forecast model."""
     if ctx is None:
         ctx = RenderContext()
     if payload is None:
         from edf_bill_fetcher.models.report_models import compute_forecast
+
         payload = compute_forecast(df)
     rows = [["Metric", "Value"]]
     from dataclasses import fields
+
     for field in fields(payload):
         value = getattr(payload, field.name)
         if isinstance(value, pd.DataFrame):
             continue
         if isinstance(value, list):
             value = "; ".join(str(item) for item in value)
-        rows.append([field.name.replace("_", " ").title(), "Unavailable" if value is None else value])
+        rows.append(
+            [field.name.replace("_", " ").title(), "Unavailable" if value is None else value]
+        )
     return f'<div id="sec-forecast"><h2 class="section">{_esc(ctx.heading("forecast"))}</h2>{_table(rows)}</div>'
 
 
-def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> str:
+def create_data_quality_section(
+    df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> str:
     """Create the data quality assessment section."""
     from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
@@ -634,7 +658,9 @@ def create_data_quality_section(df: pd.DataFrame, ctx: RenderContext | None = No
     return "\n".join(parts)
 
 
-def create_tariff_impact_section(df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None) -> str:
+def create_tariff_impact_section(
+    df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
+) -> str:
     """Create the tariff impact analysis section."""
     from edf_bill_fetcher.models.report_models import compute_tariff_analysis
 
@@ -678,8 +704,12 @@ def create_tariff_impact_section(df: pd.DataFrame, ctx: RenderContext | None = N
 
 
 def create_compensation_section(
-    df: pd.DataFrame, config: dict[str, Any] | None = None, ctx: RenderContext | None = None
-, *, payload: Any = None) -> str:
+    df: pd.DataFrame,
+    config: dict[str, Any] | None = None,
+    ctx: RenderContext | None = None,
+    *,
+    payload: Any = None,
+) -> str:
     """Create the Compensation Analysis section."""
     if ctx is None:
         ctx = RenderContext()
@@ -957,7 +987,14 @@ def generate_html_report(
     report_sections: list[str] | set[str] | None = None,
 ) -> str:
     """Capture legacy inputs once, then render their accepted result."""
-    view = capture_report_view(records, dict(config), engine, filtered, formats=("html",), sections=tuple(report_sections) if report_sections is not None else None)
+    view = capture_report_view(
+        records,
+        dict(config),
+        engine,
+        filtered,
+        formats=("html",),
+        sections=tuple(report_sections) if report_sections is not None else None,
+    )
     return render_html(view, output_path)
 
 
@@ -1012,7 +1049,10 @@ def render_html(view: ReportView, output_path: str) -> str:
     period_end = fmt_date(valid_dates.max()) if not valid_dates.empty else "Unknown"
 
     charges, payments = view.snapshot.summary.charges, view.snapshot.summary.net_credits
-    opening_balance, closing_balance = view.snapshot.summary.opening_balance, view.snapshot.summary.closing_balance
+    opening_balance, closing_balance = (
+        view.snapshot.summary.opening_balance,
+        view.snapshot.summary.closing_balance,
+    )
 
     dispute = view.model("dispute")
     flags, flag_counts = dispute.flags, dispute.counts
@@ -1129,7 +1169,15 @@ def render_html(view: ReportView, output_path: str) -> str:
         try:
             kwargs = arg_factory()
             kwargs["ctx"] = render_ctx
-            if section.key in ('ofgem', 'statistical', 'payment', 'forecast', 'data_quality', 'tariff', 'compensation'):
+            if section.key in (
+                "ofgem",
+                "statistical",
+                "payment",
+                "forecast",
+                "data_quality",
+                "tariff",
+                "compensation",
+            ):
                 kwargs["payload"] = view.model(section.key)
             body_parts.append(invoke(kwargs))
         except Exception as e:

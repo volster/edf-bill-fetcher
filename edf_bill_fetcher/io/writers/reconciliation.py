@@ -49,7 +49,8 @@ def write_reconciliation_sheet(
     sap_financial,
     evidence_df,
     account="",
-    *, payload=None,
+    *,
+    payload=None,
 ):
     """Match once per source row using date, comparable value and ledger identity."""
     ws_summary.title = "Reconciliation"
@@ -234,7 +235,11 @@ def write_reconciliation_sheet(
 
 def _render_stored(ws_summary, ws_detail, payload):
     """Resolve stored source indexes into this workbook's layout coordinates."""
-    sap_sheets = {"Contract": "SAP Contract History", "Meter Read": "SAP Meter Readings", "Financial": "SAP Financial Transactions"}
+    sap_sheets = {
+        "Contract": "SAP Contract History",
+        "Meter Read": "SAP Meter Readings",
+        "Financial": "SAP Financial Transactions",
+    }
     for row, item in enumerate(payload["summaries"], 4):
         for col, value in enumerate(item["values"], 1):
             literal_cell(ws_summary, row, col, value)
@@ -245,7 +250,11 @@ def _render_stored(ws_summary, ws_detail, payload):
         if item["side"] == "sap":
             sheet, offset = sap_sheets[item["entity"]], 4
         else:
-            sheet, offset = ("Contract History", 8) if item["entity"] == "Contract" else ("EDF Evidence Report", 2)
+            sheet, offset = (
+                ("Contract History", 8)
+                if item["entity"] == "Contract"
+                else ("EDF Evidence Report", 2)
+            )
         _recon_hyperlink(ws_detail, row, 8, sheet, item["index"] + offset)
     ws_summary.auto_filter.ref = "A3:H6"
     ws_detail.auto_filter.ref = f"A3:H{max(3, len(payload['details']) + 3)}"
