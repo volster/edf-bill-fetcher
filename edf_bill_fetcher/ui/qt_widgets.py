@@ -19,10 +19,10 @@ from PySide6.QtWidgets import (
 
 
 def label(text: str, role: str = "", *, wrap: bool = False) -> QLabel:
-    """Create text with a semantic visual role and optional wrapping."""
+    """Create plain text; field and section headings wrap with their container."""
     widget = QLabel(text)
     widget.setObjectName(role)
-    widget.setWordWrap(wrap)
+    widget.setWordWrap(wrap or role in {"fieldLabel", "sectionTitle"})
     widget.setTextFormat(Qt.TextFormat.PlainText)
     return widget
 
@@ -106,7 +106,7 @@ class PathField(QWidget):
         heading = QHBoxLayout()
         heading.addWidget(label(title, "fieldLabel"))
         heading.addStretch()
-        heading.addWidget(label(hint, "hint"))
+        heading.addWidget(label(hint, "hint", wrap=True))
         layout.addLayout(heading)
         row = QHBoxLayout()
         row.setSpacing(8)

@@ -108,7 +108,8 @@ class ReportDialog(QDialog):
         formats = Card("File formats")
         self.formats = QButtonGroup(self)
         self.format_keys = list(FORMATS)
-        grid = QGridLayout()
+        self.format_grid = QGridLayout()
+        self.format_items: list[QVBoxLayout] = []
         for index, (key, title, hint) in enumerate(
             [
                 ("both", "All formats", "PDF, Word and HTML copies"),
@@ -124,15 +125,17 @@ class ReportDialog(QDialog):
             item = QVBoxLayout()
             item.addWidget(radio)
             item.addWidget(label(hint, "hint", wrap=True))
-            grid.addLayout(item, index // 2, index % 2)
+            self.format_items.append(item)
+            self.format_grid.addLayout(item, index // 2, index % 2)
         if self.formats.checkedId() < 0:
             self.formats.button(0).setChecked(True)
-        formats.body.addLayout(grid)
+        formats.body.addLayout(self.format_grid)
         layout.addWidget(formats)
         sections = Card("Report content")
         tools = QHBoxLayout()
-        self.section_count = label("", "hint")
-        tools.addWidget(self.section_count, 1)
+        self.section_count = label("", "hint", wrap=True)
+        sections.body.addWidget(self.section_count)
+        tools.addStretch(1)
         tools.addWidget(button("Select all", lambda: self._select(True), "textButton"))
         tools.addSpacing(12)
         tools.addWidget(button("Clear", lambda: self._select(False), "textButton"))
@@ -175,6 +178,20 @@ class ReportDialog(QDialog):
             for index, check in enumerate(self.section_checks.values()):
                 self.section_grid.removeWidget(check)
                 self.section_grid.addWidget(check, index // columns, index % columns)
+            minimum = sum(
+                max(item.minimumSize().width() for item in self.format_items[column::2])
+                for column in range(2)
+            )
+            # Page margins (56), card padding (44), and scrollbar allowance (10).
+            format_columns = (
+                2
+                if self.width() >= 650
+                and minimum + self.format_grid.horizontalSpacing() <= self.width() - 110
+                else 1
+            )
+            for index, item in enumerate(self.format_items):
+                self.format_grid.removeItem(item)
+                self.format_grid.addLayout(item, index // format_columns, index % format_columns)
 
     def _select(self, checked: bool) -> None:
         for check in self.section_checks.values():
@@ -373,7 +390,7 @@ class EvidenceWindow(QMainWindow):
         main_destination.textChanged.connect(destination.entry.setText)
         options.body.addWidget(destination)
         options.body.addWidget(
-            button("Choose formats & sections…", self._open_report_settings),
+            button("Report settings…", self._open_report_settings),
             alignment=Qt.AlignmentFlag.AlignLeft,
         )
         self.saved_report_summary = label("", "hint", wrap=True)

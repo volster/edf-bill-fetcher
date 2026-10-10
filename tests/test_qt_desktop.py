@@ -54,11 +54,16 @@ def application():
 
 @pytest.fixture
 def font_metrics(application, request):
+    """Include wide font metrics that expose Windows layout overflows on Linux."""
     stylesheet = application.styleSheet()
-    application.setStyleSheet(
-        stylesheet + f"\nQWidget {{ font-size: {getattr(request, 'param', 13)}px; }}"
-    )
+    original_font = application.font()
+    pixels = getattr(request, "param", 13)
+    font = application.font()
+    font.setStretch(180 if pixels == 20 else 100)
+    application.setFont(font)
+    application.setStyleSheet(stylesheet + f"\nQWidget {{ font-size: {pixels}px; }}")
     yield
+    application.setFont(original_font)
     application.setStyleSheet(stylesheet)
     application.processEvents()
 
@@ -156,7 +161,12 @@ def test_action_stays_visible_and_source_steps_adapt(window, application, width,
         application.processEvents()
         assert window.pages.currentIndex() == index
         assert window.run_button.isVisible()
-        assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
+        page = window.pages.currentWidget()
+        wait_until(application, lambda page=page: page.horizontalScrollBar().maximum() == 0)
+        assert page.horizontalScrollBar().maximum() == 0, (
+            f"Page {index} at window width {width}: viewport={page.viewport().width()}, "
+            f"minimum content width={page.widget().minimumSizeHint().width()}"
+        )
     window._navigate(2)
     window.run_button.click()
     assert window.pages.currentIndex() == 0
@@ -225,7 +235,15 @@ def test_report_dialog_requires_content_remembers_choices_and_scrolls(applicatio
     assert dialog.section_grid.columnCount() >= 1
     page = dialog.findChild(QScrollArea)
     assert page is not None
-    assert page.horizontalScrollBar().maximum() == 0
+    for width in (560, 900, 560):
+        dialog.resize(width, 460)
+        wait_until(application, lambda: page.horizontalScrollBar().maximum() == 0)
+        for index, radio in enumerate(dialog.formats.buttons()):
+            page.ensureWidgetVisible(radio)
+            application.processEvents()
+            QTest.mouseClick(radio, Qt.MouseButton.LeftButton)
+            assert dialog.formats.checkedId() == index
+    dialog.formats.button(2).setChecked(True)
     dialog._select(False)
     actions = dialog.findChild(QDialogButtonBox)
     assert actions is not None
