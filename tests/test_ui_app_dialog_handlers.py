@@ -809,6 +809,64 @@ class TestRunWorker:
         assert str(app.run_btn["text"]) == "EXTRACT TO EXCEL"
         engine.cleanup.assert_called_once()
 
+    @pytest.mark.parametrize("cancel", [False, True])
+    def test_real_worker_marshals_ui_and_honours_captured_inputs(
+        self, app: App, tmp_path: Path, cancel: bool
+    ) -> None:
+        entered, release = Event(), Event()
+        app.pdf_dir.set(str(tmp_path))
+        app.analysis_min.set(0)
+        app.scan_sap_dumps_var.set(False)
+        app.generate_reconciliation_sheet_var.set(False)
+        app.save_evidence_files_var.set(False)
+        engine = _make_mock_engine()
+        engine.cancel_event = app.cancel_event
+
+        def collect(path):
+            entered.set()
+            assert release.wait(5), "Test collector was not released"
+
+        engine.crawl_local_pdfs.side_effect = collect
+        with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
+            try:
+                app.start_thread()
+                assert app._worker is not None
+                assert entered.wait(5), "Worker never reached collection"
+                first = app._run_request
+                app.analysis_min.set(999999)
+                app.start_thread()
+                assert app._run_request is first, "A second click launched overlapping work"
+                if cancel:
+                    app._cancel()
+                release.set()
+                app._worker.join(10)
+                assert not app._worker.is_alive(), "Worker did not finish"
+                # Worker messages and control reset must wait for main-thread polling.
+                assert not self.mock_info.called
+                assert not self.mock_warn.called
+                assert not self.mock_err.called
+                app._poll_events()
+            finally:
+                release.set()
+                if app._worker is not None:
+                    app._worker.join(10)
+        manifest = _run_manifest(app)
+        assert manifest["status"] == ("cancelled" if cancel else "complete")
+        assert str(app.run_btn["text"]) == "EXTRACT TO EXCEL"
+        assert str(app.load_report_btn["state"]) == "normal"
+        engine.cleanup.assert_called_once()
+        if cancel:
+            assert self.mock_warn.call_args[0][0] == "Cancelled"
+            assert manifest["result"] is None
+            assert not self.rendered
+        else:
+            assert self.mock_info.call_args[0][0] == "Success"
+            config = self.rendered["xlsx"].config
+            assert config["analysis_min"] == 0
+            assert config["scan_sap_dumps"] is False
+            assert config["generate_reconciliation_sheet"] is False
+            assert config["save_evidence_files"] is False
+
     def test_constructor_failure_resets_controls(self, app: App) -> None:
         app._set_extract_running()
         with patch(
