@@ -65,8 +65,8 @@ def _synthetic_sap_csv(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def test_parse_sap_financial_transactions_now_returns_26_columns() -> None:
-    """Spec §3.1: parser emits 26-key dicts (16 historical + 10 added)."""
+def test_parse_sap_financial_transactions_preserves_values_and_ledger_identity() -> None:
+    """Parser retains transaction fields and explicit ledger identity."""
     sample = {
         "Document No.": "551000421040",
         "Item": "1",
@@ -99,7 +99,41 @@ def test_parse_sap_financial_transactions_now_returns_26_columns() -> None:
     rows = parse_sap_financial_transactions(_synthetic_sap_csv([sample]))
     assert len(rows) == 1
     r = rows[0]
-    assert len(r) == 26, f"expected 26 keys, got {len(r)}: {list(r.keys())}"
+    assert set(r) == {
+        "Document No.",
+        "Item",
+        "Document Date",
+        "Posting Date",
+        "Net Due Date",
+        "Main Transaction",
+        "Sub Transaction",
+        "Transaction Text",
+        "Amount",
+        "Clearing Status",
+        "Clearing Document",
+        "Clearing Date",
+        "Clearing Reason",
+        "Document Type",
+        "Document Type Description",
+        "Source File",
+        "Account",
+        "Kraken ID",
+        "SAP Account Number",
+        "Fuel",
+        "Meter",
+        "Contract",
+        "Sub Item",
+        "Clearing Posting Date",
+        "Clearing Amount",
+        "Statistical Key Flag",
+        "Tax Code",
+        "Tax Code Description",
+        "G/L Account",
+        "G/L Description",
+        "Deferral Date",
+    }
+    assert r["Account"] == ""
+    assert r["Amount"] == "436"
     # Sanity-check the new keys are populated
     assert r["Contract"] == "2011040650"
     assert r["Sub Item"] == "0"

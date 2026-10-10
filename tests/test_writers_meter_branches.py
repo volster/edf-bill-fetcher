@@ -64,7 +64,7 @@ def _row(
         "Invoice #": invoice,
         "Date": date,
         "Reading": reading_type,
-        "Units (kWh)": units_kwh,
+        "Register Reading (kWh)": units_kwh,
         "Attachment Name": f"{invoice}.pdf",
     }
 
@@ -223,6 +223,16 @@ def test_detect_meter_rollover_custom_threshold_param() -> None:
     # delta = -180000; loose threshold catches it, strict does not.
     assert len(detect_meter_rollover(df, rollover_threshold=150_000)) == 1
     assert detect_meter_rollover(df, rollover_threshold=250_000).empty
+
+
+def test_consumption_values_do_not_stand_in_for_register_readings() -> None:
+    df = pd.DataFrame(
+        [
+            {"Date": "01 Jan 2023", "Reading": "Actual", "Units (kWh)": 120000},
+            {"Date": "01 Feb 2023", "Reading": "Actual", "Units (kWh)": 100},
+        ]
+    )
+    assert detect_meter_rollover(df).empty
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +441,7 @@ def _evidence_df_with_unparseable_units() -> pd.DataFrame:
                 "Date": "01 Jan 2023",
                 "Invoice #": "INV-N/A",
                 "Reading": "Actual",
-                "Units (kWh)": "N/A",
+                "Register Reading (kWh)": "N/A",
                 "Details": "",
                 "Tariff": "Standard",
             },
@@ -439,7 +449,7 @@ def _evidence_df_with_unparseable_units() -> pd.DataFrame:
                 "Date": "01 Feb 2023",
                 "Invoice #": "INV-002",
                 "Reading": "Estimated",
-                "Units (kWh)": 350.0,
+                "Register Reading (kWh)": 350.0,
                 "Details": "Automatic estimate",
                 "Tariff": "Standard",
             },
@@ -489,7 +499,7 @@ def _evidence_df_long_source_text() -> pd.DataFrame:
                 "Date": "01 Jan 2023",
                 "Invoice #": "INV-LONG",
                 "Reading": "Actual",
-                "Units (kWh)": 300.0,
+                "Register Reading (kWh)": 300.0,
                 "Details": "",
                 "Tariff": "Standard",
                 "Source PDF Text": long_text,
@@ -526,7 +536,7 @@ def _evidence_df_empty_source_text() -> pd.DataFrame:
                 "Date": "01 Jan 2023",
                 "Invoice #": "INV-EMPTY",
                 "Reading": "Actual",
-                "Units (kWh)": 300.0,
+                "Register Reading (kWh)": 300.0,
                 "Details": "",
                 "Tariff": "Standard",
                 "Source PDF Text": "",
@@ -565,7 +575,7 @@ def _evidence_df_no_match_in_evidence() -> pd.DataFrame:
                 "Date": "01 Jan 2023",
                 "Invoice #": "INV-ROW",
                 "Reading": "Actual",
-                "Units (kWh)": 300.0,
+                "Register Reading (kWh)": 300.0,
                 "Details": "",
                 "Tariff": "Standard",
             }
@@ -611,7 +621,7 @@ def test_write_meter_readings_sheet_evidence_index_date_units_fallback() -> None
                 "Date": "01 Jan 2023",
                 "Invoice #": "INV-FALLBACK",
                 "Reading": "Actual",
-                "Units (kWh)": 300.0,
+                "Register Reading (kWh)": 300.0,
                 "Details": "",
                 "Tariff": "Standard",
             }

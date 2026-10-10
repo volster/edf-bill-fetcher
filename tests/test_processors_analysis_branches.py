@@ -24,6 +24,8 @@ def _df(rows, extra_cols=None):
     df = pd.DataFrame(
         {
             "Date": [r[0] for r in rows],
+            "Entry Type": "New Bill",
+            "Amount Kind": "Balance",
             "_dt": pd.to_datetime([r[0] for r in rows]),
             "Amount (£)": [r[1] for r in rows],
             "Reading": [r[2] if len(r) > 2 else "Actual" for r in rows],
@@ -35,67 +37,28 @@ def _df(rows, extra_cols=None):
     return df
 
 
-class TestDisputeFlagWarningBranches:
-    """compute_dispute_flags non-happy paths — warning emission."""
+class TestInvalidDisputeEvidence:
+    """Malformed observations cannot create invented findings."""
 
-    def test_billing_gap_warning_on_bad_row(self):
-        # `_dt` non-datetime on one row → subtraction raises → BILLING_GAP warns (line 95-96)
-        df = pd.DataFrame(
-            {
-                "Date": ["2024-01-01", "2024-02-15", "2024-03-01"],
-                "_dt": [pd.Timestamp("2024-01-01"), "garbage", pd.Timestamp("2024-03-01")],
-                "Amount (£)": [100.0, 200.0, 300.0],
-            }
-        )
-        with pytest.warns(UserWarning, match="compute_dispute_flags\\[BILLING_GAP\\]"):
-            flags, counts = compute_dispute_flags(df)
-        assert counts == {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
-
-    def test_large_jump_warning_on_bad_row(self):
-        df = pd.DataFrame(
-            {
-                "Date": ["2024-01-01", "2024-02-01"],
-                "_dt": pd.to_datetime(["2024-01-01", "2024-02-01"]),
-                "Amount (£)": ["not-a-number", 100.0],
-            }
-        )
-        with pytest.warns(UserWarning, match="LARGE_JUMP"):
+    @pytest.mark.parametrize("amount", ["bad", float("inf"), "1e400"])
+    def test_invalid_balance_warns_and_does_not_create_a_delta(self, amount):
+        df = _df([("2024-01-01", 100.0), ("2024-02-01", amount)])
+        with pytest.warns(UserWarning, match="invalid amount"):
             flags, counts = compute_dispute_flags(df)
         assert flags == []
         assert counts == {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
 
-    def test_high_daily_rate_warning(self):
-        df = pd.DataFrame(
-            {
-                "Date": ["2024-01-01", "2024-02-01"],
-                "_dt": pd.to_datetime(["2024-01-01", "2024-02-01"]),
-                "Amount (£)": ["x", 100.0],
-            }
-        )
-        with pytest.warns(UserWarning, match="HIGH_DAILY_RATE"):
-            compute_dispute_flags(df, mean_daily=50.0)
+    def test_invalid_source_date_is_retained_but_unavailable_for_dated_findings(self):
+        from edf_bill_fetcher.processors.preparation import analysis_frame
 
-    def test_balance_reduction_warning(self):
-        df = pd.DataFrame(
-            {
-                "Date": ["2024-01-01", "2024-02-01"],
-                "_dt": pd.to_datetime(["2024-01-01", "2024-02-01"]),
-                "Amount (£)": ["bad", 100.0],
-            }
-        )
-        with pytest.warns(UserWarning, match="BALANCE_REDUCTION"):
-            compute_dispute_flags(df)
-
-    def test_reconciliation_warning(self):
-        df = _df(
-            [("2024-01-01", 100.0), ("2024-02-01", "bad")],
-            extra_cols={
-                "Entry Type": ["Ongoing Balance", "New Bill"],
-                "Period Charge (£)": [None, 100.0],
-            },
-        )
-        with pytest.warns(UserWarning, match="RECONCILIATION_MISMATCH"):
-            compute_dispute_flags(df)
+        df = _df([("2024-01-01", 100.0), ("2024-02-01", 200.0)])
+        df.loc[1, "Date"] = "garbage"
+        with pytest.warns(UserWarning, match="unparseable dates"):
+            prepared = analysis_frame(df)
+        assert len(prepared) == 2
+        flags, counts = compute_dispute_flags(prepared)
+        assert flags == []
+        assert counts == {"HIGH": 0, "MEDIUM": 0, "INFO": 0}
 
 
 class TestEstimatedRunBranches:
@@ -171,8 +134,8 @@ class TestBalanceReductionAndReconciliation:
         assert len(br) == 1
         assert br[0][2] == pytest.approx(700.0)  # 1000 - 300, positive reduction
 
-    def test_non_delta_flags_keep_balance_as_amount(self):
-        """C-6: non-delta flags (e.g. RECONCILIATION MISMATCH) keep the balance."""
+    def test_reconciliation_amount_is_unexplained_movement(self):
+        """A £400 movement with £100 recorded charges leaves £300 unexplained."""
         df = _df(
             [("2024-01-01", 100.0), ("2024-02-01", 500.0)],
             extra_cols={
@@ -183,7 +146,7 @@ class TestBalanceReductionAndReconciliation:
         flags, _ = compute_dispute_flags(df)
         rm = [f for f in flags if f[0] == "RECONCILIATION MISMATCH"]
         assert len(rm) == 1
-        assert rm[0][2] == pytest.approx(500.0)  # running balance, not the 400 delta
+        assert rm[0][2] == pytest.approx(300.0)  # (500 - 100) - 100 recorded charges
 
     def test_reconciliation_mismatch_flagged(self):
         df = _df(
@@ -196,8 +159,9 @@ class TestBalanceReductionAndReconciliation:
         flags, counts = compute_dispute_flags(df)
         rm = [f for f in flags if f[0] == "RECONCILIATION MISMATCH"]
         assert len(rm) == 1
-        assert rm[0][4] == "HIGH"  # diff 300 > 50% of pc 100 → HIGH severity
-        assert counts["HIGH"] == 2  # LARGE JUMP (100→500) + RECONCILIATION MISMATCH
+        assert rm[0][4] == "INFO"  # An incomplete ledger does not establish a billing error.
+        assert counts["HIGH"] == 1  # LARGE JUMP (100→500)
+        assert counts["INFO"] == 1  # Unexplained movement needs review.
 
     def test_reconciliation_within_threshold_no_flag(self):
         df = _df(
@@ -403,4 +367,4 @@ class TestReadingTypeToAem:
         assert _reading_type_to_aem("Actual") == "A"
         assert _reading_type_to_aem("Estimated") == "E"
         assert _reading_type_to_aem("Smart") == "A"
-        assert _reading_type_to_aem("Unknown") == "E"
+        assert _reading_type_to_aem("Unknown") == "U"

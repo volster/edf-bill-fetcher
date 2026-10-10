@@ -126,6 +126,8 @@ def _sample_data_one_record() -> list[dict]:
     """
     base = {
         "Source": "Local PDF Folder",
+        "Account": "A-31105244",
+        "Fuel": "Electricity",
         "Sender": "edf.co.uk",
         "Date": "01 Aug 2023",
         "Period From": "02/10/2020",
@@ -442,7 +444,7 @@ def test_sheet2_only_includes_matched_pairs(tmp_path: object) -> None:
         clear_doc="CA",
         clear_date="09-08-2023",
         rows=[
-            ("DA1", "28000", "Dr- Consum Billing Receivable", ""),
+            ("DA1", "100", "Dr- Consum Billing Receivable", ""),
             ("DA2", "0", "Dr- Consum Billing Receivable", ""),
             ("DA3", "0", "Dr- Consum Billing Receivable", ""),
             ("DA4", "0", "Dr- Consum Billing Receivable", ""),
@@ -476,7 +478,7 @@ def test_sheet2_hyperlinks_to_sheet1_and_evidence_report(tmp_path: object) -> No
         clear_doc="CA",
         clear_date="09-08-2023",
         rows=[
-            ("DA1", "28000", "Dr- Consum Billing Receivable", ""),
+            ("DA1", "100", "Dr- Consum Billing Receivable", ""),
             ("DA2", "0", "Dr- Consum Billing Receivable", ""),
             ("DA3", "0", "Dr- Consum Billing Receivable", ""),
             ("DA4", "0", "Dr- Consum Billing Receivable", ""),

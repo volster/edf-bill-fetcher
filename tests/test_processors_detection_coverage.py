@@ -125,6 +125,8 @@ def test_detect_back_billing_returns_empty_for_short_period_invoices() -> None:
         [
             {
                 "Invoice #": "A1",
+                "Entry Type": "New Bill",
+                "Period Charge (£)": 5000.0,
                 "Date": "01 Jan 2024",
                 "Period From": "01 Jan 2024",
                 "Period To": "31 Jan 2024",
@@ -148,6 +150,8 @@ def test_detect_back_billing_flags_late_billed_invoice() -> None:
         [
             {
                 "Invoice #": "A1",
+                "Entry Type": "New Bill",
+                "Period Charge (£)": 5000.0,
                 "Date": "01 Mar 2025",  # 425 days after Period From -> > 365 gate
                 "Period From": "01 Jan 2024",
                 "Period To": "31 Jan 2024",  # 30-day period; the late bill date is what triggers
@@ -283,6 +287,8 @@ def test_detect_rebilling_returns_empty_for_single_invoice() -> None:
         [
             {
                 "Invoice #": "A1",
+                "Entry Type": "New Bill",
+                "Period Charge (£)": 5000.0,
                 "Date": "01 Jan 2024",
                 "Period From": "01 Jan 2024",
                 "Period To": "31 Jan 2024",
@@ -300,6 +306,8 @@ def test_detect_rebilling_returns_empty_for_normal_non_overlapping_invoices() ->
         [
             {
                 "Invoice #": "A1",
+                "Entry Type": "New Bill",
+                "Period Charge (£)": 5000.0,
                 "Date": "01 Jan 2024",
                 "Period From": "01 Jan 2024",
                 "Period To": "31 Jan 2024",

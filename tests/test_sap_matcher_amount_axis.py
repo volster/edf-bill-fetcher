@@ -43,38 +43,32 @@ def test_sap_matcher_uses_period_charge() -> None:
     assert result[0].confidence_band == "High"  # score >= 75
 
 
-def test_sap_matcher_falls_back_to_amount_when_period_charge_na() -> None:
-    # When Period Charge (£) is N/A/unparseable, the matcher falls back to the
-    # Amount (£) running balance — same value here, so the match is still High.
+def test_sap_matcher_does_not_use_balance_when_billed_charge_is_invalid() -> None:
     sap_event = _build_event(net_amount=500.0)
     edf_records = [
         {
             "Invoice #": "T34",
             "Period From": "2020-01-01",
             "Period To": "2021-03-31",
+            "Entry Type": "New Bill",
+            "Amount Kind": "Balance",
             "Period Charge (£)": "N/A",
             "Amount (£)": 500.0,
         }
     ]
-    result = match_sap_events_to_edf([sap_event], edf_records)
-    assert len(result) == 1
-    assert result[0].edf_record["Invoice #"] == "T34"
-    assert result[0].confidence_band == "High"
+    assert match_sap_events_to_edf([sap_event], edf_records) == []
 
 
-def test_sap_matcher_falls_back_to_amount_when_period_charge_missing() -> None:
-    # Records that predate the Period Charge column (or never populate it) must
-    # still match on the Amount (£) running balance.
+def test_sap_matcher_does_not_use_balance_when_billed_charge_is_missing() -> None:
     sap_event = _build_event(net_amount=500.0)
     edf_records = [
         {
             "Invoice #": "T34",
             "Period From": "2020-01-01",
             "Period To": "2021-03-31",
+            "Entry Type": "New Bill",
+            "Amount Kind": "Balance",
             "Amount (£)": 500.0,
         }
     ]
-    result = match_sap_events_to_edf([sap_event], edf_records)
-    assert len(result) == 1
-    assert result[0].edf_record["Invoice #"] == "T34"
-    assert result[0].confidence_band == "High"
+    assert match_sap_events_to_edf([sap_event], edf_records) == []

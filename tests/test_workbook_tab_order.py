@@ -53,7 +53,7 @@ def test_workbook_tab_order_is_severity_led(tmp_path: object) -> None:
             {
                 "Date": "2024-05-15",
                 "Amount (£)": 800.00,
-                "Entry Type": "Payment",
+                "Entry Type": "New Bill",
                 "Invoice #": "INV-002",
                 "Period From": "01/04/2024",
                 "Period To": "30/04/2024",
