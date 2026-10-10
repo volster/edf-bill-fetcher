@@ -63,6 +63,7 @@ def write_back_billing_sheet(
     evidence_index: dict[str, int] | None = None,
     domination_map: dict[str, tuple[str, bool]] | None = None,
     view_superseded_row: dict[str, int] | None = None,
+    *, union_total: float | None = None,
 ) -> None:
     """Render the Back-billing Analysis tab.
 
@@ -283,7 +284,8 @@ def write_back_billing_sheet(
         from edf_bill_fetcher.processors.detection import compute_unlawful_union_total
 
         bb_live = bb[~bb["Invoice #"].astype(str).isin(domination_map or {})]
-        union_total = compute_unlawful_union_total(bb_live)
+        if union_total is None:
+            union_total = compute_unlawful_union_total(bb_live)
         total_label = "TOTAL UNLAWFUL CHARGES — UNION (no double count)"
         # Period Charge total (col 6) sums the live rows; the Unlawful column
         # (col 10) carries the union of the live rows' unlawful consumption

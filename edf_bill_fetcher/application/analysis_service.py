@@ -22,9 +22,13 @@ from edf_bill_fetcher.io.writers.analysis import run_analysers
 from edf_bill_fetcher.models import report_models as models
 from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
 from edf_bill_fetcher.processors.compensation import estimate_compensation
-from edf_bill_fetcher.processors.detection import compute_transitive_domination
+from edf_bill_fetcher.processors.detection import (
+    compute_transitive_domination,
+    compute_unlawful_union_total,
+)
 from edf_bill_fetcher.processors.financial import (
     balance_extremes,
+    bill_daily_rates,
     financial_totals,
     mean_daily_rate,
 )
@@ -35,9 +39,12 @@ from edf_bill_fetcher.processors.matching import (
 )
 from edf_bill_fetcher.processors.preparation import (
     analysis_frame,
+    balance_frame,
     identity,
+    monthly_balance_frame,
     normalize_frame,
     number,
+    scope,
 )
 from edf_bill_fetcher.writers._helpers import (
     detect_sap_back_billing_events,
@@ -190,7 +197,9 @@ def _computed_models(
         object_value(prepared.extraction.legacy_state),
     )
     payment = models.compute_payment_analysis(frame)
-    quality = models.compute_data_quality_report(frame)
+    quality = models.compute_data_quality_report(
+        frame, duplicate_count=len(rows_value(prepared.duplicates))
+    )
     quality.duplicate_count = len(rows_value(prepared.duplicates))
     quality.duplicate_rate = (
         quality.duplicate_count / quality.total_records if quality.total_records else 0.0
@@ -222,12 +231,45 @@ def _computed_models(
                 event.matched_edf_invoice = tag["Matched EDF Invoice #"]
                 event._cluster_unmatched_tag = tag
     position = analyse_sap_back_billing(events, selected, analyses["back_billing"])
+    balance = balance_frame(selected)
+    statistical_frame = balance_frame(frame)
+    if len({scope(row) for row in statistical_frame.to_dict("records")}) > 1:
+        statistical_frame = statistical_frame.iloc[:0]
+    balance["year"] = balance["_dt"].dt.year
+    yearly = (
+        balance.groupby("year")
+        .agg(
+            count=("Amount (£)", "count"),
+            avg_bal=("Amount (£)", "mean"),
+            peak=("Amount (£)", "max"),
+            low=("Amount (£)", "min"),
+        )
+        .reset_index()
+    )
+    live = analyses["back_billing"]
+    if not live.empty:
+        live = live[~live["Invoice #"].astype(str).isin(domination)]
+    source_indexes = {id(row): idx for idx, row in enumerate(state.get("sap_financial_rows", []))}
     sap = {
         "analyses": analyses,
         "domination": domination,
         "events": events,
         "matches": matches,
         "position": position,
+        "event_source_indexes": [
+            [source_indexes[id(row)] for row in event.rows] for event in events
+        ],
+        "union_total": compute_unlawful_union_total(live),
+        "frames": {
+            "evidence": frame,
+            "analysis": selected,
+            "balance": balance,
+            "statistical": statistical_frame,
+            "monthly": monthly_balance_frame(frame),
+            "daily_rates": bill_daily_rates(selected),
+            "yearly": yearly,
+        },
+        "timeline": _timeline(balance, dispute.flags),
     }
     results = {
         "payment": (payment, True, None),
@@ -255,7 +297,7 @@ def _computed_models(
         ),
     }
     diagnostics: list[dict] = []
-    return {
+    converted = {
         key: {
             "availability": "available" if available else "unavailable",
             "reason_code": None if available else reason,
@@ -263,6 +305,11 @@ def _computed_models(
         }
         for key, (payload, available, reason) in results.items()
     }
+    for key, entry in converted.items():
+        if any(item["path"].startswith(f"$.models.{key}.") for item in diagnostics):
+            entry["availability"] = "partial"
+            entry["reason_code"] = "NONFINITE_METRICS_UNAVAILABLE"
+    return converted
 
 
 def analyse_prepared(prepared: PreparedSnapshot) -> AnalysisSnapshot:
@@ -298,3 +345,108 @@ def analyse_prepared(prepared: PreparedSnapshot) -> AnalysisSnapshot:
     return AnalysisSnapshot(
         prepared, summary, computed, methods, analytical_fingerprint(prepared, methods)
     )
+
+
+def _timeline(dfc: pd.DataFrame, flags: list) -> list:
+    """Preserve the legacy workbook timeline inference in the analysis boundary."""
+    if len(dfc) < 2 or len({scope(row) for row in dfc.to_dict("records")}) != 1:
+        return []
+    dates_lbl = dfc["Date"].tolist()
+    amounts = dfc["Amount (£)"].values.astype(float)
+    n = len(amounts)
+    timeline_events = []
+
+    # Bookend: first record
+    timeline_events.append(
+        (dates_lbl[0], "ACCOUNT START", f"First bill on record. Balance: £{amounts[0]:,.2f}.")
+    )
+
+    # Top 5 largest balance jumps
+    jumps = []
+    for i in range(1, n):
+        delta = float(amounts[i]) - float(amounts[i - 1])
+        days = (dfc.iloc[i]["_dt"] - dfc.iloc[i - 1]["_dt"]).days
+        if delta > 0:
+            jumps.append((delta, i, days))
+    jumps.sort(key=lambda x: x[0], reverse=True)
+    for delta, idx, days in jumps[:5]:
+        timeline_events.append(
+            (
+                dfc.iloc[idx]["Date"],
+                "LARGE INCREASE",
+                f"Balance rose £{delta:,.2f} in {days} days "
+                f"(from £{amounts[idx - 1]:,.2f} to £{amounts[idx]:,.2f}).",
+            )
+        )
+
+    # Billing gaps > 60 days
+    for i in range(1, n):
+        days = (dfc.iloc[i]["_dt"] - dfc.iloc[i - 1]["_dt"]).days
+        if days > 60:
+            timeline_events.append(
+                (
+                    dfc.iloc[i]["Date"],
+                    "BILLING GAP",
+                    f"{days} days without a bill (previous: {dfc.iloc[i - 1]['Date']}). "
+                    f"Balance accumulated unchecked.",
+                )
+            )
+
+    # Estimated reading runs (reuse existing detection)
+    if "Reading" in dfc.columns:
+        run = 0
+        run_start_date = None
+        for i, rv in enumerate(dfc["Reading"].tolist()):
+            if str(rv).lower() in ("estimated", "est."):
+                run += 1
+                if run == 1:
+                    run_start_date = dfc.iloc[i]["Date"]
+            else:
+                if run >= 3:
+                    timeline_events.append(
+                        (
+                            run_start_date,
+                            "ESTIMATED READINGS",
+                            f"{run} consecutive bills used estimated meter readings.",
+                        )
+                    )
+                run = 0
+                run_start_date = None
+        if run >= 3:
+            timeline_events.append(
+                (
+                    run_start_date,
+                    "ESTIMATED READINGS",
+                    f"{run} consecutive estimated readings (ongoing).",
+                )
+            )
+
+    # Payment events (balance reductions)
+    for i in range(1, n):
+        delta = float(amounts[i]) - float(amounts[i - 1])
+        if delta < -200:
+            timeline_events.append(
+                (
+                    dfc.iloc[i]["Date"],
+                    "PAYMENT/CREDIT",
+                    f"Balance reduced by £{abs(delta):,.2f} "
+                    f"(from £{amounts[i - 1]:,.2f} to £{amounts[i]:,.2f}).",
+                )
+            )
+
+    # Reconciliation mismatches (from flags)
+    for ftype, fdate, _famt, fdetail, _fsev in flags:
+        if ftype == "RECONCILIATION MISMATCH":
+            timeline_events.append((fdate, "RECONCILIATION", fdetail))
+
+    # Bookend: latest record
+    timeline_events.append(
+        (
+            dates_lbl[-1],
+            "CURRENT STATE",
+            f"Latest bill on record. Balance: £{amounts[-1]:,.2f}. "
+            f"Total increase from first record: £{amounts[-1] - amounts[0]:,.2f}.",
+        )
+    )
+
+    return timeline_events

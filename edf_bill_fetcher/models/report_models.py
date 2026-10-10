@@ -127,7 +127,7 @@ class DataQualityReport:
         }
 
 
-def compute_data_quality_report(df: pd.DataFrame) -> DataQualityReport:
+def compute_data_quality_report(df: pd.DataFrame, *, duplicate_count: int | None = None) -> DataQualityReport:
     """Compute the canonical data-quality report on a copy of ``df``."""
     df = normalize_frame(df)
     total_records = len(df)
@@ -187,7 +187,8 @@ def compute_data_quality_report(df: pd.DataFrame) -> DataQualityReport:
 
     from edf_bill_fetcher.processors.preparation import prepare_evidence
 
-    duplicate_count = len(prepare_evidence(df.to_dict("records"), {"use_dedup": True}).duplicates)
+    if duplicate_count is None:
+        duplicate_count = len(prepare_evidence(df.to_dict("records"), {"use_dedup": True}).duplicates)
 
     source_distribution = df["Source"].value_counts().to_dict()
     entry_type_distribution = (

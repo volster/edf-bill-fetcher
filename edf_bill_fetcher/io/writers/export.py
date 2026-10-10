@@ -1209,6 +1209,7 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
         evidence_index=analyses["evidence_index"],
         domination_map=domination_map,
         view_superseded_row=recon_row_map,
+        union_total=sap_model["union_total"],
     )
     write_rebilling_sheet(
         wb.create_sheet(title="Rebilling & Corrections"),
