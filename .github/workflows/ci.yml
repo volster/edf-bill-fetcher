@@ -13,7 +13,7 @@ on:
     branches: [How-it-started, things-got-out-of-hand, how-its-going]
 
 permissions:
-  actions: write
+  actions: read
   contents: read
 
 jobs:
@@ -373,15 +373,3 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
-
-      - name: Trigger build workflow on success
-        if: success() && github.ref == 'refs/heads/how-its-going' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'matrix_build.yml',
-              ref: 'how-its-going'
-            });
