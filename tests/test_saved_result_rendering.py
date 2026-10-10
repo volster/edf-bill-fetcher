@@ -18,9 +18,9 @@ from edf_bill_fetcher.io.reporters.pdf_report import render_pdf
 from edf_bill_fetcher.io.writers.export import render_xlsx
 from edf_bill_fetcher.models.report_view import RenderSelection, build_report_view
 
-CASES = json.loads((Path(__file__).parent / "fixtures/financial_contracts.json").read_text())[
-    "cases"
-]
+CASES = json.loads(
+    (Path(__file__).parent / "fixtures/financial_contracts.json").read_text(encoding="utf-8")
+)["cases"]
 
 
 @pytest.mark.parametrize(

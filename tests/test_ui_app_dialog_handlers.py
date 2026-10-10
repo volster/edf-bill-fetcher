@@ -545,7 +545,10 @@ def _make_mock_engine(records: list | None = None) -> _DataEngine:
 
 
 def _run_manifest(app: App) -> dict:
-    return cast(dict, json.loads((Path(app._run_request["run_dir"]) / "run.json").read_text()))
+    return cast(
+        dict,
+        json.loads((Path(app._run_request["run_dir"]) / "run.json").read_text(encoding="utf-8")),
+    )
 
 
 def _run_worker(app: App) -> None:
@@ -627,7 +630,7 @@ class TestRunWorker:
             with patch("edf_bill_fetcher.collectors.engine.EvidenceEngine", return_value=engine):
                 _run_worker(app)
         constructor.assert_called_once()
-        archive.open.assert_called_once_with("/tmp/fake.pst")
+        archive.open.assert_called_once_with(str(Path("/tmp/fake.pst").absolute()))
         engine.crawl_pst.assert_called_once_with(archive.get_root_folder.return_value)
         archive.close.assert_called_once()
         assert _run_manifest(app)["status"] == "empty"
@@ -681,7 +684,9 @@ class TestRunWorker:
             _run_worker(app)
         assert self.mock_warn.call_args[0][0] == "Review Required"
         assert _run_manifest(app)["status"] == "review_required"
-        saved = json.loads((Path(app._run_request["run_dir"]) / "result.json").read_text())
+        saved = json.loads(
+            (Path(app._run_request["run_dir"]) / "result.json").read_text(encoding="utf-8")
+        )
         assert saved["evidence"]["legacy_state"]["error_log"] == ["parse error 1"]
 
     def test_bundle_copies_sources_and_builds_index(self, app: App) -> None:
@@ -1038,8 +1043,8 @@ class TestLoadSpreadsheetAndReport:
         assert warning.call_args[0][0] == "Reports Generated — Workbook Import"
         assert "limited provenance" in warning.call_args[0][1]
         run_dir = next(tmp_path.glob("source_report_*"))
-        manifest = json.loads((run_dir / "run.json").read_text())
-        result = json.loads((run_dir / "result.json").read_text())
+        manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
         assert manifest["status"] == "review_required"
         assert set(manifest["artifacts"]) == (
             {"html"} if fmt == "html" else {"pdf", "docx", "html"}

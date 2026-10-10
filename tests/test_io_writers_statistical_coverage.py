@@ -19,6 +19,8 @@ sheet is the ``ws`` argument. No mocking required.
 
 from __future__ import annotations
 
+import sys
+
 import openpyxl
 import pandas as pd
 import pytest
@@ -181,9 +183,12 @@ def test_writer_runs_scipy_normality_tests_when_available() -> None:
     )
 
 
-@pytest.mark.skipif(_HAS_SCIPY, reason="scipy IS installed — branch writes Jarque-Bera result")
-def test_writer_prints_scipy_unavailable_message_when_not_installed() -> None:
-    """When scipy is NOT installed, the writer writes the 'Scipy not available' banner (L272)."""
+def test_writer_prints_scipy_unavailable_message_when_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The writer explains missing distribution tests independently of worker setup."""
+    monkeypatch.setattr("edf_bill_fetcher.io.writers.statistical._HAS_SCIPY", False)
+    monkeypatch.setitem(sys.modules, "scipy", None)
     wb = _make_workbook()
     ws = wb.active
     dfc = _make_dataframe(

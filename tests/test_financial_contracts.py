@@ -12,9 +12,9 @@ import pytest
 
 from edf_bill_fetcher.application.acceptance_api import probe
 
-CASES = json.loads((Path(__file__).parent / "fixtures/financial_contracts.json").read_text())[
-    "cases"
-]
+CASES = json.loads(
+    (Path(__file__).parent / "fixtures/financial_contracts.json").read_text(encoding="utf-8")
+)["cases"]
 
 
 def assert_value(actual, expected):

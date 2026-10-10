@@ -172,8 +172,10 @@ def test_holt_winters_forecast_pair_well_formed_series_returns_arrays() -> None:
     assert len(future) == 4
 
 
-@pytest.mark.skipif(HAS_STATSMODELS, reason="statsmodels IS available — branch returns arrays")
-def test_holt_winters_forecast_pair_no_statsmodels_returns_none_pair() -> None:
+def test_holt_winters_forecast_pair_no_statsmodels_returns_none_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("edf_bill_fetcher.processors.forecasting.HAS_STATSMODELS", False)
     series = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0])
     fitted, future = _holt_winters_forecast_pair(series, steps=4)
     assert fitted is None

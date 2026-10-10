@@ -32,9 +32,9 @@ def request(run_id="validation", as_of="2024-04-01"):
 
 @pytest.fixture(scope="module")
 def snapshot():
-    case = json.loads((Path(__file__).parent / "fixtures/financial_contracts.json").read_text())[
-        "cases"
-    ][0]
+    case = json.loads(
+        (Path(__file__).parent / "fixtures/financial_contracts.json").read_text(encoding="utf-8")
+    )["cases"][0]
     return migrate_legacy(case["records"], request())
 
 
@@ -175,7 +175,7 @@ def test_invalid_legacy_input_cannot_be_migrated(legacy: object) -> None:
 
 def test_legacy_without_date_context_requires_explicit_request(tmp_path: Path) -> None:
     destination = tmp_path / "legacy.json"
-    destination.write_text('[{"Date":"31/01/2024","Amount (£)":100}]')
+    destination.write_text('[{"Date":"31/01/2024","Amount (£)":100}]', encoding="utf-8")
     with pytest.raises(ValueError, match="supply legacy_request"):
         load_result(destination)
     result = load_result(destination, legacy_request=request())

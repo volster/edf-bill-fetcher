@@ -62,7 +62,7 @@ def test_stage_failure_records_where_it_stopped_and_always_cleans_up(
     cleanup = MagicMock()
 
     def fail(*args, **kwargs):
-        persisted = json.loads((tmp_path / "run.json").read_text())
+        persisted = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
         assert persisted["stage"] == stage
         assert persisted["status"] == "running"
         raise OSError("injected " + stage)

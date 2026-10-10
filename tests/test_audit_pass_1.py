@@ -35,7 +35,6 @@ import pandas as pd
 import pytest
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine
-from edf_bill_fetcher.io.cli import HAS_PYPFF
 from edf_bill_fetcher.processors.analysis import (
     _analyze_tariff_impact,
     _data_quality_report,
@@ -388,28 +387,15 @@ def _engine_for_pst_tests():
 
 
 class TestProcessPstFile:
-    def test_pypff_not_installed_logs_error(self):
-        # If libpff-python actually IS installed, this test would
-        # try to open a real PST and fail; just skip the assertion
-        # branch and rely on the always-on error-log path being
-        # exercised at module level.
-        if HAS_PYPFF:
-            pytest.skip("HAS_PYPFF=True; pypff-installed path is untested in this slot")
+    @pytest.mark.parametrize("extension", ["pst", "ost"])
+    def test_missing_pypff_logs_error_for_both_archive_types(self, monkeypatch, extension):
+        # Exercise missing-dependency behavior even on fully provisioned CI workers.
+        monkeypatch.setattr("edf_bill_fetcher.collectors.engine.HAS_PYPFF", False)
         engine = _engine_for_pst_tests()
-        engine.process_pst_file("/does/not/exist.pst")
-        assert any("pypff" in e.lower() for e in engine.error_log), (
-            "expected an error_log entry mentioning pypff when libpff-python isn't installed"
-        )
-
-    def test_ost_alias_dispatches_to_pst_handler(self):
-        # Even without pypff installed, the OST alias should call
-        # the same code path; we verify by observing the error_log
-        # line about pypff regardless of file extension.
-        if HAS_PYPFF:
-            pytest.skip("HAS_PYPFF=True; alias path untested in this slot")
-        engine = _engine_for_pst_tests()
-        engine.process_ost_file("/does/not/exist.ost")
-        assert any("pypff" in e.lower() for e in engine.error_log)
+        getattr(engine, "process_" + extension + "_file")("/does/not/exist." + extension)
+        assert len(engine.error_log) == 1
+        assert "pypff not installed" in engine.error_log[0]
+        assert extension in engine.error_log[0]
 
 
 class TestProcessPstFileMocked:
