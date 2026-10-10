@@ -20,7 +20,7 @@ from edf_bill_fetcher.processors.preparation import prepare_evidence
 try:
     import pypff
 
-    HAS_PYPFF = True
+    HAS_PYPFF = pypff is not None
 except ImportError:
     HAS_PYPFF = False
 
@@ -202,10 +202,12 @@ def run_cli_extract(args: list[str]) -> None:
     parser.add_argument("--eml-dir", help="Path to directory containing .eml message files")
     parser.add_argument("--msg-dir", help="Path to directory containing .msg message files")
     parser.add_argument("--output", "-o", required=True, help="Output Excel file path")
-    parser.add_argument("--records-json", help="Also save extracted records as JSON")
+    parser.add_argument(
+        "--records-json", help="Also save extracted records as v2 compatibility JSON"
+    )
     parser.add_argument(
         "--save-engine-json",
-        help="Save engine state (config, filtered records, error log) as versioned JSON",
+        help="Save engine state as v2 compatibility JSON (v3 result is always saved in the source bundle)",
     )
     parser.add_argument("--config", "-c", help="Path to config JSON file (optional)")
     parser.add_argument("--acc-filter", help="Filter by account number (e.g., A-12345678)")
@@ -308,135 +310,84 @@ def run_cli_extract(args: list[str]) -> None:
 
     engine = EvidenceEngine(config, print, None, None)
 
-    try:
-        if parsed.pst and os.path.exists(parsed.pst):
-            print(f"Scanning PST/OST: {parsed.pst}")
-            try:
-                pff = pypff.file()
-            except AttributeError:
-                pff = getattr(pypff, "File", None)
-                if pff is None:
-                    raise AttributeError("pypff module has no 'file' or 'File' attribute") from None
-                pff = pff()
-            pff.open(os.path.abspath(parsed.pst))
-            try:
-                engine.crawl_pst(pff.get_root_folder())
-            finally:
-                pff.close()
+    import tempfile
+    from pathlib import Path
+    from uuid import uuid4
 
-        if parsed.htm and os.path.exists(parsed.htm):
-            print(f"Parsing HTM: {parsed.htm}")
-            engine.process_htm_file(parsed.htm)
+    from edf_bill_fetcher.application.run_service import bundle_engine_sources, collect_engine, run
+    from edf_bill_fetcher.domain.json_values import freeze_json
+    from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
 
-        if parsed.pdf_dir and os.path.exists(parsed.pdf_dir):
-            print(f"Scanning PDF folder: {parsed.pdf_dir}")
-            engine.crawl_local_pdfs(parsed.pdf_dir)
-
-        if parsed.eml_dir and os.path.exists(parsed.eml_dir):
-            print(f"Scanning EML folder: {parsed.eml_dir}")
-            engine.process_eml_folder(parsed.eml_dir)
-
-        if parsed.msg_dir and os.path.exists(parsed.msg_dir):
-            print(f"Scanning MSG folder: {parsed.msg_dir}")
-            engine.process_msg_folder(parsed.msg_dir)
-
-        if not (
-            engine.records
-            or engine.sap_contract_rows
-            or engine.sap_meter_rows
-            or engine.sap_financial_rows
-        ):
-            sys.stderr.write("WARNING: No billing records found\n")
-            sys.exit(1 if parsed.strict else 0)
-
-        prepared = prepare_evidence(engine.records, config)
-        config = prepared.config
-        engine.config = config
-        # Save a separate source bundle for each extraction.
-        import tempfile
-        from pathlib import Path
-
-        from edf_bill_fetcher.io.writers.evidence_bundle import (
-            build_bundle_index,
-            save_evidence_files,
+    sources = tuple(
+        SourceSelection(kind, path)
+        for kind, path in (
+            ("pst", parsed.pst),
+            ("htm", parsed.htm),
+            ("pdf_dir", parsed.pdf_dir),
+            ("eml_dir", parsed.eml_dir),
+            ("msg_dir", parsed.msg_dir),
         )
-
+        if path
+    )
+    request = RunRequest(
+        uuid4().hex,
+        datetime.now(timezone.utc),
+        datetime.fromisoformat(config["as_of"]).date(),
+        sources,
+        freeze_json(dict(config)),
+    )
+    try:
         output_parent = Path(parsed.output).absolute().parent
         bundle_dir = Path(
             tempfile.mkdtemp(prefix=Path(parsed.output).stem + "_", dir=output_parent)
         )
-        stats: dict[str, int] = {}
-        import pandas as pd
-
-        bundle_records = pd.concat(
-            [prepared.frame, pd.DataFrame(list(engine.source_manifest.values()))], ignore_index=True
-        )
-        saved: dict[str, str] = {}
-        if config.get("save_evidence_files", True):
-            saved = save_evidence_files(
-                bundle_records, engine.source_paths, str(bundle_dir / "evidence_files"), stats=stats
+        legacy_paths = tuple(
+            dict.fromkeys(
+                str(path)
+                for path in (
+                    bundle_dir / "records.json",
+                    parsed.records_json,
+                    parsed.save_engine_json,
+                )
+                if path
             )
-            build_bundle_index(
-                bundle_records,
-                saved,
-                str(bundle_dir / "evidence_index.docx"),
-                account=str(config.get("acc_num", "")),
-            )
-        for key in ("missing", "ambiguous"):
-            if stats.get(key):
-                engine.log_error("Evidence bundle", f"{stats[key]} {key} source files")
-        for metadata in engine.source_manifest.values():
-            path = saved.get(metadata["Attachment Name"])
-            metadata["Saved Path"] = os.path.relpath(path, bundle_dir) if path else None
-        state = {
-            **engine.__getstate__(),
-            "original_records": engine.records,
-            "records": prepared.records,
-        }
-        # Export to Excel
-        print(f"Writing Excel report: {parsed.output}")
-
-        from edf_bill_fetcher.io.writers.export import export_to_excel
-
-        export_to_excel(
-            engine.records,
-            parsed.output,
-            engine.error_log,
-            config,
-            filtered=engine.filtered_records,
-            sap_rows={
-                "contract": engine.sap_contract_rows,
-                "meter": engine.sap_meter_rows,
-                "financial": engine.sap_financial_rows,
-            },
-            invoice_pdf_paths=saved,
         )
-
-        _safe_json_dump(state, str(bundle_dir / "records.json"))
-
-        # Optionally save records as JSON
-        if parsed.records_json:
-            _safe_json_dump(state, parsed.records_json)
-            print(f"Records saved as JSON: {parsed.records_json}")
-
-        # Optionally save engine state as versioned JSON
-        if parsed.save_engine_json:
-            _safe_json_dump(state, parsed.save_engine_json)
-            print(f"Engine state saved as JSON: {parsed.save_engine_json}")
-
-        print("Extraction complete!")
-        print(f"  PDFs processed: {engine.pdf_count}")
-        print(f"  Emails matched: {engine.email_count}")
-        print(f"  Records found:  {len(engine.records)}")
-        if engine.error_log:
-            print(f"  Parse errors:   {len(engine.error_log)}")
-
+        destinations = [Path(path).resolve() for path in (*legacy_paths, parsed.output)]
+        if len(set(destinations)) != len(destinations) or any(
+            Path(source.path).resolve() in destinations for source in sources
+        ):
+            raise ValueError(
+                "Output paths must be distinct and must not overwrite selected sources"
+            )
+        outcome = run(
+            request,
+            {"xlsx": parsed.output},
+            result_path=str(bundle_dir / "result.json"),
+            manifest_path=str(bundle_dir / "run.json"),
+            collect=lambda: collect_engine(engine, request),
+            copy_sources=lambda prepared: bundle_engine_sources(
+                engine, prepared, str(bundle_dir), legacy_paths=legacy_paths
+            ),
+            cleanup=engine.cleanup,
+            progress=lambda event: print(event.message),
+        )
+        if outcome.status == "empty":
+            sys.stderr.write("WARNING: No billing records found\n")
+            sys.exit(1 if parsed.strict else 0)
+        if outcome.status not in {"complete", "review_required"}:
+            raise RuntimeError(outcome.error or outcome.status)
+        print(f"Extraction {outcome.status}. Workbook: {parsed.output}")
+        print(f"Saved analysis: {bundle_dir / 'result.json'}")
+        for path in legacy_paths:
+            print(f"Compatibility records: {path}")
+        print(
+            f"PDFs processed: {engine.pdf_count}; emails matched: {engine.email_count}; records: {len(engine.records)}"
+        )
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
         traceback.print_exc()
-        sys.exit(1)
-    finally:
         engine.cleanup()
+        sys.exit(1)
 
 
 def _diff_amount_text(value: Any) -> str:

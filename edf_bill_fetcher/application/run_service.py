@@ -166,3 +166,96 @@ def run(
         manifest["error"] = error
         save_manifest(manifest, manifest_path)
     return RunOutcome(manifest["status"], snapshot, freeze_json(manifest), error)
+
+
+def collect_engine(engine, request: RunRequest) -> tuple[list[dict], dict]:
+    """Adapt existing source collectors, closing PST resources on every outcome."""
+    for source in request.sources:
+        if engine.cancel_event is not None and engine.cancel_event.is_set():
+            raise RunCancelled("Run cancelled during collection")
+        if source.kind in {"pst", "ost"}:
+            import pypff
+
+            constructor = getattr(pypff, "file", None) or getattr(pypff, "File", None)
+            if constructor is None:
+                raise RuntimeError("pypff has no file constructor")
+            archive = constructor()
+            try:
+                archive.open(str(Path(source.path).absolute()))
+                engine.crawl_pst(archive.get_root_folder())
+            finally:
+                archive.close()
+        else:
+            method = {
+                "htm": "process_htm_file",
+                "pdf_dir": "crawl_local_pdfs",
+                "eml_dir": "process_eml_folder",
+                "msg_dir": "process_msg_folder",
+            }.get(source.kind)
+            if method is None:
+                raise ValueError(f"Unsupported collection source: {source.kind}")
+            getattr(engine, method)(source.path)
+    return engine.records, engine.__getstate__()
+
+
+def bundle_engine_sources(
+    engine, prepared: PreparedSnapshot, bundle_dir: str, *, legacy_paths: tuple[str, ...] = ()
+) -> dict:
+    """Copy sources and emit explicit v2 compatibility files from existing preparation."""
+    import os
+
+    import pandas as pd
+
+    from edf_bill_fetcher.domain.json_values import rows_value
+    from edf_bill_fetcher.helpers.artifacts import write_json
+    from edf_bill_fetcher.io.writers.evidence_bundle import build_bundle_index, save_evidence_files
+
+    config = object_value(prepared.effective_config)
+    engine.config = config
+    state = object_value(prepared.extraction.legacy_state)
+    records = rows_value(prepared.records)
+    bundle_records = pd.concat(
+        [pd.DataFrame(records), pd.DataFrame(list(engine.source_manifest.values()))],
+        ignore_index=True,
+    )
+    saved: dict[str, str] = {}
+    stats: dict[str, int] = {}
+    if config.get("save_evidence_files", True):
+        saved = save_evidence_files(
+            bundle_records,
+            engine.source_paths,
+            str(Path(bundle_dir) / "evidence_files"),
+            stats=stats,
+        )
+        build_bundle_index(
+            bundle_records,
+            saved,
+            str(Path(bundle_dir) / "evidence_index.docx"),
+            account=str(config.get("acc_num", "")),
+        )
+    for key in ("missing", "ambiguous"):
+        if stats.get(key):
+            engine.log_error("Evidence bundle", f"{stats[key]} {key} source files")
+    for metadata in engine.source_manifest.values():
+        copied = saved.get(metadata["Attachment Name"])
+        metadata["Saved Path"] = os.path.relpath(copied, bundle_dir) if copied else None
+    state.update(to_snapshot_json(engine.__getstate__(), path="$.legacy_state"))
+    state.update(
+        {
+            "saved_evidence_paths": saved,
+            "source_bundle_path": str(Path(bundle_dir).absolute()),
+            "original_records": [object_value(row.raw) for row in prepared.extraction.observations],
+        }
+    )
+    compatibility = {
+        **state,
+        "version": 2,
+        "extracted_at": prepared.extraction.request.created_at.isoformat(),
+        "config": config,
+        "records": records,
+        "duplicate_records": rows_value(prepared.duplicates),
+        "status": "review_required" if engine.error_log else "complete",
+    }
+    for path in legacy_paths:
+        write_json(compatibility, path)
+    return state
