@@ -117,6 +117,8 @@ def capture_report_view(
     from edf_bill_fetcher.domain.json_values import freeze_json
     from edf_bill_fetcher.domain.requests import RunRequest
 
+    if not records:
+        raise ValueError("No records to report on")
     cfg = dict(config)
     cfg.setdefault("as_of", date.today().isoformat())
     if sections is None and "report_sections" in cfg:

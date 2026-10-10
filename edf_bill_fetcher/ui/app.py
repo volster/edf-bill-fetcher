@@ -1214,7 +1214,12 @@ class App:
         captured = self._run_request
         request = captured["request"]
         config = copy.deepcopy(captured["config"])
-        engine = EvidenceEngine(config, self.set_status, self.set_progress, self.cancel_event)
+        try:
+            engine = EvidenceEngine(config, self.set_status, self.set_progress, self.cancel_event)
+        except Exception as error:
+            self._show("error", "Run Failed", str(error))
+            self._events.put(self._finish)
+            return
         self.engine = engine
         stem, run_dir = captured["stem"], captured["run_dir"]
         outputs = {"xlsx": os.path.join(run_dir, stem + ".xlsx")}

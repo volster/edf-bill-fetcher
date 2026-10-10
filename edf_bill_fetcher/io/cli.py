@@ -337,6 +337,7 @@ def run_cli_extract(args: list[str]) -> None:
         sources,
         freeze_json(dict(config)),
     )
+    coordinator_started = False
     try:
         output_parent = Path(parsed.output).absolute().parent
         bundle_dir = Path(
@@ -360,6 +361,7 @@ def run_cli_extract(args: list[str]) -> None:
             raise ValueError(
                 "Output paths must be distinct and must not overwrite selected sources"
             )
+        coordinator_started = True
         outcome = run(
             request,
             {"xlsx": parsed.output},
@@ -381,17 +383,22 @@ def run_cli_extract(args: list[str]) -> None:
             raise RuntimeError(outcome.error or outcome.status)
         print(f"Extraction complete! Status: {outcome.status}. Workbook: {parsed.output}")
         if engine.error_log:
-            print(f"Parse errors: {len(engine.error_log)}")
+            print(f"  Parse errors:   {len(engine.error_log)}")
         print(f"Saved analysis: {bundle_dir / 'result.json'}")
         for path in legacy_paths:
             print(f"Compatibility records: {path}")
+        if parsed.records_json:
+            print(f"Records saved as JSON: {parsed.records_json}")
+        if parsed.save_engine_json:
+            print(f"Engine state saved as JSON: {parsed.save_engine_json}")
         print(
             f"PDFs processed: {engine.pdf_count}; emails matched: {engine.email_count}; records: {len(engine.records)}"
         )
     except Exception as e:
         sys.stderr.write(f"ERROR: {e}\n")
         traceback.print_exc()
-        engine.cleanup()
+        if not coordinator_started:
+            engine.cleanup()
         sys.exit(1)
 
 
