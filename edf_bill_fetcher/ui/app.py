@@ -13,7 +13,6 @@ import threading
 import traceback
 from collections.abc import Callable
 from datetime import date, datetime
-from functools import partial
 from typing import Any, cast
 
 import pandas as pd
@@ -966,82 +965,84 @@ class App:
                 "report_sections": sections,
             }
 
-            from dataclasses import dataclass
+            from datetime import timezone
+            from uuid import uuid4
 
-            @dataclass
-            class MockEngine:
-                records: list
-                filtered_records: list
-                pdf_count: int
-                email_count: int
-                error_log: list
+            from edf_bill_fetcher.application.run_service import run
+            from edf_bill_fetcher.domain.json_values import freeze_json
+            from edf_bill_fetcher.domain.requests import RunRequest
+            from edf_bill_fetcher.models.report_view import RenderSelection
+            from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
 
-            engine = MockEngine(
-                records=records, filtered_records=[], pdf_count=0, email_count=0, error_log=[]
+            # Workbook cells are a presentation export; preserve available context,
+            # but do not claim these rows are the original extraction evidence.
+            workbook_metadata = {}
+            with pd.ExcelFile(file_path) as workbook:
+                if "Provenance" in workbook.sheet_names:
+                    metadata_frame = pd.read_excel(workbook, sheet_name="Provenance", header=None)
+                    workbook_metadata = {
+                        str(row[0]): to_snapshot_json(row[1])
+                        for row in metadata_frame.itertuples(index=False, name=None)
+                        if len(row) > 1 and pd.notna(row[0])
+                    }
+                filtered = (
+                    pd.read_excel(workbook, sheet_name="Filtered (Below Min)").to_dict("records")
+                    if "Filtered (Below Min)" in workbook.sheet_names
+                    else []
+                )
+            config["as_of"] = str(workbook_metadata.get("as_of") or date.today().isoformat())
+            captured = RunRequest(
+                uuid4().hex,
+                datetime.now(timezone.utc),
+                date.fromisoformat(config["as_of"]),
+                (),
+                freeze_json(dict(config)),
             )
+            state = {
+                "records": records,
+                "filtered_records": filtered,
+                "pdf_count": 0,
+                "email_count": 0,
+                "source_manifest": {},
+                "imported_workbook": file_path,
+                "imported_workbook_metadata": workbook_metadata,
+                "provenance": "lossy_workbook_import",
+                "error_log": [
+                    "Workbook import: original observations, source files and analytical decisions are unavailable."
+                ],
+            }
+            self.cancel_event.clear()
+            self._set_extract_running()
 
             def _generate():
-                from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
-                from edf_bill_fetcher.io.reporters.html_report import generate_html_from_gui
-                from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
-
                 try:
-                    msgs = []
-                    if "pdf" in output_paths:
-                        s, m = generate_pdf_from_gui(
-                            records=records,
-                            output_path=output_paths["pdf"],
-                            config=config,
-                            engine=engine,
-                            filtered=[],
-                        )
-                        msgs.append(("PDF", s, m))
-                    if "docx" in output_paths:
-                        s, m = generate_docx_from_gui(
-                            records=records,
-                            output_path=output_paths["docx"],
-                            config=config,
-                            engine=engine,
-                            filtered=[],
-                        )
-                        msgs.append(("DOCX", s, m))
-                    if "html" in output_paths:
-                        s, m = generate_html_from_gui(
-                            records=records,
-                            output_path=output_paths["html"],
-                            config=config,
-                            engine=engine,
-                            filtered=[],
-                        )
-                        msgs.append(("HTML", s, m))
-
-                    combined = []
-                    all_ok = True
-                    for label, ok, m in msgs:
-                        if ok:
-                            combined.append(
-                                f"✓ {label}: {m.split(chr(10))[-1] if m else 'Generated'}\n{output_paths[label.lower()]}"
-                            )
-                        else:
-                            all_ok = False
-                            self._events.put(
-                                partial(self._show, "error", f"{label} Generation Failed", m)
-                            )
-                    if all_ok and combined:
-                        self._events.put(
-                            partial(self._show, "info", "Reports Generated", "\n\n".join(combined))
-                        )
-                except Exception as e:
-                    self._events.put(
-                        partial(self._show, "error", "Error", f"An error occurred:\n\n{e}")
+                    outcome = run(
+                        captured,
+                        output_paths,
+                        result_path=os.path.join(run_dir, "result.json"),
+                        manifest_path=os.path.join(run_dir, "run.json"),
+                        collect=lambda: (records, state),
+                        cancelled=self.cancel_event.is_set,
+                        progress=lambda event: self.set_status(event.message),
+                        selection=RenderSelection(tuple(output_paths), tuple(sections)),
                     )
+                    if outcome.status in {"complete", "review_required"}:
+                        self._show(
+                            "warning",
+                            "Reports Generated — Workbook Import",
+                            "Imported workbook rows have limited provenance. Original source evidence was not recovered.\n\n"
+                            + "\n".join(output_paths.values()),
+                        )
+                    else:
+                        self._show(
+                            "warning" if outcome.status == "cancelled" else "error",
+                            "Report " + outcome.status.title(),
+                            outcome.error or outcome.status,
+                        )
+                except Exception as error:
+                    self._show("error", "Error", str(error))
                 finally:
-                    self._events.put(
-                        lambda: (
-                            self.load_report_btn.config(state="normal"),
-                            self.set_status("Ready."),
-                        )
-                    )
+                    self._events.put(self._finish)
 
             self._worker = threading.Thread(target=_generate, daemon=False)
             self._worker.start()
