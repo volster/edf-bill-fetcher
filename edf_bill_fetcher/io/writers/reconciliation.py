@@ -49,6 +49,7 @@ def write_reconciliation_sheet(
     sap_financial,
     evidence_df,
     account="",
+    *, payload=None,
 ):
     """Match once per source row using date, comparable value and ledger identity."""
     ws_summary.title = "Reconciliation"
@@ -80,6 +81,9 @@ def write_reconciliation_sheet(
     for ws, headers in ((ws_summary, summary_headers), (ws_detail, detail_headers)):
         for col, header_value in enumerate(headers, 1):
             literal_cell(ws, 3, col, header_value).font = Font(bold=True)
+    if payload is not None:
+        _render_stored(ws_summary, ws_detail, payload)
+        return
     evidence = normalize_frame(evidence_df).to_dict("records")
     meter = []
     transactions = []
@@ -223,6 +227,28 @@ def write_reconciliation_sheet(
         _recon_hyperlink(ws_summary, summary_row, 8, ws_detail.title, start)
     ws_summary.auto_filter.ref = "A3:H6"
     ws_detail.auto_filter.ref = f"A3:H{max(3, detail_row - 1)}"
+    for ws in (ws_summary, ws_detail):
+        for letter in "ABCDEFGH":
+            ws.column_dimensions[letter].width = 24 if letter != "G" else 55
+
+
+def _render_stored(ws_summary, ws_detail, payload):
+    """Resolve stored source indexes into this workbook's layout coordinates."""
+    sap_sheets = {"Contract": "SAP Contract History", "Meter Read": "SAP Meter Readings", "Financial": "SAP Financial Transactions"}
+    for row, item in enumerate(payload["summaries"], 4):
+        for col, value in enumerate(item["values"], 1):
+            literal_cell(ws_summary, row, col, value)
+        _recon_hyperlink(ws_summary, row, 8, ws_detail.title, item["detail_index"] + 4)
+    for row, item in enumerate(payload["details"], 4):
+        for col, value in enumerate(item["values"], 1):
+            literal_cell(ws_detail, row, col, value)
+        if item["side"] == "sap":
+            sheet, offset = sap_sheets[item["entity"]], 4
+        else:
+            sheet, offset = ("Contract History", 8) if item["entity"] == "Contract" else ("EDF Evidence Report", 2)
+        _recon_hyperlink(ws_detail, row, 8, sheet, item["index"] + offset)
+    ws_summary.auto_filter.ref = "A3:H6"
+    ws_detail.auto_filter.ref = f"A3:H{max(3, len(payload['details']) + 3)}"
     for ws in (ws_summary, ws_detail):
         for letter in "ABCDEFGH":
             ws.column_dimensions[letter].width = 24 if letter != "G" else 55

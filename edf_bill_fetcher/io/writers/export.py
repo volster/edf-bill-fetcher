@@ -30,9 +30,6 @@ from edf_bill_fetcher.helpers.excel_utils import (  # noqa: E402,F401,I001
     literal_cell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
-    build_sap_row_index_map as _build_sap_row_index_map,
-)
-from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
 from edf_bill_fetcher.helpers.excel_utils import (
@@ -99,7 +96,6 @@ from edf_bill_fetcher.processors.compensation import (  # noqa: E402,F401
 from edf_bill_fetcher.processors.detection import (  # noqa: E402,F401
     compute_transitive_domination,
 )
-from edf_bill_fetcher.processors.matching import _build_bb_clusters
 from edf_bill_fetcher.processors.preparation import (
     analysis_frame,
     scope,
@@ -1141,20 +1137,17 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
     # is touched. Account label is pulled from config['acc_num'].
     # ------------------------------------------------------------------
     account_label = str(config.get("acc_num", "") or "")
-    from edf_bill_fetcher.io.writers.analysis import run_analysers
 
     # Evidence index must be built on the FULL evidence frame `df`, not
     # the filtered `dfc`: the index maps signatures to Excel rows on the
     # EDF Evidence Report sheet, whose layout follows the full frame.
-    analyses = run_analysers(dfc, evidence_index_df=df)
+    sap_model = view.model("sap")
+    analyses = sap_model["analyses"]
     rb = analyses["rebilling"]
     overlapping_invoices: set[str] = (
         {str(x) for x in rb["Killer Invoice"].tolist()} if not rb.empty else set()
     )
-    domination_map = compute_transitive_domination(
-        rb,
-        analyses["back_billing"],
-    )
+    domination_map = sap_model["domination"]
     # Live rows only: map each live invoice to its Excel row on the
     # Back-billing Analysis sheet (header at row 7, data from row 8,
     # +1 per live row). The Superseded Reconciliation writer uses it for
@@ -1286,38 +1279,10 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
             edf_records_for_bb: list[dict] = []
             if dfc is not None and not dfc.empty:
                 edf_records_for_bb = dfc.to_dict(orient="records")
-            bb_events = detect_sap_back_billing_events(sap_financial)
-            bb_matches = match_sap_events_to_edf(bb_events, edf_records_for_bb)
-            # Populate Sheet 1's "Matched EDF Invoice #" column with the
-            # highest-confidence match per event (tiebreak: smallest
-            # date_delta_days).
-            for ev in bb_events:
-                ev_matches = [m for m in bb_matches if m.event is ev]
-                if ev_matches:
-                    conf_rank = {"High": 0, "Medium": 1, "Low": 2}
-                    best = sorted(
-                        ev_matches,
-                        key=lambda m: (
-                            conf_rank.get(m.confidence_band, 3),
-                            m.date_delta_days,
-                        ),
-                    )[0]
-                    ev.matched_edf_invoice = str(best.edf_record.get("Invoice #", "") or "") or None
-            # Wire cluster-unmatched: SAP events with no amount-banded invoice
-            # match that fall inside a known back-billing cluster's window are
-            # tagged as internal mechanism events of that cluster.
-            unmatched_events = [ev for ev in bb_events if ev.matched_edf_invoice is None]
-            if (
-                unmatched_events
-                and "back_billing" in analyses
-                and not analyses["back_billing"].empty
-            ):
-                clusters = _build_bb_clusters(analyses["back_billing"])
-                for ev in unmatched_events:
-                    tag = handle_cluster_unmatched(ev, clusters)
-                    if tag is not None:
-                        ev.matched_edf_invoice = tag["Matched EDF Invoice #"]
-                        ev._cluster_unmatched_tag = tag
+            bb_events, bb_matches = sap_model["events"], sap_model["matches"]
+            source_index_map = {id(row): source_idx + 4
+                                for event, indexes in zip(bb_events, sap_model["event_source_indexes"], strict=True)
+                                for row, source_idx in zip(event.rows, indexes, strict=True)}
             write_sap_back_billing_sheets(
                 wb,
                 bb_events,
@@ -1327,15 +1292,11 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
                 edf_sheet_name="EDF Evidence Report",
                 edf_first_row=2,
                 account=account_label,
-                sap_row_index_map=_build_sap_row_index_map(sap_financial),
+                sap_row_index_map=source_index_map,
             )
             if config.get("generate_reconciliation_sheet", True):
                 from edf_bill_fetcher.io.writers.sap import write_sap_back_billing_position_sheet
-                from edf_bill_fetcher.processors.matching import analyse_sap_back_billing
-
-                sap_bb_position = analyse_sap_back_billing(
-                    bb_events, dfc, analyses.get("back_billing")
-                )
+                sap_bb_position = sap_model["position"]
                 write_sap_back_billing_position_sheet(wb, sap_bb_position, account=account_label)
         if config.get("generate_reconciliation_sheet", True):
             ws_recon_summary = wb.create_sheet(title="Reconciliation")
@@ -1350,7 +1311,8 @@ def render_xlsx(view: ReportView, output_path: str) -> None:
                 sap_financial,
                 df,
                 account=account_label,
-            )
+                payload=view.model("reconciliation"),
+)
 
     _reorder_sheets(wb)
 
