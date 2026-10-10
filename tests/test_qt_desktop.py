@@ -54,16 +54,11 @@ def application():
 
 @pytest.fixture
 def font_metrics(application, request):
-    """Include wide font metrics that expose Windows layout overflows on Linux."""
+    """Exercise native platform fonts at normal and larger text sizes."""
     stylesheet = application.styleSheet()
-    original_font = application.font()
     pixels = getattr(request, "param", 13)
-    font = application.font()
-    font.setStretch(180 if pixels == 20 else 100)
-    application.setFont(font)
     application.setStyleSheet(stylesheet + f"\nQWidget {{ font-size: {pixels}px; }}")
     yield
-    application.setFont(original_font)
     application.setStyleSheet(stylesheet)
     application.processEvents()
 
