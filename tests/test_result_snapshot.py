@@ -74,7 +74,7 @@ def test_independent_money_example_preserves_zero_and_distinct_totals():
 
 def test_v3_roundtrip_preserves_originals_without_processing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     snapshot = _snapshot()
     destination = tmp_path / "result.json"
     save_result(snapshot, destination, result_id="example-result")
@@ -101,7 +101,7 @@ def test_v3_roundtrip_preserves_originals_without_processing(
 
 
 @pytest.mark.parametrize("value", [True, -1, "2"])
-def test_invalid_stored_counts_are_rejected(value):
+def test_invalid_stored_counts_are_rejected(value: object) -> None:
     encoded = encode_result(_snapshot(), "example-result")
     encoded["analysis"]["models"]["payment"]["payload"]["fields"]["count"] = value
     with pytest.raises(ValueError):
@@ -109,14 +109,14 @@ def test_invalid_stored_counts_are_rejected(value):
 
 
 @pytest.mark.parametrize("text", ['{"key":1,"key":2}', '{"amount":NaN}', '{"amount":1e400}'])
-def test_strict_json_rejects_ambiguous_or_nonfinite_evidence(text: str):
+def test_strict_json_rejects_ambiguous_or_nonfinite_evidence(text: str) -> None:
     with pytest.raises(ValueError):
         strict_loads(text)
 
 
 def test_result_replace_failure_preserves_previous_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     destination = tmp_path / "result.json"
     destination.write_bytes(b"previous accepted bytes")
 
@@ -130,7 +130,7 @@ def test_result_replace_failure_preserves_previous_bytes(
     assert list(tmp_path.iterdir()) == [destination]
 
 
-def test_second_renderer_failure_preserves_result_and_first_artifact(tmp_path: Path):
+def test_second_renderer_failure_preserves_result_and_first_artifact(tmp_path: Path) -> None:
     first, second = tmp_path / "first.html", tmp_path / "second.pdf"
     second.write_bytes(b"previous PDF")
     cleaned = []
@@ -158,7 +158,7 @@ def test_second_renderer_failure_preserves_result_and_first_artifact(tmp_path: P
     assert cleaned == [True]
 
 
-def test_cancel_between_stages_records_truthful_outcome_and_cleanup(tmp_path: Path):
+def test_cancel_between_stages_records_truthful_outcome_and_cleanup(tmp_path: Path) -> None:
     cancelled = Event()
     cleaned = []
 
@@ -179,4 +179,6 @@ def test_cancel_between_stages_records_truthful_outcome_and_cleanup(tmp_path: Pa
     assert outcome.status == "cancelled"
     assert cleaned == [True]
     assert not (tmp_path / "report.html").exists()
-    assert strict_loads((tmp_path / "run.json").read_text())["status"] == "cancelled"
+    manifest = strict_loads((tmp_path / "run.json").read_text())
+    assert isinstance(manifest, dict)
+    assert manifest["status"] == "cancelled"
