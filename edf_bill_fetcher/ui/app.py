@@ -6,6 +6,7 @@ import copy
 import gc
 import glob
 import json
+import math
 import os
 import queue
 import tempfile
@@ -362,11 +363,13 @@ class App:
         missing, unreadable, or malformed.
         """
         try:
-            with open(self._CONFIG_PATH) as f:
+            with open(self._CONFIG_PATH, encoding="utf-8") as f:
                 data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, UnicodeError):
             return
 
+        if not isinstance(data, dict) or not isinstance(data.get("gui_state", {}), dict):
+            return
         gui = data.get("gui_state", {})
         _bool_keys: dict[str, tk.Variable] = {
             "use_anchors": self.use_anchors,
@@ -386,15 +389,15 @@ class App:
             "generate_reconciliation_sheet": self.generate_reconciliation_sheet_var,
         }
         for key, var in _bool_keys.items():
-            if key in gui:
-                var.set(bool(gui[key]))
+            if type(gui.get(key)) is bool:
+                var.set(gui[key])
 
         # Legacy names (pre-typed-config) — apply only when the canonical
         # key is absent, so old config files keep working.
-        if "use_reading_classification" not in gui and "use_reading_class" in gui:
-            self.use_reading_class.set(bool(gui["use_reading_class"]))
-        if "use_acc_filter" not in gui and "use_acc_filt" in gui:
-            self.use_acc_filt.set(bool(gui["use_acc_filt"]))
+        if "use_reading_classification" not in gui and type(gui.get("use_reading_class")) is bool:
+            self.use_reading_class.set(gui["use_reading_class"])
+        if "use_acc_filter" not in gui and type(gui.get("use_acc_filt")) is bool:
+            self.use_acc_filt.set(gui["use_acc_filt"])
 
         _str_keys: dict[str, tk.Variable] = {
             "acc_num": self.acc_num,
@@ -404,23 +407,35 @@ class App:
             "output_folder": self.output_folder,
         }
         for key, var in _str_keys.items():
-            if key in gui:
-                var.set(str(gui[key]))
+            if isinstance(gui.get(key), str):
+                var.set(gui[key])
 
         _float_keys: dict[str, tk.Variable] = {
             "min_amount": self.min_amount,
             "analysis_min": self.analysis_min,
         }
         for key, var in _float_keys.items():
-            if key in gui:
+            if key in gui and not isinstance(gui[key], bool):
                 try:
-                    var.set(float(gui[key]))
-                except (ValueError, TypeError):
+                    value = float(gui[key])
+                    if math.isfinite(value) and value >= 0:
+                        var.set(value)
+                except (ValueError, TypeError, OverflowError):
                     pass
 
         ro = data.get("report_options", {})
-        if ro:
-            self._report_options = ro
+        if isinstance(ro, dict) and ro.get("format") in ("both", "pdf", "docx", "html"):
+            valid_keys = {key for key, _, _ in ReportOptionsDialog.SECTIONS}
+            selected = ro.get("sections", [key for key, _, _ in ReportOptionsDialog.SECTIONS])
+            if (
+                isinstance(selected, list)
+                and selected
+                and all(isinstance(key, str) and key in valid_keys for key in selected)
+            ):
+                self._report_options = {
+                    "format": ro["format"],
+                    "sections": list(dict.fromkeys(selected)),
+                }
 
     def _save_config(self):
         """Persist GUI state + report options to config file atomically.

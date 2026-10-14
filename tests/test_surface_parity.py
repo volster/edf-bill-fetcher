@@ -164,7 +164,10 @@ class TestTariffSurfaceParity:
 
         pdf_elements = pdf_tariff(df)
         pdf_tables = [el for el in pdf_elements if el.__class__.__name__ == "Table"]
-        pdf_rows = pdf_tables[0]._cellvalues
+        pdf_rows = [
+            [cell.getPlainText() if hasattr(cell, "getPlainText") else cell for cell in row]
+            for row in pdf_tables[0]._cellvalues
+        ]
 
         doc = __import__("docx").Document()
         styles = _get_or_create_styles(doc)
@@ -206,7 +209,10 @@ class TestOfgemSurfaceParity:
 
         pdf_elements = pdf_ofgem(df)
         pdf_tables = [el for el in pdf_elements if el.__class__.__name__ == "Table"]
-        pdf_rows = pdf_tables[0]._cellvalues
+        pdf_rows = [
+            [cell.getPlainText() if hasattr(cell, "getPlainText") else cell for cell in row]
+            for row in pdf_tables[0]._cellvalues
+        ]
 
         doc = __import__("docx").Document()
         styles = _get_or_create_styles(doc)

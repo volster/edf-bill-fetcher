@@ -24,14 +24,14 @@ __all__ = [
 ]
 
 
-INV_BOUNDARY_RE = re.compile(r"Invoice number:\s*[A-Z0-9-]+", re.I)
+INV_BOUNDARY_RE = re.compile(r"(?:Invoice|Credit note) number:\s*([A-Z0-9-]+)", re.I)
 PAGE1_BOUNDARY_RE = re.compile(
     r"(?ix)\b"
     r"(?:page\s+)?"
     r"(?:1|one)"
     r"\s*(?:of|/)\s*"
     r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
-    r"\b"
+    r"\b(?!\s*/\s*\d)"
 )
 ADMIT_RE = re.compile(
     r"(?ix)\b"
@@ -59,19 +59,33 @@ _LEGAL_CONTEXT: str = (
 def slice_pdf_pages(page_texts: list[str]) -> list[list[str]]:
     """Slice a PDF's per-page text into one chunk per invoice.
 
-    A page is a slice-start if it contains ``Invoice number:`` OR a
-    ``Page 1 of N`` marker (variants ``1 of 4``, ``one of four``,
+    A page starts a slice when its invoice / credit-note number changes or
+    it contains a ``Page 1 of N`` marker (variants ``1 of 4``, ``one of four``,
     ``1/4`` all match). The final page of an invoice is inclusive --
     it stays with its slice. Single-invoice PDFs return
     ``[list(page_texts)]`` (no behaviour change vs. the legacy
     whole-document concat).
     """
     boundaries: list[int] = []
+    document_number: str | None = None
     for i, text in enumerate(page_texts):
         if not text:
             continue
-        if INV_BOUNDARY_RE.search(text) or PAGE1_BOUNDARY_RE.search(text):
+        number_match = INV_BOUNDARY_RE.search(text)
+        number = number_match.group(1).upper() if number_match else None
+        page_one = bool(PAGE1_BOUNDARY_RE.search(text))
+        # Invoice headers may repeat on every page. Only a changed document
+        # identity or an explicit first-page marker starts another slice.
+        if page_one or (
+            number is not None
+            and number != document_number
+            and (document_number is not None or not boundaries)
+        ):
             boundaries.append(i)
+        if number is not None or page_one:
+            # A first-page cover may omit the number until its continuation.
+            # Learning that identity does not split the existing document.
+            document_number = number
 
     if len(boundaries) <= 1:
         return [list(page_texts)]

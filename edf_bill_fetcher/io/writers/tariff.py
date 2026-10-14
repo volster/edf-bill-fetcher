@@ -100,7 +100,7 @@ def write_tariff_analysis_sheet(ws, dfc, *, payload=None):
     _text(ws, r, 1, "Unique Tariffs Identified")
     _num(ws, r, 2, tariff_info.get("num_tariffs", 0), fmt="#,##0")
     r += 1
-    _text(ws, r, 1, "Tariff Changes Detected")
+    _text(ws, r, 1, "Tariff Segments Observed")
     _num(ws, r, 2, tariff_info.get("tariff_changes", 0), fmt="#,##0")
 
     for col_letter, width in zip(

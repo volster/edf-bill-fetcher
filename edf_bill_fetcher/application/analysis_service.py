@@ -337,7 +337,7 @@ def analyse_prepared(prepared: PreparedSnapshot) -> AnalysisSnapshot:
         {
             "preparation": "legacy-v1",
             "financial": "legacy-v1",
-            "models": "snapshot-v1",
+            "models": "snapshot-v2",
             "reference_sha256": hashlib.sha256(reference).hexdigest(),
             "reference_context": {
                 key: cfg.get(key) for key in ("fuel", "payment_method", "tariff_type", "cap_region")
@@ -351,7 +351,7 @@ def analyse_prepared(prepared: PreparedSnapshot) -> AnalysisSnapshot:
 
 
 def _timeline(dfc: pd.DataFrame, flags: list) -> list:
-    """Preserve the legacy workbook timeline inference in the analysis boundary."""
+    """Describe observed balances without inventing account history or transactions."""
     if len(dfc) < 2 or len({scope(row) for row in dfc.to_dict("records")}) != 1:
         return []
     dates_lbl = dfc["Date"].tolist()
@@ -361,7 +361,11 @@ def _timeline(dfc: pd.DataFrame, flags: list) -> list:
 
     # Bookend: first record
     timeline_events.append(
-        (dates_lbl[0], "ACCOUNT START", f"First bill on record. Balance: £{amounts[0]:,.2f}.")
+        (
+            dates_lbl[0],
+            "FIRST OBSERVED BALANCE",
+            f"First balance in this evidence: £{amounts[0]:,.2f}.",
+        )
     )
 
     # Top 5 largest balance jumps
@@ -389,9 +393,10 @@ def _timeline(dfc: pd.DataFrame, flags: list) -> list:
             timeline_events.append(
                 (
                     dfc.iloc[i]["Date"],
-                    "BILLING GAP",
-                    f"{days} days without a bill (previous: {dfc.iloc[i - 1]['Date']}). "
-                    f"Balance accumulated unchecked.",
+                    "EVIDENCE GAP",
+                    f"{days} days between available balance observations "
+                    f"(previous: {dfc.iloc[i - 1]['Date']}). "
+                    "The supplied evidence does not establish whether bills were issued in between.",
                 )
             )
 
@@ -410,7 +415,7 @@ def _timeline(dfc: pd.DataFrame, flags: list) -> list:
                         (
                             run_start_date,
                             "ESTIMATED READINGS",
-                            f"{run} consecutive bills used estimated meter readings.",
+                            f"{run} consecutive available observations report estimated meter readings.",
                         )
                     )
                 run = 0
@@ -420,20 +425,21 @@ def _timeline(dfc: pd.DataFrame, flags: list) -> list:
                 (
                     run_start_date,
                     "ESTIMATED READINGS",
-                    f"{run} consecutive estimated readings (ongoing).",
+                    f"{run} consecutive available observations report estimated readings through the last record.",
                 )
             )
 
-    # Payment events (balance reductions)
+    # A reduction alone does not establish a payment, credit or its cause.
     for i in range(1, n):
         delta = float(amounts[i]) - float(amounts[i - 1])
         if delta < -200:
             timeline_events.append(
                 (
                     dfc.iloc[i]["Date"],
-                    "PAYMENT/CREDIT",
+                    "BALANCE REDUCTION",
                     f"Balance reduced by £{abs(delta):,.2f} "
-                    f"(from £{amounts[i - 1]:,.2f} to £{amounts[i]:,.2f}).",
+                    f"(from £{amounts[i - 1]:,.2f} to £{amounts[i]:,.2f}). "
+                    "The balance change alone does not identify the underlying transactions.",
                 )
             )
 
@@ -446,9 +452,9 @@ def _timeline(dfc: pd.DataFrame, flags: list) -> list:
     timeline_events.append(
         (
             dates_lbl[-1],
-            "CURRENT STATE",
-            f"Latest bill on record. Balance: £{amounts[-1]:,.2f}. "
-            f"Total increase from first record: £{amounts[-1] - amounts[0]:,.2f}.",
+            "LATEST OBSERVED BALANCE",
+            f"Latest balance in this evidence: £{amounts[-1]:,.2f}. "
+            f"Net change from first observation: £{amounts[-1] - amounts[0]:,.2f}.",
         )
     )
 

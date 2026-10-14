@@ -572,6 +572,8 @@ class EvidenceReviewPage(QWidget):
     def _selection_changed(self) -> None:
         selected = self.table.selectionModel().selectedRows()
         self._clear_source()
+        self.details.clear()
+        self.extracted_text.clear()
         if not selected:
             return
         index = self.proxy.mapToSource(selected[0]).row()

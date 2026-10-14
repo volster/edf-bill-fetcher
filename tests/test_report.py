@@ -605,7 +605,10 @@ class TestOFGEMComparison:
         tables = [el for el in elements if el.__class__.__name__ == "Table"]
         assert tables, "No table found in OFGEM-comparison elements"
         comparison_table = tables[0]
-        cell_values = getattr(comparison_table, "_cellvalues", [])
+        cell_values = [
+            [cell.getPlainText() if hasattr(cell, "getPlainText") else cell for cell in row]
+            for row in getattr(comparison_table, "_cellvalues", [])
+        ]
         # First row is the header; subsequent rows are data rows.
         data_rows = cell_values[1:]
         quarters_seen = [row[0] for row in data_rows]

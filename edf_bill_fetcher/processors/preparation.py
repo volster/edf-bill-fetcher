@@ -284,7 +284,16 @@ def prepare_evidence(
         occurrences.append(
             {
                 k: row.get(k)
-                for k in ("Source ID", "Attachment Name", "Source PDF Text", "_regex_trace")
+                for k in (
+                    "Source ID",
+                    "Attachment Name",
+                    "Original Filename",
+                    "Content Hash",
+                    "Page From",
+                    "Page To",
+                    "Source PDF Text",
+                    "_regex_trace",
+                )
             }
         )
         if cfg.get("amalgamate_duplicates", False):

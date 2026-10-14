@@ -145,45 +145,78 @@ def build_evidence_review(
                         attachment, None, None, page_range(row), "Ambiguous filename mapping", ""
                     ),
                 )
+            if len(ids) == 1:
+                primary = ids[0]
         if not ids:
             if not attachment:
                 return ()
             ids = [attachment]
         result = []
-        pages = page_range(row)
-        invalid_pages = pages is None and any(
-            text(row.get(key)).strip().casefold() not in {"", "n/a", "nan", "none", "null"}
-            for key in ("Page From", "Page To")
-        )
         for source_id in dict.fromkeys(ids):
             metadata = manifest.get(source_id, {})
             metadata = metadata if isinstance(metadata, dict) else {}
             path = paths.get(source_id)
-            # An authoritative identity must not be replaced by a stale name.
-            if not manifest and path is None:
-                path = paths.get(attachment)
             name = text(
                 metadata.get("Original Filename")
                 or row.get("Original Filename")
                 or attachment
                 or source_id
             )
-            result.append(
-                ReviewSource(
-                    name,
-                    path,
-                    text(metadata.get("Content Hash") or row.get("Content Hash")) or None,
-                    pages,
-                    statuses.get(
-                        source_id,
-                        "Legacy source · integrity unverified at load"
-                        if path
-                        else "Source unavailable",
-                    ),
-                    source_id,
-                    invalid_pages,
+            occurrences = row.get("Source Occurrences", [])
+            choices = [row] if source_id == primary or source_id == attachment else []
+            if isinstance(occurrences, list):
+                choices.extend(
+                    occurrence
+                    for occurrence in occurrences
+                    if isinstance(occurrence, dict) and occurrence.get("Source ID") == source_id
                 )
-            )
+            # Byte-identical originals share page positions. A different PDF
+            # requires its own occurrence range, even for the same invoice.
+            same_content = bool(row.get("Content Hash")) and row.get(
+                "Content Hash"
+            ) == metadata.get("Content Hash")
+            if not choices:
+                choices = [row if same_content else {}]
+            ranges: set[tuple[tuple[int, int] | None, bool]] = set()
+            for occurrence in choices:
+                pages_row = occurrence
+                if (
+                    same_content
+                    and page_range(occurrence) is None
+                    and not any(occurrence.get(key) is not None for key in ("Page From", "Page To"))
+                ):
+                    pages_row = row
+                pages = page_range(pages_row)
+                invalid_pages = pages is None and any(
+                    text(pages_row.get(key)).strip().casefold()
+                    not in {"", "n/a", "nan", "none", "null"}
+                    for key in ("Page From", "Page To")
+                )
+                if (pages, invalid_pages) in ranges:
+                    continue
+                ranges.add((pages, invalid_pages))
+                title = name + (
+                    f" · pages {pages[0]}–{pages[1]}"
+                    if pages and len({page_range(choice) for choice in choices}) > 1
+                    else ""
+                )
+                result.append(
+                    ReviewSource(
+                        title,
+                        path,
+                        text(metadata.get("Content Hash") or occurrence.get("Content Hash"))
+                        or None,
+                        pages,
+                        statuses.get(
+                            source_id,
+                            "Legacy source · integrity unverified at load"
+                            if path
+                            else "Source unavailable",
+                        ),
+                        source_id,
+                        invalid_pages,
+                    )
+                )
         return tuple(result)
 
     records = rows_value(snapshot.prepared.records)

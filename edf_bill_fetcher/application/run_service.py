@@ -48,6 +48,45 @@ def check_cancelled(cancelled: Callable[[], bool]) -> None:
         raise RunCancelled("Run cancelled")
 
 
+def check_source_destinations(
+    request: RunRequest, destinations: list[Path], state: dict | None = None
+) -> None:
+    """Protect selected inputs and original/copy paths captured by source collectors."""
+    protected = {Path(source.path).resolve() for source in request.sources}
+    source_extensions = {"pdf_dir": ".pdf", "eml_dir": ".eml", "msg_dir": ".msg"}
+    for source in request.sources:
+        extension = source_extensions.get(source.kind)
+        if extension:
+            root = Path(source.path).resolve()
+            if any(
+                path.is_file() and path.is_relative_to(root) and path.suffix.lower() == extension
+                for path in destinations
+            ):
+                raise ValueError(
+                    "Artifact destination would overwrite a source in a selected folder"
+                )
+    state = state or {}
+    for key in ("source_paths", "saved_evidence_paths"):
+        paths = state.get(key, {})
+        if isinstance(paths, dict):
+            protected.update(
+                Path(path).resolve() for path in paths.values() if isinstance(path, str) and path
+            )
+    manifest = state.get("source_manifest", {})
+    bundle_root = state.get("source_bundle_path")
+    for metadata in manifest.values() if isinstance(manifest, dict) else ():
+        if not isinstance(metadata, dict):
+            continue
+        original = metadata.get("Original Path")
+        if isinstance(original, str) and original:
+            protected.add(Path(original).resolve())
+        saved = metadata.get("Saved Path")
+        if isinstance(saved, str) and saved and isinstance(bundle_root, str) and bundle_root:
+            protected.add((Path(bundle_root) / saved).resolve())
+    if protected.intersection(destinations):
+        raise ValueError("Artifact destination would overwrite a selected or preserved source")
+
+
 def default_renderers() -> dict[str, Callable]:
     """Resolve the four snapshot renderers at the I/O boundary."""
     from edf_bill_fetcher.io.reporters.docx_report import render_docx
@@ -94,7 +133,8 @@ def run(
     def stage(name: str) -> None:
         check_cancelled(cancelled)
         manifest["stage"] = name
-        save_manifest(manifest, manifest_path)
+        if destinations_valid:
+            save_manifest(manifest, manifest_path)
         progress(ProgressEvent(name, name.replace("_", " ").title()))
 
     try:
@@ -103,8 +143,13 @@ def run(
         ]
         if len(set(destinations)) != len(destinations):
             raise ValueError("Artifact destinations must be distinct")
-        if any(Path(source.path).resolve() in destinations for source in request.sources):
-            raise ValueError("Artifact destination would overwrite a selected source")
+        check_source_destinations(
+            request,
+            destinations,
+            object_value(snapshot.prepared.extraction.legacy_state)
+            if snapshot is not None
+            else None,
+        )
         destinations_valid = True
         render_selection = selection or RenderSelection(
             tuple(outputs),
@@ -117,9 +162,19 @@ def run(
         if snapshot is None:
             if collect is None:
                 raise ValueError("Extraction requires a collector")
+            # An existing status destination may itself be an original that
+            # the collector has not identified yet. Fresh run folders can
+            # publish progress immediately; existing files wait for discovery.
+            destinations_valid = not Path(manifest_path).exists()
             stage("collecting")
             records, state = collect()
             check_cancelled(cancelled)
+            try:
+                check_source_destinations(request, destinations, state)
+            except ValueError:
+                destinations_valid = False
+                raise
+            destinations_valid = True
             evidence = capture_legacy(records, state, request)
             stage("preparing")
             prepared = prepare_snapshot(evidence)
@@ -172,7 +227,12 @@ def run(
             manifest["status"] = "failed"
         manifest["error"] = error
         if destinations_valid:
-            save_manifest(manifest, manifest_path)
+            try:
+                save_manifest(manifest, manifest_path)
+            except Exception as exc:
+                error = (error + "; " if error else "") + f"Run status could not be saved: {exc}"
+                manifest["error"] = error
+                manifest["status"] = "failed"
     return RunOutcome(manifest["status"], snapshot, freeze_json(manifest), error)
 
 

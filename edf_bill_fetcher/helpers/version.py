@@ -1,52 +1,44 @@
-"""Shared package-version resolution.
-
-The evidence workbook and both report formats stamp the tool
-version on their output (provenance sheet, cover page).  Resolving
-it once here — from the repo-root ``pyproject.toml`` — keeps every
-surface truthful and avoids each writer re-implementing the lookup.
-
-Deliberately lives in ``helpers`` (the lowest shared layer) so the
-writers layer can import it without a layering violation: the old
-``_get_package_version`` in ``io/reporters/pdf_report.py`` resolved
-``Path(__file__).parent / "pyproject.toml"`` — the reporter's own
-directory, which never contains a pyproject.toml — so it silently
-returned the fallback for every run.  The bug was invisible because the
-repo root also declared that version; the moment the declared version
-diverged from the fallback, reports would stamp a stale version.
-"""
+"""Resolve the EDF package version without borrowing another project's metadata."""
 
 from __future__ import annotations
 
-import re
+import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
 _DEFAULT_VERSION = "0.5.0"
+_DISTRIBUTION = "edf-bill-fetcher"
 _MODULE_DIR = Path(__file__).resolve().parent
 
 
 def get_package_version() -> str:
-    """Return ``[project] version`` from the repo-root pyproject.toml.
+    """Return the checkout version or the installed EDF distribution version.
 
-    Walks upward from this module's directory until a
-    ``pyproject.toml`` containing a ``version`` line is found, and
-    falls back to the module-level ``_DEFAULT_VERSION`` if none can be
-    read (wheeled installs, sandboxed runners, frozen builds where the
-    manifest is absent).
-
-    Walking upward (rather than assuming a fixed relative path) keeps
-    the lookup correct whether the package is imported from a source
-    checkout or from site-packages under a virtualenv, and avoids
-    depending on the caller's working directory.
+    The source manifest belongs exactly two directories above this helper.
+    Installed and frozen packages use their distribution metadata instead;
+    searching further ancestors could attribute another project's version
+    to the evidence reports. An unavailable manifest or distribution falls
+    back to the last declared package version.
     """
-    for parent in (_MODULE_DIR, *_MODULE_DIR.parents):
-        candidate = parent / "pyproject.toml"
-        if not candidate.is_file():
-            continue
-        try:
-            text = candidate.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-        if m:
-            return m.group(1)
+    candidate = _MODULE_DIR.parent.parent / "pyproject.toml"
+    try:
+        with candidate.open("rb") as manifest:
+            project = tomllib.load(manifest).get("project", {})
+        if isinstance(project, dict) and project.get("name") == _DISTRIBUTION:
+            declared = project.get("version")
+            if isinstance(declared, str) and declared.strip():
+                return declared
+    except (OSError, ValueError):
+        pass
+    try:
+        installed = version(_DISTRIBUTION)
+        if isinstance(installed, str) and installed.strip():
+            return installed
+    except (PackageNotFoundError, OSError):
+        pass
     return _DEFAULT_VERSION

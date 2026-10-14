@@ -31,7 +31,15 @@ def scoped_analysis(function):
         for idx, record in enumerate(work.to_dict("records")):
             groups.setdefault(scope(record), []).append(idx)
         if len(groups) <= 1:
-            return function(*args, **kwargs)
+            # A single selected ledger can still have evidence from other
+            # accounts/fuels. Those credits cannot substantiate its revisions.
+            if bound.arguments.get("evidence_df") is not None:
+                evidence = normalize_frame(bound.arguments["evidence_df"])
+                key = scope(work.iloc[0].to_dict())
+                bound.arguments["evidence_df"] = evidence[
+                    [scope(record) == key for record in evidence.to_dict("records")]
+                ]
+            return function(*bound.args, **bound.kwargs)
         results = []
         all_evidence = bound.arguments.get("evidence_df")
         for indexes in groups.values():

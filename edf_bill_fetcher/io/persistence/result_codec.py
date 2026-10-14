@@ -8,6 +8,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+import pandas as pd
+
 from edf_bill_fetcher.domain.analysis import AnalysisSnapshot, FinancialSummary
 from edf_bill_fetcher.domain.evidence import ExtractionSnapshot, Observation, PreparedSnapshot
 from edf_bill_fetcher.domain.json_values import (
@@ -18,6 +20,7 @@ from edf_bill_fetcher.domain.json_values import (
 )
 from edf_bill_fetcher.domain.money import money_text
 from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
+from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
 from edf_bill_fetcher.models.snapshot_adapter import from_snapshot_json
 
 MODEL_KEYS = frozenset(
@@ -71,7 +74,12 @@ def _validate_models(value: Any) -> None:
     }
     for key, entry in models.items():
         _object(entry, {"availability", "reason_code", "payload"})
-        if entry["availability"] not in {"available", "partial", "unavailable", "not_applicable"}:
+        if not isinstance(entry["availability"], str) or entry["availability"] not in {
+            "available",
+            "partial",
+            "unavailable",
+            "not_applicable",
+        }:
             raise ValueError("Invalid model availability")
         reason = entry["reason_code"]
         if reason is not None and (not isinstance(reason, str) or not reason):
@@ -103,16 +111,97 @@ def _validate_models(value: Any) -> None:
                 "domination",
             } <= set(restored):
                 raise ValueError("SAP payload is incomplete")
+            frames = restored["frames"]
+            if (
+                not isinstance(frames, dict)
+                or not {
+                    "evidence",
+                    "analysis",
+                    "balance",
+                    "statistical",
+                    "monthly",
+                    "daily_rates",
+                    "yearly",
+                }
+                <= frames.keys()
+                or any(not isinstance(frame, pd.DataFrame) for frame in frames.values())
+            ):
+                raise ValueError("SAP precomputed frames are incomplete or invalid")
+            analyses = restored["analyses"]
+            if (
+                not isinstance(analyses, dict)
+                or not {
+                    "back_billing",
+                    "rebilling",
+                    "meter_rollover",
+                    "contracts",
+                    "evidence_index",
+                }
+                <= analyses.keys()
+                or any(
+                    not isinstance(analyses[name], pd.DataFrame)
+                    for name in ("back_billing", "rebilling", "meter_rollover", "contracts")
+                )
+                or not isinstance(analyses["evidence_index"], dict)
+            ):
+                raise ValueError("SAP precomputed analyses are incomplete or invalid")
             events = restored["events"]
-            if not isinstance(events, list) or len(events) != len(restored["event_source_indexes"]):
+            source_indexes = restored["event_source_indexes"]
+            if (
+                not isinstance(events, list)
+                or any(not isinstance(event, SapBackBillingEvent) for event in events)
+                or not isinstance(source_indexes, list)
+                or len(events) != len(source_indexes)
+                or any(not isinstance(indexes, list) for indexes in source_indexes)
+            ):
                 raise ValueError("SAP event source membership disagrees")
-            for event, indexes in zip(events, restored["event_source_indexes"], strict=True):
+            for event, indexes in zip(events, source_indexes, strict=True):
                 if len(event.rows) != len(indexes) or any(
                     type(idx) is not int or idx < 0 for idx in indexes
                 ):
                     raise ValueError("Invalid SAP source index")
+            matches = restored["matches"]
+            if not isinstance(matches, list) or any(
+                not isinstance(match, SapEdfMatch) or match.event not in events for match in matches
+            ):
+                raise ValueError("Invalid SAP event match membership")
+            position = restored["position"]
+            if (
+                not isinstance(position, dict)
+                or not {"events", "reconciliation", "summary"} <= position.keys()
+                or not isinstance(position["summary"], dict)
+                or any(
+                    not isinstance(position[name], list)
+                    or any(not isinstance(row, dict) for row in position[name])
+                    for name in ("events", "reconciliation")
+                )
+            ):
+                raise ValueError("Invalid SAP position payload")
+            domination = restored["domination"]
+            if not isinstance(domination, dict) or any(
+                not isinstance(value, list)
+                or len(value) != 2
+                or any(not isinstance(item, str) for item in value)
+                for value in domination.values()
+            ):
+                raise ValueError("Invalid SAP superseded invoice mapping")
+            timeline = restored["timeline"]
+            if not isinstance(timeline, list) or any(
+                not isinstance(row, list)
+                or len(row) != 3
+                or any(isinstance(item, (dict, list)) for item in row)
+                for row in timeline
+            ):
+                raise ValueError("Invalid SAP timeline payload")
+            if restored["union_total"] is not None and type(restored["union_total"]) not in (
+                int,
+                float,
+            ):
+                raise ValueError("Invalid SAP union total")
         if key == "reconciliation" and (
-            not isinstance(restored, dict) or set(restored) != {"summaries", "details"}
+            not isinstance(restored, dict)
+            or set(restored) != {"summaries", "details"}
+            or any(not isinstance(restored[name], list) for name in ("summaries", "details"))
         ):
             raise ValueError("Invalid reconciliation payload")
 
@@ -253,7 +342,9 @@ def decode_result(payload: object) -> AnalysisSnapshot:
             raise ValueError("Malformed reconciliation detail")
         entity, side, index = detail["entity"], detail["side"], detail["index"]
         if (
-            entity not in {"Contract", "Meter Read", "Financial"}
+            not isinstance(entity, str)
+            or entity not in {"Contract", "Meter Read", "Financial"}
+            or not isinstance(side, str)
             or side not in {"sap", "edf"}
             or type(index) is not int
             or index < 0

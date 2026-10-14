@@ -14,6 +14,7 @@ import pandas as pd
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
+from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.excel_utils import literal_cell
 from edf_bill_fetcher.helpers.theme import (
     CELL_BORDER,
@@ -22,6 +23,8 @@ from edf_bill_fetcher.helpers.theme import (
 )
 from edf_bill_fetcher.io.writers.sheet_layout import freeze_at, write_header_row
 from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
+from edf_bill_fetcher.processors.preparation import identity, number, scope
+from edf_bill_fetcher.writers._helpers import _sap_row_scope
 
 # ---- SAP color constants (was writers/__init__.py L2003-2009) ----
 ORANGE = "FE5716"
@@ -37,6 +40,50 @@ def _bb_invoice_value(rec: dict, key: str) -> object:
     if v in (None, "", "N/A", "None"):
         return ""
     return v
+
+
+def _evidence_row_position(record: dict, evidence_rows: list[dict]) -> int | None:
+    """Locate one matched record in the full evidence sheet, never guess an alias.
+
+    Stored model decoding detaches the match record from the evidence frame.
+    Invoice numbers alone cannot identify a row across accounts or revisions.
+    Preserve scope and the available source, date, period and charge anchors;
+    an ambiguous match stays unlinked.
+    """
+    direct = [idx for idx, candidate in enumerate(evidence_rows) if candidate is record]
+    if len(direct) == 1:
+        return direct[0]
+    invoice = identity(record.get("Invoice #"))
+    if not invoice:
+        return None
+    candidates = [
+        (idx, candidate)
+        for idx, candidate in enumerate(evidence_rows)
+        if scope(candidate) == scope(record) and identity(candidate.get("Invoice #")) == invoice
+    ]
+    source_id = identity(record.get("Source ID"))
+    if source_id:
+        candidates = [
+            (idx, candidate)
+            for idx, candidate in candidates
+            if identity(candidate.get("Source ID")) == source_id
+        ]
+    for field in ("Date", "Period From", "Period To"):
+        value = parse_to_sort_date(record.get(field))
+        if pd.notna(value):
+            candidates = [
+                (idx, candidate)
+                for idx, candidate in candidates
+                if parse_to_sort_date(candidate.get(field)) == value
+            ]
+    charge = number(record.get("Period Charge (£)"))
+    if charge is not None:
+        candidates = [
+            (idx, candidate)
+            for idx, candidate in candidates
+            if number(candidate.get("Period Charge (£)")) == charge
+        ]
+    return candidates[0][0] if len(candidates) == 1 else None
 
 
 # ---- _write_sap_header_row (was L1976-2002) ----
@@ -495,7 +542,7 @@ def _write_sap_bb_matches_sheet(
         "EDF Invoice #",
         "EDF Bill Date",
         "EDF Period From → To",
-        "EDF Invoice Amount (£)",
+        "EDF Period Charge (£)",
         "Amount Δ (£)",
         "Date Δ (days)",
         "Match Confidence",
@@ -554,10 +601,11 @@ def _write_sap_bb_matches_sheet(
     # Summary row index = 4 + sum_{j<i}(1 + len(events[j].rows))
     # (summary row + N underlying rows per event). Header row is row 3
     # and the first summary row is row 4 per spec §3.3.
-    summary_row_for_doc: dict[str, int] = {}
+    summary_rows: dict[tuple, list[int]] = {}
     sheet1_summary_row = 4
     for ev in events:
-        summary_row_for_doc[ev.clearing_doc] = sheet1_summary_row
+        key = (ev.clearing_doc, tuple(sorted({_sap_row_scope(row) for row in ev.rows})))
+        summary_rows.setdefault(key, []).append(sheet1_summary_row)
         sheet1_summary_row += 1 + len(ev.rows)
 
     confidence_band_fill = {
@@ -585,7 +633,7 @@ def _write_sap_bb_matches_sheet(
             if not pd.isna(ev.clearing_date)
             else ""
         )
-        edf_amt_val = rec.get("Amount (£)")
+        edf_amt_val = rec.get("Period Charge (£)")
         vals = [
             ev.clearing_doc,
             cd_iso,
@@ -612,35 +660,29 @@ def _write_sap_bb_matches_sheet(
                 vertical="center",
                 wrap_text=(j == 12),
             )
+            if j in (3, 7, 8):
+                cell.number_format = "£#,##0.00"
         # Hyperlinks:
         # col 1 (SAP Clearing Doc #) -> Sheet 1 summary row for this event
-        sap_target_row = summary_row_for_doc.get(ev.clearing_doc, 8)
+        event_key = (ev.clearing_doc, tuple(sorted({_sap_row_scope(row) for row in ev.rows})))
+        targets = summary_rows.get(event_key, [])
         c1 = ws.cell(row=r, column=1)
-        summary_loc = f"'SAP Back-billing Events'!A{sap_target_row}"
-        c1.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
-            ref=c1.coordinate,
-            location=summary_loc,
-            display=ev.clearing_doc,
-            tooltip=f"Jump to SAP event summary row {sap_target_row}",
-        )
-        c1.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
+        if len(targets) == 1:
+            sap_target_row = targets[0]
+            summary_loc = f"'SAP Back-billing Events'!A{sap_target_row}"
+            c1.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(
+                ref=c1.coordinate,
+                location=summary_loc,
+                display=ev.clearing_doc,
+                tooltip=f"Jump to SAP event summary row {sap_target_row}",
+            )
+            c1.font = Font(name="Calibri", size=10, color="0563C1", underline="single")
         # col 4 (EDF Invoice #) -> EDF Evidence Report row for this invoice
         # The row index on EDF Evidence Report = edf_first_row + position in edf_rows.
-        # Need to find the index. We use the edf_records list (which match_sap_events_to_edf
-        # was given) — the caller has passed the same list as edf_rows.
-        edf_idx = None
-        for i, er in enumerate(edf_rows):
-            if er is rec:
-                edf_idx = i
-                break
-        if edf_idx is None:
-            # Try matching by Invoice # as a fallback
-            target_inv = str(rec.get("Invoice #", "")).strip()
-            if target_inv:
-                for i, er in enumerate(edf_rows):
-                    if str(er.get("Invoice #", "")).strip() == target_inv:
-                        edf_idx = i
-                        break
+        # edf_rows must be the full evidence frame, including bills excluded
+        # from analysis by thresholds. Decoded match dictionaries have no
+        # shared object identity, so only an unambiguous anchored row is safe.
+        edf_idx = _evidence_row_position(rec, edf_rows)
         if edf_idx is not None:
             edf_target_row = edf_first_row + edf_idx
             c4 = ws.cell(row=r, column=4)

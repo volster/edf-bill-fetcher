@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
@@ -71,6 +72,9 @@ def text(
         safe_val = ""
     else:
         safe_val = str(val)
+        from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+        safe_val = ILLEGAL_CHARACTERS_RE.sub("", safe_val)
         if safe_val and safe_val[0] in "+-=@":
             safe_val = "'" + safe_val
     cell = ws.cell(row=r, column=c, value=safe_val)
@@ -195,30 +199,50 @@ def suppress_text_warnings_post_save(output_path: str) -> None:
         suffix=".xlsx", delete=False, dir=os.path.dirname(output_path) or "."
     )
     tmp.close()
-    os.replace(output_path, tmp.name)
-
-    with zipfile.ZipFile(tmp.name, "r") as zin:
-        title_by_path = _sheet_title_by_xml_path(zin)
-        with zipfile.ZipFile(output_path, "w") as zout:
-            for item in zin.namelist():
-                data = zin.read(item)
-                if item.startswith("xl/worksheets/sheet") and item.endswith(".xml"):
-                    xml = data.decode("utf-8", errors="replace")
-                    sheet_title = title_by_path.get(item)
-                    suppressions = _TEXT_SUPPRESSION_QUEUE.get(sheet_title) if sheet_title else None
-                    if suppressions:
-                        for col_letter, start_row, end_row in suppressions:
-                            sqref = f"{col_letter}{start_row}:{col_letter}{end_row}"
+    try:
+        with zipfile.ZipFile(output_path, "r") as zin:
+            title_by_path = _sheet_title_by_xml_path(zin)
+            with zipfile.ZipFile(tmp.name, "w") as zout:
+                for item in zin.infolist():
+                    data = zin.read(item)
+                    if item.filename.startswith("xl/worksheets/sheet") and item.filename.endswith(
+                        ".xml"
+                    ):
+                        xml = data.decode("utf-8")
+                        sheet_title = title_by_path.get(item.filename)
+                        suppressions = (
+                            _TEXT_SUPPRESSION_QUEUE.get(sheet_title) if sheet_title else None
+                        )
+                        if suppressions:
+                            children = []
+                            for col_letter, start_row, end_row in suppressions:
+                                sqref = f"{col_letter}{start_row}:{col_letter}{end_row}"
+                                children.append(
+                                    f'<ignoredError sqref="{sqref}" numberStoredAsText="1"/>'
+                                )
+                            existing = re.findall(r"<ignoredErrors>(.*?)</ignoredErrors>", xml)
+                            xml = re.sub(r"<ignoredErrors>.*?</ignoredErrors>", "", xml)
                             block = (
-                                f'<ignoredErrors><ignoredError sqref="{sqref}" '
-                                f'numberStoredAsText="1"/></ignoredErrors>'
+                                "<ignoredErrors>"
+                                + "".join(existing + children)
+                                + "</ignoredErrors>"
                             )
-                            xml = xml.replace("</worksheet>", f"{block}</worksheet>")
-                    data = xml.encode("utf-8")
-                zout.writestr(item, data)
-
-    _TEXT_SUPPRESSION_QUEUE.clear()
-    os.unlink(tmp.name)
+                            # Worksheet schema places ignoredErrors before drawing,
+                            # controls and tableParts, rather than after every element.
+                            following = re.search(
+                                r"<(?:smartTags|drawing|drawingHF|legacyDrawing|legacyDrawingHF|picture|oleObjects|controls|webPublishItems|tableParts|extLst)\b|</worksheet>",
+                                xml,
+                            )
+                            if following is None:
+                                raise ValueError("Malformed worksheet XML")
+                            xml = xml[: following.start()] + block + xml[following.start() :]
+                        data = xml.encode("utf-8")
+                    zout.writestr(item, data)
+        os.replace(tmp.name, output_path)
+        _TEXT_SUPPRESSION_QUEUE.clear()
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
 
 
 def build_sap_row_index_map(sap_financial: list[dict]) -> dict[int, int]:

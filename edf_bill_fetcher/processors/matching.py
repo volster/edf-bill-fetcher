@@ -20,7 +20,7 @@ from edf_bill_fetcher.helpers.excel_utils import build_evidence_index as _build_
 from edf_bill_fetcher.helpers.identity import account_key
 from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
 from edf_bill_fetcher.processors.ledgers import invoice_reference, scoped_analysis
-from edf_bill_fetcher.processors.preparation import number
+from edf_bill_fetcher.processors.preparation import identity, number
 from edf_bill_fetcher.processors.sap_parsers import _parse_amount_for_event
 
 # SAP match band constants — local definitions to keep module self-contained.
@@ -194,13 +194,39 @@ def match_sap_events_to_edf(
         for idx, pf, pt, edf_amt, _invoice in parsed_edf:
             accounts = {
                 account_key(
-                    r.get("Account") or r.get("Kraken ID") or r.get("SAP Account Number") or ""
+                    next(
+                        (
+                            identity(r.get(field))
+                            for field in ("Account", "Kraken ID", "SAP Account Number")
+                            if identity(r.get(field))
+                        ),
+                        "",
+                    )
                 )
                 for r in ev.rows
             }
             accounts.discard("")
             account = account_key(edf_records[idx].get("Account", ""))
-            if accounts and account not in accounts:
+            if accounts and accounts != {account}:
+                continue
+            # Gross/net amounts cannot overcome contradictory ledger facts.
+            # An event's rows must all be compatible with the candidate;
+            # missing fuel/meter/register evidence remains unknown.
+            incompatible = False
+            for field in ("Fuel", "Meter", "Register"):
+                known = {
+                    (
+                        identity(row.get(field))
+                        or (identity(row.get("Fuel Type")) if field == "Fuel" else "")
+                    ).casefold()
+                    for row in ev.rows
+                }
+                known.discard("")
+                candidate = identity(edf_records[idx].get(field)).casefold()
+                if len(known) > 1 or (known and candidate and known != {candidate}):
+                    incompatible = True
+                    break
+            if incompatible:
                 continue
             # Compute the date delta in days vs Period To (or From fallback)
             if not pd.isna(pt):
@@ -252,6 +278,7 @@ def match_sap_events_to_edf(
             date_score = 0
             date_in_span = False
             date_axis = ev_cd
+            date_basis = "Clearing date"
             if (
                 not pd.isna(posting_ts)
                 and not pd.isna(pf)
@@ -259,6 +286,7 @@ def match_sap_events_to_edf(
                 and pd.Timestamp(pf) <= posting_ts <= pd.Timestamp(pt)
             ):
                 date_axis = posting_ts
+                date_basis = "Posting date"
             if (
                 not pd.isna(pf)
                 and not pd.isna(pt)
@@ -294,20 +322,20 @@ def match_sap_events_to_edf(
             amt_delta = round(ev.net_amount - edf_amt, 2)
             if band == "High":
                 notes = (
-                    "Clearing date inside EDF period + amount within 5%"
+                    f"{date_basis} inside EDF period + amount within 5%"
                     if date_in_span
                     else f"Within {date_delta_days}d of period-end + amount within 5%"
                 )
             elif band == "Medium":
                 # amount_score > 0 is guaranteed by the Medium+ gate above.
                 if date_in_span:
-                    notes = "Clearing date inside EDF period + amount within 25%"
+                    notes = f"{date_basis} inside EDF period + amount within 25%"
                 else:
                     notes = f"Within {date_delta_days}d of period-end + amount within 25%"
             else:  # band == "Low"
                 if date_in_span and amount_score == 0:
                     notes = (
-                        "Clearing date inside EDF period but amounts do not "
+                        f"{date_basis} inside EDF period but amounts do not "
                         "correspond — likely coincidental"
                     )
                 else:

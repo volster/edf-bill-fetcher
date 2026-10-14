@@ -57,15 +57,15 @@ def compute_payment_analysis(df: pd.DataFrame) -> PaymentAnalysis:
         )
 
     payments["_dt"] = payments["Date"].apply(parse_to_sort_date)
-    payments = payments.sort_values("_dt").reset_index(drop=True)
-    # `_amount` holds the RAW (signed) per-row transaction figure so
-    # chronology rendering matches the old `payment_amount(row)[0]`
-    # behavior exactly; the abs() mirroring the old dict is applied at
-    # the STAT level (abs(sum), abs(mean), ...), not element-wise.
+    payments = payments.sort_values("_dt", kind="stable").reset_index(drop=True)
+    # The shared helper provides payment/credit magnitudes; account balance
+    # observations are never substituted for a missing transaction.
     payments["_amount"] = payment_amounts(payments)
 
-    pay_dates = payments["_dt"].dropna()
-    intervals = pay_dates.diff().dt.days.dropna()
+    dated = payments[payments["_dt"].notna()]
+    ledgers = pd.Series([scope(row) for row in dated.to_dict("records")], index=dated.index)
+    intervals = dated.groupby(ledgers, sort=False)["_dt"].diff().dt.days.dropna()
+    latest = dated.iloc[-1] if not dated.empty else None
 
     return PaymentAnalysis(
         count=len(payments),
@@ -76,8 +76,8 @@ def compute_payment_analysis(df: pd.DataFrame) -> PaymentAnalysis:
         smallest_payment=float(abs(payments["_amount"].min())),
         avg_interval_days=float(intervals.mean()) if len(intervals) > 0 else None,
         median_interval_days=float(intervals.median()) if len(intervals) > 0 else None,
-        last_payment_date=payments.iloc[-1]["Date"] if len(payments) > 0 else None,
-        last_payment_amount=float(payments["_amount"].iloc[-1]) if len(payments) > 0 else None,
+        last_payment_date=latest["Date"] if latest is not None else None,
+        last_payment_amount=float(latest["_amount"]) if latest is not None else None,
         chronology=payments,
     )
 

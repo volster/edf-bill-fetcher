@@ -22,7 +22,7 @@ from edf_bill_fetcher.models.events import SapBackBillingEvent
 # the two copies are unified into a single implementation.  Existing
 # importers (writers/__init__.py, io/writers/export.py) keep working.
 from edf_bill_fetcher.processors.matching import match_sap_events_to_edf  # noqa: F401
-from edf_bill_fetcher.processors.preparation import SOURCE_PRECEDENCE
+from edf_bill_fetcher.processors.preparation import SOURCE_PRECEDENCE, identity, scope
 
 EST_YELLOW = "FFFF99"
 JUMP_RED = "FF9999"
@@ -150,6 +150,21 @@ _SAP_CONFIDENCE_BANDS = (("High", 75), ("Medium", 40), ("Low", 10))
 _parse_amount_for_event = parse_amount
 
 
+def _sap_row_scope(row: dict) -> tuple[str, ...]:
+    """Use the available SAP identity aliases without filling unknown ledgers."""
+    normalized = dict(row)
+    normalized["Account"] = next(
+        (
+            identity(row.get(field))
+            for field in ("Account", "Kraken ID", "SAP Account Number")
+            if identity(row.get(field))
+        ),
+        "",
+    )
+    normalized["Fuel"] = identity(row.get("Fuel")) or identity(row.get("Fuel Type"))
+    return scope(normalized)
+
+
 def _confidence_band(score: int) -> str | None:
     """Map a numeric match score to High/Medium/Low/None (Unmatched)."""
     for band, threshold in _SAP_CONFIDENCE_BANDS:
@@ -178,17 +193,19 @@ def detect_sap_back_billing_events(
         if str(r.get("Statistical Key Flag", "")).strip() != _SAP_DEBT_MGMT_FLAG_VALUE
     ]
 
-    clusters: dict[str, list[dict]] = {}
+    clusters: dict[tuple[tuple[str, ...], str], list[dict]] = {}
     for r in filtered:
         cd = str(r.get("Clearing Document", "")).strip()
         if not cd or cd in ("NA", "None", "*"):
             continue
-        clusters.setdefault(cd, []).append(r)
+        # A clearing document number can recur in independent ledgers.
+        # Unknown scope remains separate instead of borrowing a known account.
+        clusters.setdefault((_sap_row_scope(r), cd), []).append(r)
 
-    clusters_kept = {cd: rows for cd, rows in clusters.items() if len(rows) >= min_cluster_size}
+    clusters_kept = {key: rows for key, rows in clusters.items() if len(rows) >= min_cluster_size}
 
     events: list = []
-    for cd, rows in clusters_kept.items():
+    for (_, cd), rows in clusters_kept.items():
         clear_dates = [
             pd.to_datetime(str(r.get("Clearing Date", "")).strip(), errors="coerce")
             for r in rows

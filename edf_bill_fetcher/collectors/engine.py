@@ -28,6 +28,7 @@ from typing import Any
 
 import pdfplumber
 from bs4 import BeautifulSoup
+from bs4.dammit import EncodingDetector, UnicodeDammit
 from openpyxl.styles import Side as _Side
 
 # Canonical homes (per Tasks 1-6 organization)
@@ -773,6 +774,8 @@ class EvidenceEngine:
                     return
                 pdf_text_parts: list[str] = []
                 for p in pdf.pages:
+                    if self.is_cancelled():
+                        return
                     try:
                         page_text = p.extract_text()
                         pdf_text_parts.append(page_text or "")
@@ -815,6 +818,8 @@ class EvidenceEngine:
 
             first_page = 1
             for i, slice_pages in enumerate(slices, start=1):
+                if self.is_cancelled():
+                    return
                 slice_text = " ".join(slice_pages)
                 self._source_context.update(document_identity(slice_text))
                 self._source_context["Page From"] = first_page
@@ -929,21 +934,28 @@ class EvidenceEngine:
         """Read an HTM account-history export and extract every record it contains."""
         try:
             self._source_context = {}
-            self._source_context = self._register_source(
-                path, os.path.basename(path), Path(path).read_bytes()
-            )
-            # Read with strict UTF-8 first — evidence data must not be
-            # silently corrupted by mojibake replacement.  Fall back to
-            # "replace" only if strict fails, and log a warning so the
-            # user knows data may be imperfect.
+            raw = Path(path).read_bytes()
+            self._source_context = self._register_source(path, os.path.basename(path), raw)
+            # Browser exports can declare Windows-1252 or UTF-16. Honour
+            # their encoding and preserve the pound sign used by the parser.
+            _, bom_encoding = EncodingDetector.strip_byte_order_mark(raw)
+            declared = EncodingDetector.find_declared_encoding(raw, is_html=True)
+            encodings = [bom_encoding] if bom_encoding else []
+            if declared:
+                encodings.append(declared)
+            encodings.extend(["utf-8", "windows-1252"])
+            decoded = UnicodeDammit(raw, known_definite_encodings=encodings, is_html=True)
             try:
-                with open(path, encoding="utf-8", errors="strict") as f:
-                    content = f.read()
+                raw.decode("utf-8")
             except UnicodeDecodeError:
-                self.log_error(f"HTM: {path}", "UTF-8 decode error — some characters replaced")
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            soup = BeautifulSoup(content, "html.parser")
+                if not declared and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+                    self.log_error(
+                        f"HTM: {path}",
+                        f"UTF-8 decode error — read as {decoded.original_encoding}",
+                    )
+            if decoded.contains_replacement_characters:
+                self.log_error(f"HTM: {path}", "Some undecodable characters replaced")
+            soup = BeautifulSoup(decoded.unicode_markup or "", "html.parser")
             text = soup.get_text(separator=" ", strip=True)
             self._source_context.update(document_identity(text))
             recs = parse_htm_account_history(text)

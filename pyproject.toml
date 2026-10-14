@@ -23,6 +23,7 @@ classifiers = [
     "Topic :: Office/Business :: Financial",
 ]
 dependencies = [
+    "tomli>=2,<3; python_version < '3.11'",  # Parse the source version manifest on Python 3.10
     "PySide6-Essentials>=6.7,<7",  # Qt desktop controls; no WebEngine dependency
     # === Runtime core (required for any functional report — Excel + PDF + DOCX) ===
     "pandas>=2.0,<3",

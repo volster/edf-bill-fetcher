@@ -1209,9 +1209,12 @@ def render_xlsx(
             target = qualified if qualified in targets else inv
             if target not in targets:
                 continue
-            saved_path = invoice_pdf_paths.get(
-                str(record.get("Source ID", ""))
-            ) or invoice_pdf_paths.get(str(record.get("Attachment Name", "")))
+            source_id = str(record.get("Source ID", "") or "")
+            saved_path = (
+                invoice_pdf_paths.get(source_id)
+                if source_id
+                else invoice_pdf_paths.get(str(record.get("Attachment Name", "")))
+            )
             if saved_path:
                 recon_pdf_paths.setdefault(
                     target,
@@ -1307,9 +1310,10 @@ def render_xlsx(
             # ``dfc``) as the join target. Both new sheets appear under
             # the existing ``scan_sap_dumps`` toggle alongside the
             # existing SAP sheets.
-            edf_records_for_bb: list[dict] = []
-            if dfc is not None and not dfc.empty:
-                edf_records_for_bb = dfc.to_dict(orient="records")
+            # Match models were computed against analysis rows, but links
+            # target the full evidence sheet. Threshold filtering must not
+            # change the spreadsheet coordinates of the matched originals.
+            edf_records_for_bb = df.to_dict(orient="records")
             bb_events, bb_matches = sap_model["events"], sap_model["matches"]
             source_index_map = {
                 id(row): source_idx + 4

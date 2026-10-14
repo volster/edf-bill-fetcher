@@ -1,24 +1,14 @@
-"""Tests for the report-version helper.
-
-Versioning the report directly off the project's pyproject.toml
-means a user always sees the version string we ship —
-not a stale literal baked into cover-page code. The fallback
-path is checked here to lock in the no-crash behaviour for
-builds where pyproject is missing (wheeled installs, sandboxed
-runners).
-
-Inputs are entirely synthetic — the helper reads the actual
-project pyproject.toml so whatever ``[project] version = "..."``
-is declared here, the test will compare against it.
-"""
+"""Report provenance uses the EDF checkout or installed distribution version."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
+import pytest
 from reportlab.platypus import Paragraph
 
+from edf_bill_fetcher.helpers import version as version_helper
 from edf_bill_fetcher.io.reporters.pdf_report import _get_package_version, create_cover_page
 
 
@@ -63,68 +53,83 @@ def test_get_package_version_includes_the_actual_pyproject_version():
     assert found_version, f"Cover-page text did not contain the version string 'v{declared}'"
 
 
-def test_get_package_version_falls_back_to_zero_when_pyproject_missing(
-    monkeypatch,
+def test_checkout_uses_own_project_section_and_ignores_nearby_decoys(monkeypatch, tmp_path):
+    root = tmp_path / "checkout"
+    helper = root / "edf_bill_fetcher" / "helpers"
+    helper.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[tool.other]\nversion = "8.8.8"\n'
+        '[project]\nname = "edf-bill-fetcher"\nversion = "1.2.3"\n',
+        encoding="utf-8",
+    )
+    (helper / "pyproject.toml").write_text('version = "9.9.9"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text('version = "7.7.7"\n', encoding="utf-8")
+    monkeypatch.setattr(version_helper, "_MODULE_DIR", helper)
+    monkeypatch.setattr(version_helper, "version", lambda _name: "6.6.6")
+    assert _get_package_version() == "1.2.3"
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        None,
+        b'[project]\nname = "foreign-project"\nversion = "9.9.9"\n',
+        b'[tool.other]\nname = "edf-bill-fetcher"\nversion = "9.9.9"\n',
+        b'[project]\nname = "edf-bill-fetcher"\nversion = 999\n',
+        b'[project]\nname = "edf-bill-fetcher"\nversion = ""\n',
+        b'[project]\nname = "edf-bill-fetcher"\nversion = "unterminated\n',
+        b"\xff",
+    ],
+)
+def test_installed_version_does_not_borrow_foreign_or_invalid_manifests(
+    monkeypatch, tmp_path, manifest
 ):
-    """If pyproject.toml is unreadable, return a stable fallback.
+    helper = tmp_path / "site-packages" / "edf_bill_fetcher" / "helpers"
+    helper.mkdir(parents=True)
+    # This farther ancestor used to be incorrectly attributed to EDF.
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "foreign-project"\nversion = "9.9.9"\n', encoding="utf-8"
+    )
+    if manifest is not None:
+        (helper.parent.parent / "pyproject.toml").write_bytes(manifest)
+    monkeypatch.setattr(version_helper, "_MODULE_DIR", helper)
+    seen = []
 
-    The helper resolves Path(__file__).parent / "pyproject.toml" and
-    reads it. We monkey-patch the module-level lookup by replacing
-    ``open`` in the ``edf_report`` module's namespace so any read
-    attempt raises ``OSError``. The function must feed the
-    fallback chain instead of propagating — the cover page is what a
-    user sees first and a missing version string is uglier
-    than a stable fallback. Avoid relying on ``Path.resolve`` /
-    platform-specific ``_flavour`` (CI Windows runners differ from
-    Linux / macOS in how pathlib's POSIXPath / WindowsPath copies
-    work through subclassing).
-    """
-    import builtins
+    def installed_version(name):
+        seen.append(name)
+        return "2.3.4"
 
-    real_open = builtins.open
-
-    def _raise_open(*args, **kwargs):
-        # Allow the helper to open *something* (so ast / import
-        # machinery works in unrelated tests) when the target is
-        # NOT pyproject.toml — but raise when target IS pyproject.
-        path = args[0] if args else kwargs.get("file", kwargs.get("name"))
-        if isinstance(path, str) and path.endswith("pyproject.toml"):
-            raise OSError("simulated missing")
-        if isinstance(path, object) and str(path).endswith("pyproject.toml"):
-            raise OSError("simulated missing")
-        return real_open(*args, **kwargs)
-
-    monkeypatch.setattr(builtins, "open", _raise_open)
-    try:
-        from edf_bill_fetcher.io.reporters.pdf_report import _get_package_version as _get
-
-        _get()
-    except OSError:
-        import pytest
-
-        pytest.fail(
-            "_get_package_version() leaked an OSError when pyproject.toml is unreadable; "
-            "expected fall-back to '0.1.0'"
-        )
+    monkeypatch.setattr(version_helper, "version", installed_version)
+    assert _get_package_version() == "2.3.4"
+    assert seen == ["edf-bill-fetcher"]
 
 
-def test_get_package_version_uses_repo_root_not_module_dir(monkeypatch, tmp_path):
-    """A pyproject.toml sitting next to the module must be ignored.
+def test_unreadable_manifest_uses_installed_version(monkeypatch, tmp_path):
+    helper = tmp_path / "edf_bill_fetcher" / "helpers"
+    helper.mkdir(parents=True)
+    candidate = tmp_path / "pyproject.toml"
+    candidate.mkdir()  # Opening a directory as a TOML manifest raises OSError on every platform.
+    monkeypatch.setattr(version_helper, "_MODULE_DIR", helper)
+    monkeypatch.setattr(version_helper, "version", lambda _name: "2.3.4")
+    assert _get_package_version() == "2.3.4"
 
-    The helper resolves the version from the *repo-root* pyproject.toml.
-    Regression pin: the original implementation looked at
-    ``Path(__file__).parent / "pyproject.toml"`` — the module's own
-    directory — which does not contain a pyproject.toml, so it
-    silently returned the ``"0.1.0"`` fallback for every run.  That
-    bug was invisible because the repo root *also* declared 0.1.0.
-    This test plants a decoy pyproject.toml with a distinct version
-    in a fake module directory and asserts it is never read.
-    """
-    import edf_bill_fetcher.io.reporters.pdf_report as pdf_mod
 
-    decoy_dir = tmp_path / "edf_bill_fetcher" / "io" / "reporters"
-    decoy_dir.mkdir(parents=True)
-    (decoy_dir / "pyproject.toml").write_text('version = "9.9.9"\n')
+def test_distribution_metadata_is_used_without_a_source_manifest(monkeypatch, tmp_path):
+    metadata = tmp_path / "edf_bill_fetcher-4.5.6.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: edf-bill-fetcher\nVersion: 4.5.6\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(version_helper, "_MODULE_DIR", tmp_path / "edf_bill_fetcher" / "helpers")
+    assert _get_package_version() == "4.5.6"
 
-    monkeypatch.setattr(pdf_mod, "__file__", str(decoy_dir / "pdf_report.py"))
-    assert pdf_mod._get_package_version() == _read_pyproject_version()
+
+def test_last_declared_default_is_only_used_when_metadata_is_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(version_helper, "_MODULE_DIR", tmp_path / "edf_bill_fetcher" / "helpers")
+
+    def missing_distribution(_name):
+        raise version_helper.PackageNotFoundError("edf-bill-fetcher")
+
+    monkeypatch.setattr(version_helper, "version", missing_distribution)
+    assert _get_package_version() == version_helper._DEFAULT_VERSION

@@ -326,6 +326,32 @@ def make_table_style(
     return TableStyle(style_commands)
 
 
+def _wrapped_table(data: list[list], widths: list[float], *, font_size: int = 7) -> Table:
+    """Fit every column inside the frame and display source text literally.
+
+    Plain Table strings do not wrap or interpret XML entities. Paragraph
+    cells consume one escaping pass, safely showing the original characters
+    while wrapping long invoice and file references within positive widths.
+    """
+    available = CONTENT_WIDTH - 12  # Frame's default left/right inner padding.
+    total = sum(widths)
+    column_widths = [available * width / total for width in widths]
+    cells = []
+    for row_number, row in enumerate(data):
+        style = ParagraphStyle(
+            "EvidenceHeader" if row_number == 0 else "EvidenceCell",
+            fontName="Helvetica-Bold" if row_number == 0 else "Helvetica",
+            fontSize=font_size,
+            leading=font_size + 2,
+            textColor=Colors.WHITE if row_number == 0 else Colors.DARK_GREY,
+            splitLongWords=True,
+        )
+        cells.append([Paragraph(xml_escape(str(value)), style) for value in row])
+    table = Table(cells, colWidths=column_widths, repeatRows=1)
+    table.setStyle(make_table_style(num_rows=len(data), font_size=font_size))
+    return table
+
+
 # =============================================================================
 # PAGE TEMPLATES
 # =============================================================================
@@ -693,8 +719,8 @@ def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> 
     if not flags:
         elements.append(
             Paragraph(
-                "No automated flags were generated. The billing data appears consistent within "
-                "established thresholds.",
+                "No automated flags were generated. Manual review of the original evidence "
+                "and its completeness is still required.",
                 STYLES["BodyText"],
             )
         )
@@ -785,11 +811,10 @@ def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | No
     source_data = [["Source", "Records", "Percentage"]]
     total = len(df)
     for src, cnt in source_counts.items():
-        source_data.append([xml_escape(str(src)), str(cnt), f"{cnt / total:.1%}"])
+        source_data.append([str(src), str(cnt), f"{cnt / total:.1%}"])
     source_data.append(["TOTAL", str(total), "100.0%"])
 
-    t = Table(source_data, colWidths=[8 * cm, 3 * cm, 3 * cm])
-    t.setStyle(make_table_style(num_rows=len(source_data)))
+    t = _wrapped_table(source_data, [8, 3, 3], font_size=8)
     elements.append(t)
     elements.append(Spacer(1, 0.5 * cm))
 
@@ -813,25 +838,18 @@ def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | No
         # Summary table for this source
         detail_data = [["Date", "Invoice #", "Amount", "Period", "Entry Type", "Reading"]]
         for _, row in src_df.iterrows():
-            # Every column carries user-derived data — escape each
-            # so any literal `<`, `>`, or `&` shows as visible text
-            # rather than being rendered as a tag.  See
-            # ``tests/test_pdf_tablecell_xml.py``.
             detail_data.append(
                 [
-                    xml_escape(str(fmt_date(row.get("Date")))),
-                    xml_escape(str(row.get("Invoice #", "N/A"))),
-                    xml_escape(str(fmt_money(row.get("Amount (£)")))),
-                    xml_escape(
-                        f"{fmt_date(row.get('Period From'))}–{fmt_date(row.get('Period To'))}"
-                    ),
-                    xml_escape(str(row.get("Entry Type", ""))),
-                    xml_escape(str(row.get("Reading", ""))),
+                    fmt_date(row.get("Date")),
+                    str(row.get("Invoice #", "N/A")),
+                    fmt_money(row.get("Amount (£)")),
+                    f"{fmt_date(row.get('Period From'))}–{fmt_date(row.get('Period To'))}",
+                    str(row.get("Entry Type", "")),
+                    str(row.get("Reading", "")),
                 ]
             )
 
-        t = Table(detail_data, colWidths=[2.5 * cm, 3 * cm, 3 * cm, 4 * cm, 3 * cm, 2 * cm])
-        t.setStyle(make_table_style(num_rows=len(detail_data), font_size=7))
+        t = _wrapped_table(detail_data, [2.5, 3, 3, 4, 3, 2])
         elements.append(t)
         elements.append(Spacer(1, 0.3 * cm))
 
@@ -891,29 +909,25 @@ def create_anomaly_detail_section(
         # Table of findings
         detail_data = [["#", "Date", "Amount", "Severity", "Detail"]]
         for i, (_ftype, date, amt, detail, sev) in enumerate(cat_flags, 1):
-            # ``detail`` carries user-derived strings (PDF/PST source
-            # names plus computed rationale).  The table rendering
-            # path treats string cells as plain text, but escape
-            # anyway so audit-log readers see literal chars.
             truncated = detail[:200] + ("..." if len(detail) > 200 else "")
             detail_data.append(
                 [
                     str(i),
-                    xml_escape(str(fmt_date(date))),
-                    xml_escape(str(fmt_money(amt) if amt else "")),
-                    xml_escape(str(sev)),
-                    xml_escape(truncated),
+                    fmt_date(date),
+                    fmt_money(amt) if amt is not None else "",
+                    str(sev),
+                    truncated,
                 ]
             )
 
-        t = Table(
-            detail_data, colWidths=[0.8 * cm, 2.5 * cm, 3 * cm, 2 * cm, CONTENT_WIDTH - 8.3 * cm]
-        )
+        t = _wrapped_table(detail_data, [0.8, 2.5, 3, 2, 7.7])
         style = make_table_style(num_rows=len(detail_data), font_size=7)
         # Color severity column
         for row_idx, (_, _, _, sev, _) in enumerate(cat_flags, 1):
             style.add("TEXTCOLOR", (3, row_idx), (3, row_idx), severity_color(sev))
             style.add("FONTNAME", (3, row_idx), (3, row_idx), "Helvetica-Bold")
+            t._cellvalues[row_idx][3].style.textColor = severity_color(sev)
+            t._cellvalues[row_idx][3].style.fontName = "Helvetica-Bold"
         t.setStyle(style)
         elements.append(t)
         elements.append(Spacer(1, 0.4 * cm))
@@ -974,13 +988,12 @@ def create_timeline_section(
             [
                 fmt_date(ev["date"]),
                 ev["type"],
-                fmt_money(ev["amount"]) if ev["amount"] else "",
+                fmt_money(ev["amount"]) if ev["amount"] is not None else "",
                 ev["detail"][:150] + ("..." if len(ev["detail"]) > 150 else ""),
             ]
         )
 
-    t = Table(timeline_data, colWidths=[2.5 * cm, 3.5 * cm, 3 * cm, CONTENT_WIDTH - 9 * cm])
-    t.setStyle(make_table_style(num_rows=len(timeline_data), font_size=7))
+    t = _wrapped_table(timeline_data, [2.5, 3.5, 3, 7])
     elements.append(t)
 
     elements.append(PageBreak())
@@ -1072,8 +1085,7 @@ def create_ofgem_comparison(
     # spilling into the next column.  Give the last two columns an
     # extra half-centimetre each and tighten Period to keep the
     # table inside the printable area on a portrait A4.
-    t = Table(cap_data, colWidths=[3.0 * cm, 3.0 * cm, 3.5 * cm, 4.0 * cm, 3.5 * cm])
-    t.setStyle(make_table_style(num_rows=len(cap_data)))
+    t = _wrapped_table(cap_data, [3, 3, 3.5, 4, 3.5], font_size=8)
 
     # Color the status column
     style = TableStyle(
@@ -1088,11 +1100,16 @@ def create_ofgem_comparison(
         if "EXCEEDS" in status:
             style.add("TEXTCOLOR", (4, i), (4, i), Colors.RED)
             style.add("FONTNAME", (4, i), (4, i), "Helvetica-Bold")
+            t._cellvalues[i][4].style.textColor = Colors.RED
+            t._cellvalues[i][4].style.fontName = "Helvetica-Bold"
         elif "REVIEW" in status:
             style.add("TEXTCOLOR", (4, i), (4, i), Colors.RED)
             style.add("FONTNAME", (4, i), (4, i), "Helvetica-Bold")
+            t._cellvalues[i][4].style.textColor = Colors.RED
+            t._cellvalues[i][4].style.fontName = "Helvetica-Bold"
         elif "BELOW" in status:
             style.add("TEXTCOLOR", (4, i), (4, i), Colors.GREEN)
+            t._cellvalues[i][4].style.textColor = Colors.GREEN
     t.setStyle(style)
 
     elements.append(t)
@@ -1260,17 +1277,13 @@ def create_payment_analysis(
             pay_detail.append(
                 [
                     fmt_date(row["Date"]),
-                    xml_escape(str(row["Entry Type"])),
+                    str(row["Entry Type"]),
                     fmt_money(row["_amount"]),
                     fmt_money(row.get("Balance (£)")),
-                    xml_escape(str(row.get("Details", "")))[:80],
+                    str(row.get("Details", ""))[:80],
                 ]
             )
-        t = Table(
-            pay_detail,
-            colWidths=[2.5 * cm, 2.5 * cm, 3 * cm, 3 * cm, max(2 * cm, CONTENT_WIDTH - 11 * cm)],
-        )
-        t.setStyle(make_table_style(num_rows=len(pay_detail), font_size=7))
+        t = _wrapped_table(pay_detail, [2.5, 2.5, 3, 3, 5])
         elements.append(t)
     else:
         elements.append(
@@ -1533,16 +1546,13 @@ def create_tariff_impact_section(
             ]
         )
 
-    t = Table(
-        tariff_table, colWidths=[4 * cm, 2 * cm, 3 * cm, 2.5 * cm, 2.5 * cm, 2.5 * cm, 3 * cm]
-    )
-    t.setStyle(make_table_style(num_rows=len(tariff_table), font_size=8))
+    t = _wrapped_table(tariff_table, [4, 2, 3, 2.5, 2.5, 2.5, 3], font_size=8)
     elements.append(t)
     elements.append(Spacer(1, 0.5 * cm))
 
     elements.append(
         Paragraph(
-            f"<b>Tariff Changes Detected: {analysis.tariff_changes}</b>",
+            f"<b>Tariff Segments Observed: {analysis.tariff_changes}</b>",
             STYLES["SubSectionHeader"],
         )
     )
@@ -1586,17 +1596,13 @@ def create_compensation_section(
         return elements
 
     # Group by category, preserving the estimator's stable emission order.
-    categories: list[tuple[str, list[dict[str, Any]]]] = []
-    seen: set[str] = set()
+    categories: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         cat = str(row.get("category", ""))
-        if cat not in seen:
-            seen.add(cat)
-            categories.append((cat, []))
-        categories[-1][1].append(row)
+        categories.setdefault(cat, []).append(row)
 
-    for cat, cat_rows in categories:
-        elements.append(Paragraph(f"<b>{cat}</b>", STYLES["SubSectionHeader"]))
+    for cat, cat_rows in categories.items():
+        elements.append(Paragraph(f"<b>{xml_escape(cat)}</b>", STYLES["SubSectionHeader"]))
         table_rows: list[list[str]] = [
             [
                 "Category",
@@ -1622,20 +1628,7 @@ def create_compensation_section(
                     str(r.get("legal_basis", "")),
                 ]
             )
-        t = Table(
-            table_rows,
-            colWidths=[
-                3.2 * cm,
-                2.2 * cm,
-                2.2 * cm,
-                2.2 * cm,
-                1.4 * cm,
-                1.6 * cm,
-                2.6 * cm,
-                4.6 * cm,
-            ],
-        )
-        t.setStyle(make_table_style(num_rows=len(table_rows), font_size=7))
+        t = _wrapped_table(table_rows, [3.2, 2.2, 2.2, 2.2, 1.4, 1.6, 2.6, 4.6])
         elements.append(t)
         elements.append(Spacer(1, 0.3 * cm))
 
@@ -1752,12 +1745,10 @@ def create_appendix_full_evidence(
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    # Local short-form for cell sanitisation.  All user-data
-    # strings fed into a Table cell go through this so a string
-    # with `<bad>` shows the literal `<bad>` rather than any
-    # markup interpretation.  See ``tests/test_pdf_tablecell_xml.py``.
+    # Escaping happens once in _wrapped_table, after preserving the full
+    # invoice/source references. XML entities are never truncated mid-token.
     def _xf(value: object) -> str:
-        return xml_escape(str(value))
+        return str(value)
 
     elements.append(
         Paragraph(
@@ -1801,7 +1792,7 @@ def create_appendix_full_evidence(
         evidence_data.append(
             [
                 _xf(fmt_date(row.get("Date", ""))),
-                _xf(row.get("Source", ""))[:30],
+                _xf(row.get("Source", "")),
                 _xf(row.get("Entry Type", "")),
                 # fmt_money output is numeric (no special chars)
                 fmt_money(row.get("Amount (£)", 0)),
@@ -1810,22 +1801,22 @@ def create_appendix_full_evidence(
                 else "N/A",
                 _xf(row.get("Period From", "")),
                 _xf(row.get("Period To", "")),
-                _xf(row.get("Invoice #", ""))[:15],
-                _xf(row.get("Reading", ""))[:15],
+                _xf(row.get("Invoice #", "")),
+                _xf(row.get("Reading", "")),
                 # Units / Standing Chg: try to keep as numeric if
                 # parseable — those are safe; only escape the raw
                 # fallback when coercion fails.  For brevity here
                 # we escape the displayed value as a whole string
                 # because the underlying cells are normally
                 # already-numeric str()s.
-                _xf(row.get("Units (kWh)", ""))[:10],
-                _xf(row.get("Standing Chg (p/day)", ""))[:10],
-                _xf(row.get("Attachment Name", ""))[:20],
+                _xf(row.get("Units (kWh)", "")),
+                _xf(row.get("Standing Chg (p/day)", "")),
+                _xf(row.get("Attachment Name", "")),
                 _xf(row.get("Details", ""))[:50],
             ]
         )
 
-    # Calculate column widths
+    # Relative widths; the wrapped table scales these to the actual frame.
     col_widths = [
         2.0 * cm,  # Date
         2.5 * cm,  # Source
@@ -1839,10 +1830,10 @@ def create_appendix_full_evidence(
         1.5 * cm,  # Units
         1.5 * cm,  # Standing
         2.0 * cm,  # Attachment
-        CONTENT_WIDTH - sum([2.0, 2.5, 2.0, 2.0, 2.0, 2.0, 2.0, 1.5, 1.5, 1.5, 1.5, 2.0]) * cm,
+        4.0 * cm,
     ]
 
-    t = Table(evidence_data, colWidths=col_widths, repeatRows=1)
+    t = _wrapped_table(evidence_data, col_widths, font_size=6)
     t.setStyle(
         TableStyle(
             [
@@ -1888,7 +1879,7 @@ def create_appendix_full_evidence(
             filt_data.append(
                 [
                     _xf(fmt_date(row.get("Date", ""))),
-                    _xf(row.get("Source", ""))[:30],
+                    _xf(row.get("Source", "")),
                     _xf(row.get("Entry Type", "")),
                     fmt_money(row.get("Amount (£)", 0)),
                     fmt_money(row.get("Period Charge (£)", 0))
@@ -1896,17 +1887,17 @@ def create_appendix_full_evidence(
                     else "N/A",
                     _xf(row.get("Period From", "")),
                     _xf(row.get("Period To", "")),
-                    _xf(row.get("Invoice #", ""))[:15],
-                    _xf(row.get("Reading", ""))[:15],
-                    _xf(row.get("Units (kWh)", ""))[:10],
-                    _xf(row.get("Standing Chg (p/day)", ""))[:10],
-                    _xf(row.get("Attachment Name", ""))[:20],
+                    _xf(row.get("Invoice #", "")),
+                    _xf(row.get("Reading", "")),
+                    _xf(row.get("Units (kWh)", "")),
+                    _xf(row.get("Standing Chg (p/day)", "")),
+                    _xf(row.get("Attachment Name", "")),
                     _xf(row.get("Details", ""))[:50],
                 ]
             )
 
         if len(filt_data) > 1:
-            t2 = Table(filt_data, colWidths=col_widths, repeatRows=1)
+            t2 = _wrapped_table(filt_data, col_widths, font_size=6)
             t2.setStyle(
                 TableStyle(
                     [
@@ -1972,7 +1963,7 @@ def create_appendix_glossary(ctx: RenderContext | None = None) -> list:
     for term, definition in terms.items():
         glossary_data.append([term, definition])
 
-    t = Table(glossary_data, colWidths=[4 * cm, CONTENT_WIDTH - 4 * cm])
+    t = _wrapped_table(glossary_data, [4, 12], font_size=8)
     t.setStyle(
         TableStyle(
             [

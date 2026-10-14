@@ -251,7 +251,10 @@ def run_cli_extract(args: list[str]) -> None:
     if parsed.config:
         try:
             with open(parsed.config, encoding="utf-8") as f:
-                config = cast(ConfigDict, json.load(f))
+                loaded_config = json.load(f)
+                if not isinstance(loaded_config, dict):
+                    raise ValueError("Configuration must be a JSON object")
+                config = cast(ConfigDict, loaded_config)
         except Exception as e:
             sys.stderr.write(f"ERROR: Failed to load config: {e}\n")
             sys.exit(1)
@@ -502,10 +505,11 @@ def _render_cli_report(parsed: argparse.Namespace, fmt: str) -> None:
     from pathlib import Path
     from uuid import uuid4
 
-    from edf_bill_fetcher.application.run_service import run
+    from edf_bill_fetcher.application.run_service import check_source_destinations, run
     from edf_bill_fetcher.domain.json_values import freeze_json, object_value, strict_loads
     from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
     from edf_bill_fetcher.io.persistence.result_codec import decode_result, migrate_legacy
+    from edf_bill_fetcher.io.writers.evidence_bundle import resolve_bundle_paths
     from edf_bill_fetcher.models.report_view import RenderSelection
 
     payload = strict_loads(Path(parsed.records).read_text(encoding="utf-8"))
@@ -577,6 +581,18 @@ def _render_cli_report(parsed: argparse.Namespace, fmt: str) -> None:
         Path(path).resolve() in protected for path in (parsed.output, result_path, manifest_path)
     ):
         raise ValueError("Report output would overwrite an input file")
+    state = object_value(snapshot.prepared.extraction.legacy_state)
+    bundle_root = Path(parsed.records).resolve().parent
+    paths, warnings = resolve_bundle_paths(state, str(bundle_root))
+    check_source_destinations(
+        request,
+        [Path(path).resolve() for path in (parsed.output, result_path, manifest_path)],
+        {
+            **state,
+            "source_bundle_path": str(bundle_root),
+            "saved_evidence_paths": {**state.get("saved_evidence_paths", {}), **paths},
+        },
+    )
     outcome = run(
         request,
         {fmt: parsed.output},
@@ -584,12 +600,15 @@ def _render_cli_report(parsed: argparse.Namespace, fmt: str) -> None:
         manifest_path=manifest_path,
         accepted_result=snapshot,
         selection=selection,
+        warnings=warnings,
     )
     if outcome.status not in {"complete", "review_required"}:
         raise RuntimeError(outcome.error or "No records to report on")
     sys.stdout.write(
         f"{fmt.upper()} report generated: {parsed.output}\nSaved analysis: {result_path}\n"
     )
+    for warning in warnings:
+        sys.stderr.write(f"WARNING: {warning}\n")
 
 
 def run_cli_pdf_report(args: list[str]) -> None:

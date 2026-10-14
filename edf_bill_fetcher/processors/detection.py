@@ -19,7 +19,7 @@ import pandas as pd
 from edf_bill_fetcher.helpers.date_utils import _safe_to_datetime, parse_to_display_date
 from edf_bill_fetcher.io.adapters.pdf import legal_context as legal_context_fn  # noqa: E402,F401
 from edf_bill_fetcher.processors.ledgers import scoped_analysis
-from edf_bill_fetcher.processors.preparation import scope
+from edf_bill_fetcher.processors.preparation import identity, normalize_record, number, scope
 from edf_bill_fetcher.processors.sap_parsers import (
     detect_reconciliation_statement,
     extract_reconciliation_statement_rows,
@@ -191,18 +191,18 @@ def _parse_sub_periods(raw: object) -> list[dict]:
         pf, pt = _safe_to_datetime(parts[0]), _safe_to_datetime(parts[1])
         if pd.isna(pf) or pd.isna(pt):
             continue
-        try:
-            rows.append(
-                {
-                    "period_from": pf,
-                    "period_to": pt,
-                    "units_kwh": float(parts[2]),
-                    "rate_p": float(parts[3]),
-                    "charge": float(parts[4]),
-                }
-            )
-        except (TypeError, ValueError):
+        units, rate, charge = (number(part) for part in parts[2:])
+        if units is None or rate is None or charge is None:
             continue
+        rows.append(
+            {
+                "period_from": pf,
+                "period_to": pt,
+                "units_kwh": units,
+                "rate_p": rate,
+                "charge": charge,
+            }
+        )
     return rows
 
 
@@ -316,10 +316,9 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     the count of consumption days in the period that fall more than
     365 days before the bill Date.
 
-    The detector also pulls ``Period Charge (£)`` from the source
-    record; if that column is absent, N/A, or unparseable, it falls
-    back to ``Amount (£)`` and records the provenance in the
-    ``Value Source`` column.
+    The detector pulls ``Period Charge (£)`` or an explicit transaction
+    from the source record. It does not substitute an account balance
+    for an unavailable charge; ``Value Source`` records the basis.
 
     The function tolerates a missing ``Cancel/Rebill Admitted``
     column (treated as ``False``).
@@ -399,6 +398,9 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     has_admit = "Cancel/Rebill Admitted" in df.columns
     rows = []
     for _, r in df.iterrows():
+        kind = identity(r.get("Entry Type"))
+        if kind and kind not in {"Unknown", "New Bill", "Ongoing Balance", "Charge"}:
+            continue
         pf = _safe_to_datetime(r.get("Period From"))
         pt = _safe_to_datetime(r.get("Period To"))
         if pd.isna(pf) or pd.isna(pt):
@@ -422,11 +424,11 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
             continue
         # Excess Days: consumption days supplied more than 365 days before bill Date.
         excess = max(0, int((backbilling_cutoff(bill_date_dt) - pf).days))
-        # Period Charge (£) with Amount (£) fallback.
+        # Use a billed charge or known transaction, never an account balance.
         charge, value_source = _pull_period_charge(r)
         if charge is None or charge <= 0:
             continue
-        admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
+        admitted = str(r.get("Cancel/Rebill Admitted")).lower() == "true" if has_admit else False
         bill_date_raw = r.get("Date", "")
         sub_periods = _parse_sub_periods(r.get("Sub Periods"))
         cutoff = backbilling_cutoff(bill_date_dt)
@@ -446,10 +448,7 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
             # In both cases rate/100 * kwh_per_day * excess == unlawful.
             excess_eff = min(excess, days)
             if excess_eff > 0:
-                try:
-                    units_f = float(str(r.get("Units (kWh)", "")).replace(",", "").strip())
-                except (TypeError, ValueError):
-                    units_f = 0.0
+                units_f = number(r.get("Units (kWh)")) or 0.0
                 if units_f > 0 and days > 0:
                     rate_p = charge / units_f * 100.0 if units_f else 100.0
                     kwh_per_day = units_f / days if days else 0.0
@@ -497,12 +496,40 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
     return out[columns + ["_unlawful_slices"]]
 
 
+def _ambiguous_invoice_references(df: pd.DataFrame) -> set[str]:
+    """Find bill identifiers with differing observations within one ledger.
+
+    Revision graph nodes use invoice identifiers, so distinct bill versions
+    sharing one identifier cannot be ordered safely by that graph.
+    """
+    observations: dict[str, set[tuple]] = defaultdict(set)
+    for raw in df.to_dict("records"):
+        record = normalize_record(raw)
+        if record["Entry Type"] not in {"Unknown", "New Bill", "Ongoing Balance", "Charge"}:
+            continue
+        invoice = identity(record.get("Invoice #"))
+        if not invoice:
+            continue
+        observations[invoice].add(
+            (
+                _safe_to_datetime(record.get("Date")),
+                _safe_to_datetime(record.get("Period From")),
+                _safe_to_datetime(record.get("Period To")),
+                number(record.get("Period Charge (£)")),
+                number(record.get("Transaction Amount (£)")),
+            )
+        )
+    return {invoice for invoice, versions in observations.items() if len(versions) > 1}
+
+
 def _reversal_match(
     evidence_df: pd.DataFrame | None,
     killed_inv: str,
     killed_amount: float | None,
     killed_pf: pd.Timestamp,
     killed_pt: pd.Timestamp,
+    *,
+    killed_date: pd.Timestamp | None = None,
 ) -> bool:
     """Return whether a reversal-credit row in *evidence_df* matches the killed invoice well enough to count as rebilling evidence.
 
@@ -515,17 +542,20 @@ def _reversal_match(
         return False
     if "Entry Type" not in evidence_df.columns:
         return False
-    try:
-        amount = abs(float(killed_amount or 0.0))
-    except (TypeError, ValueError):
+    amount = number(killed_amount)
+    if amount is None or amount <= 0:
         return False
-    matching = evidence_df[evidence_df["Entry Type"].isin(["Credit", "Payment"])]
+    # Paying an invoice does not cancel its charge. Only a credit can
+    # substantiate the existing reversal heuristic.
+    matching = evidence_df[evidence_df["Entry Type"] == "Credit"]
     for _, row in matching.iterrows():
-        try:
-            row_amt = abs(float(row.get("Amount (£)", 0) or 0))
-        except (TypeError, ValueError):
+        credit_date = _safe_to_datetime(row.get("Date"))
+        if killed_date is not None and pd.notna(credit_date) and credit_date < killed_date:
             continue
-        if abs(row_amt - amount) > 0.50:
+        row_amt = number(normalize_record(row.to_dict()).get("Transaction Amount (£)"))
+        if row_amt is None or row_amt >= 0:
+            continue
+        if abs(abs(row_amt) - amount) > 0.50:
             continue
         rpf = _safe_to_datetime(row.get("Period From"))
         rpt = _safe_to_datetime(row.get("Period To"))
@@ -589,21 +619,28 @@ def detect_rebilling(
         return pd.DataFrame(columns=columns)
     has_admit = "Cancel/Rebill Admitted" in df.columns
     rows = []
+    observed = pd.concat([df, evidence_df], ignore_index=True) if evidence_df is not None else df
+    ambiguous = _ambiguous_invoice_references(observed)
     parsed = []
     for _, r in df.iterrows():
+        kind = identity(r.get("Entry Type"))
+        if kind and kind not in {"Unknown", "New Bill", "Ongoing Balance", "Charge"}:
+            continue
+        invoice = identity(r.get("Invoice #"))
+        if not invoice or invoice in ambiguous:
+            continue
         pf = _safe_to_datetime(r.get("Period From"))
         pt = _safe_to_datetime(r.get("Period To"))
         bd = _safe_to_datetime(r.get("Date"))
         if pd.isna(pf) or pd.isna(pt) or pd.isna(bd):
             continue
-        try:
-            amount = float(r.get("Amount (£)", 0) or 0)
-        except (TypeError, ValueError):
-            amount = None
-        admitted = bool(r.get("Cancel/Rebill Admitted")) if has_admit else False
+        amount, _ = _pull_period_charge(r)
+        if amount is not None and amount < 0:
+            continue
+        admitted = str(r.get("Cancel/Rebill Admitted")).lower() == "true" if has_admit else False
         parsed.append(
             {
-                "Invoice #": r.get("Invoice #", ""),
+                "Invoice #": invoice,
                 "Date_raw": r.get("Date", ""),
                 "Date": bd,
                 "Period From": pf,
@@ -618,6 +655,10 @@ def detect_rebilling(
     parsed.sort(key=lambda x: x["Date"])
     for i, killer in enumerate(parsed):
         for killed in parsed[:i]:
+            # Dates alone cannot order documents issued on the same day,
+            # and repeated observations of an invoice cannot replace itself.
+            if killer["Date"] <= killed["Date"] or killer["Invoice #"] == killed["Invoice #"]:
+                continue
             # Containment -- the only structural requirement.
             if not (
                 killer["Period From"] <= killed["Period From"]
@@ -636,6 +677,7 @@ def detect_rebilling(
                 killed["Amount"],
                 killed["Period From"],
                 killed["Period To"],
+                killed_date=killed["Date"],
             )
             if reversal_match:
                 triggers.append("reversal credit row matches killed")
@@ -676,7 +718,7 @@ def compute_transitive_domination(
     rebilling_df: pd.DataFrame,
     back_billing_rows: pd.DataFrame,
 ) -> dict[str, tuple[str, bool]]:
-    """Compute the transitive closure of the kill-chain edges restricted to back-billing rows.
+    """Follow the full revision chain, returning superseded back-billing rows.
 
     Consumes:
         rebilling_df: output of detect_rebilling with columns
@@ -720,12 +762,9 @@ def compute_transitive_domination(
         if pd.notna(pf) and pd.notna(pt):
             period_map[inv_id] = (pf, pt)
 
-    # Widen the edge filter to include any edge where the KILLED endpoint
-    # is a back-billing row, regardless of whether the killer is. A
-    # non-back-billing rebill (e.g. a regular monthly bill) CAN supersede
-    # a back-billing invoice; the survivor then carries that killer's ID
-    # even though it has no row in the back-billing sheet.
-    bb_edges = [(u, v) for u, v in edges if v in bb_ids]
+    # Keep the complete revision chain. An intermediate replacement may
+    # not itself be back-billed but can be replaced again by a later bill.
+    bb_edges = edges
 
     adj: dict[str, list[str]] = defaultdict(list)
     for u, v in bb_edges:
@@ -751,6 +790,16 @@ def compute_transitive_domination(
                     queue.append(neighbor)
         reachable_from[source] = visited - {source}
 
+    cyclic = {u for u, v in bb_edges if u == v}
+    for source in sources:
+        if any(
+            source in reachable_from[other] and other in reachable_from[source]
+            for other in sources
+            if source != other
+        ):
+            cyclic.add(source)
+    ambiguous = cyclic | {node for source in cyclic for node in reachable_from[source]}
+
     def sort_key(inv_id: str) -> tuple[pd.Timestamp, str]:
         if inv_id in period_map:
             return (period_map[inv_id][0], inv_id)
@@ -769,17 +818,22 @@ def compute_transitive_domination(
 
     domination_map: dict[str, tuple[str, bool]] = {}
     for target in bb_ids:
+        # Cycles contradict a chronological revision chain. Retain their
+        # evidence and any downstream bills for review instead of hiding all
+        # live exposure through mutual or cycle-derived supersession.
+        if target in ambiguous:
+            continue
         superseded_by = [
             source for source in sources if source != target and target in reachable_from[source]
         ]
         if not superseded_by:
             continue
         # The survivor is the ultimate transitive root — a source that is
-        # not itself superseded by any other candidate. Only fall back to
-        # earliest-period-start tiebreak if every candidate is superseded
-        # (a cycle, which shouldn't happen in well-formed kill chains).
+        # not itself superseded by any other candidate.
         roots = [s for s in superseded_by if s not in superseded_sources]
-        survivor = max(roots if roots else superseded_by, key=sort_key)
+        if not roots:
+            continue
+        survivor = max(roots, key=sort_key)
         partial_overlap = False
         if survivor in period_map and target in period_map:
             survivor_start, survivor_end = period_map[survivor]

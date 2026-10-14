@@ -114,10 +114,10 @@ def test_transitive_domination_non_bb_killer_via_transitive_chain() -> None:
     assert "R" not in result
 
 
-def test_cycle_produces_mutual_domination() -> None:
+def test_cycle_cannot_establish_automatic_domination() -> None:
     # A kills B AND B kills A — a 2-node cycle. Cycles shouldn't happen in
-    # well-formed kill chains, but the function must handle them gracefully
-    # (mutual supersession) rather than crash or loop forever.
+    # well-formed kill chains. Both bills must remain available for review;
+    # mutual supersession would incorrectly hide all financial exposure.
     rebilling_df = pd.DataFrame(
         [
             {"Killer Invoice": "A", "Killed Invoice": "B"},
@@ -131,11 +131,7 @@ def test_cycle_produces_mutual_domination() -> None:
         ]
     )
     result = compute_transitive_domination(rebilling_df, back_billing_rows)
-    # Does not crash; both nodes are recorded (mutual supersession).
-    assert "A" in result
-    assert "B" in result
-    assert result["A"][0] == "B"
-    assert result["B"][0] == "A"
+    assert result == {}
 
 
 def test_two_disjoint_killers_latest_survives() -> None:

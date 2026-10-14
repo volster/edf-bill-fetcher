@@ -133,9 +133,8 @@ def write_evidence_sheet(ws, df, is_duplicate=False, saved_paths=None):
                     cell.value = f'=IF(AND({balance_column}{prior_row}>0,{balance_column}{row_number}>{balance_column}{prior_row}*2),"⚠ >100% INCREASE","")'
                     cell.data_type = "f"
             if header == "Attachment Name":
-                path = saved_paths.get(str(record.get("Source ID", ""))) or saved_paths.get(
-                    str(value)
-                )
+                source_id = str(record.get("Source ID", "") or "")
+                path = saved_paths.get(source_id) if source_id else saved_paths.get(str(value))
                 if path:
                     cell.hyperlink = str(path)
                     cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
@@ -207,11 +206,11 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
 
         row_values = [
             int(year_val),
-            range_f,
+            f'=IF(C{r_idx}=0,"",{range_f[1:]})',
             f'=COUNTIFS({amt_col},"<>",{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1))',
             f'=IFERROR(AVERAGEIFS({amt_col},{date_col},">="&DATE({yr_cell},1,1),{date_col},"<"&DATE({yr_cell}+1,1,1)),"")',
-            peak_f,
-            low_f,
+            f'=IF(C{r_idx}=0,"",{peak_f[1:]})',
+            f'=IF(C{r_idx}=0,"",{low_f[1:]})',
             "→ Drill down",
         ]
         for c_idx, val in enumerate(row_values, 1):
@@ -244,15 +243,27 @@ def write_summary_sheet(ws, years, evidence_sheet_name, last_data_row=5000):
     tot_fill = PatternFill("solid", start_color="10367A")
     tot_specs = [
         ("OVERALL", None, "center"),
-        (f'=IFERROR(MAX(E{first_r}:E{last_r})-MIN(F{first_r}:F{last_r}),"")', "£#,##0.00", "right"),
+        (
+            f'=IF(SUM(C{first_r}:C{last_r})=0,"",IFERROR(MAX(E{first_r}:E{last_r})-MIN(F{first_r}:F{last_r}),""))',
+            "£#,##0.00",
+            "right",
+        ),
         (f"=SUM(C{first_r}:C{last_r})", "#,##0", "right"),
         (
             f'=IFERROR(SUMPRODUCT(D{first_r}:D{last_r},C{first_r}:C{last_r})/SUM(C{first_r}:C{last_r}),"")',
             "£#,##0.00",
             "right",
         ),
-        (f'=IFERROR(MAX(E{first_r}:E{last_r}),"")', "£#,##0.00", "right"),
-        (f'=IFERROR(MIN(F{first_r}:F{last_r}),"")', "£#,##0.00", "right"),
+        (
+            f'=IF(SUM(C{first_r}:C{last_r})=0,"",IFERROR(MAX(E{first_r}:E{last_r}),""))',
+            "£#,##0.00",
+            "right",
+        ),
+        (
+            f'=IF(SUM(C{first_r}:C{last_r})=0,"",IFERROR(MIN(F{first_r}:F{last_r}),""))',
+            "£#,##0.00",
+            "right",
+        ),
     ]
     for c_idx, (val, num_fmt, align) in enumerate(tot_specs, 1):
         c = ws.cell(row=n, column=c_idx, value=val)

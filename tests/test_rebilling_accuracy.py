@@ -32,10 +32,13 @@ def _row(
 ) -> dict:
     return {
         "Invoice #": invoice,
+        "Entry Type": "New Bill",
         "Date": date,
         "Period From": period_from,
         "Period To": period_to,
         "Amount (£)": amount,
+        "Balance (£)": amount,
+        "Period Charge (£)": amount,
         "Cancel/Rebill Admitted": admitted,
     }
 

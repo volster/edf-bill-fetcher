@@ -121,7 +121,11 @@ def sanitise_filename(name: str) -> str:
     if re.match(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", base, re.I):
         base = "_" + base
     stem, ext = os.path.splitext(base)
-    base = stem[:180] + ext[:20]
+    # POSIX filenames are capped in bytes; character limits alone still allow
+    # valid Unicode labels to exceed NAME_MAX and silently lose a bundle copy.
+    base = stem.encode("utf-8")[:180].decode("utf-8", errors="ignore") + ext.encode("utf-8")[
+        :20
+    ].decode("utf-8", errors="ignore")
     return base or "attachment"
 
 
@@ -162,13 +166,18 @@ def save_evidence_files(
 
     rows = evidence_df.to_dict("records")
     paths: dict[str, set[str]] = defaultdict(set)
+    unresolved_identities: set[str] = set()
     hashes: dict[str, set[str]] = defaultdict(set)
     source_invoices: dict[str, set[str]] = defaultdict(set)
     invoice_sources: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         att = _text(row.get("Attachment Name"))
         source_id = _text(row.get("Source ID"))
-        src = source_paths.get(source_id) or source_paths.get(att)
+        # A recorded identity is authoritative: a missing ID must never pick a
+        # different occurrence merely because its display filename matches.
+        src = source_paths.get(source_id) if source_id else source_paths.get(att)
+        if att and source_id and not src:
+            unresolved_identities.add(att)
         if att and src:
             src = os.path.realpath(src)
             paths[att].add(src)
@@ -202,6 +211,9 @@ def save_evidence_files(
         if att in attempted:
             continue
         attempted.add(att)
+        if att in unresolved_identities:
+            log(f"evidence_files: missing source identity for {att!r}; no file copied")
+            continue
         choices = paths.get(att, set())
         if len(choices) > 1:
             log(f"evidence_files: ambiguous source identity for {att!r}; no file copied")
@@ -221,7 +233,7 @@ def save_evidence_files(
         dest_base = sanitise_filename(display_name)
         inv_num = next(iter(source_invoices[src]), "") if len(source_invoices[src]) == 1 else ""
         if inv_num and inv_num not in multi_att_invoices:
-            dest_base = sanitise_filename(inv_num) + os.path.splitext(display_name)[1]
+            dest_base = sanitise_filename(inv_num + os.path.splitext(display_name)[1])
         stem, ext = os.path.splitext(dest_base)
         n = 2
         while dest_base.casefold() in used_names or os.path.exists(
@@ -292,12 +304,15 @@ def build_bundle_manifest(
         if invoice and invoice not in entry["invoices"]:
             entry["invoices"].append(invoice)
         pages = [row.get("Page From"), row.get("Page To")]
-        if all(
-            isinstance(page, (int, float))
-            and not isinstance(page, bool)
-            and 1 <= page <= 1_000_000
-            and int(page) == page
-            for page in pages
+        if (
+            all(
+                isinstance(page, (int, float))
+                and not isinstance(page, bool)
+                and 1 <= page <= 1_000_000
+                and int(page) == page
+                for page in pages
+            )
+            and pages[0] <= pages[1]
         ):
             page_range = [int(page) for page in pages]
             if page_range not in entry["page_ranges"]:
@@ -315,6 +330,14 @@ def resolve_bundle_paths(state: dict, bundle_dir: str) -> tuple[dict[str, str], 
     manifest = state.get("source_manifest", {})
     if not isinstance(manifest, dict):
         return {}, ("Stored evidence mapping is unavailable.",)
+    aliases: dict[str, set[str]] = defaultdict(set)
+    for source_id, metadata in manifest.items():
+        if isinstance(metadata, dict):
+            name = metadata.get("Attachment Name")
+            if isinstance(name, str) and name:
+                # Include unavailable occurrences too: their names do not become
+                # unambiguous simply because only one copy can currently open.
+                aliases[name].add(source_id)
     for source_id, metadata in manifest.items():
         if not isinstance(metadata, dict):
             notes.append(f"Stored evidence mapping is unavailable: {source_id}")
@@ -327,13 +350,13 @@ def resolve_bundle_paths(state: dict, bundle_dir: str) -> tuple[dict[str, str], 
             continue
         try:
             source = (root / relative.replace("\\", "/")).resolve()
-        except (OSError, RuntimeError):
+            if not source.is_relative_to(root) or not source.is_file():
+                notes.append(
+                    f"Original evidence unavailable: {metadata.get('Original Filename', source_id)}"
+                )
+                continue
+        except (OSError, ValueError, RuntimeError):
             notes.append(f"Original evidence unavailable: {source_id}")
-            continue
-        if not source.is_relative_to(root) or not source.is_file():
-            notes.append(
-                f"Original evidence unavailable: {metadata.get('Original Filename', source_id)}"
-            )
             continue
         expected = metadata.get("Content Hash")
         try:
@@ -346,21 +369,33 @@ def resolve_bundle_paths(state: dict, bundle_dir: str) -> tuple[dict[str, str], 
             notes.append(f"Original evidence unreadable: {source.name}: {error}")
             continue
         paths[source_id] = str(source)
-        name = metadata.get("Attachment Name")
-        if isinstance(name, str):
-            paths[name] = str(source)
+    for name, identities in aliases.items():
+        if len(identities) > 1:
+            notes.append(f"Stored evidence attachment name is ambiguous: {name}")
+        elif name not in manifest:
+            identity = next(iter(identities))
+            if identity in paths:
+                paths[name] = paths[identity]
     # Older compatibility results may have absolute mappings without a manifest.
     if not manifest:
         legacy_paths = state.get("saved_evidence_paths", {})
         if not isinstance(legacy_paths, dict):
             return {}, ("Stored evidence mapping is unavailable.",)
         for key, path in legacy_paths.items():
-            legacy_source = Path(path) if isinstance(path, str) else None
-            if legacy_source is not None and not legacy_source.is_absolute():
-                legacy_source = root / legacy_source
-            if legacy_source is not None and legacy_source.is_file():
-                paths[key] = str(legacy_source.resolve())
-            else:
+            try:
+                if not isinstance(path, str) or not path:
+                    raise ValueError("Missing legacy evidence path")
+                legacy_source = Path(path.replace("\\", "/"))
+                relative = not legacy_source.is_absolute()
+                if relative:
+                    legacy_source = root / legacy_source
+                legacy_source = legacy_source.resolve()
+                if (
+                    relative and not legacy_source.is_relative_to(root)
+                ) or not legacy_source.is_file():
+                    raise ValueError("Unavailable legacy evidence path")
+                paths[key] = str(legacy_source)
+            except (OSError, ValueError, RuntimeError):
                 notes.append(f"Original evidence unavailable: {key}")
     return paths, tuple(notes)
 

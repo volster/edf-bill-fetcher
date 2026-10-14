@@ -86,14 +86,22 @@ def parse_eml_message(path: str | Path) -> dict[str, Any]:
     body_html = ""
     body_text = ""
     attachments = []
-    for part in msg.walk():
-        if part.is_multipart():
-            continue
+    parts: list[Message] = [msg]
+    while parts:
+        part = parts.pop()
         filename = part.get_filename()
         if filename or part.get_content_disposition() == "attachment":
             attachment_data = part.get_payload(decode=True)
             if isinstance(attachment_data, bytes):
                 attachments.append({"name": filename or "attachment", "data": attachment_data})
+            # An attached .eml or multipart document is not the enclosing
+            # email's body. walk() would descend into it and make its HTML
+            # override the enclosing email's actual plain-text evidence.
+            continue
+        if part.is_multipart():
+            payload = part.get_payload()
+            if isinstance(payload, list):
+                parts.extend(child for child in reversed(payload) if isinstance(child, Message))
             continue
         text = _decode_payload(part)
         if text is None:

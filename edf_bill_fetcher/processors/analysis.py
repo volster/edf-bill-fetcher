@@ -28,7 +28,7 @@ from edf_bill_fetcher.helpers.dispute_flags import (
     RECON_MIN_TOLERANCE,
     RECON_PCT_TOLERANCE,
 )
-from edf_bill_fetcher.processors.detection import _reversal_match
+from edf_bill_fetcher.processors.detection import _ambiguous_invoice_references, _reversal_match
 from edf_bill_fetcher.writers._helpers import _disclosed_label, _reading_type_to_aem
 
 
@@ -56,6 +56,20 @@ def compute_dispute_flags(dfc: pd.DataFrame, mean_daily: float = 0.0) -> tuple[l
     flags = []
     work["_scope"] = [scope(r) for r in work.to_dict("records")]
     for _, group in work.groupby("_scope", sort=False):
+        for invoice in sorted(_ambiguous_invoice_references(group)):
+            observations = group[group["Invoice #"].map(identity) == invoice]
+            dated = observations[observations["_dt"].notna()].sort_values("_dt", kind="stable")
+            date = dated.iloc[-1]["Date"] if not dated.empty else "N/A"
+            flags.append(
+                (
+                    "INVOICE IDENTITY CONFLICT",
+                    date,
+                    None,
+                    f"Invoice {invoice} has differing bill observations within the same ledger. "
+                    "Automatic supersession is withheld; review the original documents.",
+                    "MEDIUM",
+                )
+            )
         bills = group[group["Entry Type"].isin(["New Bill", "Ongoing Balance"])].sort_values("_dt")
         dated_bills = bills[bills["_dt"].notna()]
         for i in range(1, len(dated_bills)):

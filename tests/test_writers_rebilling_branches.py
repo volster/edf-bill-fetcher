@@ -66,6 +66,7 @@ def _row(
         "Period From": period_from,
         "Period To": period_to,
         "Amount (£)": amount,
+        "Period Charge (£)": amount,
         "Cancel/Rebill Admitted": admitted,
     }
 
@@ -253,14 +254,14 @@ def test_reversal_match_skips_row_with_unparseable_amount() -> None:
     assert _reversal_match(evidence, "A", 250.0, killed_pf, killed_pt) is True
 
 
-def test_reversal_match_accepts_payment_entry_type() -> None:
-    """The 'Payment' Entry Type is also accepted alongside 'Credit'."""
+def test_reversal_match_rejects_payment_entry_type() -> None:
+    """A payment settles debt but does not establish reversal of the bill."""
     killed_pf = pd.Timestamp("2023-01-01")
     killed_pt = pd.Timestamp("2023-03-31")
     evidence = pd.DataFrame(
         [_credit_row("A", "01 Jan 2023", "31 Mar 2023", -250.0, entry_type="Payment")]
     )
-    assert _reversal_match(evidence, "A", 250.0, killed_pf, killed_pt) is True
+    assert _reversal_match(evidence, "A", 250.0, killed_pf, killed_pt) is False
 
 
 def test_reversal_match_returns_false_when_no_matching_credit_rows() -> None:

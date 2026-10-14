@@ -263,8 +263,8 @@ def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> 
 
     if not flags:
         parts.append(
-            "<p>No automated flags were generated. The billing data appears "
-            "consistent within established thresholds.</p></div>"
+            "<p>No automated flags were generated. Manual review of the original evidence "
+            "and its completeness is still required.</p></div>"
         )
         return "\n".join(parts)
 
@@ -699,7 +699,7 @@ def create_tariff_impact_section(
         )
     parts.append(_table(tariff_rows))
 
-    parts.append(f"<h3>Tariff Changes Detected: {analysis.tariff_changes}</h3>")
+    parts.append(f"<h3>Tariff Segments Observed: {analysis.tariff_changes}</h3>")
     parts.append("</div>")
     return "\n".join(parts)
 
@@ -723,16 +723,12 @@ def create_compensation_section(
         parts.append("<p>No compensation claims identified in the extracted records.</p></div>")
         return "\n".join(parts)
 
-    categories: list[tuple[str, list[dict[str, Any]]]] = []
-    seen: set[str] = set()
+    categories: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         cat = str(row.get("category", ""))
-        if cat not in seen:
-            seen.add(cat)
-            categories.append((cat, []))
-        categories[-1][1].append(row)
+        categories.setdefault(cat, []).append(row)
 
-    for cat, cat_rows in categories:
+    for cat, cat_rows in categories.items():
         parts.append(f"<h3>{_esc(cat)}</h3>")
         table_rows: list[list[Any]] = [
             [

@@ -1044,7 +1044,7 @@ def create_tariff_impact_section(
     doc.add_paragraph("")
 
     doc.add_paragraph(
-        f"Tariff Changes Detected: {analysis.tariff_changes}",
+        f"Tariff Segments Observed: {analysis.tariff_changes}",
         style=styles["SubSectionHeader"],
     )
 
@@ -1075,16 +1075,12 @@ def create_compensation_section(
         doc.add_page_break()
         return
 
-    categories: list[tuple[str, list[dict[str, Any]]]] = []
-    seen: set[str] = set()
+    categories: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         cat = str(row.get("category", ""))
-        if cat not in seen:
-            seen.add(cat)
-            categories.append((cat, []))
-        categories[-1][1].append(row)
+        categories.setdefault(cat, []).append(row)
 
-    for cat, cat_rows in categories:
+    for cat, cat_rows in categories.items():
         doc.add_paragraph(cat, style=styles["SubSectionHeader"])
         table = doc.add_table(rows=len(cat_rows) + 1, cols=8)
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
