@@ -161,17 +161,35 @@ def _parse_sap_csv(
     out: list[dict] = []
     n_short = 0
     n_long = 0
+    short_positions: list[int] = []
+    long_positions: list[int] = []
     for raw_row in rows[1:]:
         if not raw_row or all(not (c or "").strip() for c in raw_row):
             continue
         if len(raw_row) < len(header):
             n_short += 1
+            if len(short_positions) < 10:
+                short_positions.append(len(out) + 1)
         elif len(raw_row) > len(header):
             n_long += 1
+            if len(long_positions) < 10:
+                long_positions.append(len(out) + 1)
         row = {header[i]: (raw_row[i] if i < len(raw_row) else "") for i in range(len(header))}
         out.append(row)
     if report is not None and (n_short or n_long):
-        report(f"SAP CSV: {n_short} short row(s), {n_long} long row(s) out of {len(out)} parsed")
+        locations = "; ".join(
+            f"{label}: {', '.join(map(str, positions))}{' (first 10)' if count > 10 else ''}"
+            for label, positions, count in (
+                ("short", short_positions, n_short),
+                ("long", long_positions, n_long),
+            )
+            if positions
+        )
+        report(
+            f"SAP CSV: {n_short} short row(s), {n_long} long row(s) out of {len(out)} parsed. "
+            f"Affected parsed data rows (1-based): {locations}. "
+            f"Expected {len(header)} fields; missing fields padded, extra fields omitted. Review the original."
+        )
     return out
 
 

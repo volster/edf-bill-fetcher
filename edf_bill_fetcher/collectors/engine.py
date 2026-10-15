@@ -725,7 +725,11 @@ class EvidenceEngine:
         self.attachment_count += 1
         if not data.startswith(b"%PDF"):
             self.skipped_attachment_count += 1
-            self.log_error("Attachment", f"Unsupported attachment {name!r} in {parent!r}")
+            if name.lower().endswith(".pdf"):
+                self.log_error(
+                    "Attachment",
+                    f"Attachment {name!r} in {parent!r} is empty or has no PDF header; PDF not extracted",
+                )
             return
         if self._attachment_dir is None:
             self._attachment_dir = tempfile.TemporaryDirectory(prefix="edf-attachments-")
@@ -844,13 +848,17 @@ class EvidenceEngine:
                     sap_kind = detect_sap_dump(slice_text)
                     if sap_kind is not None:
                         source_file = slice_attachment or slice_detail or ""
+
+                        def report_sap(message: str, label: str = source_file) -> None:
+                            self.log_error(f"SAP dump {label}", message)
+
                         if sap_kind == "contract":
                             self.sap_contract_rows.extend(
                                 self._selected_sap_rows(
                                     parse_sap_contract_history(
                                         slice_text,
                                         source_file=source_file,
-                                        report=lambda msg: self.log_error("SAP dump", msg),
+                                        report=report_sap,
                                     )
                                 )
                             )
@@ -860,7 +868,7 @@ class EvidenceEngine:
                                     parse_sap_meter_read_history(
                                         slice_text,
                                         source_file=source_file,
-                                        report=lambda msg: self.log_error("SAP dump", msg),
+                                        report=report_sap,
                                     )
                                 )
                             )
@@ -870,7 +878,7 @@ class EvidenceEngine:
                                     parse_sap_financial_transactions(
                                         slice_text,
                                         source_file=source_file,
-                                        report=lambda msg: self.log_error("SAP dump", msg),
+                                        report=report_sap,
                                     )
                                 )
                             )
@@ -1011,13 +1019,65 @@ class EvidenceEngine:
     # PST / OST crawl
     # ------------------------------------------------------------------
 
-    def crawl_pst(self, folder):
+    def _process_pst_body(
+        self, msg: Any, subj: str, date_str: str, sender: str, context: str
+    ) -> None:
+        """Try body representations independently without blocking attachment recovery."""
+        for label, getter, source in (
+            ("HTML", "get_html_body", "Email Body"),
+            ("plain text", "get_plain_text_body", "Email Body"),
+            ("RTF", "get_rtf_body", "Email Body (RTF)"),
+        ):
+            try:
+                body = getattr(msg, getter)()
+                if not body:
+                    continue
+                if label == "HTML":
+                    body_text = BeautifulSoup(body, "html.parser").get_text(separator=" ")
+                else:
+                    if isinstance(body, bytes):
+                        decoded = UnicodeDammit(
+                            body, known_definite_encodings=["utf-8", "windows-1252"]
+                        )
+                        body_text = decoded.unicode_markup or ""
+                        if (
+                            decoded.original_encoding not in {"utf-8", "ascii"}
+                            or decoded.contains_replacement_characters
+                        ):
+                            self.log_error(
+                                f"PST {label} body ({context})",
+                                f"Body decoded as {decoded.original_encoding}; review extracted text",
+                            )
+                    else:
+                        body_text = str(body)
+                    if label == "RTF":
+                        body_text = re.sub(r"\\[a-z]+[-\d]*\s?", " ", body_text)
+                        body_text = re.sub(r"[{}\\]", " ", body_text)
+                if not body_text.strip():
+                    continue
+                self.process_text(body_text, source, subj, date_str, sender=sender)
+                return
+            except Exception as error:
+                self.log_error(f"PST {label} body ({context})", str(error))
+        self.log_error(
+            f"Email: {subj} ({date_str})",
+            "No readable body; attachment extraction will still be attempted",
+        )
+
+    def crawl_pst(self, folder: Any, *, folder_path: str = "") -> None:
         """Recursively walk a PST/OST folder and process every EDF email found."""
         if not HAS_PYPFF:
             self.log_error("PST", "pypff not installed — skipping PST processing")
             return
         if self.is_cancelled():
             return
+
+        try:
+            name = folder.get_name()
+        except Exception:
+            name = None
+        name = name if isinstance(name, str) and name else "Unnamed folder"
+        folder_label = f"{folder_path}/{name}" if folder_path else name
 
         msg_total = folder.get_number_of_sub_messages()
         for i in range(msg_total):
@@ -1055,82 +1115,54 @@ class EvidenceEngine:
                 if should_process:
                     with self.lock:
                         self.email_count += 1
-                    html = msg.get_html_body()
-                    plain = msg.get_plain_text_body()
-
-                    if html:
-                        body_text = BeautifulSoup(html, "html.parser").get_text(separator=" ")
-                        self.process_text(
-                            body_text,
-                            "Email Body",
-                            subj,
-                            date_str,
-                            sender=sender_email,
-                            attachment_name=self._source_context.get("Attachment Name", ""),
+                    context = f'{folder_label}, message index {i}, "{subj}" ({date_str})'
+                    self._process_pst_body(msg, subj, date_str, sender_email, context)
+                    try:
+                        attachment_total = msg.get_number_of_attachments()
+                    except Exception as error:
+                        self.log_error(
+                            f"PST attachments ({context})",
+                            "Unable to enumerate attachments; attachments may be missing. Any readable body was processed separately. "
+                            + str(error),
                         )
-                    elif plain:
-                        self.process_text(
-                            plain.decode("utf-8", errors="ignore"),
-                            "Email Body",
-                            subj,
-                            date_str,
-                            sender=sender_email,
-                        )
-                    else:
-                        rtf_body = None
-                        try:
-                            rtf_body = msg.get_rtf_body()
-                        except Exception:
-                            pass
-                        if rtf_body:
-                            try:
-                                rtf_str = rtf_body.decode("utf-8", errors="replace")
-                                rtf_text = re.sub(r"\\[a-z]+[-\d]*\s?", " ", rtf_str)
-                                rtf_text = re.sub(r"[{}\\]", " ", rtf_text)
-                                self.process_text(
-                                    rtf_text,
-                                    "Email Body (RTF)",
-                                    subj,
-                                    date_str,
-                                    sender=sender_email,
-                                )
-                            except Exception as e:
-                                self.log_error(f"Email: {subj}", f"RTF decode: {e}")
-                        else:
-                            self.log_error(f"Email: {subj} ({date_str})", "No readable body")
-
-                    for a_idx in range(msg.get_number_of_attachments()):
+                        continue
+                    for a_idx in range(attachment_total):
                         if self.is_cancelled():
                             return
                         try:
                             att = msg.get_attachment(a_idx)
                             size = att.get_size()
-                            if size > 4:
-                                buf = att.read_buffer(size)
-                                if buf:
-                                    att_name = (
-                                        _pst_attachment_filename(att)
-                                        or f"Attachment_{a_idx + 1}.pdf"
-                                    )
-                                    self._process_attachment(
-                                        buf,
-                                        att_name,
-                                        "PST PDF Attachment",
-                                        date_str,
-                                        sender_email,
-                                        f"{subj} ({date_str})",
-                                    )
+                            buf = att.read_buffer(size) if size else b""
+                            buf = buf or b""
+                            att_name = _pst_attachment_filename(att) or (
+                                f"Attachment_{a_idx + 1}.pdf"
+                                if buf.startswith(b"%PDF")
+                                else f"Attachment_{a_idx + 1}"
+                            )
+                            self._process_attachment(
+                                buf,
+                                att_name,
+                                "PST PDF Attachment",
+                                date_str,
+                                sender_email,
+                                f"{subj} ({date_str})",
+                            )
                         except Exception as e:
-                            self.log_error(f'Attachment in "{subj}"', str(e))
+                            self.log_error(
+                                f'Attachment in "{subj}" ({folder_label}, message index {i}, attachment index {a_idx})',
+                                str(e),
+                            )
 
             except Exception as e:
-                self.log_error(f"PST message index {i}", str(e))
+                self.log_error(f"PST message index {i} ({folder_label})", str(e))
 
-        self.update_ui(f"Scanned {self.email_count} emails, {self.pdf_count} attached PDFs…")
+        self.update_ui(
+            f"Scanned {self.email_count} emails, {self.pdf_count} attached PDFs; skipped {self.skipped_attachment_count} attachments…"
+        )
         for j in range(folder.get_number_of_sub_folders()):
             if self.is_cancelled():
                 return
-            self.crawl_pst(folder.get_sub_folder(j))
+            self.crawl_pst(folder.get_sub_folder(j), folder_path=folder_label)
 
     # ------------------------------------------------------------------
     # Local PDF folder

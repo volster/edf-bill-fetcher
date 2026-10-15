@@ -181,7 +181,9 @@ def _validate_models(value: Any) -> None:
             if not isinstance(domination, dict) or any(
                 not isinstance(value, list)
                 or len(value) != 2
-                or any(not isinstance(item, str) for item in value)
+                or not isinstance(value[0], str)
+                or not value[0].strip()
+                or type(value[1]) is not bool
                 for value in domination.values()
             ):
                 raise ValueError("Invalid SAP superseded invoice mapping")
