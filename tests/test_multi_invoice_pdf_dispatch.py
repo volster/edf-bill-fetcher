@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 def _fake_page(text: str) -> MagicMock:
     p = MagicMock()
     p.extract_text.return_value = text
+    p.images = []
     return p
 
 

@@ -560,3 +560,31 @@ python main.py --html-report --records /path/to/run/result.json --output report.
 Each command also saves `report.<format>.result.json` and `report.<format>.run.json`. A v3 rerender restores the saved calculations. A report failure leaves the saved analysis and earlier completed artifacts available, with a failed run manifest. Cancellation is checked between stages and while supported collectors run; an active document render completes before the next cancellation check.
 
 Workbook imports preserve available rows and metadata, label provenance as lossy, and create a new run. They cannot recover original source files or extraction decisions.
+
+### Scanned PDFs and OCR
+
+PDF pages without text, and image pages with only a sparse text header, are
+recognized locally with Tesseract OCR (English). Normal text pages use their
+existing text. This also applies to PDFs attached to PST/OST, EML and MSG messages;
+OCR cannot recover an attachment that the archive reader cannot extract.
+
+Packaged builds include the OCR engine and English language data. Source installs
+need Tesseract separately: `sudo apt install tesseract-ocr tesseract-ocr-eng` on
+Debian/Ubuntu, `brew install tesseract` on macOS, or the Tesseract Windows installer
+(default `C:\Program Files\Tesseract-OCR`). No documents are uploaded and no model
+downloads occur during extraction.
+
+The original PDF is preserved unchanged. OCR records show their page numbers,
+extraction method, lowest word confidence and a review-required flag in the
+review screen. Recognized page text and failures are retained in the source
+manifest, including pages that yield no billing records. OCR always requires
+review: check invoice identifiers, dates, decimal points and amounts against the
+original, even when confidence is high. Missing engines, failed pages and pages
+with no recognized text are reported while readable pages continue. OCR work is
+bounded per page and can be cancelled. PDFs with a substantial but incorrect
+existing text layer currently require manual review; they are not automatically
+re-OCRed.
+
+Local PyInstaller builds must install Tesseract and add
+`--additional-hooks-dir=.github/pyinstaller_hooks` to include OCR. CI exercises an
+image-only bill through every built executable before publishing artifacts.

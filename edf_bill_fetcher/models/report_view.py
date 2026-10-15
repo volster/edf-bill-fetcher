@@ -75,6 +75,26 @@ class ReportView:
         return rows_value(self.snapshot.prepared.duplicates)
 
     @property
+    def ocr_notice(self) -> str | None:
+        """Keep OCR limitations visible even when optional report sections are hidden."""
+        manifest = object_value(self.snapshot.prepared.extraction.legacy_state).get(
+            "source_manifest", {}
+        )
+        used_ocr = any(row.get("OCR Review Required") for row in self.records)
+        if isinstance(manifest, dict):
+            used_ocr = used_ocr or any(
+                isinstance(source, dict) and source.get("OCR Page Results")
+                for source in manifest.values()
+            )
+        if not used_ocr:
+            return None
+        return (
+            "OCR review required: some source pages required text recognition. "
+            "Verify invoice references, dates, periods and amounts against the original PDFs. "
+            "Confidence scores do not establish accuracy; unreadable pages may leave gaps."
+        )
+
+    @property
     def engine(self) -> SimpleNamespace:
         """Expose data-only legacy metadata to the compatibility layout builders."""
         state = {

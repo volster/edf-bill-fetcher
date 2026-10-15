@@ -93,7 +93,7 @@ where = ["."]
 include = ["edf_bill_fetcher*"]
 
 [tool.setuptools.package-data]
-"edf_bill_fetcher.data" = ["*.json"]
+"edf_bill_fetcher.data" = ["*.json", "ocr_licenses/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

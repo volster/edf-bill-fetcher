@@ -2108,6 +2108,10 @@ def render_pdf(view: ReportView, output_path: str) -> str:
         elements.append(NextPageTemplate("content"))
         elements.append(PageBreak())
 
+    if view.ocr_notice:
+        elements.append(Paragraph(xml_escape(view.ocr_notice), STYLES["BodyText"]))
+        elements.append(Spacer(1, 0.3 * cm))
+
     # === TABLE OF CONTENTS ===
     if section_enabled("toc"):
         try:

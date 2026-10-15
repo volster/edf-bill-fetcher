@@ -37,7 +37,7 @@ jobs:
           # tkinter for the GUI; python3-dev so libpff-python can
           # source-build against system Python headers; autotools
           # so the source build itself can run.
-          sudo apt-get install -y python3-tk tk-dev python3-dev
+          sudo apt-get install -y python3-tk tk-dev python3-dev tesseract-ocr tesseract-ocr-eng
           sudo apt-get install -y build-essential autoconf automake libtool pkg-config
           sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1
 
@@ -48,7 +48,14 @@ jobs:
           # that aren't needed for this build.  Skip the verbose
           # "tap not trusted" warnings so the install log stays focused.
           export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
-          brew install python-tk
+          brew install python-tk tesseract
+
+      - name: Install OCR engine (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install tesseract --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "Tesseract installation failed" }
 
       - name: Install Dependencies
         run: |
@@ -90,6 +97,7 @@ jobs:
             --hidden-import=PySide6.QtGui \
             --hidden-import=PySide6.QtWidgets \
             --hidden-import=pypdfium2 \
+            --additional-hooks-dir=.github/pyinstaller_hooks \
             --hidden-import=reportlab \
             --hidden-import=reportlab.platypus \
             --hidden-import=reportlab.lib \
@@ -148,6 +156,9 @@ jobs:
           else
             echo "WARNING: No signed executable found to verify"
           fi
+
+      - name: Verify bundled OCR on an image-only bill
+        run: python .github/scripts/check_frozen_ocr.py
 
       - name: Record build dependencies
         shell: bash

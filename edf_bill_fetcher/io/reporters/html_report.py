@@ -1071,6 +1071,9 @@ def render_html(view: ReportView, output_path: str) -> str:
             )
         )
 
+    if view.ocr_notice:
+        body_parts.append(_note(_esc(view.ocr_notice)))
+
     if section_enabled("toc"):
         try:
             body_parts.append(create_table_of_contents(render_ctx))

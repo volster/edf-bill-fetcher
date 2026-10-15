@@ -52,6 +52,7 @@ from edf_bill_fetcher.helpers.pst_resources import (
 from edf_bill_fetcher.io.adapters.eml import parse_eml_message
 from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
 from edf_bill_fetcher.io.adapters.msg import HAS_EXTRACT_MSG, parse_msg_message
+from edf_bill_fetcher.io.adapters.ocr import OcrCancelled, PdfOcrReader, requires_ocr
 from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pages
 from edf_bill_fetcher.io.persistence.run_manifest import is_run_directory
 from edf_bill_fetcher.models.config import ConfigDict
@@ -184,6 +185,7 @@ class EvidenceEngine:
         self.attachment_count = 0
         self.skipped_attachment_count = 0
         self._attachment_dir: tempfile.TemporaryDirectory[str] | None = None
+        self._ocr_reader: PdfOcrReader | None = None
 
     # ------------------------------------------------------------------
     # Pickle support — Phase 1.4
@@ -254,6 +256,7 @@ class EvidenceEngine:
         self.skipped_attachment_count = state.get("skipped_attachment_count", 0)
         self._source_context = {}
         self._attachment_dir = None
+        self._ocr_reader = None
         # Rebuild runtime primitives fresh — the persisted snapshot
         # does not carry cancel state forward.
         self.cancel_event = threading.Event()
@@ -269,6 +272,7 @@ class EvidenceEngine:
         if self._attachment_dir is not None:
             self._attachment_dir.cleanup()
             self._attachment_dir = None
+        self._ocr_reader = None
 
     def is_cancelled(self):
         """Return True if the cancel event has been set by the GUI."""
@@ -777,12 +781,12 @@ class EvidenceEngine:
                     self.log_error(f"PDF: {detail_label}", "PDF has no pages")
                     return
                 pdf_text_parts: list[str] = []
-                for p in pdf.pages:
+                ocr_pages: dict[int, dict[str, Any]] = {}
+                for page_index, p in enumerate(pdf.pages):
                     if self.is_cancelled():
                         return
                     try:
                         page_text = p.extract_text()
-                        pdf_text_parts.append(page_text or "")
                     except (
                         pdfplumber.utils.exceptions.PdfminerException,
                         ValueError,
@@ -793,10 +797,52 @@ class EvidenceEngine:
                         # ``BaseException`` (e.g. ``KeyboardInterrupt``) and
                         # unexpected runtime errors propagate so the caller
                         # can still cancel or surface real bugs.
-                        pdf_text_parts.append("")
+                        page_text = ""
                         self.log_error(
                             f"PDF page {detail_label}", f"Page extraction failed: {page_err}"
                         )
+                    # OCR only empty pages or image pages with a sparse text
+                    # header. A short native amount-bearing page stays native.
+                    if requires_ocr(page_text, p):
+                        page_number = page_index + 1
+                        context = f"OCR {detail_label}, page {page_number}"
+                        self.update_ui(f"{context}: recognizing scanned text…")
+                        if self._ocr_reader is None:
+                            self._ocr_reader = PdfOcrReader()
+                        try:
+                            recognized = self._ocr_reader.read_page(
+                                raw, page_index, self.is_cancelled
+                            )
+                            if self.is_cancelled():
+                                return
+                            ocr_pages[page_number] = {
+                                "Status": "recognized" if recognized.text.strip() else "no text",
+                                "Text": recognized.text,
+                                "Minimum Confidence (%)": recognized.minimum_confidence,
+                                "Engine": "Tesseract (English)",
+                            }
+                            if recognized.text.strip():
+                                page_text = recognized.text
+                                self.log_error(
+                                    context,
+                                    "OCR-generated evidence: verify amounts, dates and invoice references against the original. "
+                                    f"Lowest word confidence: {recognized.minimum_confidence}% (not proof of accuracy).",
+                                )
+                            else:
+                                self.log_error(
+                                    context,
+                                    "No readable text found; page may be blank or require manual review",
+                                )
+                        except OcrCancelled:
+                            return
+                        except Exception as error:
+                            ocr_pages[page_number] = {"Status": "failed", "Error": str(error)}
+                            self.log_error(context, str(error))
+                    pdf_text_parts.append(page_text or "")
+                if ocr_pages:
+                    self.source_manifest[self._source_context["Source ID"]]["OCR Page Results"] = {
+                        str(number): result for number, result in ocr_pages.items()
+                    }
             del raw
 
             # Use original filename as attachment_name if not already set
@@ -828,6 +874,28 @@ class EvidenceEngine:
                 self._source_context.update(document_identity(slice_text))
                 self._source_context["Page From"] = first_page
                 self._source_context["Page To"] = first_page + len(slice_pages) - 1
+                covered_ocr = {
+                    number: result
+                    for number, result in ocr_pages.items()
+                    if first_page <= number < first_page + len(slice_pages)
+                }
+                for key in ("OCR Pages", "OCR Minimum Confidence (%)", "OCR Review Required"):
+                    self._source_context.pop(key, None)
+                self._source_context["Text Extraction"] = "PDF text"
+                if covered_ocr:
+                    self._source_context["Text Extraction"] = (
+                        "OCR" if len(covered_ocr) == len(slice_pages) else "PDF text + OCR"
+                    )
+                    self._source_context["OCR Pages"] = list(covered_ocr)
+                    self._source_context["OCR Review Required"] = True
+                    scores = [
+                        result["Minimum Confidence (%)"]
+                        for result in covered_ocr.values()
+                        if result.get("Minimum Confidence (%)") is not None
+                    ]
+                    self._source_context["OCR Minimum Confidence (%)"] = (
+                        min(scores) if scores else None
+                    )
                 first_page += len(slice_pages)
                 if multi:
                     slice_detail = f"{detail_label} #{i}"

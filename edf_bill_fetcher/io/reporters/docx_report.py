@@ -1561,6 +1561,9 @@ def render_docx(view: ReportView, output_path: str) -> str:
             doc, styles, acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y")
         )
 
+    if view.ocr_notice:
+        doc.add_paragraph(view.ocr_notice)
+
     # === TABLE OF CONTENTS ===
     if section_enabled("toc"):
         create_table_of_contents(doc, styles, render_ctx)

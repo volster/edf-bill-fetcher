@@ -1,10 +1,5 @@
-"""PDF-related helpers.
+"""Shared PDFium synchronization for original previews and OCR rasterization."""
 
-This module is currently a placeholder for future PDF-specific helpers.
-For now, the two PDF-related helpers (``pdf_hyperlink_cell`` and
-``evidence_report_hyperlink_cell``) live in ``excel_utils.py`` because the
-functions actually create an openpyxl cell, not a PDF-parsing primitive.
+from threading import Lock
 
-Future PDF parsing helpers (text extraction, table detection, etc.)
-should be added here as the codebase grows.
-"""
+PDF_LOCK = Lock()  # PDFium requires serialized access, even across documents.

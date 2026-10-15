@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from threading import Event, Lock
+from threading import Event
 
 from PySide6.QtCore import (
     QAbstractTableModel,
@@ -50,10 +50,10 @@ from edf_bill_fetcher.application.evidence_review import (
 from edf_bill_fetcher.application.run_service import RunCancelled, check_cancelled
 from edf_bill_fetcher.domain.analysis import AnalysisSnapshot
 from edf_bill_fetcher.domain.json_values import object_value, rows_value
+from edf_bill_fetcher.helpers.pdf_utils import PDF_LOCK
 from edf_bill_fetcher.io.persistence.result_store import load_result
 from edf_bill_fetcher.ui.qt_widgets import button, label
 
-PDF_LOCK = Lock()  # PDFium requires serialized access, even across documents.
 CATEGORIES = (
     "All records",
     "Bills & charges",
@@ -599,6 +599,10 @@ class EvidenceReviewPage(QWidget):
             "Attachment Name",
             "Page From",
             "Page To",
+            "Text Extraction",
+            "OCR Pages",
+            "OCR Minimum Confidence (%)",
+            "OCR Review Required",
         )
         ordered_keys = list(dict.fromkeys((*primary_fields, *row)))
         self.details.setPlainText(

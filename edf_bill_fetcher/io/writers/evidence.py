@@ -81,6 +81,10 @@ EVIDENCE_HEADERS: list[str] = [
     "Original Filename",
     "Page From",
     "Page To",
+    "Text Extraction",
+    "OCR Pages",
+    "OCR Minimum Confidence (%)",
+    "OCR Review Required",
 ]
 COL_AMOUNT = EVIDENCE_HEADERS.index("Amount (£)") + 1
 
