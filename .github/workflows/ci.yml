@@ -368,7 +368,9 @@ jobs:
         run: |
           # macOS Cocoa provides a display by default.
           # Windows conda env ships a complete Tcl/Tk.
-          pytest --cov=. --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
+          # Retry one complete suite only for the Windows runner's known
+          # intermittent Tcl/Tk library setup error; do not retry assertions.
+          python ci_pytest.py
 
       - name: Publish test failures in the job summary
         if: always()
