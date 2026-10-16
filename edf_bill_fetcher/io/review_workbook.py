@@ -80,7 +80,9 @@ def _heading(ws: Worksheet, row: int, text: str, end: int = 10) -> None:
     ws.row_dimensions[row].height = 38
 
 
-def write_review_sheets(wb: Workbook, view: ReportView, saved_links: dict[str, str]) -> None:
+def write_review_sheets(
+    wb: Workbook, view: ReportView, saved_links: dict[str, str], workbook_path: str
+) -> None:
     """Add an editable table, navigation, audit trail and a verified baseline snapshot."""
     snapshot = view.snapshot
     wb.properties.identifier = REVIEW_MARKER
@@ -329,9 +331,17 @@ def write_review_sheets(wb: Workbook, view: ReportView, saved_links: dict[str, s
             sheet.sheet_view.showGridLines = False
     # Store the reference values with the snapshot. Comparing numeric cells
     # allows Excel's serialization rounding, rather than hashing binary floats.
+    source_root_relative = None
+    source_root = state.get("source_bundle_path")
+    if isinstance(source_root, str) and source_root:
+        parent = Path(workbook_path).resolve().parent
+        root = Path(source_root).resolve()
+        if root.is_relative_to(parent):
+            source_root_relative = root.relative_to(parent).as_posix()
     payload = {
         "result": encode_result(snapshot, snapshot.prepared.extraction.request.run_id + "-excel"),
         "references": _reference_values(wb),
+        "source_root_relative": source_root_relative,
     }
     data = canonical_text(payload).encode("utf-8")
     if len(data) > MAX_BYTES:
@@ -424,8 +434,21 @@ def load_review_workbook(path: str) -> tuple[list[dict], dict, str] | None:
             if hashlib.sha256(raw).hexdigest() != hidden.cell(2, 1).value:
                 raise ValueError("Review payload checksum does not match")
             payload = strict_loads(raw.decode("utf-8"))
-            if not isinstance(payload, dict) or set(payload) != {"result", "references"}:
+            if not isinstance(payload, dict) or set(payload) != {
+                "result",
+                "references",
+                "source_root_relative",
+            }:
                 raise ValueError("Invalid review payload fields")
+            relative_root = payload["source_root_relative"]
+            if relative_root is not None and (
+                not isinstance(relative_root, str)
+                or Path(relative_root).is_absolute()
+                or ".." in Path(relative_root).parts
+                or "\\" in relative_root
+                or ":" in relative_root
+            ):
+                raise ValueError("Invalid relative source bundle location")
             snapshot = decode_result(payload["result"])
         except (TypeError, UnicodeError, zlib.error, ValueError) as error:
             raise ValueError(f"Cannot read preserved review analysis: {error}") from error
@@ -565,6 +588,7 @@ def load_review_workbook(path: str) -> tuple[list[dict], dict, str] | None:
                 "imported_workbook": str(Path(path).resolve()),
                 "provenance": "reviewed_workbook",
                 "review_config": object_value(snapshot.prepared.effective_config),
+                "review_source_root_relative": relative_root,
             }
         )
         state.pop("records", None)

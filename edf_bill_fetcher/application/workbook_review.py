@@ -66,6 +66,11 @@ def bundle_review_sources(prepared: PreparedSnapshot, directory: str, workbook: 
     }
     paths: dict[str, str] = {}
     roots = [str(Path(workbook).resolve().parent)]
+    relative_root = state.get("review_source_root_relative")
+    if isinstance(relative_root, str):
+        candidate = (Path(workbook).resolve().parent / relative_root).resolve()
+        if candidate.is_relative_to(Path(workbook).resolve().parent):
+            roots.insert(0, str(candidate))
     old_root = state.get("source_bundle_path")
     if isinstance(old_root, str) and old_root and old_root not in roots:
         roots.append(old_root)

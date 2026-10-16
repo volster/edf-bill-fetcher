@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -492,3 +493,29 @@ def test_cleared_invoice_reference_stays_blank_in_next_review(review_pack, tmp_p
     assert outcome.error is None
     _, state, _ = load_review_workbook(str(Path(directory, "Reviewed_Evidence.xlsx")))
     assert all(not decision["changes"] for decision in state["human_review"]["decisions"])
+
+
+def test_moved_cli_style_pack_finds_bundle_below_workbook_folder(review_pack, tmp_path):
+    path, baseline, _ = review_pack
+    container = tmp_path / "portable"
+    container.mkdir()
+    shutil.move(str(path.parent), container / "original")
+    state = object_value(baseline.prepared.extraction.legacy_state)
+    state["source_bundle_path"] = str(container / "original")
+    snapshot = replace(
+        baseline,
+        prepared=replace(
+            baseline.prepared,
+            extraction=replace(baseline.prepared.extraction, legacy_state=freeze_json(state)),
+        ),
+    )
+    render_xlsx(
+        build_report_view(snapshot, RenderSelection(("xlsx",))), str(container / "Evidence.xlsx")
+    )
+    moved = tmp_path / "moved"
+    container.rename(moved)
+    directory, outcome = regenerate_workbook(
+        str(moved / "Evidence.xlsx"), str(tmp_path), formats=("xlsx",)
+    )
+    assert outcome.error is None
+    assert len(list(Path(directory, "evidence_files").iterdir())) == 3
