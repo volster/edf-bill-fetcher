@@ -10,6 +10,7 @@ import pickle
 import sys
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -759,6 +760,15 @@ def main() -> None:
         )
         sys.stderr.write("\n")
         sys.exit(2)
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-gui":
+        # Build-only health probe: the default app still opens normally.
+        parser = argparse.ArgumentParser(prog="edf-collector --check-gui")
+        parser.add_argument("--report", type=Path, required=True)
+        options = parser.parse_args(sys.argv[2:])
+        from edf_bill_fetcher.ui.qt_smoke import check_gui
+
+        sys.exit(check_gui(options.report, platform="cocoa" if sys.platform == "darwin" else None))
 
     from edf_bill_fetcher.ui.qt_app import launch
 

@@ -89,79 +89,11 @@ jobs:
         run: >-
           "${{ steps.python.outputs.python-path }}" ci_runtime.py
 
-      - name: Build Executable
-        shell: bash
-        run: |
-          # PyInstaller flags mirror matrix_build.yml. Hidden imports
-          # are required because PyInstaller's static analysis can't
-          # follow dynamic (find_spec/importlib) imports — see the
-          # docstring in matrix_build.yml for the full rationale.
-          python -m PyInstaller --onefile --windowed --name EDF_Evidence_Collector \
-            --hidden-import=PySide6.QtCore \
-            --hidden-import=PySide6.QtGui \
-            --hidden-import=PySide6.QtWidgets \
-            --hidden-import=pypdfium2 \
-            --additional-hooks-dir=.github/pyinstaller_hooks \
-            --hidden-import=reportlab \
-            --hidden-import=reportlab.platypus \
-            --hidden-import=reportlab.lib \
-            --hidden-import=reportlab.lib.colors \
-            --hidden-import=reportlab.lib.styles \
-            --hidden-import=reportlab.lib.units \
-            --hidden-import=reportlab.lib.pagesizes \
-            --hidden-import=reportlab.lib.enums \
-            --hidden-import=reportlab.pdfbase \
-            --hidden-import=reportlab.pdfbase.pdfmetrics \
-            --hidden-import=reportlab.pdfbase.ttfonts \
-            --hidden-import=scipy \
-            --hidden-import=scipy.stats \
-            --hidden-import=statsmodels \
-            --hidden-import=statsmodels.tsa.holtwinters \
-            --hidden-import=pypff \
-            --collect-all extract_msg \
-            --collect-data edf_bill_fetcher \
-            --copy-metadata=edf-bill-fetcher \
-            main.py
-
-      - name: Code-sign macOS bundle (ad-hoc)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          # Ad-hoc signing (sign with `-` identity = no developer cert).
-          # This won't pass Gatekeeper's notarization check. Users who
-          # download the artifact will need
-          # to `xattr -cr EDF_Evidence_Collector.app` to clear the
-          # quarantine flag before running.
-          #
-          # --deep is deprecated since macOS 11 and can corrupt nested
-          # framework signatures, so sign the inner binary first, then
-          # the outer .app.
-          if [ -d "dist/EDF_Evidence_Collector.app" ]; then
-            codesign --force --sign - dist/EDF_Evidence_Collector.app/Contents/MacOS/EDF_Evidence_Collector || true
-            codesign --force --sign - dist/EDF_Evidence_Collector.app || true
-            echo "Ad-hoc signed dist/EDF_Evidence_Collector.app"
-          elif [ -f "dist/EDF_Evidence_Collector" ]; then
-            codesign --force --sign - dist/EDF_Evidence_Collector
-            echo "Ad-hoc signed dist/EDF_Evidence_Collector (single binary)"
-          else
-            echo "WARNING: No executable found to sign"
-          fi
-
-      - name: Verify macOS code signature (ad-hoc)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          if [ -d "dist/EDF_Evidence_Collector.app" ]; then
-            codesign --verify --verbose=4 dist/EDF_Evidence_Collector.app
-            echo "Signature verification passed for dist/EDF_Evidence_Collector.app"
-          elif [ -f "dist/EDF_Evidence_Collector" ]; then
-            codesign --verify --verbose=4 dist/EDF_Evidence_Collector
-            echo "Signature verification passed for dist/EDF_Evidence_Collector (single binary)"
-          else
-            echo "WARNING: No signed executable found to verify"
-          fi
+      - name: Build executable (standard .app on macOS)
+        run: python ci_build.py
 
       - name: Verify bundled OCR and Excel corrections on an image-only bill
+        if: runner.os != 'macOS'
         run: python .github/scripts/check_frozen_ocr.py
 
       - name: Record build dependencies
@@ -184,26 +116,15 @@ jobs:
         shell: bash
 
       - name: Package release zip
-        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          set -e
-          TAG="${{ github.ref_name }}"
-          if [ -d "dist/EDF_Evidence_Collector.app" ]; then
-            # macOS: zip the whole .app bundle (preserves symlinks so the
-            # ad-hoc signature survives) plus the raw binary.
-            zip -q -r -y "EDF_Evidence_Collector-macos-${TAG}.zip" \
-              dist/EDF_Evidence_Collector.app dist/EDF_Evidence_Collector dist/build-dependencies.txt dist/build-provenance.json
-            # Validate the bundle users will actually extract, after
-            # packaging, rather than only the original build tree.
-            archive_check="$(mktemp -d)"
-            trap 'rm -rf "$archive_check"' EXIT
-            unzip -q "EDF_Evidence_Collector-macos-${TAG}.zip" -d "$archive_check"
-            codesign --verify --verbose=4 "$archive_check/dist/EDF_Evidence_Collector.app"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            python ci_macos.py --archive "EDF_Evidence_Collector-macos-arm64-ad-hoc-${RELEASE_TAG}.zip"
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            # Windows: PowerShell Compress-Archive to avoid zip quirks.
-            powershell -Command "Compress-Archive -Path dist/EDF_Evidence_Collector.exe,dist/build-dependencies.txt,dist/build-provenance.json -DestinationPath 'EDF_Evidence_Collector-windows-${TAG}.zip' -Force"
+            powershell -Command "Compress-Archive -Path dist/EDF_Evidence_Collector.exe,dist/build-dependencies.txt,dist/build-provenance.json -DestinationPath 'EDF_Evidence_Collector-windows-${RELEASE_TAG}.zip' -Force"
           else
-            zip -q "EDF_Evidence_Collector-ubuntu-${TAG}.zip" dist/EDF_Evidence_Collector dist/build-dependencies.txt dist/build-provenance.json
+            zip -q "EDF_Evidence_Collector-ubuntu-${RELEASE_TAG}.zip" dist/EDF_Evidence_Collector dist/build-dependencies.txt dist/build-provenance.json
           fi
           ls -la ./*.zip
 
@@ -224,9 +145,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: EDF_Evidence_Collector-${{ matrix.os }}
-          path: |
-            dist/
-            ./*.zip
+          path: ./*.zip
           retention-days: 90
 
   publish:

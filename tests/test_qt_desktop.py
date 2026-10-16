@@ -817,3 +817,39 @@ def test_qt_launcher_runs_real_event_loop_without_tk(application, tmp_path, monk
     assert qt_app.launch([]) == 0
     assert visible == [True]
     windows[0].close()
+
+
+@pytest.mark.parametrize("hide", [False, True])
+def test_build_gui_check_observes_real_window_and_isolates_preferences(
+    application, tmp_path, monkeypatch, hide
+):
+    from edf_bill_fetcher.ui import qt_smoke
+
+    paths = []
+
+    def build(path):
+        paths.append(path)
+        widget = EvidenceWindow(path)
+        if hide:
+            QTimer.singleShot(10, widget.hide)
+        return widget
+
+    monkeypatch.setattr(qt_smoke, "EvidenceWindow", build)
+    report_path = tmp_path / "gui.json"
+    assert qt_smoke.check_gui(report_path) == (1 if hide else 0)
+    report = json.loads(report_path.read_text())
+    assert report == {
+        "schema": 1,
+        "visible": not hide,
+        "pages": 4,
+        "platform": application.platformName(),
+        "frozen": False,
+    }
+    assert len(paths) == 1
+    assert not paths[0].parent.exists()
+
+
+def test_build_gui_check_fails_when_report_cannot_be_written(application, tmp_path):
+    from edf_bill_fetcher.ui.qt_smoke import check_gui
+
+    assert check_gui(tmp_path / "missing" / "gui.json") == 1

@@ -1,5 +1,6 @@
 """Exercise bundled OCR through the delivered application's real extraction command."""
 
+import argparse
 import json
 import os
 import shutil
@@ -9,10 +10,19 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-candidates = [
-    Path("dist/EDF_Evidence_Collector.app/Contents/MacOS/EDF_Evidence_Collector"),
-    Path("dist/EDF_Evidence_Collector.exe" if os.name == "nt" else "dist/EDF_Evidence_Collector"),
-]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--executable", type=Path)
+options = parser.parse_args()
+candidates = (
+    [options.executable]
+    if options.executable
+    else [
+        Path("dist/EDF_Evidence_Collector.app/Contents/MacOS/EDF_Evidence_Collector"),
+        Path(
+            "dist/EDF_Evidence_Collector.exe" if os.name == "nt" else "dist/EDF_Evidence_Collector"
+        ),
+    ]
+)
 executable = next(path.resolve() for path in candidates if path.is_file())
 with tempfile.TemporaryDirectory(prefix="edf-frozen-ocr-") as directory:
     root = Path(directory)

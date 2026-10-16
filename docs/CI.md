@@ -85,6 +85,14 @@ They are excluded from release asset downloads. The delivered binary must also
 pass the image-only PDF OCR and amended-Excel round-trip smoke check. The source
 GUI preflight does not by itself certify a frozen executable's interactive GUI.
 
+Mac builds additionally verify deep, strict code-signature integrity, archive
+with `ditto`, and verify the extracted `.app`. The extracted app must open a
+real Cocoa window through LaunchServices, then pass OCR and Excel correction
+checks. Signing failures are fatal during the PyInstaller build. Both build
+workflows use `ci_build.py` and `ci_macos.py` so release packaging cannot drift
+from the ordinary build. See [Mac opening and trust status](MACOS.md): ad-hoc
+signing does not provide Gatekeeper trust or Apple notarization.
+
 ## Reproduce and maintain
 
 ```bash

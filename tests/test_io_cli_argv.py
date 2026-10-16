@@ -1320,3 +1320,27 @@ class TestMainDispatch:
             main()
         assert exc.value.code == 7
         assert calls == ["launched"]
+
+    @pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+    def test_gui_build_probe_preserves_exit_code_and_uses_native_mac_backend(
+        self, monkeypatch, tmp_path, platform
+    ):
+        import types
+
+        calls = []
+        probe = types.ModuleType("edf_bill_fetcher.ui.qt_smoke")
+
+        def check_gui(report, **kwargs):
+            calls.append((report, kwargs))
+            return 3
+
+        probe.__dict__["check_gui"] = check_gui
+        path = tmp_path / "gui.json"
+        monkeypatch.setattr(cli_module, "HAS_QT", True)
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setattr(sys, "argv", ["edf-collector", "--check-gui", "--report", str(path)])
+        monkeypatch.setitem(sys.modules, "edf_bill_fetcher.ui.qt_smoke", probe)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 3
+        assert calls == [(path, {"platform": "cocoa" if platform == "darwin" else None})]

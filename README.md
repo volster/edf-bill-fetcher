@@ -73,7 +73,7 @@ pip install -e ".[msg]"       # optional Outlook MSG parsing
 #
 #   [dev]    test + lint + typecheck toolchain (pytest, pytest-xvfb,
 #            pytest-cov, ruff, mypy)
-#   [build]  PyInstaller for one-file Windows / macOS / Linux executables
+#   [build]  PyInstaller for Windows / Linux binaries and macOS app bundles
 pip install -e ".[dev,build]"   # recommended for contributors
 ```
 
@@ -89,7 +89,9 @@ pip install -e ".[dev,build]"   # recommended for contributors
   not required. On Debian/Ubuntu, Qt's X11 backend also needs
   `libxcb-cursor0`, `libxkbcommon-x11-0` and `libegl1`.
 - macOS and Windows packaged builds are produced by CI. Local PyInstaller
-  builds require the `[build]` extra.
+  builds require the `[build]` extra. The Mac download targets Apple silicon
+  and requires a one-time **Open Anyway** approval because it is ad-hoc signed,
+  without Apple notarization. See [Mac opening instructions](docs/MACOS.md).
 
 What `pip install -e .` actually pulls in (current version):
 

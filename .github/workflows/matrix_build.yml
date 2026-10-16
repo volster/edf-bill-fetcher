@@ -95,98 +95,11 @@ jobs:
         run: >-
           "${{ steps.python.outputs.python-path }}" ci_runtime.py
 
-      - name: Build Executable
-        shell: bash
-        run: |
-          # Hidden imports — each line below is a module the source
-          # code loads dynamically (via ``find_spec`` / ``importlib``)
-          # that PyInstaller's static analysis can't follow.  Every
-          # entry here corresponds to a runtime dep declared in
-          # ``pyproject.toml[project].dependencies``; we add it here
-          # purely so PyInstaller bundles the binary into the exe.
-          #
-          # Crashes caused by a missing module show up at exe runtime
-          # as ``ImportError: No module named 'X'`` — pinning these
-          # with ``--hidden-import`` is the standard PyInstaller
-          # workaround (see scikit-build / pandas' own bundling docs).
-          #
-          # NOTE: bash's ``\`` line-continuation does NOT accept ``#``
-          # comments on the joined lines — the inline-comment
-          # style the previous draft of this step used (mid-command
-          # ``# === Direct deps: reportlab ===`` etc.) caused the
-          # GitHub Actions runner to treat each comment as a fresh
-          # shell command (``--hidden-import=reportlab: command
-          # not found``), which propagates onward as
-          # ``pyinstaller: error: the following arguments are
-          # required: scriptname``.  All rationale lives in this
-          # header block; the actual pyinstaller command is a clean
-          # uninterrupted chain of ``\` joins.
-          python -m PyInstaller --onefile --windowed --name EDF_Evidence_Collector \
-            --hidden-import=PySide6.QtCore \
-            --hidden-import=PySide6.QtGui \
-            --hidden-import=PySide6.QtWidgets \
-            --hidden-import=pypdfium2 \
-            --additional-hooks-dir=.github/pyinstaller_hooks \
-            --hidden-import=reportlab \
-            --hidden-import=reportlab.platypus \
-            --hidden-import=reportlab.lib \
-            --hidden-import=reportlab.lib.colors \
-            --hidden-import=reportlab.lib.styles \
-            --hidden-import=reportlab.lib.units \
-            --hidden-import=reportlab.lib.pagesizes \
-            --hidden-import=reportlab.lib.enums \
-            --hidden-import=reportlab.pdfbase \
-            --hidden-import=reportlab.pdfbase.pdfmetrics \
-            --hidden-import=reportlab.pdfbase.ttfonts \
-            --hidden-import=scipy \
-            --hidden-import=scipy.stats \
-            --hidden-import=statsmodels \
-            --hidden-import=statsmodels.tsa.holtwinters \
-            --hidden-import=pypff \
-            --collect-all extract_msg \
-            --collect-data edf_bill_fetcher \
-            --copy-metadata=edf-bill-fetcher \
-            main.py
-
-      - name: Code-sign macOS bundle (ad-hoc)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          # Ad-hoc signing (sign with `-` identity = no developer cert).
-          # This won't pass Gatekeeper's notarization check. Users who
-          # download the artifact will need
-          # to `xattr -cr EDF_Evidence_Collector.app` to clear the
-          # quarantine flag before running.
-          #
-          # --deep is deprecated since macOS 11 and can corrupt nested
-          # framework signatures, so sign the inner binary first, then
-          # the outer .app.
-          if [ -d "dist/EDF_Evidence_Collector.app" ]; then
-            codesign --force --sign - dist/EDF_Evidence_Collector.app/Contents/MacOS/EDF_Evidence_Collector || true
-            codesign --force --sign - dist/EDF_Evidence_Collector.app || true
-            echo "Ad-hoc signed dist/EDF_Evidence_Collector.app"
-          elif [ -f "dist/EDF_Evidence_Collector" ]; then
-            codesign --force --sign - dist/EDF_Evidence_Collector
-            echo "Ad-hoc signed dist/EDF_Evidence_Collector (single binary)"
-          else
-            echo "WARNING: No executable found to sign"
-          fi
-
-      - name: Verify macOS code signature (ad-hoc)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          if [ -d "dist/EDF_Evidence_Collector.app" ]; then
-            codesign --verify --verbose=4 dist/EDF_Evidence_Collector.app
-            echo "Signature verification passed for dist/EDF_Evidence_Collector.app"
-          elif [ -f "dist/EDF_Evidence_Collector" ]; then
-            codesign --verify --verbose=4 dist/EDF_Evidence_Collector
-            echo "Signature verification passed for dist/EDF_Evidence_Collector (single binary)"
-          else
-            echo "WARNING: No signed executable found to verify"
-          fi
+      - name: Build executable (standard .app on macOS)
+        run: python ci_build.py
 
       - name: Verify bundled OCR and Excel corrections on an image-only bill
+        if: runner.os != 'macOS'
         run: python .github/scripts/check_frozen_ocr.py
 
       - name: Record build dependencies
@@ -209,17 +122,9 @@ jobs:
           fi
         shell: bash
 
-      - name: Package and verify macOS artifact
+      - name: Package and verify extracted macOS app
         if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          # Artifact uploads do not preserve symlink metadata. Store the
-          # signed app inside a zip that retains its framework symlinks.
-          zip -q -r -y EDF_Evidence_Collector-macos.zip dist/
-          archive_check="$(mktemp -d)"
-          trap 'rm -rf "$archive_check"' EXIT
-          unzip -q EDF_Evidence_Collector-macos.zip -d "$archive_check"
-          codesign --verify --verbose=4 "$archive_check/dist/EDF_Evidence_Collector.app"
+        run: python ci_macos.py --archive EDF_Evidence_Collector-macos-arm64-ad-hoc.zip
 
       - name: Upload build diagnostics
         if: always()
@@ -237,6 +142,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v6
         with:
-          name: EDF_Evidence_Collector-${{ matrix.os }}-${{ github.event_name == 'workflow_dispatch' && 'manual-unvalidated' || 'ci-validated' }}
-          path: ${{ runner.os == 'macOS' && 'EDF_Evidence_Collector-macos.zip' || 'dist/' }}
+          name: EDF_Evidence_Collector-${{ matrix.os }}${{ runner.os == 'macOS' && '-arm64-ad-hoc' || '' }}-${{ github.event_name == 'workflow_dispatch' && 'manual-unvalidated' || 'ci-validated' }}
+          path: ${{ runner.os == 'macOS' && 'EDF_Evidence_Collector-macos-arm64-ad-hoc.zip' || 'dist/' }}
           retention-days: 7
