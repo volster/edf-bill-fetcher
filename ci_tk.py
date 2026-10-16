@@ -42,8 +42,6 @@ def _create_with_retry(create: Callable[..., Any], args: tuple, kwargs: dict, re
         if not any(
             marker in detail
             for marker in ("Can't find a usable tk.tcl", "Can't find a usable init.tcl")
-        ) or not any(
-            marker in detail for marker in ("no such file or directory", "permission denied")
         ):
             raise
         # Let a transient read lock settle before verifying the files; a

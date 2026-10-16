@@ -16,15 +16,14 @@ def isolated_actions(monkeypatch):
     monkeypatch.setattr(ci_tk.time, "sleep", lambda delay: None)
 
 
-def _error(path):
+def _error(path, reason="no such file or directory"):
     return _tkinter.TclError(
-        "Can't find a usable tk.tcl: couldn't read file \""
-        + str(path)
-        + '": no such file or directory'
+        "Can't find a usable tk.tcl: couldn't read file \"" + str(path) + '": ' + reason
     )
 
 
-def test_verified_readable_script_retries_native_call_and_retains_hash(tmp_path):
+@pytest.mark.parametrize("reason", ["no such file or directory", "permission denied", "No error"])
+def test_verified_readable_script_retries_native_call_and_retains_hash(tmp_path, reason):
     script = tmp_path / "Tk libraries/button.tcl"
     script.parent.mkdir()
     script.write_bytes(b"# a synthetic Tcl script")
@@ -35,7 +34,7 @@ def test_verified_readable_script_retries_native_call_and_retains_hash(tmp_path)
     def create(*args, **kwargs):
         calls.append((args, kwargs))
         if len(calls) == 1:
-            raise _error(script)
+            raise _error(script, reason)
         return sentinel
 
     assert ci_tk._create_with_retry(create, ("screen",), {"wantTk": True}, report) is sentinel
