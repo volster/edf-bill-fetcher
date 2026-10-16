@@ -468,7 +468,9 @@ def test_saved_result_renders_without_reanalysis_or_modifying_original(
     assert outcome.snapshot == snapshot
     assert path.read_bytes() == original
     assert load_result(Path(job.directory) / "result.json") == snapshot
-    assert "Last Payment Amount" in Path(job.outputs["html"]).read_text()
+    html = Path(job.outputs["html"]).read_text()
+    assert "No payment/credit records were supplied" in html
+    assert "£0.00" not in html  # Missing payment evidence must not look like a measured zero.
 
 
 @pytest.mark.parametrize("change", ["moved", "missing", "modified"])

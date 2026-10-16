@@ -33,6 +33,10 @@ from edf_bill_fetcher.application.record_review import (
 from edf_bill_fetcher.domain.json_values import canonical_text, object_value, strict_loads
 from edf_bill_fetcher.helpers.excel_utils import literal_cell
 from edf_bill_fetcher.io.persistence.result_codec import decode_result, encode_result
+from edf_bill_fetcher.io.writers.workbook_presentation import (
+    polish_reference_sheets,
+    write_workbook_dashboard,
+)
 from edf_bill_fetcher.models.report_view import ReportView
 
 REVIEW_SHEET = "Review & Corrections"
@@ -92,7 +96,7 @@ def write_review_sheets(
     hidden = wb.create_sheet(PAYLOAD_SHEET)
     hidden.sheet_state = "veryHidden"
 
-    start = wb.create_sheet("Start here", 0)
+    start = wb.create_sheet("Workbook guide")
     start.sheet_view.showGridLines = False
     start.sheet_properties.tabColor = TEAL
     for col in range(1, 11):
@@ -166,7 +170,7 @@ def write_review_sheets(
     start.page_setup.fitToWidth = 1
     start.page_setup.fitToHeight = 1
 
-    ws = wb.create_sheet(REVIEW_SHEET, 1)
+    ws = wb.create_sheet(REVIEW_SHEET, 0)
     ws.sheet_view.showGridLines = False
     ws.sheet_view.zoomScale = 85
     ws.sheet_properties.tabColor = TEAL
@@ -285,6 +289,8 @@ def write_review_sheets(
     ws.freeze_panes = "F5"
     ws.protection.sheet = True
     ws.protection.autoFilter = False
+    ws.protection.formatColumns = False
+    ws.protection.formatRows = False
     # Excel cannot sort a protected range containing locked IDs. The guide
     # allows unprotecting (no password) before sorting the complete table.
     ws.cell(2, 1).comment = Comment(
@@ -298,7 +304,30 @@ def write_review_sheets(
     ws.page_setup.fitToHeight = 0
     ws.print_title_rows = "1:4"
 
-    history = wb.create_sheet("Review history", 2)
+    # Keep less frequent fields available behind column outlines. The core
+    # financial inputs and source link remain visible without a 27-column scan.
+    for title in (
+        "Energy Unit Rate (p/kWh)",
+        "Standing Chg (p/day)",
+        "Reading",
+        "Register Reading (kWh)",
+        "Meter",
+        "Register",
+        "Tariff",
+        "Amount Kind",
+        "Cancel/Rebill Admitted",
+        "Details",
+        "Source",
+    ):
+        dimension = ws.column_dimensions[get_column_letter(HEADERS.index(title) + 1)]
+        dimension.hidden = True
+        dimension.outlineLevel = 1
+    ws.sheet_properties.outlinePr.summaryRight = False
+    ws.cell(
+        2, 1
+    ).comment.text += " Expand the column outlines for rates, meter/register detail and notes. If Excel disables the outline buttons, unprotect the sheet (no password) or use Unhide Columns."
+
+    history = wb.create_sheet("Review history", 1)
     history.sheet_view.showGridLines = False
     history.sheet_properties.tabColor = GREY
     columns = (
@@ -322,6 +351,8 @@ def write_review_sheets(
             literal_cell(history, row, column, change.get(key))
     history.freeze_panes = "E2"
     history.auto_filter.ref = history.dimensions
+    write_workbook_dashboard(wb, view)
+    polish_reference_sheets(wb)
     # Calculated sheets are reference outputs. Protection prevents accidental
     # edits, while import also checks their values against a stored digest.
     for sheet in wb:

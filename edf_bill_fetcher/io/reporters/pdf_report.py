@@ -18,8 +18,8 @@ from xml.sax.saxutils import escape as xml_escape
 
 import pandas as pd
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import (
@@ -44,6 +44,18 @@ from edf_bill_fetcher.helpers.formatting import (
 )
 from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.output_overview import (
+    OutputOverview,
+    build_output_overview,
+    report_account_label,
+)
+from edf_bill_fetcher.models.output_tables import (
+    EVIDENCE_HEADERS,
+    EVIDENCE_NOTE,
+    EVIDENCE_WIDTHS,
+    evidence_cells,
+    timeline_table,
+)
 from edf_bill_fetcher.models.report_view import ReportView, capture_report_view
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
 
@@ -129,6 +141,7 @@ def build_styles() -> dict[str, ParagraphStyle]:
         spaceBefore=18,
         spaceAfter=10,
         fontName="Helvetica-Bold",
+        keepWithNext=True,
         borderWidth=0,
         borderPadding=0,
     )
@@ -141,6 +154,7 @@ def build_styles() -> dict[str, ParagraphStyle]:
         spaceBefore=12,
         spaceAfter=6,
         fontName="Helvetica-Bold",
+        keepWithNext=True,
     )
     custom["SubSubSectionHeader"] = ParagraphStyle(
         "SubSubSectionHeader",
@@ -161,7 +175,7 @@ def build_styles() -> dict[str, ParagraphStyle]:
         leading=13,
         textColor=Colors.DARK_GREY,
         spaceAfter=6,
-        alignment=TA_JUSTIFY,
+        alignment=TA_LEFT,
         fontName="Helvetica",
     )
     custom["BodyTextIndent"] = ParagraphStyle(
@@ -326,14 +340,20 @@ def make_table_style(
     return TableStyle(style_commands)
 
 
-def _wrapped_table(data: list[list], widths: list[float], *, font_size: int = 7) -> Table:
+def _wrapped_table(
+    data: list[list],
+    widths: list[float],
+    *,
+    font_size: int = 7,
+    content_width: float = CONTENT_WIDTH,
+) -> Table:
     """Fit every column inside the frame and display source text literally.
 
     Plain Table strings do not wrap or interpret XML entities. Paragraph
     cells consume one escaping pass, safely showing the original characters
     while wrapping long invoice and file references within positive widths.
     """
-    available = CONTENT_WIDTH - 12  # Frame's default left/right inner padding.
+    available = content_width - 12  # Frame's default left/right inner padding.
     total = sum(widths)
     column_widths = [available * width / total for width in widths]
     cells = []
@@ -357,7 +377,9 @@ def _wrapped_table(data: list[list], widths: list[float], *, font_size: int = 7)
 # =============================================================================
 
 
-def build_doc_template(output_path: str) -> BaseDocTemplate:
+def build_doc_template(
+    output_path: str, *, include_cover: bool = True, first_landscape: bool = False
+) -> BaseDocTemplate:
     """Build the document template with page templates."""
     doc = BaseDocTemplate(
         output_path,
@@ -382,31 +404,31 @@ def build_doc_template(output_path: str) -> BaseDocTemplate:
         """Add page number to footer."""
         canvas.saveState()
         page_num = canvas.getPageNumber()
-        if page_num > 1:  # Skip cover page
+        width, _ = canvas._pagesize
+        if page_num > 1 or not include_cover:
             canvas.setFont("Helvetica", 8)
             canvas.setFillColor(Colors.MEDIUM_GREY)
-            canvas.drawCentredString(PAGE_WIDTH / 2, 1.2 * cm, f"Page {page_num - 1}")
+            canvas.drawCentredString(width / 2, 1.2 * cm, f"Page {page_num - int(include_cover)}")
             # Footer line
             canvas.setStrokeColor(Colors.LIGHT_BLUE)
             canvas.setLineWidth(0.5)
-            canvas.line(MARGIN, 1.5 * cm, PAGE_WIDTH - MARGIN, 1.5 * cm)
+            canvas.line(MARGIN, 1.5 * cm, width - MARGIN, 1.5 * cm)
         canvas.restoreState()
 
     def add_header(canvas, doc):
         """Add header to content pages."""
         canvas.saveState()
         page_num = canvas.getPageNumber()
-        if page_num > 1:
+        width, height = canvas._pagesize
+        if page_num > 1 or not include_cover:
             canvas.setFont("Helvetica", 7)
             canvas.setFillColor(Colors.MEDIUM_GREY)
-            canvas.drawString(
-                MARGIN, PAGE_HEIGHT - 1.2 * cm, "EDF Energy Ombudsman Evidence Report"
-            )
-            canvas.drawRightString(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 1.2 * cm, "CONFIDENTIAL")
+            canvas.drawString(MARGIN, height - 1.2 * cm, "EDF Energy Ombudsman Evidence Report")
+            canvas.drawRightString(width - MARGIN, height - 1.2 * cm, "CONFIDENTIAL")
             # Header line
             canvas.setStrokeColor(Colors.LIGHT_BLUE)
             canvas.setLineWidth(0.5)
-            canvas.line(MARGIN, PAGE_HEIGHT - 1.4 * cm, PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 1.4 * cm)
+            canvas.line(MARGIN, height - 1.4 * cm, width - MARGIN, height - 1.4 * cm)
         canvas.restoreState()
 
     def content_page(canvas, doc):
@@ -416,12 +438,33 @@ def build_doc_template(output_path: str) -> BaseDocTemplate:
     def cover_page(canvas, doc):
         pass  # No header/footer on cover
 
-    doc.addPageTemplates(
-        [
-            PageTemplate(id="cover", frames=[cover_frame], onPage=cover_page),
-            PageTemplate(id="content", frames=[content_frame], onPage=content_page),
-        ]
+    templates = [
+        PageTemplate(id="content", frames=[content_frame], onPage=content_page, pagesize=A4)
+    ]
+    if include_cover:
+        templates.insert(
+            0, PageTemplate(id="cover", frames=[cover_frame], onPage=cover_page, pagesize=A4)
+        )
+    wide_width, wide_height = landscape(A4)
+    templates.append(
+        PageTemplate(
+            id="landscape",
+            frames=[Frame(MARGIN, MARGIN, wide_width - 2 * MARGIN, wide_height - 2 * MARGIN)],
+            onPage=content_page,
+            pagesize=landscape(A4),
+        )
     )
+    if first_landscape:
+        templates.insert(0, templates.pop())
+    doc.addPageTemplates(templates)
+
+    def after_flowable(flowable):
+        anchor = getattr(flowable, "_report_anchor", None)
+        if anchor:
+            doc.canv.bookmarkPage(anchor)
+            doc.canv.addOutlineEntry(flowable.getPlainText(), anchor, level=0)
+
+    doc.afterFlowable = after_flowable
 
     return doc
 
@@ -512,7 +555,7 @@ def create_cover_page(
     )
     elements.append(
         Paragraph(
-            f"Period Covered: <b>{xml_escape(str(period_start))}</b> to <b>{xml_escape(str(period_end))}</b>",
+            f"Record dates: <b>{xml_escape(str(period_start))}</b> to <b>{xml_escape(str(period_end))}</b>",
             STYLES["CoverInfo"],
         )
     )
@@ -543,7 +586,7 @@ def create_cover_page(
     return elements
 
 
-def create_table_of_contents(ctx: RenderContext) -> list:
+def create_table_of_contents(ctx: RenderContext, *, linked: bool = False) -> list:
     """Create table of contents as a single table, driven by ``ctx``.
 
     Numbers and titles come straight from the RenderContext — same registry
@@ -561,7 +604,15 @@ def create_table_of_contents(ctx: RenderContext) -> list:
 
     toc_data = [["No.", "Section"]]
     for spec in ctx.sections_in_order:
-        toc_data.append([spec.label, spec.section.title])
+        title = (
+            Paragraph(
+                f'<link href="#sec-{spec.section.key}" color="#10367A">{xml_escape(spec.section.title)}</link>',
+                STYLES["BodyText"],
+            )
+            if linked
+            else spec.section.title
+        )
+        toc_data.append([spec.label, title])
 
     toc_table = Table(toc_data, colWidths=[1.5 * cm, CONTENT_WIDTH - 1.5 * cm])
     style = TableStyle(
@@ -606,6 +657,7 @@ def create_executive_summary(
     opening_balance: float | None = None,
     closing_balance: float | None = None,
     ctx: RenderContext | None = None,
+    overview: OutputOverview | None = None,
 ) -> list:
     """Create executive summary section."""
     elements = []
@@ -617,14 +669,14 @@ def create_executive_summary(
     elements.append(Spacer(1, 0.3 * cm))
 
     # Overview paragraph
-    overview = (
-        f"This report presents the findings of a comprehensive analysis of EDF Energy billing data "
-        f"for account <b>{xml_escape(account_ref)}</b>, covering the period "
+    intro = (
+        f"This report reviews the supplied EDF Energy billing evidence "
+        f"for account <b>{xml_escape(account_ref)}</b>, with record dates from "
         f"<b>{xml_escape(str(period_start))}</b> to <b>{xml_escape(str(period_end))}</b>. "
-        f"The analysis encompasses <b>{total_records}</b> billing records "
-        f"sourced from EDF bills (PDF), HTM account exports, and email archives (PST/OST)."
+        f"The analysis encompasses <b>{total_records}</b> evidence record{'s' if total_records != 1 else ''} "
+        f"from the sources listed in the evidence index."
     )
-    elements.append(Paragraph(overview, STYLES["BodyText"]))
+    elements.append(Paragraph(intro, STYLES["BodyText"]))
     elements.append(Spacer(1, 0.3 * cm))
 
     # Financial summary
@@ -645,11 +697,11 @@ def create_executive_summary(
         # not extract real numbers (no dated/amounted rows), which is
         # the honest result rather than the steady state.
         [
-            "Opening Balance (First Record)",
+            "First observed balance",
             fmt_money(opening_balance) if opening_balance is not None else "—",
         ],
         [
-            "Closing Balance (Latest Record)",
+            "Last observed balance",
             fmt_money(closing_balance) if closing_balance is not None else "—",
         ],
     ]
@@ -657,6 +709,21 @@ def create_executive_summary(
     fin_table.setStyle(make_table_style(num_rows=6))
     elements.append(fin_table)
     elements.append(Spacer(1, 0.3 * cm))
+    if overview:
+        elements.append(
+            Paragraph(
+                f"Analysis as of {overview.analysis_date}. {xml_escape(overview.balance_note)}",
+                STYLES["SmallText"],
+            )
+        )
+        elements.append(Paragraph("Review priorities", STYLES["SubSectionHeader"]))
+        for priority in overview.priorities:
+            elements.append(
+                Paragraph(
+                    f"<b>{xml_escape(priority.title)}</b> — {xml_escape(priority.action)}",
+                    STYLES["BodyText"],
+                )
+            )
 
     # Key findings
     elements.append(Paragraph("<b>Key Findings</b>", STYLES["SubSectionHeader"]))
@@ -665,23 +732,23 @@ def create_executive_summary(
     findings = []
     if flag_count.get("HIGH", 0) > 0:
         findings.append(
-            f"<b>{flag_count['HIGH']} HIGH-severity anomalies</b> detected, including billing spikes "
-            f"exceeding 50% period-over-period, gaps over 120 days without billing, and "
-            f"missing or inconsistent ledger evidence requiring review."
+            f"<b>{flag_count['HIGH']} HIGH-severity findings</b> require review. "
+            "Read the dated findings for the specific checks triggered and their supporting evidence."
         )
     if flag_count.get("MEDIUM", 0) > 0:
         findings.append(
-            f"<b>{flag_count['MEDIUM']} MEDIUM-severity issues</b> identified, including billing "
-            f"gaps of 60-120 days, daily rate anomalies 2.5-4x average, and estimated reading runs."
+            f"<b>{flag_count['MEDIUM']} MEDIUM-severity findings</b> require review. "
+            "The findings table explains each observation and its account context."
         )
     if flag_count.get("INFO", 0) > 0:
         findings.append(
-            f"<b>{flag_count['INFO']} informational items</b> noted, primarily balance reductions "
-            f"requiring checks of the underlying transactions."
+            f"<b>{flag_count['INFO']} informational findings</b> provide context for manual review."
         )
 
     if not findings:
-        findings.append("No significant anomalies detected in the billing data.")
+        findings.append(
+            "No automated flags were generated. This does not establish that all bills and payments are present or correct."
+        )
 
     for i, finding in enumerate(findings, 1):
         elements.append(Paragraph(f"{i}. {finding}", STYLES["BulletText"]))
@@ -876,6 +943,15 @@ def create_anomaly_detail_section(
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
+    if not flags:
+        elements.append(
+            Paragraph(
+                "No dated automated findings to expand. Check source coverage and review priorities before relying on the absence of flags.",
+                STYLES["BodyText"],
+            )
+        )
+        return elements
+
     # Group by category
     categories: dict[str, list[tuple]] = {
         "LARGE JUMP": [],
@@ -948,52 +1024,8 @@ def create_timeline_section(
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    # Build timeline events
-    events = []
-    df = df.copy()
-    df["_dt"] = df["Date"].apply(parse_to_sort_date)
-    df = df.sort_values("_dt")
-
-    # Add all records as timeline events
-    for _, row in df.iterrows():
-        events.append(
-            {
-                "date": row["Date"],
-                "type": row.get("Entry Type", "Record"),
-                "amount": row.get("Amount (£)"),
-                "detail": f"{row.get('Source', '')} — {row.get('Details', '')[:100]}",
-                "source": row.get("Source", ""),
-            }
-        )
-
-    # Add flag events
-    for ftype, date, amt, detail, _sev in flags:
-        events.append(
-            {
-                "date": date,
-                "type": f"⚠ {ftype}",
-                "amount": amt,
-                "detail": detail,
-                "source": "AUTOMATED FLAG",
-            }
-        )
-
-    # Sort by date
-    events.sort(key=lambda e: parse_to_sort_date(e["date"]) or pd.Timestamp.min)
-
-    # Timeline table
-    timeline_data = [["Date", "Event Type", "Amount", "Detail"]]
-    for ev in events:
-        timeline_data.append(
-            [
-                fmt_date(ev["date"]),
-                ev["type"],
-                fmt_money(ev["amount"]) if ev["amount"] is not None else "",
-                ev["detail"][:150] + ("..." if len(ev["detail"]) > 150 else ""),
-            ]
-        )
-
-    t = _wrapped_table(timeline_data, [2.5, 3.5, 3, 7])
+    timeline_data = timeline_table(df, flags)
+    t = _wrapped_table(timeline_data, [2, 3, 2.5, 2.5, 7], font_size=8)
     elements.append(t)
 
     elements.append(PageBreak())
@@ -1042,7 +1074,8 @@ def create_ofgem_comparison(
     if not comparison.rows:
         elements.append(
             Paragraph(
-                "No billing records with both Period Charge and Units (kWh) available for comparison.",
+                "No billing records with a usable extracted energy unit rate and consumption period "
+                "are available for comparison. A total charge divided by usage is not a substitute.",
                 STYLES["BodyText"],
             )
         )
@@ -1117,10 +1150,11 @@ def create_ofgem_comparison(
 
     elements.append(
         Paragraph(
-            "<b>Methodology:</b> Unit rates calculated as Period Charge (£) ÷ Units (kWh) × 100. "
-            "Standing charges compared separately against OFGEM daily cap. "
-            "Only records with both Period Charge and Units (kWh) are included. "
-            "OFGEM cap data sourced from official Default Tariff Cap publications.",
+            "<b>Methodology:</b> Extracted energy unit rates are allocated to consumption quarters "
+            "and weighted by usage, or days when usage is unavailable. The model does not divide "
+            "total bill charges by kWh or assess standing charges here. Missing tariff/payment/fuel "
+            "context remains unassessed. OFGEM data is a GB-average direct-debit electricity "
+            "benchmark, not an account-specific legal cap.",
             STYLES["SmallText"],
         )
     )
@@ -1153,11 +1187,20 @@ def create_statistical_analysis(
 
     if n < 3:
         elements.append(
-            Paragraph("Insufficient data for statistical analysis.", STYLES["BodyText"])
+            Paragraph(
+                "At least three usable balance observations in one ledger are needed. No statistical conclusion is available for this selection.",
+                STYLES["BodyText"],
+            )
         )
         elements.append(PageBreak())
         return elements
 
+    elements.append(
+        Paragraph(
+            "These statistics describe recorded balances, not individual bill costs. Outliers identify observations to inspect; they do not establish a billing error.",
+            STYLES["BodyText"],
+        )
+    )
     # Descriptive stats
     mean_amt = sa.mean
     std_amt = sa.std
@@ -1287,7 +1330,10 @@ def create_payment_analysis(
         elements.append(t)
     else:
         elements.append(
-            Paragraph("No payment/credit records found in the data.", STYLES["BodyText"])
+            Paragraph(
+                "No payment/credit records were supplied. This does not establish that no payments were made; check statements or payment confirmations.",
+                STYLES["BodyText"],
+            )
         )
 
     elements.append(PageBreak())
@@ -1315,9 +1361,9 @@ def create_forecast_section(
 
     elements.append(
         Paragraph(
-            "Projections are based on historical billing patterns and should be treated as "
-            "indicative only. They assume continuation of current trends and do not account for "
-            "seasonal variations, tariff changes, or policy changes.",
+            "These are projections of observed balances, not future bill charges or compensation. "
+            "They are indicative context only; missing payments, tariff changes and other account "
+            "events can make a balance trend misleading.",
             STYLES["BodyText"],
         )
     )
@@ -1665,23 +1711,23 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
         (
             "A.1 Data Sources",
             [
-                "All billing records were extracted from three primary source types:",
-                "• <b>PDF Bills:</b> EDF Energy invoices (both legacy and new KI/KCR formats) "
-                "processed via pdfplumber with format-specific regex extraction.",
-                "• <b>HTM Export:</b> EDF MyAccount 'Payments and Invoices' export parsed via "
+                "Supported sources include the following. See the evidence index for the sources supplied in this run:",
+                "• PDF Bills: EDF Energy invoices (both legacy and new KI/KCR formats) "
+                "processed using text extraction or OCR, then format-specific field extraction.",
+                "• HTM Export: EDF MyAccount 'Payments and Invoices' export parsed via "
                 "BeautifulSoup with pattern matching for charge/payment/reversal entries.",
-                "• <b>PST/OST Email Archives:</b> Outlook data files processed via libpff-python, "
+                "• PST/OST Email Archives: Outlook data files processed via libpff-python, "
                 "extracting email bodies (HTML/plain text/RTF) and PDF attachments.",
             ],
         ),
         (
             "A.2 Amount Extraction Logic",
             [
-                "Two complementary strategies ensure comprehensive amount detection:",
-                "1. <b>Smart Context Search:</b> 10 prioritized regex patterns targeting specific "
+                "Extraction strategies depend on the selected settings and available document text:",
+                "1. Smart Context Search: prioritized patterns targeting specific "
                 "EDF billing language (e.g., 'Current balance £X debit', 'Total charges for this period'). "
                 "Patterns execute in priority order; first match wins.",
-                "2. <b>Large Amount Fallback:</b> Scans all £ amounts ≥ minimum threshold, "
+                "2. Large Amount Fallback: scans all £ amounts ≥ minimum threshold, "
                 "selecting the largest. Used when context patterns fail.",
             ],
         ),
@@ -1696,9 +1742,9 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
         (
             "A.4 Classification Logic",
             [
-                "<b>Entry Type:</b> 'New Bill' (period charge + period dates), 'Ongoing Balance' "
+                "Entry Type: 'New Bill' (period charge + period dates), 'Ongoing Balance' "
                 "(cumulative balance only), 'Payment', 'Credit'.",
-                "<b>Reading Type:</b> Regex classification — 'Estimated' (estimated/est./estimate), "
+                "Reading Type: regex classification — 'Estimated' (estimated/est./estimate), "
                 "'Actual' (actual/customer reading/your reading), 'Smart' (smart meter/automated).",
             ],
         ),
@@ -1735,6 +1781,7 @@ def create_appendix_full_evidence(
     filtered: list | None = None,
     config: dict | None = None,
     ctx: RenderContext | None = None,
+    content_width: float = CONTENT_WIDTH,
 ) -> list:
     """Create Full Evidence Table appendix, plus optional Filtered Records sub-table."""
     elements = []
@@ -1745,15 +1792,9 @@ def create_appendix_full_evidence(
     elements.append(Paragraph(heading, STYLES["SectionHeader"]))
     elements.append(Spacer(1, 0.3 * cm))
 
-    # Escaping happens once in _wrapped_table, after preserving the full
-    # invoice/source references. XML entities are never truncated mid-token.
-    def _xf(value: object) -> str:
-        return str(value)
-
     elements.append(
         Paragraph(
-            "This appendix contains the complete set of billing records used in this analysis. "
-            "Records are sorted chronologically by date.",
+            EVIDENCE_NOTE,
             STYLES["BodyText"],
         )
     )
@@ -1769,76 +1810,21 @@ def create_appendix_full_evidence(
         df["_dt"] = df["Date"].apply(parse_to_sort_date)
     df_sorted = df.sort_values("_dt").reset_index(drop=True)
 
-    # Table header
-    evidence_header = [
-        "Date",
-        "Source",
-        "Entry Type",
-        "Amount (£)",
-        "Period Charge (£)",
-        "Period From",
-        "Period To",
-        "Invoice #",
-        "Reading",
-        "Units (kWh)",
-        "Standing Chg (p/day)",
-        "Attachment",
-        "Details",
+    evidence_header = EVIDENCE_HEADERS
+    evidence_data = [
+        evidence_header,
+        *[evidence_cells(row) for row in df_sorted.to_dict("records")],
     ]
-
-    evidence_data = [evidence_header]
-
-    for _, row in df_sorted.iterrows():
-        evidence_data.append(
-            [
-                _xf(fmt_date(row.get("Date", ""))),
-                _xf(row.get("Source", "")),
-                _xf(row.get("Entry Type", "")),
-                # fmt_money output is numeric (no special chars)
-                fmt_money(row.get("Amount (£)", 0)),
-                fmt_money(row.get("Period Charge (£)", 0))
-                if row.get("Period Charge (£)") not in ("", "N/A", None)
-                else "N/A",
-                _xf(row.get("Period From", "")),
-                _xf(row.get("Period To", "")),
-                _xf(row.get("Invoice #", "")),
-                _xf(row.get("Reading", "")),
-                # Units / Standing Chg: try to keep as numeric if
-                # parseable — those are safe; only escape the raw
-                # fallback when coercion fails.  For brevity here
-                # we escape the displayed value as a whole string
-                # because the underlying cells are normally
-                # already-numeric str()s.
-                _xf(row.get("Units (kWh)", "")),
-                _xf(row.get("Standing Chg (p/day)", "")),
-                _xf(row.get("Attachment Name", "")),
-                _xf(row.get("Details", ""))[:50],
-            ]
-        )
 
     # Relative widths; the wrapped table scales these to the actual frame.
-    col_widths = [
-        2.0 * cm,  # Date
-        2.5 * cm,  # Source
-        2.0 * cm,  # Entry Type
-        2.0 * cm,  # Amount
-        2.0 * cm,  # Period Charge
-        2.0 * cm,  # Period From
-        2.0 * cm,  # Period To
-        1.5 * cm,  # Invoice
-        1.5 * cm,  # Reading
-        1.5 * cm,  # Units
-        1.5 * cm,  # Standing
-        2.0 * cm,  # Attachment
-        4.0 * cm,
-    ]
+    col_widths = list(EVIDENCE_WIDTHS)
 
-    t = _wrapped_table(evidence_data, col_widths, font_size=6)
+    t = _wrapped_table(evidence_data, col_widths, font_size=8, content_width=content_width)
     t.setStyle(
         TableStyle(
             [
                 ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                ("FONTSIZE", (0, 0), (-1, -1), 6),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
                 ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                 ("BACKGROUND", (0, 0), (-1, 0), Colors.NAVY),
@@ -1875,34 +1861,15 @@ def create_appendix_full_evidence(
         elements.append(Spacer(1, 0.3 * cm))
 
         filt_data = [evidence_header]
-        for row in filtered:
-            filt_data.append(
-                [
-                    _xf(fmt_date(row.get("Date", ""))),
-                    _xf(row.get("Source", "")),
-                    _xf(row.get("Entry Type", "")),
-                    fmt_money(row.get("Amount (£)", 0)),
-                    fmt_money(row.get("Period Charge (£)", 0))
-                    if row.get("Period Charge (£)") not in ("", "N/A", None)
-                    else "N/A",
-                    _xf(row.get("Period From", "")),
-                    _xf(row.get("Period To", "")),
-                    _xf(row.get("Invoice #", "")),
-                    _xf(row.get("Reading", "")),
-                    _xf(row.get("Units (kWh)", "")),
-                    _xf(row.get("Standing Chg (p/day)", "")),
-                    _xf(row.get("Attachment Name", "")),
-                    _xf(row.get("Details", ""))[:50],
-                ]
-            )
+        filt_data.extend(evidence_cells(row) for row in filtered)
 
         if len(filt_data) > 1:
-            t2 = _wrapped_table(filt_data, col_widths, font_size=6)
+            t2 = _wrapped_table(filt_data, col_widths, font_size=8, content_width=content_width)
             t2.setStyle(
                 TableStyle(
                     [
                         ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                        ("FONTSIZE", (0, 0), (-1, -1), 6),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
                         ("TEXTCOLOR", (0, 0), (-1, -1), Colors.DARK_GREY),
                         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                         ("BACKGROUND", (0, 0), (-1, 0), Colors.AMBER),
@@ -1941,8 +1908,8 @@ def create_appendix_glossary(ctx: RenderContext | None = None) -> list:
         "Equivalent to 'Total charges for this period' on new EDF invoices.",
         "Amount (£)": "The primary balance figure — typically the current cumulative account balance "
         "on new invoices, or the running balance on HTM exports.",
-        "Unit Rate (p/kWh)": "Effective price per kWh = Period Charge ÷ Units (kWh) × 100. "
-        "Includes both energy and standing charge components unless separated.",
+        "Energy Unit Rate (p/kWh)": "The energy price extracted from the bill, excluding "
+        "standing charges. Total bill cost divided by usage is not an equivalent unit rate.",
         "Standing Charge (p/day)": "Daily fixed charge regardless of consumption, as published on EDF bills.",
         "OFGEM Price Cap": "Maximum price per unit (p/kWh) and daily standing charge (p/day) that "
         "suppliers can charge customers on default/standard variable tariffs, "
@@ -2062,7 +2029,7 @@ def render_pdf(view: ReportView, output_path: str) -> str:
     df = df.sort_values("_sort").reset_index(drop=True)
 
     # Account reference
-    acc_ref = config.get("report_account_ref") or config.get("acc_num") or "Unknown"
+    acc_ref = report_account_label(view)
 
     # Period bounds
     dates_parsed = df["Date"].apply(parse_to_sort_date)
@@ -2099,7 +2066,12 @@ def render_pdf(view: ReportView, output_path: str) -> str:
     render_ctx = RenderContext(enabled_sections)
 
     # Build document
-    doc = build_doc_template(output_path)
+    only_evidence = enabled_sections == {"appendix_full_evidence"}
+    doc = build_doc_template(
+        output_path,
+        include_cover=section_enabled("cover"),
+        first_landscape=only_evidence,
+    )
     elements = []
 
     # === COVER PAGE ===
@@ -2121,7 +2093,7 @@ def render_pdf(view: ReportView, output_path: str) -> str:
     # === TABLE OF CONTENTS ===
     if section_enabled("toc"):
         try:
-            elements.extend(create_table_of_contents(render_ctx))
+            elements.extend(create_table_of_contents(render_ctx, linked=True))
         except Exception as e:
             section_failures.append(str(e))
             elements.append(
@@ -2151,6 +2123,7 @@ def render_pdf(view: ReportView, output_path: str) -> str:
                 "period_end": period_end,
                 "opening_balance": opening_balance,
                 "closing_balance": closing_balance,
+                "overview": build_output_overview(view),
             },
             lambda kwargs: create_executive_summary(**kwargs),
         ),
@@ -2236,7 +2209,25 @@ def render_pdf(view: ReportView, output_path: str) -> str:
                 "compensation",
             ):
                 kwargs["payload"] = view.model(section.key)
-            elements.extend(invoke(kwargs))
+            if section.key == "appendix_full_evidence":
+                kwargs["content_width"] = landscape(A4)[0] - 2 * MARGIN
+                if not only_evidence:
+                    if elements and isinstance(elements[-1], PageBreak):
+                        elements.insert(len(elements) - 1, NextPageTemplate("landscape"))
+                    else:
+                        elements.extend([NextPageTemplate("landscape"), PageBreak()])
+            section_elements = invoke(kwargs)
+            # Section builders also serve standalone callers. Compose their
+            # content here without the legacy forced page between every section.
+            while section_elements and isinstance(section_elements[0], PageBreak):
+                section_elements.pop(0)
+            while section_elements and isinstance(section_elements[-1], PageBreak):
+                section_elements.pop()
+            for flowable in section_elements:
+                if isinstance(flowable, Paragraph) and flowable.style.name == "SectionHeader":
+                    flowable._report_anchor = f"sec-{section.key}"
+                    break
+            elements.extend(section_elements)
         except Exception as e:
             section_failures.append(str(e))
             elements.append(

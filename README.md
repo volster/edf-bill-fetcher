@@ -26,7 +26,7 @@ how each finding was produced.
 - **Cross-source deduplication**: compatible account/fuel/meter/register identity and supported invoice, transaction or source-row relationships determine duplicate membership. Equal dates and amounts alone do not establish the same event. Completeness selects the kept row, with source precedence as a tie-breaker. Optional amalgamation fills missing fields; original siblings and source occurrences remain available for audit.
 - **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets — see the *Output Sheets* section for the full conditional-emission list.
 - **SAP financial-ledger integration**: when `scan_sap_dumps` is on (default), the engine also digests EDF's three SAP-CSV-in-PDF dumps (`*_Contract-History.pdf`, `*_Meter-Readings.pdf`, `*_Financial-Transactions.pdf`) and renders three source sheets + two analyser sheets (`SAP Back-billing Events` and `SAP ↔ EDF Matched Events`) + a cross-source `Reconciliation` sheet. See the *SAP ledger integration* section below for the full design.
-- **PDF, DOCX and HTML output**: 15 selectable sections. Numbering derives from `models/report_sections.py` so headings and contents agree for the selected sections.
+- **PDF, DOCX and HTML output**: 15 selectable sections with linked contents, concrete review priorities and explicit balance/transaction columns. PDF and Word use landscape evidence appendices; HTML has responsive navigation and print styles and works offline. Numbering derives from `models/report_sections.py` so headings and contents agree for the selected sections.
 - **Indicative compensation scenarios**: supported bill-period allocations and configured credit-interest scenarios feed the workbook and reports. Interest has no assumed statutory rate; eligibility requires assessment of the original evidence. Back-billing age detection uses a nominal 365-day window.
 - **Qt desktop workspace**: separate extraction, saved-report and preference flows, with visible progress, cancellation and review notes.
   - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
@@ -333,7 +333,13 @@ Removing a section: same steps in reverse.
 
 ## Review and correct in Excel
 
-Every new workbook opens on **Start here**, with navigation and instructions.
+Every new workbook opens on **Start here**, with a financial overview, dated
+review priorities and links to every visible sheet. Balances are labelled as
+observations; combined balances remain unavailable for mixed ledgers. The
+**Workbook guide** explains the correction workflow. Less frequently used
+columns are grouped and hidden; use Excel's outline controls or Unhide Columns
+to expand them. If Excel disables outlines on a protected sheet, unprotect it
+without a password.
 Use **Review & Corrections** to fix invoice references, dates, account/meter
 identifiers, charges, balances, signed transactions, consumption, rates or notes.
 Pale green cells are editable; grey source fields and the hidden row ID identify
@@ -388,9 +394,10 @@ Sheets are written in roughly this order; conditional sheets only appear when th
 
 | Sheet | When emitted | Description |
 | --- | --- | --- |
-| **Start here** | always (first tab) | Review instructions, analysis date, included/excluded counts and navigation |
+| **Start here** | always (first tab) | Financial overview, analysis date, evidence coverage, concrete review priorities and sheet directory |
 | **Review & Corrections** | always | Validated editable inputs, inclusion decisions, reasons and source links |
 | **Review history** | always | Before/after values, reasons and lineage for imported review decisions |
+| **Workbook guide** | always | Correction instructions, financial meanings and regeneration guidance |
 | **Provenance** | always | Tool version, generation timestamp, account reference, record counts, and a full snapshot of the run configuration — so a filed workbook is self-documenting about how its conclusions were produced |
 | **Annual Summary** | always | Yearly balance range, average, peak, low |
 | **EDF Evidence Report** | always | All extracted records with live formulas |

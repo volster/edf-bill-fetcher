@@ -244,7 +244,7 @@ def test_analytical_sections_render_stored_metrics(
     html = out_path.read_text(encoding="utf-8")
     assert "not implemented in HTML" not in html
     assert "Mean" in html
-    assert "Total Paid" in html
+    assert "Recorded total" in html
     assert "Unavailable" in html
     assert "Statistical Analysis" in html
     assert "Payment &amp; Credit Analysis" in html

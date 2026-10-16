@@ -33,6 +33,8 @@ def _make_df() -> pd.DataFrame:
             "Period Charge (£)": [80.0, 60.0],
             "Units (kWh)": ["100", "80"],
             "Reading": ["Estimated<bad>", "Actual&worse"],
+            "Account": ["ACCOUNT<one>", "ACCOUNT&two"],
+            "Attachment Name": ["bill<one>.pdf", "bill&two.pdf"],
             "Entry Type": ["New Bill<inject>", "New Bill"],
             "Source": ["<HTM>", "PST"],
             "Tariff": ["Standard", "Standard Tariff"],
@@ -70,7 +72,14 @@ def test_source_markup_is_visible_literal_text_and_cells_stay_on_page(section: s
         # Wrapping can put a reference on several lines; compare characters
         # without whitespace, while checking the actual PDF's page bounds.
         text = _table_text(document)
-        for original in ("<HTM>", "INV-<safe>", "INV&here", "Estimated<bad>", "Actual&worse"):
+        originals = ["<HTM>", "INV-<safe>", "INV&here", "NewBill<inject>"]
+        if section == "index":
+            originals.extend(["Estimated<bad>", "Actual&worse"])
+        else:
+            # The redesigned appendix puts account/file identity ahead of
+            # reading metadata, which remains available in the workbook.
+            originals.extend(["ACCOUNT<one>", "ACCOUNT&two", "bill<one>.pdf", "bill&two.pdf"])
+        for original in originals:
             assert original in text
         assert "&lt;" not in text
         assert "&amp;" not in text

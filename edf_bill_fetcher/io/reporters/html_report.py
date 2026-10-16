@@ -10,10 +10,9 @@ The document carries inline CSS only — no external stylesheets, scripts
 or remote assets — so it opens correctly from an offline file share.
 
 Each registry section is rendered by a ``create_<name>(...)`` builder
-returning an HTML fragment string.  Sections whose analysis is
-chart-heavy in the PDF/DOCX surfaces (statistical, payment, forecast)
-render a "not implemented in HTML" placeholder note instead, directing
-the reader to the PDF/DOCX/Excel outputs.  A registry key with no
+returning an HTML fragment string. Analytical sections present the stored
+models as readable tables, with explicit explanations for missing data.
+A registry key with no
 wired builder raises ``RuntimeError`` at dispatch — the same
 loud-failure mode the PDF dispatcher uses.
 """
@@ -32,6 +31,17 @@ from edf_bill_fetcher.helpers.formatting import fmt_money, fmt_number
 from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
 from edf_bill_fetcher.helpers.version import get_package_version as _get_package_version
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.output_overview import (
+    OutputOverview,
+    build_output_overview,
+    report_account_label,
+)
+from edf_bill_fetcher.models.output_tables import (
+    EVIDENCE_HEADERS,
+    EVIDENCE_NOTE,
+    evidence_cells,
+    timeline_table,
+)
 from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS, RenderContext
 from edf_bill_fetcher.models.report_view import ReportView, capture_report_view
 from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compensation
@@ -43,32 +53,70 @@ from edf_bill_fetcher.processors.compensation import DISCLAIMER, estimate_compen
 # Inline stylesheet — deliberately self-contained so the report renders
 # offline from a file share without fetching any external asset.
 _CSS = """
-body { font-family: "Segoe UI", Helvetica, Arial, sans-serif; color: #333333;
-       margin: 0; padding: 0; background: #ffffff; }
-.container { max-width: 900px; margin: 0 auto; padding: 24px 32px 64px 32px; }
-h1 { color: #10367A; font-size: 28px; margin: 0 0 4px 0; }
-h2.section { color: #10367A; font-size: 18px; border-bottom: 2px solid #10367A;
-             padding-bottom: 6px; margin: 40px 0 12px 0; }
-h3 { color: #1B4F9E; font-size: 14px; margin: 20px 0 8px 0; }
-p { font-size: 11px; line-height: 1.5; margin: 0 0 10px 0; }
-p.note { background: #EBF3FA; border-left: 4px solid #2E75B6; padding: 10px 12px;
-         font-style: italic; color: #333333; }
-p.muted { color: #666666; font-size: 9px; }
-table { border-collapse: collapse; width: 100%; margin: 0 0 16px 0; }
-th, td { border: 1px solid #B4C6E7; padding: 5px 7px; font-size: 10px;
-         text-align: left; vertical-align: top; }
-th { background: #10367A; color: #ffffff; font-weight: bold; }
-tr.alt td { background: #EBF3FA; }
-.cover { text-align: center; padding: 48px 0 24px 0; }
-.cover .subtitle { color: #2E75B6; font-size: 14px; margin: 8px 0 20px 0; }
-.cover .confidential { color: #C00000; font-weight: bold; font-size: 11px;
-                       margin: 24px 0 6px 0; }
-.cover table { width: 60%; margin: 8px auto; }
-.toc ol { font-size: 11px; }
-.toc a { color: #10367A; text-decoration: none; }
-.toc a:hover { text-decoration: underline; }
-.failed { color: #C00000; font-style: italic; }
-ul { font-size: 11px; line-height: 1.5; }
+:root { color-scheme: light; --ink:#18354a; --accent:#007f82; --line:#d6e1e8; }
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; scroll-padding-top:24px; }
+body { font-family:"Segoe UI",Calibri,Arial,sans-serif; color:#253849; margin:0;
+       background:#f2f5f7; font-size:16px; line-height:1.6; }
+.container { max-width:1280px; margin:auto; padding:32px; }
+.report-layout { display:grid; grid-template-columns:240px minmax(0,1fr); gap:32px; align-items:start; }
+.report-layout.no-nav { grid-template-columns:minmax(0,1fr); }
+main { min-width:0; background:white; border:1px solid var(--line); border-radius:12px; padding:32px; }
+main > div[id^="sec-"] { scroll-margin-top:24px; }
+h1 { color:var(--ink); font-size:32px; line-height:1.2; margin:0 0 8px; }
+h2.section { color:var(--ink); font-size:23px; line-height:1.3; border-bottom:2px solid var(--line);
+             padding-bottom:12px; margin:40px 0 18px; }
+main > div:first-child h2 { margin-top:0; }
+h3 { color:var(--ink); font-size:18px; line-height:1.4; margin:24px 0 10px; }
+p { margin:0 0 16px; overflow-wrap:anywhere; }
+p.note { background:#edf6f7; border-left:4px solid var(--accent); padding:14px 18px; border-radius:0 6px 6px 0; }
+p.muted { color:#526576; font-size:14px; }
+.table-scroll { width:100%; overflow-x:auto; margin:0 0 20px; border:1px solid var(--line); border-radius:6px; }
+table { border-collapse:collapse; width:100%; }
+th,td { padding:10px 12px; font-size:14px; text-align:left; vertical-align:top;
+        border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+thead th { background:var(--ink); color:white; font-weight:600; }
+tbody th { font-weight:600; background:transparent; }
+tr.alt td,tr.alt th { background:#f4f7fa; }
+.numeric { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.cover { background:white; border:1px solid var(--line); border-top:6px solid var(--accent);
+         border-radius:12px; padding:32px; margin-bottom:28px; }
+.cover .subtitle { color:var(--accent); font-size:18px; margin:10px 0 24px; }
+.cover .confidential { color:#8c3532; font-weight:600; font-size:13px; margin:24px 0 8px; }
+.cover .table-scroll { max-width:720px; }
+.toc { position:sticky; top:24px; max-height:calc(100vh - 48px); overflow-y:auto; font-size:14px; }
+.toc h2.section { margin:0 0 14px; font-size:18px; }
+.toc ol { list-style:none; padding:0; margin:0; }
+.toc li { margin:0 0 6px; }
+.toc a { display:block; padding:7px 10px; border-radius:5px; text-decoration:none; color:var(--ink); }
+.toc a:hover,.toc a:focus-visible { background:#dfecef; text-decoration:underline; }
+a { color:#006b80; text-underline-offset:3px; }
+:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+.skip-link { position:absolute; left:16px; top:-100px; background:white; padding:12px; z-index:3; }
+.skip-link:focus { top:16px; }
+.priorities { padding-left:24px; }
+.priorities li { margin-bottom:14px; }
+.failed { color:#a12727; }
+ul { padding-left:24px; }
+@media (max-width:850px) {
+ .container { padding:16px; } .report-layout { display:block; }
+ .toc { position:static; max-height:none; margin:0 0 24px; }
+ .toc ol { columns:2; } .toc li { break-inside:avoid; }
+ main,.cover { padding:22px; } h1 { font-size:26px; }
+}
+@media (max-width:480px) { .toc ol { columns:1; } main,.cover { padding:16px; } }
+@media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+@media print {
+ @page { size:A4; margin:18mm; }
+ body { background:white; font-size:11pt; } .container { max-width:none; padding:0; }
+ .toc,.skip-link { display:none; } .report-layout { display:block; }
+ main,.cover { padding:0; border:0; border-radius:0; }
+ .cover { margin-bottom:24pt; } h2.section,h3 { break-after:avoid; }
+ .table-scroll { overflow:visible; border:0; } th,td { font-size:9pt; padding:5pt; }
+ thead { display:table-header-group; } thead th { color:black; background:#e7edf0; }
+ tr { break-inside:avoid; } p { orphans:3; widows:3; }
+ a { color:inherit; } p.note { border:1px solid #a9bcc6; }
+}
 """
 
 
@@ -86,17 +134,29 @@ def _table(rows: list[list[Any]], *, header: bool = True) -> str:
     """
     if not rows:
         return ""
-    parts = ["<table>"]
+    parts = [
+        '<div class="table-scroll" tabindex="0" role="region" aria-label="Report data table"><table>'
+    ]
     body_start = 0
     if header:
         head = rows[0]
-        parts.append("<tr>" + "".join(f"<th>{_esc(c)}</th>" for c in head) + "</tr>")
+        parts.append(
+            "<thead><tr>"
+            + "".join(f'<th scope="col">{_esc(c)}</th>' for c in head)
+            + "</tr></thead>"
+        )
         body_start = 1
+    parts.append("<tbody>")
     for i, row in enumerate(rows[body_start:], start=body_start):
         cls = ' class="alt"' if i % 2 == 0 else ""
-        cells = "".join(f"<td>{_esc(c)}</td>" for c in row)
+        cells = "".join(
+            f'<td class="numeric">{_esc(c)}</td>'
+            if isinstance(c, (int, float)) or str(c).startswith("£")
+            else f"<td>{_esc(c)}</td>"
+            for c in row
+        )
         parts.append(f"<tr{cls}>{cells}</tr>")
-    parts.append("</table>")
+    parts.append("</tbody></table></div>")
     return "\n".join(parts)
 
 
@@ -130,7 +190,7 @@ def create_cover_page(acc_ref: str, period_start: str, period_end: str, report_d
     version = _get_package_version()
     rows = [
         ["Account Reference", acc_ref],
-        ["Period Covered", f"{period_start} to {period_end}"],
+        ["Record dates", f"{period_start} to {period_end}"],
         ["Report Generated", report_date],
         ["Prepared by", "EDF Evidence Collector"],
     ]
@@ -158,10 +218,12 @@ def create_cover_page(acc_ref: str, period_start: str, period_end: str, report_d
 
 def create_table_of_contents(ctx: RenderContext) -> str:
     """Create the table of contents, driven by ``ctx``."""
-    parts = ['<div class="toc"><h2 class="section">Table of Contents</h2>']
+    parts = [
+        '<nav class="toc" aria-label="Report contents"><h2 class="section">Table of Contents</h2>'
+    ]
     if not ctx.sections_in_order:
         parts.append("<p><i>No report sections selected.</i></p>")
-        parts.append("</div>")
+        parts.append("</nav>")
         return "\n".join(parts)
     parts.append("<ol>")
     for spec in ctx.sections_in_order:
@@ -169,7 +231,7 @@ def create_table_of_contents(ctx: RenderContext) -> str:
         parts.append(
             f'<li><a href="#{anchor}">{_esc(spec.label)} {_esc(spec.section.title)}</a></li>'
         )
-    parts.append("</ol></div>")
+    parts.append("</ol></nav>")
     return "\n".join(parts)
 
 
@@ -186,6 +248,7 @@ def create_executive_summary(
     opening_balance: float | None = None,
     closing_balance: float | None = None,
     ctx: RenderContext | None = None,
+    overview: OutputOverview | None = None,
 ) -> str:
     """Create the executive summary section."""
     if ctx is None:
@@ -195,11 +258,11 @@ def create_executive_summary(
 
     parts = [f'<div id="sec-exec_summary"><h2 class="section">{_esc(heading)}</h2>']
     parts.append(
-        "<p>This report presents the findings of a comprehensive analysis of EDF Energy "
-        f"billing data for account <b>{_esc(account_ref)}</b>, covering the period "
+        "<p>This report reviews the supplied EDF Energy billing evidence "
+        f"for account <b>{_esc(account_ref)}</b>, with record dates from "
         f"<b>{_esc(period_start)}</b> to <b>{_esc(period_end)}</b>. "
-        f"The analysis encompasses <b>{total_records}</b> billing records sourced from "
-        "EDF bills (PDF), HTM account exports, and email archives (PST/OST).</p>"
+        f"The analysis encompasses <b>{total_records}</b> evidence record{'s' if total_records != 1 else ''} sourced from "
+        "the sources listed in the evidence index.</p>"
     )
     fin_rows = [
         ["Metric", "Amount"],
@@ -207,37 +270,45 @@ def create_executive_summary(
         ["Net Payments/Credits (After Refunds)", fmt_money(total_payments)],
         ["Recorded Net Movement", fmt_money(net_change)],
         [
-            "Opening Balance (First Record)",
+            "First observed balance",
             fmt_money(opening_balance) if opening_balance is not None else "—",
         ],
         [
-            "Closing Balance (Latest Record)",
+            "Last observed balance",
             fmt_money(closing_balance) if closing_balance is not None else "—",
         ],
     ]
     parts.append("<h3>Financial Summary</h3>")
     parts.append(_table(fin_rows))
+    if overview:
+        parts.append(_note(f"Analysis as of {overview.analysis_date}. {overview.balance_note}"))
+        parts.append('<h3>Review priorities</h3><ol class="priorities">')
+        for priority in overview.priorities:
+            title = _esc(priority.title)
+            if priority.section in ctx.selected:
+                title = f'<a href="#sec-{priority.section}">{title}</a>'
+            parts.append(f"<li><strong>{title}</strong><br>{_esc(priority.action)}</li>")
+        parts.append("</ol>")
 
     findings: list[str] = []
     if flag_count.get("HIGH", 0) > 0:
         findings.append(
-            f"{flag_count['HIGH']} HIGH-severity anomalies detected, including billing "
-            "spikes exceeding 50% period-over-period, gaps over 120 days without "
-            "billing, and missing or inconsistent ledger evidence requiring review."
+            f"{flag_count['HIGH']} HIGH-severity findings require review. "
+            "Read the dated findings for the specific checks triggered and their supporting evidence."
         )
     if flag_count.get("MEDIUM", 0) > 0:
         findings.append(
-            f"{flag_count['MEDIUM']} MEDIUM-severity issues identified, including "
-            "billing gaps of 60-120 days, daily rate anomalies 2.5-4x average, and "
-            "estimated reading runs."
+            f"{flag_count['MEDIUM']} MEDIUM-severity findings require review. "
+            "The findings table explains each observation and its account context."
         )
     if flag_count.get("INFO", 0) > 0:
         findings.append(
-            f"{flag_count['INFO']} informational items noted, primarily balance "
-            "reductions requiring checks of the underlying transactions."
+            f"{flag_count['INFO']} informational findings provide context for manual review."
         )
     if not findings:
-        findings.append("No significant anomalies detected in the billing data.")
+        findings.append(
+            "No automated flags were generated. This does not establish that all bills and payments are present or correct."
+        )
 
     parts.append("<h3>Key Findings</h3><ul>")
     for finding in findings:
@@ -402,38 +473,7 @@ def create_timeline_section(df: pd.DataFrame, flags: list, ctx: RenderContext | 
     heading = ctx.heading("timeline")
     parts = [f'<div id="sec-timeline"><h2 class="section">{_esc(heading)}</h2>']
 
-    events: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        events.append(
-            {
-                "date": row["Date"],
-                "type": row.get("Entry Type", "Record"),
-                "amount": row.get("Amount (£)"),
-                "detail": f"{row.get('Source', '')} — {str(row.get('Details', ''))[:100]}",
-            }
-        )
-    for ftype, date, amt, detail, _sev in flags:
-        events.append(
-            {
-                "date": date,
-                "type": f"⚠ {ftype}",
-                "amount": amt,
-                "detail": detail,
-            }
-        )
-    events.sort(key=lambda e: parse_to_sort_date(e["date"]) or pd.Timestamp.min)
-
-    timeline_rows = [["Date", "Event Type", "Amount", "Detail"]]
-    for ev in events:
-        timeline_rows.append(
-            [
-                fmt_date(ev["date"]),
-                ev["type"],
-                fmt_money(ev["amount"]) if ev["amount"] else "",
-                str(ev["detail"])[:150],
-            ]
-        )
-    parts.append(_table(timeline_rows))
+    parts.append(_table(timeline_table(df, flags)))
     parts.append("</div>")
     return "\n".join(parts)
 
@@ -465,8 +505,8 @@ def create_ofgem_comparison(
 
     if not comparison.rows:
         parts.append(
-            "<p>No billing records with both Period Charge and Units (kWh) available "
-            "for comparison.</p></div>"
+            "<p>No billing records with a usable extracted energy unit rate and consumption period "
+            "are available for comparison. A total charge divided by usage is not a substitute.</p></div>"
         )
         return "\n".join(parts)
 
@@ -490,10 +530,11 @@ def create_ofgem_comparison(
     header = ["Period", "Bill Unit Rate (p/kWh)", "OFGEM Cap (p/kWh)", "Difference", "Status"]
     parts.append(_table([header, *cap_rows]))
     parts.append(
-        '<p class="muted"><b>Methodology:</b> Unit rates calculated as '
-        "Period Charge (£) ÷ Units (kWh) × 100. Only records with both "
-        "Period Charge and Units (kWh) are included. OFGEM cap data sourced "
-        "from official Default Tariff Cap publications.</p>"
+        '<p class="muted"><b>Methodology:</b> Extracted energy unit rates are allocated '
+        "to consumption quarters and weighted by usage, or days when usage is unavailable. "
+        "The model does not divide total bill charges by kWh or assess standing charges here. "
+        "Missing tariff/payment/fuel context remains unassessed. OFGEM data is a "
+        "GB-average direct-debit electricity benchmark, not an account-specific legal cap.</p>"
     )
     parts.append("</div>")
     return "\n".join(parts)
@@ -509,19 +550,42 @@ def create_statistical_analysis(
         from edf_bill_fetcher.models.report_models import compute_statistical_analysis
 
         payload = compute_statistical_analysis(df)
-    rows = [["Metric", "Value"]]
-    from dataclasses import fields
-
-    for field in fields(payload):
-        value = getattr(payload, field.name)
-        if isinstance(value, pd.DataFrame):
-            continue
-        if isinstance(value, list):
-            value = "; ".join(str(item) for item in value)
-        rows.append(
-            [field.name.replace("_", " ").title(), "Unavailable" if value is None else value]
+    heading = (
+        f'<div id="sec-statistical"><h2 class="section">{_esc(ctx.heading("statistical"))}</h2>'
+    )
+    if payload.count < 3:
+        return (
+            heading
+            + _note(
+                "At least three usable balance observations in one ledger are needed for descriptive statistics. No statistical conclusion is available for this selection."
+            )
+            + "</div>"
         )
-    return f'<div id="sec-statistical"><h2 class="section">{_esc(ctx.heading("statistical"))}</h2>{_table(rows)}</div>'
+    rows = [
+        ["Balance statistic", "Value"],
+        ["Observations", payload.count],
+        ["Mean observed balance", fmt_money(payload.mean)],
+        ["Median observed balance", fmt_money(payload.median)],
+        ["Lowest observed balance", fmt_money(payload.minimum)],
+        ["Highest observed balance", fmt_money(payload.maximum)],
+        ["Standard deviation", fmt_money(payload.std)],
+        ["Range", fmt_money(payload.range)],
+    ]
+    anomaly_rows = [
+        ["Screening method", "Flagged observations", "Dates"],
+        ["Z-score", payload.z_count, ", ".join(payload.z_dates) or "None"],
+        ["Interquartile range", payload.iqr_count, ", ".join(payload.iqr_dates) or "None"],
+    ]
+    return (
+        heading
+        + _note(
+            "These statistics describe recorded balances, not the cost of individual bills. Outlier screens identify observations to inspect; they do not establish a billing error."
+        )
+        + _table(rows)
+        + "<h3>Observations to inspect</h3>"
+        + _table(anomaly_rows)
+        + "</div>"
+    )
 
 
 def create_payment_analysis(
@@ -534,19 +598,40 @@ def create_payment_analysis(
         from edf_bill_fetcher.models.report_models import compute_payment_analysis
 
         payload = compute_payment_analysis(df)
-    rows = [["Metric", "Value"]]
-    from dataclasses import fields
-
-    for field in fields(payload):
-        value = getattr(payload, field.name)
-        if isinstance(value, pd.DataFrame):
-            continue
-        if isinstance(value, list):
-            value = "; ".join(str(item) for item in value)
-        rows.append(
-            [field.name.replace("_", " ").title(), "Unavailable" if value is None else value]
+    heading = f'<div id="sec-payment"><h2 class="section">{_esc(ctx.heading("payment"))}</h2>'
+    if not payload.count:
+        return (
+            heading
+            + _note(
+                "No payment/credit records were supplied. This is not evidence that no payments were made; check statements or payment confirmations."
+            )
+            + "</div>"
         )
-    return f'<div id="sec-payment"><h2 class="section">{_esc(ctx.heading("payment"))}</h2>{_table(rows)}</div>'
+    rows = [
+        ["Payment / credit summary", "Value"],
+        ["Records supplied", payload.count],
+        ["Recorded total", fmt_money(payload.total_paid)],
+        ["Average", fmt_money(payload.avg_payment)],
+        ["Median", fmt_money(payload.median_payment)],
+        ["Largest", fmt_money(payload.largest_payment)],
+        ["Smallest", fmt_money(payload.smallest_payment)],
+        ["Last dated payment", fmt_date(payload.last_payment_date)],
+        ["Last dated amount", fmt_money(payload.last_payment_amount)],
+    ]
+    if payload.avg_interval_days is not None:
+        rows.append(["Average interval within a ledger", f"{payload.avg_interval_days:.1f} days"])
+    chronology = [["Date", "Type", "Recorded payment / credit", "Balance after", "Details"]]
+    for row in payload.chronology.to_dict("records"):
+        chronology.append(
+            [
+                fmt_date(row.get("Date")),
+                row.get("Entry Type"),
+                fmt_money(row.get("_amount")),
+                fmt_money(row.get("Balance (£)")),
+                row.get("Details", ""),
+            ]
+        )
+    return heading + _table(rows) + "<h3>Payment chronology</h3>" + _table(chronology) + "</div>"
 
 
 def create_forecast_section(
@@ -559,19 +644,46 @@ def create_forecast_section(
         from edf_bill_fetcher.models.report_models import compute_forecast
 
         payload = compute_forecast(df)
-    rows = [["Metric", "Value"]]
-    from dataclasses import fields
-
-    for field in fields(payload):
-        value = getattr(payload, field.name)
-        if isinstance(value, pd.DataFrame):
-            continue
-        if isinstance(value, list):
-            value = "; ".join(str(item) for item in value)
-        rows.append(
-            [field.name.replace("_", " ").title(), "Unavailable" if value is None else value]
+    heading = f'<div id="sec-forecast"><h2 class="section">{_esc(ctx.heading("forecast"))}</h2>'
+    if not payload.linear_forecast and not payload.ema_forecast and not payload.hw_forecast:
+        return (
+            heading
+            + _note(
+                "No forecast is available. At least three usable monthly balance observations in a single ledger are needed. A forecast is context, not evidence of future charges or compensation."
+            )
+            + "</div>"
         )
-    return f'<div id="sec-forecast"><h2 class="section">{_esc(ctx.heading("forecast"))}</h2>{_table(rows)}</div>'
+    dates = [
+        parse_to_sort_date(value)
+        for value in df.get("_dt", df.get("Date", pd.Series(dtype=object)))
+    ]
+    dated = [value for value in dates if not pd.isna(value)]
+    rows = [["Forecast month", "Linear balance", "EMA balance", "Holt–Winters balance"]]
+    projections = (payload.linear_forecast, payload.ema_forecast, payload.hw_forecast or [])
+    for index in range(max(map(len, projections))):
+        label = (
+            (max(dated) + pd.DateOffset(months=index + 1)).strftime("%b %Y")
+            if dated
+            else f"Month {index + 1}"
+        )
+        rows.append(
+            [
+                label,
+                *(
+                    fmt_money(values[index]) if index < len(values) else "Unavailable"
+                    for values in projections
+                ),
+            ]
+        )
+    information = "".join(f"<li>{_esc(text)}</li>" for text in payload.model_info)
+    return (
+        heading
+        + _note(
+            f"Projections use {payload.n} monthly balance observations. They estimate a balance trajectory, not future bill charges. Historical fit does not guarantee future accuracy."
+        )
+        + _table(rows)
+        + f"<details><summary>Model notes</summary><ul>{information}</ul></details></div>"
+    )
 
 
 def create_data_quality_section(
@@ -775,9 +887,9 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
         (
             "A.1 Data Sources",
             [
-                "All billing records were extracted from three primary source types:",
+                "Supported sources include the following. See the evidence index for the sources supplied in this run:",
                 "• PDF Bills: EDF Energy invoices (both legacy and new KI/KCR formats) "
-                "processed via pdfplumber with format-specific regex extraction.",
+                "processed using text extraction or OCR, then format-specific field extraction.",
                 "• HTM Export: EDF MyAccount 'Payments and Invoices' export parsed via "
                 "BeautifulSoup with pattern matching for charge/payment/reversal entries.",
                 "• PST/OST Email Archives: Outlook data files processed via libpff-python, "
@@ -787,8 +899,8 @@ def create_appendix_methodology(config: ConfigDict, ctx: RenderContext | None = 
         (
             "A.2 Amount Extraction Logic",
             [
-                "Two complementary strategies ensure comprehensive amount detection:",
-                "1. Smart Context Search: 10 prioritized regex patterns targeting specific "
+                "Extraction strategies depend on the selected settings and available document text:",
+                "1. Smart Context Search: prioritized patterns targeting specific "
                 "EDF billing language. Patterns execute in priority order; first match wins.",
                 "2. Large Amount Fallback: scans all £ amounts ≥ minimum threshold, "
                 "selecting the largest. Used when context patterns fail.",
@@ -843,8 +955,8 @@ def create_appendix_glossary(ctx: RenderContext | None = None) -> str:
         "balance). Equivalent to 'Total charges for this period' on new EDF invoices.",
         "Amount (£)": "The primary balance figure — typically the current cumulative "
         "account balance on new invoices, or the running balance on HTM exports.",
-        "Unit Rate (p/kWh)": "Effective price per kWh = Period Charge ÷ Units (kWh) × 100. "
-        "Includes both energy and standing charge components unless separated.",
+        "Energy Unit Rate (p/kWh)": "The energy price extracted from the bill, excluding "
+        "standing charges. Total bill cost divided by usage is not an equivalent unit rate.",
         "Standing Charge (p/day)": "Daily fixed charge regardless of consumption, as "
         "published on EDF bills.",
         "OFGEM Price Cap": "Maximum price per unit (p/kWh) and daily standing charge "
@@ -885,51 +997,12 @@ def create_appendix_full_evidence(
         ctx = RenderContext()
     heading = ctx.heading("appendix_full_evidence")
     parts = [f'<div id="sec-appendix_full_evidence"><h2 class="section">{_esc(heading)}</h2>']
-    parts.append(
-        "<p>This appendix contains the complete set of billing records used in this "
-        "analysis. Records are sorted chronologically by date.</p>"
-    )
+    parts.append(f"<p>{_esc(EVIDENCE_NOTE)}</p>")
 
     table_row_cap = 150
-    evidence_header = [
-        "Date",
-        "Source",
-        "Entry Type",
-        "Amount (£)",
-        "Period Charge (£)",
-        "Period From",
-        "Period To",
-        "Invoice #",
-        "Reading",
-        "Units (kWh)",
-        "Standing Chg (p/day)",
-        "Attachment",
-        "Details",
-    ]
 
     def _evidence_rows(frame: pd.DataFrame) -> list[list[Any]]:
-        rows: list[list[Any]] = [evidence_header]
-        for _, row in frame.iterrows():
-            rows.append(
-                [
-                    fmt_date(row.get("Date", "")),
-                    str(row.get("Source", ""))[:30],
-                    str(row.get("Entry Type", "")),
-                    fmt_money(row.get("Amount (£)", 0)),
-                    fmt_money(row.get("Period Charge (£)", 0))
-                    if row.get("Period Charge (£)") not in ("", "N/A", None)
-                    else "N/A",
-                    fmt_date(row.get("Period From", "")),
-                    fmt_date(row.get("Period To", "")),
-                    str(row.get("Invoice #", ""))[:15],
-                    str(row.get("Reading", ""))[:15],
-                    str(row.get("Units (kWh)", ""))[:10],
-                    str(row.get("Standing Chg (p/day)", ""))[:10],
-                    str(row.get("Attachment Name", ""))[:20],
-                    str(row.get("Details", ""))[:50],
-                ]
-            )
-        return rows
+        return [EVIDENCE_HEADERS, *[evidence_cells(row) for row in frame.to_dict("records")]]
 
     if df.empty:
         parts.append("<p>No records available.</p></div>")
@@ -1043,7 +1116,7 @@ def render_html(view: ReportView, output_path: str) -> str:
     df["_sort"] = df["Date"].apply(parse_to_sort_date)
     df = df.sort_values("_sort").reset_index(drop=True)
 
-    acc_ref = config.get("report_account_ref") or config.get("acc_num") or "Unknown"
+    acc_ref = report_account_label(view)
 
     dates_parsed = df["Date"].apply(parse_to_sort_date)
     valid_dates = dates_parsed.dropna()
@@ -1067,22 +1140,22 @@ def render_html(view: ReportView, output_path: str) -> str:
     render_ctx = RenderContext(enabled_sections)
 
     body_parts: list[str] = []
+    cover = ""
+    navigation = ""
 
     if section_enabled("cover"):
-        body_parts.append(
-            create_cover_page(
-                acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y")
-            )
+        cover = create_cover_page(
+            acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y")
         )
 
     if view.review_notice:
-        body_parts.append(_note(_esc(view.review_notice)))
+        body_parts.append(_note(view.review_notice))
     if view.ocr_notice:
-        body_parts.append(_note(_esc(view.ocr_notice)))
+        body_parts.append(_note(view.ocr_notice))
 
     if section_enabled("toc"):
         try:
-            body_parts.append(create_table_of_contents(render_ctx))
+            navigation = create_table_of_contents(render_ctx)
         except Exception as e:
             section_failures.append(str(e))  # pragma: no cover - defensive mirror of PDF
             body_parts.append(_note(f"Table of Contents failed: {_esc(e)}"))
@@ -1102,6 +1175,7 @@ def render_html(view: ReportView, output_path: str) -> str:
                 "period_end": period_end,
                 "opening_balance": opening_balance,
                 "closing_balance": closing_balance,
+                "overview": build_output_overview(view),
             },
             lambda kwargs: create_executive_summary(**kwargs),
         ),
@@ -1134,7 +1208,7 @@ def render_html(view: ReportView, output_path: str) -> str:
             lambda kwargs: create_payment_analysis(**kwargs),
         ),
         "forecast": (
-            lambda: {"df": df},
+            lambda: {"df": view.frame("monthly")},
             lambda kwargs: create_forecast_section(**kwargs),
         ),
         "data_quality": (
@@ -1194,10 +1268,17 @@ def render_html(view: ReportView, output_path: str) -> str:
     html_doc = (
         "<!DOCTYPE html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_esc('EDF Energy Ombudsman Evidence Report')}</title>\n"
         f"<style>{_CSS}</style>\n"
         "</head>\n<body>\n"
-        '<div class="container">\n' + "\n".join(body_parts) + "\n</div>\n</body>\n</html>\n"
+        '<a class="skip-link" href="#report-content">Skip to report</a><div class="container">\n'
+        + cover
+        + f'<div class="report-layout{chr(32) + "no-nav" if not navigation else ""}">'
+        + navigation
+        + '<main id="report-content">'
+        + "\n".join(body_parts)
+        + "\n</main></div></div>\n</body>\n</html>\n"
     )
 
     if section_failures:
