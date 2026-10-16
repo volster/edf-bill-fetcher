@@ -466,6 +466,23 @@ def create_anomaly_detail_section(
     return "\n".join(parts)
 
 
+def create_revision_section(model: dict | None) -> str:
+    """Append stored revision comparisons to the detailed findings output."""
+    if model is None:
+        return ""
+    from edf_bill_fetcher.models.output_tables import revision_note, revision_table
+
+    return (
+        "<h3>Bill revision review</h3>"
+        + f'<p class="note">{_esc(revision_note(model))}</p>'
+        + (
+            _table(revision_table(model))
+            if model["relationships"]
+            else "<p>No revision relationships were found. You can add a missed relationship in the app.</p>"
+        )
+    )
+
+
 def create_timeline_section(df: pd.DataFrame, flags: list, ctx: RenderContext | None = None) -> str:
     """Create the chronological timeline of events."""
     if ctx is None:
@@ -1189,7 +1206,9 @@ def render_html(view: ReportView, output_path: str) -> str:
         ),
         "detailed_findings": (
             lambda: {"flags": flags, "df": df},
-            lambda kwargs: create_anomaly_detail_section(**kwargs),
+            lambda kwargs: (
+                create_anomaly_detail_section(**kwargs) + create_revision_section(view.revisions)
+            ),
         ),
         "timeline": (
             lambda: {"df": df, "flags": flags},

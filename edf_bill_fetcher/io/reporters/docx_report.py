@@ -648,6 +648,36 @@ def create_anomaly_detail_section(
     doc.add_page_break()
 
 
+def create_revision_section(doc: Any, styles: dict, model: dict | None) -> None:
+    """Append accepted revision comparisons without recalculating their relationships."""
+    if model is None:
+        return
+    from edf_bill_fetcher.models.output_tables import revision_note, revision_table
+
+    doc.add_paragraph("Bill revision review", style=styles["SubSectionHeader"])
+    doc.add_paragraph(revision_note(model), style=styles["BodyText"])
+    if model["relationships"]:
+        rows = revision_table(model)
+        table = doc.add_table(rows=1, cols=4)
+        for cell, value in zip(table.rows[0].cells, rows[0], strict=True):
+            cell.text = value
+        for values in rows[1:]:
+            for cell, value in zip(table.add_row().cells, values, strict=True):
+                cell.text = value
+        _format_table(table)
+    else:
+        doc.add_paragraph(
+            "No revision relationships were found. You can add a missed relationship in the app.",
+            style=styles["BodyText"],
+        )
+
+
+def create_reviewed_findings(model: dict | None, **kwargs: Any) -> None:
+    """Keep anomaly and revision details under one report section."""
+    create_anomaly_detail_section(**kwargs)
+    create_revision_section(kwargs["doc"], kwargs["styles"], model)
+
+
 def create_timeline_section(
     doc: Any,
     styles: Any,
@@ -1595,7 +1625,7 @@ def render_docx(view: ReportView, output_path: str) -> str:
         ),
         "detailed_findings": (
             lambda: {"doc": doc, "styles": styles, "flags": flags, "df": df},
-            lambda kwargs: create_anomaly_detail_section(**kwargs),
+            lambda kwargs: create_reviewed_findings(view.revisions, **kwargs),
         ),
         "timeline": (
             lambda: {"doc": doc, "styles": styles, "df": df, "flags": flags},

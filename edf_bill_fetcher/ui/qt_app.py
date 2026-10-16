@@ -288,6 +288,7 @@ class EvidenceWindow(QMainWindow):
         self.review_page = EvidenceReviewPage(self)
         self.review_page.changed.connect(self._refresh_state)
         self.review_page.idle.connect(self._review_idle)
+        self.review_page.regenerate_requested.connect(self._start_review_export)
         self.pages.addWidget(self.review_page)
         workspace.addWidget(self.pages, 1)
         workspace.addWidget(self._build_footer())
@@ -376,7 +377,7 @@ class EvidenceWindow(QMainWindow):
         card.body.addWidget(self.report_input)
         card.body.addWidget(
             label(
-                "To correct or exclude records in Excel, edit Review & Corrections, save the workbook, then choose it here. Regeneration creates a new pack and workbook using the saved analysis date and settings. Older workbooks import with limited provenance.",
+                "Correct or exclude records in the Review evidence workspace, or edit Review & Corrections in Excel and choose the amended workbook here. Both paths create a new pack using the saved analysis date and settings. Older workbooks import with limited provenance.",
                 "hint",
                 wrap=True,
             )
@@ -633,13 +634,17 @@ class EvidenceWindow(QMainWindow):
             return
         page = self.pages.currentIndex()
         if page == 3:
-            self.run_button.setText("Open saved analysis")
-            self.run_button.setEnabled(self.review_page.loader is None)
-            self.status.setText("Read-only evidence review")
+            self.run_button.setText(
+                "Create reviewed pack" if self.review_page.session else "Open saved analysis"
+            )
+            self.run_button.setEnabled(
+                self.review_page.loader is None and self.review_page.impact_worker is None
+            )
+            self.status.setText("Review evidence and corrections")
             self.readiness.setText(
                 "Opening and verifying evidence…"
                 if self.review_page.loader is not None
-                else "Search saved records and inspect their original sources."
+                else "Apply corrections to the draft, preview the figures and create a new pack."
             )
         elif page == 2:
             self.run_button.setText("Back to workspace")
@@ -863,7 +868,10 @@ class EvidenceWindow(QMainWindow):
             return
         if self.pages.currentIndex() == 3:
             self._review_pending = None
-            self.review_page.pick_analysis()
+            if self.review_page.session is not None:
+                self.review_page.regenerate_draft()
+            else:
+                self.review_page.pick_analysis()
             return
         if self.pages.currentIndex() == 2:
             self._navigate(0)
@@ -874,6 +882,46 @@ class EvidenceWindow(QMainWindow):
             self._feedback(str(error), "error")
             return
         self.save_settings()
+        self._begin_job(job)
+
+    @Slot(object)
+    def _start_review_export(self, draft: dict) -> None:
+        if self._busy or self.review_page.review is None:
+            return
+        try:
+            source = Path(self.review_page.analysis_path)
+            snapshot = self.review_page.review.snapshot
+            destination = str(self._field_value("output_folder"))
+            base = Path(destination) if destination else source.parent
+            base.mkdir(parents=True, exist_ok=True)
+            directory = tempfile.mkdtemp(
+                prefix="reviewed_" + date.today().strftime("%Y%m%d") + "_", dir=base
+            )
+            request = RunRequest(
+                uuid4().hex,
+                datetime.now(timezone.utc),
+                snapshot.prepared.extraction.request.as_of,
+                (SourceSelection("records_json", str(source)),),
+                snapshot.prepared.effective_config,
+            )
+            job = DesktopJob(
+                request,
+                directory,
+                "Reviewed evidence",
+                ("xlsx", *FORMATS[self.report_options["format"]]),
+                tuple(self.report_options["sections"]),
+                "review",
+                str(source),
+                freeze_json(draft),
+            )
+        except (OSError, ValueError) as error:
+            self._feedback(str(error), "error")
+            return
+        self.save_settings()
+        self._begin_job(job)
+
+    def _begin_job(self, job: DesktopJob) -> None:
+        """Run every desktop workflow with the same cancellation and publication lifecycle."""
         self.current_job = job
         self.last_outcome = None
         self._pending_outcome = None
@@ -939,6 +987,11 @@ class EvidenceWindow(QMainWindow):
                     else str(Path(job.directory) / "result.json")
                 )
                 self._review_pending = (self.last_outcome.snapshot, directory, path)
+                if job.mode == "review" and self.last_outcome.status in {
+                    "complete",
+                    "review_required",
+                }:
+                    self._navigate(3)
         if worker is not None:
             worker.deleteLater()
         if self._closing:
@@ -1032,6 +1085,9 @@ class EvidenceWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Keep the worker alive until cancellation and cleanup finish."""
+        if not self._closing and not self.review_page.allow_leave():
+            event.ignore()
+            return
         self.review_page.shutdown()
         if self.worker is not None and self.worker.isRunning():
             self._closing = True

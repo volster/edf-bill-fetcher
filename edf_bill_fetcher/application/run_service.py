@@ -211,7 +211,14 @@ def run(
                 save_manifest(manifest, manifest_path)
             check_cancelled(cancelled)
             manifest["status"] = (
-                "review_required" if state.get("error_log") or warnings else "complete"
+                "review_required"
+                if state.get("error_log")
+                or warnings
+                or any(
+                    annotation.get("status") == "needs_information"
+                    for annotation in state.get("human_review_statuses", {}).values()
+                )
+                else "complete"
             )
     except RunCancelled as exc:
         error = str(exc)

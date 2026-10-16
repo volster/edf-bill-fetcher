@@ -80,13 +80,17 @@ def analytical_fingerprint(prepared: PreparedSnapshot, methods: FrozenJSON) -> s
         {key: value for key, value in row.items() if key not in ignored}
         for row in rows_value(prepared.duplicates)
     ]
-    payload = {
+    payload: dict = {
         "records": records,
         "duplicates": duplicates,
         "effective_config": {key: config[key] for key in included if key in config},
         "relevant_legacy_state": {"sap": sap, "sources": facts},
         "methods": object_value(methods),
     }
+    if state.get("bill_revision_decisions"):
+        payload["relevant_legacy_state"]["bill_revision_decisions"] = state[
+            "bill_revision_decisions"
+        ]
     return hashlib.sha256(canonical_text(payload).encode()).hexdigest()
 
 

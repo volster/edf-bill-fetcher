@@ -284,6 +284,7 @@ def _reorder_sheets(wb: openpyxl.Workbook) -> None:
         "Back-billing Analysis",
         "Superseded Reconciliation",
         "Rebilling & Corrections",
+        "Bill revisions",
         "Meter Readings",
         "Contract History",
         "Compensation",
@@ -1352,6 +1353,9 @@ def render_xlsx(
                 payload=view.model("reconciliation"),
             )
 
+    from edf_bill_fetcher.io.writers.revisions import write_revision_sheet
+
+    write_revision_sheet(wb, view)
     _reorder_sheets(wb)
 
     from edf_bill_fetcher.io.review_workbook import write_review_sheets

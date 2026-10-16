@@ -140,13 +140,15 @@ The Qt workspace has four pages:
   exposes originals that have no ordinary bill rows, including SAP dumps.
   Open `result.json` from
   an earlier pack or review the latest run. Previewing preserves the saved
-  calculations and valuation date; it creates no files and edits no sources.
+  calculations and valuation date. Use **Correct record** to edit or exclude a row
+  with a reason; **Preview changes** recalculates the draft without publishing it.
+  **Create reviewed pack** saves a new workbook, analysis and selected reports.
   Source IDs, hashes and page ranges keep merged PDFs and moved packs traceable.
   Findings with only a saved date offer explicitly labelled related records,
   rather than claiming a source relationship that was never recorded.
 - **Generate reports**: open `result.json` from an earlier run to preserve
-  its original calculations and valuation date. To correct or exclude records,
-  edit the workbook's **Review & Corrections** table, then select that `.xlsx`
+  its original calculations and valuation date. Corrections are also available
+  directly in **Review evidence**. For Excel review, edit the workbook's **Review & Corrections** table, then select that `.xlsx`
   here to rebuild the analysis and bundle. Older workbooks import with explicit
   notes about their limited provenance.
   Report settings remember the chosen formats and sections.
@@ -380,6 +382,62 @@ for provenance and prepare a separately redacted pack when needed. Workbook
 protection and payload checksums detect mistakes; they are not encryption or
 digital signatures. Sources are linked, not embedded in Excel.
 
+### In-app corrections and bill revisions
+
+Open an analysis in **Review evidence**, select a canonical record and choose
+**Edit selected record**. Compare the fields with the adjacent original PDF.
+Correct fields or clear **Include**, record a reason and choose **Apply to draft**.
+Mark evidence **Verified against source** or **Needs information** when useful.
+Dates, money, signs and identifiers use the same validation rules as Excel.
+Source text, files, hashes and occurrence metadata cannot be edited.
+
+Applied decisions are automatically saved beside the analysis as
+`result.review-draft.json`; **Save draft** also saves immediately. Reopening that
+analysis resumes the draft. Drafts are bound to the entire accepted result;
+a draft from a different or changed analysis is rejected. Keep the draft beside
+its original `result.json`. If a draft is corrupt or stale, preserve/rename it
+before reopening the analysis. **Undo** and **Redo** apply within the current
+session; the undo stack itself is not restored after restart. Unapplied forms
+prompt before navigation or closing. Failed saves keep progress open unless you
+explicitly discard it.
+
+**Preview changes** shows recalculated charges and net credits without creating
+files. The accepted figures remain visible until **Create reviewed pack**
+finishes. Generation uses the original analysis date and settings, always writes
+an updated Excel workbook and uses **Report settings** for document formats and
+sections. Successful generation opens the new analysis; failure or cancellation
+keeps the original analysis and draft available.
+
+In **Bill revisions**, select an earlier bill and a later bill or credit.
+Suggestions use overlapping consumption periods or an explicit invoice reference
+in a credit document and require a known matching account with no conflicting
+fuel, meter or register. They are **suggestions**, not cancellation findings.
+Use the selectors to add a relationship the suggestions missed, compare the
+fields, inspect either source, then confirm or reject it with a reason. Multiple
+links can describe a chain or partial replacements; no single survivor is
+silently selected. Confirmed links require usable dates in earlier-to-later
+order and cannot form cycles. Clear conflicting decisions before changing a
+linked record's account, fuel, meter, register, date or type. Explicit rejection
+is retained. Automatic suggestions are capped at 500 and visibly labelled when
+truncated; explicit decisions are retained beyond that cap.
+
+**A revision link does not remove a charge or credit from the ledger.** A cancelled
+original may already be offset by a credit; excluding it again can double adjust
+the account. Inclusion remains a separate reasoned decision. Document charge
+differences are comparisons, not refunds or changes to liability. Existing
+back-billing and compensation rules are unchanged. The **Bill revisions** Excel
+reference tab lists stored comparisons and decisions; PDF, Word and HTML include
+a revision subsection under **Detailed findings** (up to 30 relationships,
+prioritising explicit decisions). Older saved results are rendered as preserved;
+regenerate through a review workflow to calculate revision suggestions.
+
+Excel changes to previously reviewed records reset their verification status to
+**Needs review**. Unchanged statuses and revision decisions carry forward between
+review rounds. Review history records field, inclusion, status and relationship
+decisions, while original observations remain preserved. When corrections merge
+duplicate records, verification of an absorbed row is archived in review history
+and the saved analysis; it is not transferred to a different record.
+
 The same workflow is available without the desktop:
 
 ```bash
@@ -397,6 +455,7 @@ Sheets are written in roughly this order; conditional sheets only appear when th
 | **Start here** | always (first tab) | Financial overview, analysis date, evidence coverage, concrete review priorities and sheet directory |
 | **Review & Corrections** | always | Validated editable inputs, inclusion decisions, reasons and source links |
 | **Review history** | always | Before/after values, reasons and lineage for imported review decisions |
+| **Bill revisions** | newly analysed results | Suggested, confirmed and rejected document relationships, inclusion states, differences and full source references |
 | **Workbook guide** | always | Correction instructions, financial meanings and regeneration guidance |
 | **Provenance** | always | Tool version, generation timestamp, account reference, record counts, and a full snapshot of the run configuration — so a filed workbook is self-documenting about how its conclusions were produced |
 | **Annual Summary** | always | Yearly balance range, average, peak, low |

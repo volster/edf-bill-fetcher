@@ -106,3 +106,68 @@ def timeline_table(df: pd.DataFrame, flags: list) -> list[list[str]]:
         ["Date", "Event", "Balance (£)", "Transaction (£)", "Context / detail"],
         *[row for _, row in events],
     ]
+
+
+def revision_table(model: dict) -> list[list[str]]:
+    """Present bounded comparisons from stored decisions; retain every source reference."""
+    links = sorted(
+        model["relationships"],
+        key=lambda link: {"confirmed": 0, "rejected": 1, "suggested": 2}[link["status"]],
+    )
+    rows = [["Decision / ledger", "Earlier document", "Later document", "Comparison / reason"]]
+    for link in links[:30]:
+        a, b = link["earlier"], link["later"]
+        documents = []
+        for row, included in ((a, link["earlier_included"]), (b, link["later_included"])):
+            documents.append(
+                "\n".join(
+                    (
+                        identity(row.get("Invoice #")) or "Invoice unavailable",
+                        report_date(row.get("Date")),
+                        f"Charge: {fmt_money(row.get('Period Charge (£)')) or 'Unknown'}; transaction: {fmt_money(row.get('Transaction Amount (£)')) or 'Unknown'}",
+                        "Included" if included else "Excluded",
+                        identity(row.get("Attachment Name")) or "Source unavailable",
+                        "Pages: "
+                        + (
+                            "–".join(
+                                identity(row.get(k))
+                                for k in ("Page From", "Page To")
+                                if identity(row.get(k))
+                            )
+                            or "Unknown"
+                        ),
+                    )
+                )
+            )
+        difference = fmt_money(link.get("charge_difference"))
+        rows.append(
+            [
+                link["status"].title()
+                + " · "
+                + link["kind"].replace("_", " ")
+                + "\n"
+                + ledger_label(a),
+                *documents,
+                (f"Document charge difference: {difference}. " if difference else "")
+                + "Changed: "
+                + (", ".join(link["changed_fields"]) or "No compared fields")
+                + ".\n"
+                + (link["reason"] or link["basis"]),
+            ]
+        )
+    return rows
+
+
+def revision_note(model: dict) -> str:
+    """Explain inference limits, separate inclusion decisions and the complete workbook view."""
+    return (
+        str(model["notice"])
+        + " Document charge differences are not refunds or changes to account liability. "
+        + (
+            "Showing 30 relationships, prioritising explicit decisions. "
+            if len(model["relationships"]) > 30
+            else ""
+        )
+        + ("Automatic suggestions were capped at 500. " if model["truncated"] else "")
+        + "The Bill revisions worksheet contains all stored relationships and full references."
+    )

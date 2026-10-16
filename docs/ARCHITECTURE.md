@@ -36,7 +36,7 @@ flowchart LR
     bundle --> workbook
 ```
 
-Every renderer uses the same preparation functions and pinned valuation date. Each renderer computes its own view of the shared models; there is no application-wide cached analysis result. Workbook-only SAP analyses remain separate from the document reports.
+Every renderer consumes the accepted result and pinned valuation date. The application computes one immutable `AnalysisSnapshot` through `capture_legacy` → `prepare_snapshot` → `analyse_prepared`. `ReportView` exposes fresh decoded presentation values from that accepted result. Rendering a version 3 saved result does not rerun analytical models. SAP and workbook-specific analyses are stored alongside the other models.
 
 ## Monetary and identity contracts
 
@@ -48,13 +48,13 @@ Account, fuel, meter and register identity constrain deduplication and matching.
 
 ## Run lifecycle and persistence
 
-The GUI captures configuration, source paths and report options on the main thread before starting a worker. Workers send callbacks through a queue consumed by the Tk main loop. Closing requests cancellation and lets cleanup finish before the interpreter is destroyed.
+The GUI captures configuration, source paths and report options on the main thread before starting a worker. Qt `QThread` workers emit signals consumed on the main thread and never read widgets. The legacy Tk entry points retain a callback queue for compatibility. Closing requests cancellation and lets cleanup finish before the interpreter is destroyed.
 
 Each GUI extraction reserves a unique run directory containing its workbook, requested reports, source copies, bundle index, `records.json` and `run.json` status. Several runs cannot overwrite each other's evidence. A report imported from a workbook also reserves its own directory.
 
 CLI extraction respects the explicitly requested workbook destination and creates a unique adjacent source bundle with a JSON snapshot. Optional JSON destinations are supported. Generated files are staged in the destination directory and atomically replaced after generation succeeds. A failed report section fails the report and leaves an existing destination intact.
 
-JSON version 2 preserves canonical and original records, configuration, valuation date, filtered records, duplicate decisions, source metadata, SAP data, counters and errors. Report loading accepts legacy bare record lists and version 1/2 JSON. Routine report loading accepts JSON engine data. The restricted pickle loader remains an internal compatibility API, not a report CLI interchange path.
+JSON version 3 preserves original observations, prepared evidence, configuration, valuation date, every accepted model, fingerprints and provenance. Version 3 decoding validates transport and membership without recalculating analysis. Legacy bare record lists and version 1/2 inputs are migrated through the shared analysis path. Routine report loading accepts saved results and legacy JSON engine data. The restricted pickle loader remains an internal compatibility API, not a report CLI interchange path.
 
 ## Analytical limits
 
@@ -69,3 +69,35 @@ Forecasts require at least three consecutive month-end balance observations from
 `pyproject.toml` defines dependencies and limits package discovery to `edf_bill_fetcher`. Executable workflows include the MSG extra and record resolved build dependencies in the distributed artifact. Builds triggered by CI check out the commit that completed CI.
 
 GitHub CI runs linting, formatting, type checking and the full test suite across supported Python versions and operating systems. Application checks also include end-to-end extraction, all four output formats, evidence links, JSON reloads, and GUI snapshot/run-isolation/shutdown behavior.
+
+## Human review and document revisions
+
+`application/record_review.py` is the shared validation and audit contract for
+Excel and native review. `ReviewSession` holds a draft separate from the accepted
+result, with stable row IDs, bounded undo/redo and atomic sidecar persistence. A
+full-result digest prevents applying the draft to a foreign or changed snapshot.
+The Qt loader and preview workers perform loading, hashing and recalculation
+away from the GUI thread. `DesktopJob(mode="review")` captures a frozen draft;
+the worker reloads the accepted result and checks the binding before applying it.
+
+Both Excel and native review produce complete decisions over canonical and
+previously excluded rows, preserve raw observations and run the same preparation
+and analysis services. New packs retain the original valuation date/settings.
+Only verified retained sources are copied; excluded sources remain recoverable
+from their earlier packs. Shared PDFs stay whole. Form prompts, auto-save and
+cooperative shutdown prevent unintentional loss; preview writes no artifacts.
+
+`processors/revisions.py` proposes identity-compatible document relationships
+from overlapping periods or explicit credit references. Human decisions require
+reasons; confirmed links are checked for date order and cycles. A relationship
+does not change transaction inclusion or existing compensation calculations.
+Decisions are analytical inputs; their nonempty state contributes to the
+fingerprint. The stored model lives in the optional `sap.bill_revisions` payload
+extension, preserving the strict top-level model registry and older v3 results.
+Renderers consume that stored assessment and never regenerate suggestions.
+
+The Excel reference tab retains all stored links. Document reports add bounded
+comparisons within the existing Detailed findings section, retaining full source
+references and explicit decision states. Review history includes field,
+inclusion, verification and relationship decisions. Excel changes invalidate a
+record's previous verification state, while unchanged review metadata survives.

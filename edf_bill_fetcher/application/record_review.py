@@ -5,14 +5,15 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 from edf_bill_fetcher.domain.analysis import AnalysisSnapshot
 from edf_bill_fetcher.domain.json_values import canonical_text, object_value, rows_value
 
-# This is also the public input contract for a future in-app editor. Source facts,
+# Shared correction contract for Excel and the in-app editor. Source facts,
 # extraction text, hashes, source IDs and analytical findings are never editable.
 REVIEW_FIELDS = {
     "Date": "date",
@@ -105,16 +106,25 @@ def input_value(field: str, value: Any) -> Any:
 def review_rows(snapshot: AnalysisSnapshot) -> list[dict]:
     """Expose one decision per canonical row, including previously excluded rows."""
     state = object_value(snapshot.prepared.extraction.legacy_state)
+    return review_row_data(
+        rows_value(snapshot.prepared.records),
+        state.get("review_excluded_records", []),
+        snapshot.input_fingerprint,
+    )
+
+
+def review_row_data(records: list[dict], excluded: list[dict], fingerprint: str) -> list[dict]:
+    """Assign the same stable review identities during analysis and human review."""
     result = []
-    for included, records in (
-        (True, rows_value(snapshot.prepared.records)),
-        (False, state.get("review_excluded_records", [])),
+    for included, group in (
+        (True, records),
+        (False, excluded),
     ):
-        for ordinal, record in enumerate(records):
+        for ordinal, record in enumerate(group):
             identity = (
                 record.get("Review Row ID")
                 or hashlib.sha256(
-                    canonical_text([snapshot.input_fingerprint, included, ordinal, record]).encode()
+                    canonical_text([fingerprint, included, ordinal, record]).encode()
                 ).hexdigest()
             )
             result.append({"id": identity, "included": included, "record": record})
@@ -262,3 +272,162 @@ def apply_review(context: dict) -> tuple[list[dict], list[dict]]:
     if seen != set(indexed):
         raise ValueError("Review rows were removed; use Include = No instead of deleting rows")
     return resolved, excluded
+
+
+def validate_review_statuses(row_ids: set[str], statuses: object) -> None:
+    """Validate per-record verification independently of financial inclusion."""
+    if not isinstance(statuses, dict) or not set(statuses) <= row_ids:
+        raise ValueError("Invalid record review states")
+    for annotation in statuses.values():
+        if (
+            not isinstance(annotation, dict)
+            or set(annotation) != {"status", "reason"}
+            or not isinstance(annotation["status"], str)
+            or annotation["status"] not in {"unreviewed", "verified", "needs_information"}
+            or not isinstance(annotation["reason"], str)
+            or len(annotation["reason"]) > 4000
+        ):
+            raise ValueError("Invalid review status or reason")
+        if annotation["status"] != "unreviewed" and not annotation["reason"].strip():
+            raise ValueError("Give a reason when verifying evidence or requesting information")
+
+
+def review_inputs(
+    snapshot: AnalysisSnapshot,
+    decisions: list[dict],
+    *,
+    input_path: str,
+    origin: str = "reviewed_workbook",
+    relative_root: str | None = None,
+    statuses: dict | None = None,
+    revisions: list[dict] | None = None,
+) -> tuple[list[dict], dict, str]:
+    """Build traceable review inputs shared by Excel and the desktop editor."""
+    baseline = review_rows(snapshot)
+    by_id = {item["id"]: item for item in baseline}
+    decisions = [
+        {
+            **decision,
+            "changes": {
+                field: input_value(field, value) for field, value in decision["changes"].items()
+            },
+        }
+        for decision in decisions
+    ]
+    context = {
+        "version": 1,
+        "base_fingerprint": snapshot.input_fingerprint,
+        "rows": baseline,
+        "decisions": decisions,
+    }
+    resolved, excluded = apply_review(context)
+    state = object_value(snapshot.prepared.extraction.legacy_state)
+    history = list(state.get("review_history", []))
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    for decision in decisions:
+        original = by_id[decision["row_id"]]
+        after = corrected_record(original["record"], decision["changes"])
+        changed_fields = {
+            key for key in REVIEW_FIELDS if after.get(key) != original["record"].get(key)
+        }
+        for field in sorted(changed_fields):
+            history.append(
+                {
+                    "at": reviewed_at,
+                    "base_fingerprint": snapshot.input_fingerprint,
+                    "row_id": original["id"],
+                    "invoice": original["record"].get("Invoice #"),
+                    "field": field,
+                    "before": original["record"].get(field),
+                    "after": after.get(field),
+                    "reason": decision["reason"],
+                }
+            )
+        if decision["include"] != original["included"]:
+            history.append(
+                {
+                    "at": reviewed_at,
+                    "base_fingerprint": snapshot.input_fingerprint,
+                    "row_id": original["id"],
+                    "invoice": original["record"].get("Invoice #"),
+                    "field": "Include",
+                    "before": original["included"],
+                    "after": decision["include"],
+                    "reason": decision["reason"],
+                }
+            )
+    originals = [
+        object_value(observation.raw) for observation in snapshot.prepared.extraction.observations
+    ]
+    state.update(
+        {
+            "original_records": originals,
+            "human_review": context,
+            "review_excluded_records": excluded,
+            "review_history": history,
+            "imported_workbook": str(Path(input_path).resolve()),
+            "provenance": origin,
+            "review_config": object_value(snapshot.prepared.effective_config),
+            "review_source_root_relative": relative_root,
+        }
+    )
+    if statuses is None and "human_review_statuses" in state:
+        # Excel edits have no explicit verification control. Previously verified
+        # values must return to review when their fields or inclusion change.
+        statuses = {key: dict(value) for key, value in state["human_review_statuses"].items()}
+        for decision in decisions:
+            row_id = decision["row_id"]
+            if row_id in statuses and (
+                decision["changes"] or decision["include"] != by_id[row_id]["included"]
+            ):
+                statuses[row_id] = {
+                    "status": "unreviewed",
+                    "reason": "Excel correction changed a reviewed record; verify it again against the source.",
+                }
+    if statuses is not None:
+        validate_review_statuses(set(by_id), statuses)
+        previous = state.get("human_review_statuses", {})
+        for row_id in sorted(set(previous) | set(statuses)):
+            if previous.get(row_id) != statuses.get(row_id):
+                history.append(
+                    {
+                        "at": reviewed_at,
+                        "base_fingerprint": snapshot.input_fingerprint,
+                        "row_id": row_id,
+                        "invoice": by_id[row_id]["record"].get("Invoice #"),
+                        "field": "Review status",
+                        "before": previous.get(row_id, {}).get("status"),
+                        "after": statuses.get(row_id, {}).get("status"),
+                        "reason": statuses.get(row_id, previous.get(row_id, {})).get("reason", ""),
+                    }
+                )
+        state["human_review_statuses"] = statuses
+    if revisions is not None:
+        from edf_bill_fetcher.processors.revisions import validate_decisions
+
+        effective = [
+            {"id": row["Review Row ID"], "included": included, "record": row}
+            for included, rows in ((True, resolved), (False, excluded))
+            for row in rows
+        ]
+        revisions = validate_decisions(effective, revisions)
+        previous = {(d["older"], d["newer"]): d for d in state.get("bill_revision_decisions", [])}
+        current = {(d["older"], d["newer"]): d for d in revisions}
+        for pair in sorted(previous.keys() | current.keys()):
+            before_link, after_link = previous.get(pair), current.get(pair)
+            if before_link != after_link:
+                history.append(
+                    {
+                        "at": reviewed_at,
+                        "base_fingerprint": snapshot.input_fingerprint,
+                        "row_id": pair[0],
+                        "invoice": by_id[pair[0]]["record"].get("Invoice #"),
+                        "field": "Revision relationship",
+                        "before": str(before_link) if before_link else None,
+                        "after": str(after_link) if after_link else None,
+                        "reason": current.get(pair, previous.get(pair, {}))["reason"],
+                    }
+                )
+        state["bill_revision_decisions"] = revisions
+    state.pop("records", None)
+    return originals, state, snapshot.prepared.extraction.request.as_of.isoformat()

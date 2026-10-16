@@ -77,6 +77,19 @@ def build_output_overview(view: ReportView) -> OutputOverview:
     exclusions = len(state.get("review_excluded_records", []))
     notes = len(state.get("error_log", []))
     priorities = []
+    needs_info = sum(
+        item.get("status") == "needs_information"
+        for item in state.get("human_review_statuses", {}).values()
+    )
+    if needs_info:
+        priorities.append(
+            ReviewPriority(
+                f"Resolve {needs_info} human review information request{'s' if needs_info != 1 else ''}",
+                "Inspect the record review states and reasons in the app and Review history before sharing the pack.",
+                "Review history",
+                "detailed_findings",
+            )
+        )
     counts = view.model("dispute").counts
     high, medium = int(counts.get("HIGH", 0)), int(counts.get("MEDIUM", 0))
     if high or medium:
@@ -110,7 +123,7 @@ def build_output_overview(view: ReportView) -> OutputOverview:
         priorities.append(
             ReviewPriority(
                 "Complete the bill references and amounts",
-                f"Included bill rows missing an invoice reference: {missing_refs}; missing/invalid period: {missing_periods}; missing charge: {missing_charges}. Check and correct these fields in Excel.",
+                f"Included bill rows missing an invoice reference: {missing_refs}; missing/invalid period: {missing_periods}; missing charge: {missing_charges}. Check and correct these fields in the app or Excel.",
                 "Review & Corrections",
                 "data_quality",
             )

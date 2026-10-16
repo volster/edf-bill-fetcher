@@ -208,6 +208,9 @@ def polish_reference_sheets(wb: Workbook) -> None:
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
         ws.print_title_rows = "1:1"
+        if ws.title == "Bill revisions":
+            ws.print_title_rows = "1:4"
+            ws.page_setup.paperSize = ws.PAPERSIZE_A3
         ws.protection.formatColumns = False
         ws.protection.formatRows = False
         if ws.title == "Parse Errors":

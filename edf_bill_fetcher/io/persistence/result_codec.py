@@ -61,6 +61,61 @@ def _money(value: Any, nullable: bool = False) -> Decimal | None:
     return Decimal(value)
 
 
+def _validate_revisions(model: Any) -> None:
+    model = _object(model, {"version", "notice", "relationships", "truncated"})
+    if (
+        type(model["version"]) is not int
+        or model["version"] != 1
+        or type(model["truncated"]) is not bool
+    ):
+        raise ValueError("Unsupported bill revision assessment")
+    _string(model["notice"])
+    links = model["relationships"]
+    if not isinstance(links, list) or len(links) > 10500:
+        raise ValueError("Invalid bill revision assessment")
+    seen = set()
+    for link in links:
+        link = _object(
+            link,
+            {
+                "older",
+                "newer",
+                "kind",
+                "status",
+                "reason",
+                "basis",
+                "earlier",
+                "later",
+                "earlier_included",
+                "later_included",
+                "changed_fields",
+                "charge_difference",
+            },
+        )
+        pair = (_string(link["older"]), _string(link["newer"]))
+        if pair[0] == pair[1] or pair in seen:
+            raise ValueError("Duplicate or identical revision endpoints")
+        seen.add(pair)
+        if (
+            _string(link["kind"]) not in {"replacement", "cancellation_credit"}
+            or _string(link["status"]) not in {"suggested", "confirmed", "rejected"}
+            or not isinstance(link["reason"], str)
+            or (link["status"] != "suggested" and not link["reason"].strip())
+            or not isinstance(link["earlier"], dict)
+            or not isinstance(link["later"], dict)
+            or type(link["earlier_included"]) is not bool
+            or type(link["later_included"]) is not bool
+            or not isinstance(link["changed_fields"], list)
+            or any(not isinstance(field, str) for field in link["changed_fields"])
+            or (
+                link["charge_difference"] is not None
+                and type(link["charge_difference"]) not in (int, float)
+            )
+        ):
+            raise ValueError("Invalid stored bill revision relationship")
+        _string(link["basis"])
+
+
 def _validate_models(value: Any) -> None:
     models = _object(value, set(MODEL_KEYS))
     expected = {
@@ -111,6 +166,8 @@ def _validate_models(value: Any) -> None:
                 "domination",
             } <= set(restored):
                 raise ValueError("SAP payload is incomplete")
+            if "bill_revisions" in restored:
+                _validate_revisions(restored["bill_revisions"])
             frames = restored["frames"]
             if (
                 not isinstance(frames, dict)

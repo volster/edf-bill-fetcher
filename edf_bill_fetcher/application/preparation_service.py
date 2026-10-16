@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from edf_bill_fetcher.domain.evidence import ExtractionSnapshot, PreparedSnapshot
 from edf_bill_fetcher.domain.json_values import freeze_json, object_value
 from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
@@ -20,6 +22,45 @@ def prepare_snapshot(extraction: ExtractionSnapshot) -> PreparedSnapshot:
         inputs,
         object_value(extraction.request.config),
     )
+    statuses = state.get("human_review_statuses", {})
+    if statuses:
+        # Correcting an invoice can merge two previously distinct rows. Keep
+        # the absorbed row's verification as history, rather than attaching
+        # it to a different record or leaving an unreopenable active status.
+        active_ids = {
+            row.get("Review Row ID")
+            for row in prepared.records + state.get("review_excluded_records", [])
+        }
+        absorbed = set(statuses) - active_ids
+        duplicate_ids = {row.get("Review Row ID") for row in prepared.duplicates}
+        if not absorbed <= duplicate_ids:
+            raise ValueError("Review status refers to an unknown record")
+        if absorbed:
+            archived = state.setdefault("archived_review_statuses", {})
+            history = state.setdefault("review_history", [])
+            for row_id in sorted(absorbed):
+                annotation = statuses.pop(row_id)
+                archived[row_id] = annotation
+                history.append(
+                    {
+                        "at": extraction.request.created_at.isoformat(),
+                        "base_fingerprint": state.get("human_review", {}).get("base_fingerprint"),
+                        "row_id": row_id,
+                        "invoice": next(
+                            (
+                                row.get("Invoice #")
+                                for row in inputs
+                                if row.get("Review Row ID") == row_id
+                            ),
+                            None,
+                        ),
+                        "field": "Review status",
+                        "before": annotation["status"],
+                        "after": "archived_after_deduplication",
+                        "reason": "Record merged by duplicate resolution; previous verification retained in archived_review_statuses.",
+                    }
+                )
+            extraction = replace(extraction, legacy_state=freeze_json(state))
     return PreparedSnapshot(
         extraction,
         freeze_json(to_snapshot_json(prepared.records)),

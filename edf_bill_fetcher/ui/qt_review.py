@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from threading import Event
@@ -30,8 +30,10 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableView,
@@ -47,11 +49,17 @@ from edf_bill_fetcher.application.evidence_review import (
     build_evidence_review,
     text,
 )
+from edf_bill_fetcher.application.review_session import ReviewSession
 from edf_bill_fetcher.application.run_service import RunCancelled, check_cancelled
 from edf_bill_fetcher.domain.analysis import AnalysisSnapshot
-from edf_bill_fetcher.domain.json_values import object_value, rows_value
+from edf_bill_fetcher.domain.json_values import (
+    freeze_json,
+    object_value,
+    rows_value,
+)
 from edf_bill_fetcher.helpers.pdf_utils import PDF_LOCK
 from edf_bill_fetcher.io.persistence.result_store import load_result
+from edf_bill_fetcher.ui.qt_review_tools import RecordEditor, RevisionPanel
 from edf_bill_fetcher.ui.qt_widgets import button, label
 
 CATEGORIES = (
@@ -61,6 +69,7 @@ CATEGORIES = (
     "Findings",
     "Duplicates",
     "Filtered out",
+    "Excluded",
     "Other records",
     "Source files",
 )
@@ -179,7 +188,13 @@ class EvidenceFilter(QSortFilterProxyModel):
             return False
         entry = model.entries[row]
         if self.category == "All records":
-            if entry.category in {"Findings", "Duplicates", "Filtered out", "Source files"}:
+            if entry.category in {
+                "Findings",
+                "Duplicates",
+                "Filtered out",
+                "Source files",
+                "Excluded",
+            }:
                 return False
         elif self.category != entry.category:
             return False
@@ -206,14 +221,63 @@ class ReviewLoader(QThread):
         super().__init__(parent)
         self.directory, self.path, self.snapshot = directory, path, snapshot
         self.cancel_event = Event()
+        self.session: ReviewSession | None = None
 
     def run(self) -> None:
         """Keep the previously displayed analysis intact when a new load fails."""
         try:
             check_cancelled(self.cancel_event.is_set)
             snapshot = self.snapshot if self.snapshot is not None else load_result(self.path)
+            draft_path = Path(self.path or str(Path(self.directory) / "result.json")).with_suffix(
+                ".review-draft.json"
+            )
+            self.session = (
+                ReviewSession.load(snapshot, draft_path)
+                if draft_path.is_file()
+                else ReviewSession(snapshot)
+            )
             result = build_evidence_review(snapshot, self.directory, self.cancel_event.is_set)
             self.loaded.emit(result)
+        except RunCancelled:
+            return
+        except Exception as error:
+            self.failed.emit(str(error))
+
+
+class ReviewPreview(QThread):
+    """Calculate an explicit draft preview without writing files or changing accepted results."""
+
+    ready = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, session: ReviewSession, source: str, parent: QObject | None = None):
+        """Capture an immutable snapshot and detached validated draft."""
+        super().__init__(parent)
+        self.snapshot, self.payload, self.source = session.snapshot, session.payload(), source
+        self.cancel_event = Event()
+
+    def run(self) -> None:
+        """Use the same preparation and analysis path as a reviewed export."""
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        from edf_bill_fetcher.application.analysis_service import analyse_prepared
+        from edf_bill_fetcher.application.legacy_adapter import capture_legacy
+        from edf_bill_fetcher.application.preparation_service import prepare_snapshot
+
+        try:
+            session = ReviewSession.restore(self.snapshot, self.payload)
+            records, state, _ = session.inputs(self.source)
+            check_cancelled(self.cancel_event.is_set)
+            request = replace(
+                self.snapshot.prepared.extraction.request,
+                run_id=uuid4().hex,
+                created_at=datetime.now(timezone.utc),
+                config=freeze_json(state["review_config"]),
+            )
+            result = analyse_prepared(prepare_snapshot(capture_legacy(records, state, request)))
+            check_cancelled(self.cancel_event.is_set)
+            self.ready.emit(result)
         except RunCancelled:
             return
         except Exception as error:
@@ -308,12 +372,20 @@ class EvidenceReviewPage(QWidget):
 
     changed = Signal()
     idle = Signal()
+    regenerate_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Build a responsive split view with keyboard-accessible record selection."""
         super().__init__(parent)
         self.setObjectName("page")
         self.review: EvidenceReview | None = None
+        self.session: ReviewSession | None = None
+        self.draft_path = ""
+        self.draft_dirty = False
+        self._saved_draft: dict | None = None
+        self._guarding = False
+        self._draft_generation = 0
+        self.impact_worker: ReviewPreview | None = None
         self.analysis_path = ""
         self.loader: ReviewLoader | None = None
         self.preview_worker: PdfPreview | None = None
@@ -324,8 +396,15 @@ class EvidenceReviewPage(QWidget):
         self._image: QImage | None = None
         self._open_failed = False
         self._shutdown = False
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 16)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.workspace_scroll = QScrollArea()
+        self.workspace_scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        self.workspace_scroll.setWidget(content)
+        outer.addWidget(self.workspace_scroll)
+        layout.setContentsMargins(24, 20, 24, 40)
         layout.setSpacing(10)
         header = QHBoxLayout()
         header.addWidget(label("Review evidence", "title"), 1)
@@ -356,7 +435,30 @@ class EvidenceReviewPage(QWidget):
         self.availability.setAccessibleName("Source availability filter")
         filters.addWidget(self.availability)
         layout.addLayout(filters)
+        review_actions = QHBoxLayout()
+        self.edit_record = button("Edit selected record", self._edit_selected)
+        self.undo_button = button("Undo", lambda: self._history(False))
+        self.redo_button = button("Redo", lambda: self._history(True))
+        for action in (self.edit_record, self.undo_button, self.redo_button):
+            review_actions.addWidget(action)
+        layout.addLayout(review_actions)
+        export_actions = QHBoxLayout()
+        self.save_draft = button("Save draft", self.save_progress)
+        self.preview_changes = button("Preview changes", self.preview_draft)
+        self.regenerate = button("Create reviewed pack", self.regenerate_draft)
+        for action in (self.save_draft, self.preview_changes, self.regenerate):
+            export_actions.addWidget(action)
+        layout.addLayout(export_actions)
+        self.draft_status = label(
+            "Edits are saved separately from the accepted analysis.", "hint", wrap=True
+        )
+        layout.addWidget(self.draft_status)
+        self.impact = label("", "hint", wrap=True)
+        self.impact.hide()
+        layout.addWidget(self.impact)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setMinimumHeight(420)
+        self.splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         left = QWidget()
         records = QVBoxLayout(left)
         records.setContentsMargins(0, 0, 0, 0)
@@ -381,6 +483,7 @@ class EvidenceReviewPage(QWidget):
             self.table.setColumnWidth(column, width)
         records.addWidget(self.table, 3)
         self.details_tabs = QTabWidget()
+        self.details_tabs.setMinimumHeight(210)
         self.details = QPlainTextEdit()
         self.details.setReadOnly(True)
         self.details.setPlaceholderText("Select a record to inspect all preserved fields.")
@@ -394,9 +497,19 @@ class EvidenceReviewPage(QWidget):
         self.run_notes.setReadOnly(True)
         self.run_notes.setAccessibleName("Saved analysis review notes")
         self.details_tabs.addTab(self.run_notes, "Review notes")
+        self.editor = RecordEditor()
+        self.revisions = RevisionPanel()
+        self.details_tabs.addTab(self.editor, "Correct record")
+        self.details_tabs.addTab(self.revisions, "Bill revisions")
+        self.editor.applied.connect(self._draft_changed)
+        self.editor.failed.connect(self._message)
+        self.revisions.changed.connect(self._draft_changed)
+        self.revisions.failed.connect(self._message)
+        self.revisions.show_record.connect(self.select_record)
         records.addWidget(self.details_tabs, 2)
         self.splitter.addWidget(left)
         right = QWidget()
+        self.preview_pane = right
         preview = QVBoxLayout(right)
         preview.setContentsMargins(0, 0, 0, 0)
         preview.addWidget(label("Original source", "sectionTitle"))
@@ -420,6 +533,7 @@ class EvidenceReviewPage(QWidget):
         self.preview_scroll.setWidget(self.canvas)
         self.preview_scroll.setWidgetResizable(True)
         self.preview_scroll.setMinimumSize(180, 100)
+        self.preview_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         preview.addWidget(self.preview_scroll, 1)
         controls = QHBoxLayout()
         self.previous = button("‹", lambda: self.page.setValue(self.page.value() - 1))
@@ -444,8 +558,16 @@ class EvidenceReviewPage(QWidget):
         self.splitter.setChildrenCollapsible(False)
         self.splitter.setSizes([540, 440])
         layout.addWidget(self.splitter, 1)
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.setInterval(400)
+        self._draft_timer.timeout.connect(self.save_progress)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
+        self._focus_timer = QTimer(self)
+        self._focus_timer.setSingleShot(True)
+        self._focus_timer.timeout.connect(self._reveal_tools)
+        self.details_tabs.currentChanged.connect(self._focus_tools)
         self._search_timer.setInterval(150)
         self._search_timer.timeout.connect(self._filter)
         self.search.textChanged.connect(lambda: self._search_timer.start())
@@ -456,6 +578,7 @@ class EvidenceReviewPage(QWidget):
         self.page.valueChanged.connect(self._queue_preview)
         self.zoom.currentIndexChanged.connect(self._queue_preview)
         self._preview_controls(False)
+        self._review_controls()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Stack source and records on smaller windows and refit the raster."""
@@ -466,6 +589,30 @@ class EvidenceReviewPage(QWidget):
             else Qt.Orientation.Horizontal
         )
         self._display_image()
+        self._focus_timer.start(0)
+
+    def _focus_tools(self, index: int) -> None:
+        editing = index in {3, 4}
+        self.table.setMaximumHeight(110 if editing else 16777215)
+        self.details_tabs.setMinimumHeight(450 if editing else 210)
+        self.splitter.setMinimumHeight(600 if editing else 420)
+        if editing:
+            self._focus_timer.start(0)
+
+    def _reveal_tools(self) -> None:
+        editing = self.details_tabs.currentIndex() in {3, 4}
+        source_layout = self.preview_pane.layout()
+        assert source_layout is not None
+        needed = source_layout.totalHeightForWidth(max(1, self.preview_pane.width()))
+        self.splitter.setMinimumHeight(
+            max(
+                600 if editing else 420,
+                self.preview_pane.minimumSizeHint().height(),
+                needed + self.preview_scroll.minimumHeight(),
+            )
+        )
+        if editing:
+            self.workspace_scroll.ensureWidgetVisible(self.details_tabs)
 
     def pick_analysis(self) -> None:
         """Open an existing saved result; browsing never publishes a new analysis."""
@@ -481,7 +628,12 @@ class EvidenceReviewPage(QWidget):
         self, path: str = "", *, snapshot: AnalysisSnapshot | None = None, directory: str = ""
     ) -> None:
         """Verify sources in the background and commit the view only after success."""
-        if self.loader is not None or self._shutdown:
+        if (
+            self.loader is not None
+            or self.impact_worker is not None
+            or self._shutdown
+            or not self.allow_leave()
+        ):
             return
         self.open_button.setEnabled(False)
         self._message("Opening analysis and verifying original files…")
@@ -500,6 +652,14 @@ class EvidenceReviewPage(QWidget):
         assert self.loader is not None
         self.analysis_path = self.loader.path or str(Path(review.directory) / "result.json")
         self.review = review
+        self.session = self.loader.session
+        self._saved_draft = self.session.payload() if self.session else None
+        self.draft_path = str(Path(self.analysis_path).with_suffix(".review-draft.json"))
+        self.draft_dirty = False
+        self._draft_timer.stop()
+        self.impact.clear()
+        self.impact.hide()
+        self.revisions.refresh(self.session)
         self.model.beginResetModel()
         self.model.entries = review.entries
         self.model.rows = [object_value(entry.fields) for entry in review.entries]
@@ -525,13 +685,15 @@ class EvidenceReviewPage(QWidget):
             control.blockSignals(False)
         summary = review.snapshot.summary
         self.summary.setText(
-            f"Analysis as of {review.snapshot.prepared.extraction.request.as_of.isoformat()} · Charges £{summary.charges:,.2f} · Net credits £{summary.net_credits:,.2f}\n{self.analysis_path}"
+            f"Accepted analysis as of {review.snapshot.prepared.extraction.request.as_of.isoformat()} · Charges £{summary.charges:,.2f} · Net credits £{summary.net_credits:,.2f}"
         )
         self.summary.setToolTip(self.analysis_path)
         self.run_notes.setPlainText("\n\n".join(review.notes) or "No review notes were recorded.")
         self.details_tabs.setTabText(2, f"Review notes ({len(review.notes)})")
         self.message.hide()
+        self.editor.set_record(None)
         self._filter()
+        self._review_controls()
         self.changed.emit()
 
     @Slot(str)
@@ -545,6 +707,7 @@ class EvidenceReviewPage(QWidget):
         self.open_button.setEnabled(True)
         if worker is not None:
             worker.deleteLater()
+        self._review_controls()
         self.changed.emit()
         self._emit_idle()
 
@@ -553,6 +716,8 @@ class EvidenceReviewPage(QWidget):
         self.message.show()
 
     def _filter(self) -> None:
+        if not self._guarding and not self.editor.allow_leave():
+            return
         self.proxy.query = self.search.text().strip().casefold()
         self.proxy.category = self.category.currentText()
         self.proxy.availability = self.availability.currentIndex()
@@ -570,14 +735,25 @@ class EvidenceReviewPage(QWidget):
             self.table.selectRow(0)
 
     def _selection_changed(self) -> None:
+        if self._guarding:
+            return
+        if not self.editor.allow_leave():
+            self._guarding = True
+            self.select_record(self.editor.row_id)
+            self._guarding = False
+            return
         selected = self.table.selectionModel().selectedRows()
         self._clear_source()
         self.details.clear()
         self.extracted_text.clear()
         if not selected:
+            self.editor.set_record(None)
+            self._review_controls()
             return
         index = self.proxy.mapToSource(selected[0]).row()
         entry, row = self.model.entries[index], self.model.rows[index]
+        self.editor.set_record(self.session if entry.row_id else None, entry.row_id)
+        self._review_controls()
         primary_fields = (
             "Finding",
             "Severity",
@@ -668,6 +844,7 @@ class EvidenceReviewPage(QWidget):
         )
 
     def _source_changed(self) -> None:
+        self._focus_timer.start(0)
         source = self.source_choices.currentData()
         self._pending_preview = None
         self._selected_source = source if isinstance(source, ReviewSource) else None
@@ -846,16 +1023,174 @@ class EvidenceReviewPage(QWidget):
         )
         self._emit_idle()
 
+    def _review_controls(self) -> None:
+        ready = self.session is not None and self.loader is None and self.impact_worker is None
+        self.edit_record.setEnabled(ready and bool(self.editor.row_id))
+        self.undo_button.setEnabled(ready and bool(self.session and self.session.undo_stack))
+        self.redo_button.setEnabled(ready and bool(self.session and self.session.redo_stack))
+        for control in (self.save_draft, self.preview_changes, self.regenerate):
+            control.setEnabled(ready)
+        if self.session:
+            self.draft_status.setText(
+                f"Draft: {len(self.session.decisions)} record decisions · {len(self.session.revisions)} revision decisions. "
+                + (
+                    "Unsaved progress."
+                    if self.draft_dirty
+                    else "Accepted figures above update when a reviewed pack is created."
+                )
+            )
+            self.draft_status.setToolTip(self.draft_path)
+        self.changed.emit()
+
+    def _edit_selected(self) -> None:
+        if self.editor.row_id:
+            self.details_tabs.setCurrentWidget(self.editor)
+            self.workspace_scroll.ensureWidgetVisible(self.details_tabs)
+
+    def _draft_changed(self) -> None:
+        self.draft_dirty = True
+        self._draft_generation += 1
+        self.impact.setText(
+            "Draft changed. Preview or create a reviewed pack to update calculated figures."
+        )
+        self.impact.show()
+        self.revisions.refresh(self.session)
+        self._review_controls()
+        self._draft_timer.start()
+
+    def save_progress(self) -> bool:
+        """Save applied draft decisions atomically, without rewriting the accepted analysis."""
+        if self.session is None or not self.draft_dirty:
+            return True
+        try:
+            self.session.save(self.draft_path)
+        except (OSError, ValueError) as error:
+            self._message("Draft could not be saved: " + str(error))
+            return False
+        self.draft_dirty = False
+        self._saved_draft = self.session.payload()
+        self._review_controls()
+        return True
+
+    def allow_leave(self) -> bool:
+        """Preserve unapplied edits and failed draft saves when changing analyses or closing."""
+        if not self.editor.allow_leave() or not self.revisions.allow_leave():
+            return False
+        if self.save_progress():
+            return True
+        choice = QMessageBox.question(
+            self,
+            "Draft save failed",
+            "Your draft could not be saved. Discard the unsaved progress and continue? Choose Cancel to keep it open and resolve the save problem.",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if choice == QMessageBox.StandardButton.Discard:
+            if self.session is not None and self._saved_draft is not None:
+                row_id = self.editor.row_id
+                self.session = ReviewSession.restore(self.session.snapshot, self._saved_draft)
+                self.editor.set_record(self.session if row_id else None, row_id)
+                self.revisions.refresh(self.session)
+            self.draft_dirty = False
+            self._draft_timer.stop()
+            return True
+        return False
+
+    def _history(self, redo: bool) -> None:
+        if (
+            self.session is None
+            or not self.editor.allow_leave()
+            or not self.revisions.allow_leave()
+        ):
+            return
+        row_id = self.editor.row_id
+        (self.session.redo if redo else self.session.undo)()
+        self.editor.set_record(self.session if row_id else None, row_id)
+        self._draft_changed()
+
+    def select_record(self, row_id: str) -> None:
+        """Reveal a stable revision endpoint and display its verified original source."""
+        for index, entry in enumerate(self.model.entries):
+            if entry.row_id != row_id:
+                continue
+            target = self.proxy.mapFromSource(self.model.index(index, 0))
+            if not target.isValid():
+                self.search.clear()
+                self.category.setCurrentText(entry.category)
+                self.availability.setCurrentIndex(0)
+                self._filter()
+                target = self.proxy.mapFromSource(self.model.index(index, 0))
+            if target.isValid():
+                self.table.selectRow(target.row())
+            return
+
+    def preview_draft(self) -> None:
+        """Show financial impact from an explicit, cancellable background recalculation."""
+        if self.session is None or self.impact_worker is not None or not self.allow_leave():
+            return
+        worker = ReviewPreview(self.session, self.analysis_path, self)
+        self.impact_worker = worker
+        self._preview_generation = self._draft_generation
+        self.open_button.setEnabled(False)
+        self.editor.setEnabled(False)
+        self.revisions.setEnabled(False)
+        self.impact.setText("Calculating the draft preview…")
+        self.impact.show()
+        worker.ready.connect(self._impact_ready)
+        worker.failed.connect(self._impact_failed)
+        worker.finished.connect(self._impact_finished)
+        self._review_controls()
+        worker.start()
+
+    def _impact_failed(self, error: str) -> None:
+        self.impact.setText("Preview could not be calculated. Accepted figures are unchanged.")
+        self._message(error)
+
+    def _impact_ready(self, snapshot: AnalysisSnapshot) -> None:
+        if (
+            self._shutdown
+            or self._preview_generation != self._draft_generation
+            or self.review is None
+        ):
+            return
+        before, after = self.review.snapshot.summary, snapshot.summary
+        self.impact.setText(
+            f"Preview only · Charges £{before.charges:,.2f} → £{after.charges:,.2f} · Net credits £{before.net_credits:,.2f} → £{after.net_credits:,.2f}. Create a reviewed pack to publish these figures."
+        )
+
+    def _impact_finished(self) -> None:
+        worker, self.impact_worker = self.impact_worker, None
+        if worker:
+            worker.deleteLater()
+        self.open_button.setEnabled(True)
+        self.editor.setEnabled(bool(self.editor.row_id))
+        self.revisions.setEnabled(self.session is not None)
+        self._review_controls()
+        self._emit_idle()
+
+    def regenerate_draft(self) -> None:
+        """Ask the owning window to publish a new reviewed pack using its output preferences."""
+        if self.session is not None and self.allow_leave():
+            self.regenerate_requested.emit(self.session.payload())
+
     def has_workers(self) -> bool:
         """Keep owners alive until all native handles and worker signals are finished."""
-        return self.loader is not None or self.preview_worker is not None or self.opener is not None
+        return (
+            self.loader is not None
+            or self.preview_worker is not None
+            or self.opener is not None
+            or self.impact_worker is not None
+        )
 
     def shutdown(self) -> None:
         """Cancel loading/rendering and discard queued requests on application close."""
         self._shutdown = True
         self._pending_preview = None
         self._search_timer.stop()
-        for worker in (self.loader, self.preview_worker, self.opener):
+        self._draft_timer.stop()
+        self._focus_timer.stop()
+        self.save_progress()
+        for worker in (self.loader, self.preview_worker, self.opener, self.impact_worker):
             if worker is not None:
                 worker.cancel_event.set()
 

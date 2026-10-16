@@ -389,7 +389,21 @@ def test_small_and_normal_windows_keep_preview_and_actions_accessible(
     application.processEvents()
     assert window.width() == width
     assert window.height() == (720 if width == 1160 else 600)
-    for action in (window.run_button, page.open_button, page.open_source, page.page):
+    assert window.rect().contains(
+        window.run_button.mapTo(window, window.run_button.rect().bottomRight())
+    )
+    # The expanded correction workspace scrolls at smaller sizes. Every
+    # source action must be reachable inside that viewport without resizing.
+    for action in (page.open_button, page.open_source, page.page):
+        viewport = page.workspace_scroll.viewport()
+
+        def revealed(action=action, viewport=viewport):
+            page.workspace_scroll.ensureWidgetVisible(action, 10, 10)
+            return viewport.rect().contains(
+                action.mapTo(viewport, action.rect().topLeft())
+            ) and viewport.rect().contains(action.mapTo(viewport, action.rect().bottomRight()))
+
+        wait_until(application, revealed)
         assert window.rect().contains(action.mapTo(window, action.rect().bottomRight()))
 
 

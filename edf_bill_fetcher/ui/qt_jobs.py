@@ -18,7 +18,7 @@ from edf_bill_fetcher.application.run_service import (
     default_renderers,
     run,
 )
-from edf_bill_fetcher.domain.json_values import freeze_json, object_value
+from edf_bill_fetcher.domain.json_values import FrozenJSON, freeze_json, object_value, thaw_json
 from edf_bill_fetcher.domain.requests import RunRequest
 from edf_bill_fetcher.io.persistence.result_store import load_result
 from edf_bill_fetcher.io.persistence.run_manifest import save_manifest
@@ -37,6 +37,7 @@ class DesktopJob:
     sections: tuple[str, ...]
     mode: str = "extract"
     input_path: str = ""
+    review_draft: FrozenJSON | None = None
 
     @property
     def outputs(self) -> dict[str, str]:
@@ -102,9 +103,20 @@ class RunWorker(QThread):
                     as_of=accepted.prepared.extraction.request.as_of,
                     config=freeze_json(cfg),
                 )
-            elif job.mode == "workbook":
-                self.progress.emit("Reading workbook…")
-                records, state, as_of = read_workbook(job.input_path)
+            elif job.mode in {"workbook", "review"}:
+                as_of: str | None
+                if job.mode == "review":
+                    from edf_bill_fetcher.application.review_session import ReviewSession
+
+                    self.progress.emit("Validating review draft…")
+                    if job.review_draft is None:
+                        raise ValueError("No review draft was supplied")
+                    base = load_result(job.input_path)
+                    session = ReviewSession.restore(base, thaw_json(job.review_draft))
+                    records, state, as_of = session.inputs(job.input_path)
+                else:
+                    self.progress.emit("Reading workbook…")
+                    records, state, as_of = read_workbook(job.input_path)
                 cfg = state.get("review_config", object_value(request.config))
                 cfg["as_of"] = as_of or request.as_of.isoformat()
                 request = replace(

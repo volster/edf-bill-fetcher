@@ -1012,6 +1012,32 @@ def create_anomaly_detail_section(
     return elements
 
 
+def create_revision_section(model: dict | None) -> list:
+    """Append stored revision comparisons with wrapping and repeated table headers."""
+    if model is None:
+        return []
+    from edf_bill_fetcher.models.output_tables import revision_note, revision_table
+
+    elements = [
+        Paragraph("Bill revision review", STYLES["SubSectionHeader"]),
+        Paragraph(xml_escape(revision_note(model)), STYLES["BodyText"]),
+    ]
+    if model["relationships"]:
+        rows = revision_table(model)
+        table = _wrapped_table(rows, [3.3, 4.2, 4.2, 4.3])
+        table.splitInRow = 1
+        table.setStyle(make_table_style(num_rows=len(rows), font_size=7))
+        elements.append(table)
+    else:
+        elements.append(
+            Paragraph(
+                "No revision relationships were found. You can add a missed relationship in the app.",
+                STYLES["BodyText"],
+            )
+        )
+    return elements
+
+
 def create_timeline_section(
     df: pd.DataFrame, flags: list, ctx: RenderContext | None = None
 ) -> list:
@@ -2137,7 +2163,9 @@ def render_pdf(view: ReportView, output_path: str) -> str:
         ),
         "detailed_findings": (
             lambda: {"flags": flags, "df": df},
-            lambda kwargs: create_anomaly_detail_section(**kwargs),
+            lambda kwargs: (
+                create_anomaly_detail_section(**kwargs) + create_revision_section(view.revisions)
+            ),
         ),
         "timeline": (
             lambda: {"df": df, "flags": flags},

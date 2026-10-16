@@ -6,7 +6,7 @@ import base64
 import hashlib
 import math
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
@@ -26,8 +26,8 @@ from edf_bill_fetcher.application.record_review import (
     ENTRY_TYPES,
     REVIEW_FIELDS,
     apply_review,
-    corrected_record,
     input_value,
+    review_inputs,
     review_rows,
 )
 from edf_bill_fetcher.domain.json_values import canonical_text, object_value, strict_loads
@@ -564,66 +564,12 @@ def load_review_workbook(path: str) -> tuple[list[dict], dict, str] | None:
                 )
             except (TypeError, ValueError) as error:
                 raise ValueError(f"{REVIEW_SHEET}, row {row_number}: {error}") from error
-        context = {
-            "version": 1,
-            "base_fingerprint": snapshot.input_fingerprint,
-            "rows": baseline,
-            "decisions": decisions,
-        }
-        _, excluded = apply_review(context)
-        state = object_value(snapshot.prepared.extraction.legacy_state)
-        history = list(state.get("review_history", []))
-        reviewed_at = datetime.now(timezone.utc).isoformat()
-        for decision in decisions:
-            original = by_id[decision["row_id"]]
-            after = corrected_record(original["record"], decision["changes"])
-            changed_fields = {
-                key for key in REVIEW_FIELDS if after.get(key) != original["record"].get(key)
-            }
-            for field in sorted(changed_fields):
-                history.append(
-                    {
-                        "at": reviewed_at,
-                        "base_fingerprint": snapshot.input_fingerprint,
-                        "row_id": original["id"],
-                        "invoice": original["record"].get("Invoice #"),
-                        "field": field,
-                        "before": original["record"].get(field),
-                        "after": after.get(field),
-                        "reason": decision["reason"],
-                    }
-                )
-            if decision["include"] != original["included"]:
-                history.append(
-                    {
-                        "at": reviewed_at,
-                        "base_fingerprint": snapshot.input_fingerprint,
-                        "row_id": original["id"],
-                        "invoice": original["record"].get("Invoice #"),
-                        "field": "Include",
-                        "before": original["included"],
-                        "after": decision["include"],
-                        "reason": decision["reason"],
-                    }
-                )
-        originals = [
-            object_value(observation.raw)
-            for observation in snapshot.prepared.extraction.observations
-        ]
-        state.update(
-            {
-                "original_records": originals,
-                "human_review": context,
-                "review_excluded_records": excluded,
-                "review_history": history,
-                "imported_workbook": str(Path(path).resolve()),
-                "provenance": "reviewed_workbook",
-                "review_config": object_value(snapshot.prepared.effective_config),
-                "review_source_root_relative": relative_root,
-            }
+        return review_inputs(
+            snapshot,
+            decisions,
+            input_path=path,
+            relative_root=relative_root,
         )
-        state.pop("records", None)
-        return originals, state, snapshot.prepared.extraction.request.as_of.isoformat()
     finally:
         wb.close()
 

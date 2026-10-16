@@ -35,6 +35,7 @@ class ReviewEntry:
     fields: FrozenJSON
     sources: tuple[ReviewSource, ...]
     relation_note: str = ""
+    row_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,27 @@ def build_evidence_review(
                 notes.append(
                     f"{statuses[source_id]}: {metadata.get('Original Filename', source_id)}"
                 )
+
+    # Excluded originals remain in earlier packs. Expose only their verified
+    # recorded copies, without falling back for missing/changed active sources.
+    for source_id, metadata in state.get("review_excluded_source_manifest", {}).items():
+        check_cancelled(cancelled)
+        if source_id in manifest or not isinstance(metadata, dict):
+            continue
+        manifest[source_id] = metadata
+        original = state.get("review_source_paths", {}).get(source_id)
+        expected = metadata.get("Content Hash")
+        statuses[source_id] = "Excluded source unavailable; earlier pack may have moved"
+        try:
+            if (
+                isinstance(original, str)
+                and expected
+                and artifact_record(original)["sha256"] == expected
+            ):
+                paths[source_id] = original
+                statuses[source_id] = "Verified excluded source · retained in an earlier pack"
+        except (OSError, ValueError, RuntimeError):
+            pass
 
     def sources(row: dict) -> tuple[ReviewSource, ...]:
         primary = text(row.get("Source ID"))
@@ -219,9 +241,11 @@ def build_evidence_review(
                 )
         return tuple(result)
 
-    records = rows_value(snapshot.prepared.records)
+    from edf_bill_fetcher.application.record_review import review_rows
+
     entries = []
-    for row in records:
+    for item in review_rows(snapshot):
+        row = item["record"]
         check_cancelled(cancelled)
         kind = row.get("Entry Type")
         category = (
@@ -231,7 +255,14 @@ def build_evidence_review(
             if kind in {"New Bill", "Ongoing Balance", "Charge", "Late Payment"}
             else "Other records"
         )
-        entries.append(ReviewEntry(category, freeze_json(row), sources(row)))
+        entries.append(
+            ReviewEntry(
+                category if item["included"] else "Excluded",
+                freeze_json(row),
+                sources(row),
+                row_id=item["id"],
+            )
+        )
     view = build_report_view(snapshot, RenderSelection())
     canonical_entries = tuple(entries)
     for flag, when, amount, detail, severity in view.model("dispute").flags:

@@ -82,9 +82,12 @@ class ReportView:
             return None
         excluded = len(state.get("review_excluded_records", []))
         changes = len(state.get("review_history", []))
+        statuses = list(state.get("human_review_statuses", {}).values())
+        verified = sum(row.get("status") == "verified" for row in statuses)
+        needs_info = sum(row.get("status") == "needs_information" for row in statuses)
         return (
-            f"Human-reviewed analysis: {changes} recorded field/inclusion changes; "
-            f"{excluded} records currently excluded. The workbook Review history and result.json "
+            f"Human-reviewed analysis: {changes} recorded changes and review decisions; "
+            f"{excluded} records currently excluded; {verified} verified against source; {needs_info} need information. The workbook Review history and result.json "
             "preserve reasons and original extraction data. Shared source PDFs remain whole; "
             "record exclusions do not redact pages."
         )
@@ -125,6 +128,12 @@ class ReportView:
     def model(self, key: str) -> Any:
         """Decode a fixed model without fitting or financial processing."""
         return from_snapshot_json(object_value(self.snapshot.models)[key]["payload"])
+
+    @property
+    def revisions(self) -> dict | None:
+        """Read the stored revision assessment; older accepted results remain unchanged."""
+        result = self.model("sap").get("bill_revisions")
+        return result if isinstance(result, dict) else None
 
     def frame(self, key: str = "evidence") -> pd.DataFrame:
         """Return a new precomputed frame stored with the analytical payload."""
