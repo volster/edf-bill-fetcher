@@ -376,7 +376,7 @@ class EvidenceWindow(QMainWindow):
         card.body.addWidget(self.report_input)
         card.body.addWidget(
             label(
-                "You can also import an Excel workbook. Workbook imports have limited provenance because original source files and decisions are unavailable.",
+                "To correct or exclude records in Excel, edit Review & Corrections, save the workbook, then choose it here. Regeneration creates a new pack and workbook using the saved analysis date and settings. Older workbooks import with limited provenance.",
                 "hint",
                 wrap=True,
             )
@@ -400,7 +400,7 @@ class EvidenceWindow(QMainWindow):
         options.body.addWidget(self.report_excel)
         options.body.addWidget(
             label(
-                "Reports are saved in a new folder alongside a preserved analysis.",
+                "Reports are saved in a new folder alongside a preserved analysis. Excel imports always include a fresh review workbook.",
                 "hint",
                 wrap=True,
             )
@@ -765,7 +765,7 @@ class EvidenceWindow(QMainWindow):
             inputs.append(SourceSelection("records_json", str(path)))
             mode = "workbook" if path.suffix.lower() == ".xlsx" else "saved_result"
             formats = FORMATS[self.report_options["format"]]
-            if self.report_excel.isChecked():
+            if self.report_excel.isChecked() or mode == "workbook":
                 formats = ("xlsx", *formats)
             stem = path.stem
         else:

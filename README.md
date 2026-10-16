@@ -145,8 +145,10 @@ The Qt workspace has four pages:
   Findings with only a saved date offer explicitly labelled related records,
   rather than claiming a source relationship that was never recorded.
 - **Generate reports**: open `result.json` from an earlier run to preserve
-  its original calculations and valuation date. Excel imports are also
-  supported, with explicit review notes about their limited provenance.
+  its original calculations and valuation date. To correct or exclude records,
+  edit the workbook's **Review & Corrections** table, then select that `.xlsx`
+  here to rebuild the analysis and bundle. Older workbooks import with explicit
+  notes about their limited provenance.
   Report settings remember the chosen formats and sections.
 - **Preferences**: account and sender filters, extraction methods, duplicate
   handling and SAP reconciliation. Existing settings are restored from
@@ -329,13 +331,67 @@ A `tests/test_dispatch_parity.py` structural test pins the invariant that the PD
 
 Removing a section: same steps in reverse.
 
+## Review and correct in Excel
+
+Every new workbook opens on **Start here**, with navigation and instructions.
+Use **Review & Corrections** to fix invoice references, dates, account/meter
+identifiers, charges, balances, signed transactions, consumption, rates or notes.
+Pale green cells are editable; grey source fields and the hidden row ID identify
+the original record. Give a reason for each change. Set **Include = No** to
+exclude a record; keep the row so the decision remains traceable. To sort the
+whole table in Excel, use **Review → Unprotect Sheet** first (no password).
+
+Balances and transactions have different meanings. A period-charge correction
+also updates a transaction that previously matched that charge, unless you edit
+the transaction explicitly. Payments and credits are negative transactions;
+refunds are positive. Blank amounts remain unknown, including after regeneration.
+Use real Excel dates, `DD/MM/YYYY` or `YYYY-MM-DD`, and paste values rather than
+formulas. Keep identifiers formatted as Text to preserve leading zeroes.
+
+Save an amended copy beside `evidence_files/`, then use **Generate reports**.
+The app preserves the original valuation date, analysis settings, original
+extraction observations, SAP data and source identities, recalculates all models,
+and writes a **new** pack with an updated workbook. The old pack and input
+spreadsheet remain untouched. **Review history** records before/after values and
+reasons across repeated review rounds. Previously excluded rows remain in the
+table and can be reinstated. Their original files are recoverable while the
+earlier pack is available; otherwise missing evidence is reported.
+
+Summary, evidence, SAP and filtered tabs are protected reference outputs. They
+show the last generated analysis until the app regenerates it; changing them
+does not provide a supported correction input. Import rejects changed reference
+values, formulas, missing/duplicate row IDs, malformed dates and unexplained
+changes with an actionable error. Adding manual records and editing SAP dump rows
+are outside this Excel workflow. Workbooks generated before this feature retain
+the older, explicitly lossy import path; export a fresh workbook from their
+`result.json` to obtain the full review workflow.
+
+Exclusions omit records from the new analysis and files referenced only by those
+records from the new source bundle. Shared PDFs remain whole, including pages
+belonging to excluded records. This is **not PDF redaction**: original extraction
+data and review history also remain in the saved analysis. Keep original packs
+for provenance and prepare a separately redacted pack when needed. Workbook
+protection and payload checksums detect mistakes; they are not encryption or
+digital signatures. Sources are linked, not embedded in Excel.
+
+The same workflow is available without the desktop:
+
+```bash
+edf-collector --review-workbook --workbook amended.xlsx --output-dir reviewed-packs
+# Optionally select document formats; an updated Excel workbook is always included.
+edf-collector --review-workbook -i amended.xlsx -o reviewed-packs --formats xlsx,html
+```
+
 ## Output Sheets (Excel)
 
 Sheets are written in roughly this order; conditional sheets only appear when their gating input is non-empty and the relevant toggle is on:
 
 | Sheet | When emitted | Description |
 | --- | --- | --- |
-| **Provenance** | always (first tab) | Tool version, generation timestamp, account reference, record counts, and a full snapshot of the run configuration — so a filed workbook is self-documenting about how its conclusions were produced |
+| **Start here** | always (first tab) | Review instructions, analysis date, included/excluded counts and navigation |
+| **Review & Corrections** | always | Validated editable inputs, inclusion decisions, reasons and source links |
+| **Review history** | always | Before/after values, reasons and lineage for imported review decisions |
+| **Provenance** | always | Tool version, generation timestamp, account reference, record counts, and a full snapshot of the run configuration — so a filed workbook is self-documenting about how its conclusions were produced |
 | **Annual Summary** | always | Yearly balance range, average, peak, low |
 | **EDF Evidence Report** | always | All extracted records with live formulas |
 | **Duplicate Entries** | `use_dedup and save_dups` (default on/ off respectively) | Deduplicated records, retained for audit so the dropped siblings are visible |

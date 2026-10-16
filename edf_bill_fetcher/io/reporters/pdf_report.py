@@ -2019,7 +2019,11 @@ def render_pdf(view: ReportView, output_path: str) -> str:
     filtered = engine.filtered_records
     df = view.frame()
     if df.empty:
-        raise ValueError("No records to report on")
+        if not view.review_notice:
+            raise ValueError("No records to report on")
+        from edf_bill_fetcher.io.reporters.review_empty import render_empty_review
+
+        return render_empty_review(view, output_path, "pdf")
 
     # Validate required parameters — create a minimal engine if not provided
     # (CLI usage without --engine-data should still work)
@@ -2108,6 +2112,8 @@ def render_pdf(view: ReportView, output_path: str) -> str:
         elements.append(NextPageTemplate("content"))
         elements.append(PageBreak())
 
+    if view.review_notice:
+        elements.append(Paragraph(xml_escape(view.review_notice), STYLES["BodyText"]))
     if view.ocr_notice:
         elements.append(Paragraph(xml_escape(view.ocr_notice), STYLES["BodyText"]))
         elements.append(Spacer(1, 0.3 * cm))

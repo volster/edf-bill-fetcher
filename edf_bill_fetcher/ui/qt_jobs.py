@@ -51,43 +51,10 @@ class DesktopJob:
 
 
 def read_workbook(path: str) -> tuple[list[dict], dict, str | None]:
-    """Import workbook rows with an explicit warning about lost extraction provenance."""
-    import pandas as pd
+    """Use the shared Excel review/legacy import adapter."""
+    from edf_bill_fetcher.io.review_workbook import read_workbook as read
 
-    from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
-
-    with pd.ExcelFile(path) as workbook:
-        records = pd.read_excel(workbook, sheet_name="EDF Evidence Report").to_dict("records")
-        metadata = {}
-        if "Provenance" in workbook.sheet_names:
-            frame = pd.read_excel(workbook, sheet_name="Provenance", header=None)
-            metadata = {
-                str(row[0]): to_snapshot_json(row[1])
-                for row in frame.itertuples(index=False, name=None)
-                if len(row) > 1 and pd.notna(row[0])
-            }
-        filtered = (
-            pd.read_excel(workbook, sheet_name="Filtered (Below Min)").to_dict("records")
-            if "Filtered (Below Min)" in workbook.sheet_names
-            else []
-        )
-    return (
-        records,
-        {
-            "records": records,
-            "filtered_records": filtered,
-            "pdf_count": 0,
-            "email_count": 0,
-            "source_manifest": {},
-            "imported_workbook": path,
-            "imported_workbook_metadata": metadata,
-            "provenance": "lossy_workbook_import",
-            "error_log": [
-                "Workbook import: original observations, source files and analytical decisions are unavailable."
-            ],
-        },
-        str(metadata["as_of"]) if metadata.get("as_of") else None,
-    )
+    return read(path)
 
 
 class RunWorker(QThread):
@@ -138,7 +105,7 @@ class RunWorker(QThread):
             elif job.mode == "workbook":
                 self.progress.emit("Reading workbook…")
                 records, state, as_of = read_workbook(job.input_path)
-                cfg = object_value(request.config)
+                cfg = state.get("review_config", object_value(request.config))
                 cfg["as_of"] = as_of or request.as_of.isoformat()
                 request = replace(
                     request, as_of=date.fromisoformat(cfg["as_of"]), config=freeze_json(cfg)
@@ -162,6 +129,10 @@ class RunWorker(QThread):
                     engine.cleanup()
 
             def bundle(prepared):
+                if imported is not None and "human_review" in imported[1]:
+                    from edf_bill_fetcher.application.workbook_review import bundle_review_sources
+
+                    return bundle_review_sources(prepared, job.directory, job.input_path)
                 return bundle_engine_sources(
                     engine,
                     prepared,
@@ -175,7 +146,9 @@ class RunWorker(QThread):
                 result_path=result_path,
                 manifest_path=manifest_path,
                 collect=collect,
-                copy_sources=bundle if job.mode == "extract" else None,
+                copy_sources=bundle
+                if job.mode == "extract" or (imported is not None and "human_review" in imported[1])
+                else None,
                 cleanup=cleanup,
                 cancelled=self.cancel_event.is_set,
                 progress=lambda event: self.progress.emit(

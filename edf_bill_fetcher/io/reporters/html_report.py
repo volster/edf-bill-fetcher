@@ -1004,7 +1004,11 @@ def render_html(view: ReportView, output_path: str) -> str:
     filtered = engine.filtered_records
     df = view.frame()
     if df.empty:
-        raise ValueError("No records to report on")
+        if not view.review_notice:
+            raise ValueError("No records to report on")
+        from edf_bill_fetcher.io.reporters.review_empty import render_empty_review
+
+        return render_empty_review(view, output_path, "html")
 
     if engine is None:
 
@@ -1071,6 +1075,8 @@ def render_html(view: ReportView, output_path: str) -> str:
             )
         )
 
+    if view.review_notice:
+        body_parts.append(_note(_esc(view.review_notice)))
     if view.ocr_notice:
         body_parts.append(_note(_esc(view.ocr_notice)))
 

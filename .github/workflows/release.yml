@@ -136,7 +136,7 @@ jobs:
             echo "WARNING: No signed executable found to verify"
           fi
 
-      - name: Verify bundled OCR on an image-only bill
+      - name: Verify bundled OCR and Excel corrections on an image-only bill
         run: python .github/scripts/check_frozen_ocr.py
 
       - name: Record build dependencies

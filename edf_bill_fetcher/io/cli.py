@@ -701,10 +701,41 @@ def run_cli_html_report(args: list[str]) -> None:
         sys.exit(1)
 
 
+def run_cli_review(args: list[str]) -> None:
+    """Regenerate a fresh evidence pack from an amended review workbook."""
+    from edf_bill_fetcher.application.workbook_review import regenerate_workbook
+
+    parser = argparse.ArgumentParser(prog="edf-collector --review-workbook")
+    parser.add_argument("--workbook", "-i", required=True, help="Amended EDF review .xlsx")
+    parser.add_argument(
+        "--output-dir", "-o", required=True, help="Parent folder for a new reviewed pack"
+    )
+    parser.add_argument(
+        "--formats",
+        default="xlsx,pdf,docx,html",
+        help="Comma-separated formats; an updated xlsx is always included",
+    )
+    parsed = parser.parse_args(args)
+    try:
+        directory, outcome = regenerate_workbook(
+            parsed.workbook, parsed.output_dir, formats=tuple(parsed.formats.split(","))
+        )
+        print(f"Reviewed pack: {directory}")
+        print(f"Status: {outcome.status}")
+        if outcome.error:
+            raise ValueError(outcome.error)
+    except Exception as error:
+        sys.stderr.write(f"ERROR: {error}\n")
+        sys.exit(1)
+
+
 def main() -> None:
     """Entry point for the EDF Evidence Collector CLI."""
     if len(sys.argv) > 1:
-        if sys.argv[1] in ("--pdf-report", "--report", "-r"):
+        if sys.argv[1] == "--review-workbook":
+            run_cli_review(sys.argv[2:])
+            return
+        elif sys.argv[1] in ("--pdf-report", "--report", "-r"):
             run_cli_pdf_report(sys.argv[2:])
             return
         elif sys.argv[1] in ("--docx-report", "--word-report", "-w"):

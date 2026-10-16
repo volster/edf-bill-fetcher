@@ -1354,6 +1354,10 @@ def render_xlsx(
 
     _reorder_sheets(wb)
 
+    from edf_bill_fetcher.io.review_workbook import write_review_sheets
+
+    write_review_sheets(wb, view, saved_links)
+
     try:
         wb.save(output_path)
     except FileNotFoundError:

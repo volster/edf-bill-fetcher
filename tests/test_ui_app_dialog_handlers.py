@@ -1058,10 +1058,9 @@ class TestLoadSpreadsheetAndReport:
     ) -> None:
         monkeypatch.setattr(app_module, "HAS_PDF_REPORT", True)
         with patch("tkinter.filedialog.askopenfilename", return_value="/tmp/fake.xlsx"):
-            with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
-                mock_df = MagicMock()
-                mock_df.empty = True
-                mock_pd.read_excel.return_value = mock_df
+            with patch(
+                "edf_bill_fetcher.io.review_workbook.read_workbook", return_value=([], {}, None)
+            ):
                 with patch("tkinter.messagebox.showwarning") as mock_warn:
                     app.load_spreadsheet_and_report()
                     mock_warn.assert_called_once()
@@ -1127,21 +1126,54 @@ class TestLoadSpreadsheetAndReport:
         fake_xlsx = tmp_path / "source.xlsx"
         fake_xlsx.write_text("")
         with patch("tkinter.filedialog.askopenfilename", return_value=str(fake_xlsx)):
-            with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
-                mock_df = MagicMock()
-                mock_df.empty = False
-                mock_df.to_dict.return_value = [{"Amount": 100}]
-                mock_pd.read_excel.return_value = mock_df
+            with patch(
+                "edf_bill_fetcher.io.review_workbook.read_workbook",
+                return_value=([{"Amount": 100}], {}, None),
+            ):
                 with patch("tkinter.messagebox.showwarning") as mock_warn:
                     app.load_spreadsheet_and_report()
                     mock_warn.assert_called_once()
                     assert mock_warn.call_args[0][0] == "No Reports"
 
+    def test_review_workbook_rebuilds_pack_in_legacy_desktop(
+        self, app: App, tmp_path: Path
+    ) -> None:
+        from openpyxl import load_workbook
+
+        from edf_bill_fetcher.io.review_workbook import HEADERS, REVIEW_SHEET
+        from edf_bill_fetcher.io.writers.export import render_xlsx
+        from edf_bill_fetcher.models.report_view import capture_report_view
+
+        source = tmp_path / "review.xlsx"
+        view = capture_report_view(_bill_records(), {"as_of": "2026-01-31"}, formats=("xlsx",))
+        render_xlsx(view, str(source))
+        workbook = load_workbook(source)
+        workbook[REVIEW_SHEET].cell(5, HEADERS.index("Period Charge (£)") + 1, 85)
+        workbook[REVIEW_SHEET].cell(5, 2, "Verified source")
+        workbook.save(source)
+        app._report_options = {"format": "html", "sections": ["exec_summary"]}
+        app.analysis_min.set(999999)
+        with patch.object(app_module.threading, "Thread", _SyncThread):
+            with patch("tkinter.filedialog.askopenfilename", return_value=str(source)):
+                with patch("tkinter.messagebox.showinfo") as notice:
+                    app.load_spreadsheet_and_report()
+                    app._poll_events()
+        assert notice.call_args[0][0] == "Reviewed Pack Generated"
+        directory = next(tmp_path.glob("review_report_*"))
+        result = json.loads((directory / "result.json").read_text(encoding="utf-8"))
+        manifest = json.loads((directory / "run.json").read_text(encoding="utf-8"))
+        assert result["analysis"]["summary"]["charges"] == "85.00"
+        assert result["request"]["as_of"] == "2026-01-31"
+        assert set(manifest["artifacts"]) == {"html", "xlsx"}
+        assert (directory / "evidence_manifest.json").is_file()
+
     def test_load_error_on_exception(self, app: App, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(app_module, "HAS_PDF_REPORT", True)
         with patch("tkinter.filedialog.askopenfilename", return_value="/tmp/fake.xlsx"):
-            with patch("edf_bill_fetcher.ui.app.pd") as mock_pd:
-                mock_pd.read_excel.side_effect = RuntimeError("boom")
+            with patch(
+                "edf_bill_fetcher.io.review_workbook.read_workbook",
+                side_effect=RuntimeError("boom"),
+            ):
                 with patch("tkinter.messagebox.showerror") as mock_err:
                     app.load_spreadsheet_and_report()
                     mock_err.assert_called_once()

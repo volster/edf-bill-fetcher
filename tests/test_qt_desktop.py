@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QLineEdit,
     QPlainTextEdit,
@@ -582,6 +583,43 @@ def test_export_failure_keeps_saved_analysis_and_reports_partial_artifacts(
     assert "saved analysis is available" in window.feedback.text()
     assert window.status.text() == "Run needs attention"
     assert window.details_button.isVisible()
+
+
+def test_amended_review_workbook_rebuilds_analysis_with_saved_settings(
+    window, application, tmp_path
+):
+    from openpyxl import load_workbook
+
+    from edf_bill_fetcher.io.review_workbook import HEADERS, REVIEW_SHEET
+    from edf_bill_fetcher.io.writers.export import render_xlsx
+    from edf_bill_fetcher.models.report_view import RenderSelection, build_report_view
+
+    path = tmp_path / "review.xlsx"
+    render_xlsx(build_report_view(result_snapshot(), RenderSelection(("xlsx",))), str(path))
+    workbook = load_workbook(path)
+    sheet = workbook[REVIEW_SHEET]
+    sheet.cell(5, HEADERS.index("Period Charge (£)") + 1, 85)
+    sheet.cell(5, 2, "Verified source charge")
+    workbook.save(path)
+    original = path.read_bytes()
+    window._navigate(1)
+    window.report_input.entry.setText(str(path))
+    window.report_options = {"format": "html", "sections": ["exec_summary"]}
+    minimum = window.fields["analysis_min"]
+    assert isinstance(minimum, QDoubleSpinBox)
+    minimum.setValue(999999)
+    outcome = execute(window.capture_job(), application)
+    assert outcome.error is None
+    assert outcome.snapshot is not None
+    assert outcome.snapshot.summary.charges == 85
+    assert outcome.snapshot.prepared.extraction.request.as_of == date(2026, 1, 31)
+    assert object_value(outcome.snapshot.prepared.effective_config).get("analysis_min", 0) == 0
+    manifest = object_value(outcome.manifest)
+    assert set(manifest["artifacts"]) == {"xlsx", "html"}
+    state = object_value(outcome.snapshot.prepared.extraction.legacy_state)
+    assert state["provenance"] == "reviewed_workbook"
+    assert len(state["review_history"]) == 2
+    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize("close", [False, True])

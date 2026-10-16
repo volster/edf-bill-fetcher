@@ -1464,7 +1464,11 @@ def render_docx(view: ReportView, output_path: str) -> str:
     filtered = engine.filtered_records
     df = view.frame()
     if df.empty:
-        raise ValueError("No records to report on")
+        if not view.review_notice:
+            raise ValueError("No records to report on")
+        from edf_bill_fetcher.io.reporters.review_empty import render_empty_review
+
+        return render_empty_review(view, output_path, "docx")
 
     # Validate required parameters — create a minimal engine if not provided
     # (CLI usage without --engine-data should still work)
@@ -1561,6 +1565,8 @@ def render_docx(view: ReportView, output_path: str) -> str:
             doc, styles, acc_ref, period_start, period_end, datetime.now().strftime("%d %B %Y")
         )
 
+    if view.review_notice:
+        doc.add_paragraph(view.review_notice)
     if view.ocr_notice:
         doc.add_paragraph(view.ocr_notice)
 

@@ -171,9 +171,11 @@ def test_single_row_workbook_sheets_are_reordered(tmp_path: object) -> None:
     )
     export_to_excel(df, str(out), error_log=[], config=config)
     wb = load_workbook(out)
-    # Raw creation order would be ["Annual Summary", "Provenance",
-    # "EDF Evidence Report"]; the reorder must put Provenance first.
-    assert wb.sheetnames[:3] == [
+    # The review workspace precedes the consistently ordered reference tabs.
+    assert wb.sheetnames[:6] == [
+        "Start here",
+        "Review & Corrections",
+        "Review history",
         "Provenance",
         "Annual Summary",
         "EDF Evidence Report",

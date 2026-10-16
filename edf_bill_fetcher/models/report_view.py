@@ -75,6 +75,21 @@ class ReportView:
         return rows_value(self.snapshot.prepared.duplicates)
 
     @property
+    def review_notice(self) -> str | None:
+        """Disclose human corrections and exclusions in every regenerated report."""
+        state = object_value(self.snapshot.prepared.extraction.legacy_state)
+        if "human_review" not in state:
+            return None
+        excluded = len(state.get("review_excluded_records", []))
+        changes = len(state.get("review_history", []))
+        return (
+            f"Human-reviewed analysis: {changes} recorded field/inclusion changes; "
+            f"{excluded} records currently excluded. The workbook Review history and result.json "
+            "preserve reasons and original extraction data. Shared source PDFs remain whole; "
+            "record exclusions do not redact pages."
+        )
+
+    @property
     def ocr_notice(self) -> str | None:
         """Keep OCR limitations visible even when optional report sections are hidden."""
         manifest = object_value(self.snapshot.prepared.extraction.legacy_state).get(

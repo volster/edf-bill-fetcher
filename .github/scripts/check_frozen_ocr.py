@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from openpyxl import load_workbook
+
 candidates = [
     Path("dist/EDF_Evidence_Collector.app/Contents/MacOS/EDF_Evidence_Collector"),
     Path("dist/EDF_Evidence_Collector.exe" if os.name == "nt" else "dist/EDF_Evidence_Collector"),
@@ -51,3 +53,36 @@ with tempfile.TemporaryDirectory(prefix="edf-frozen-ocr-") as directory:
     assert row["OCR Pages"] == [1], row
     assert row["OCR Review Required"] is True, row
     assert result["status"] == "review_required", result["status"]
+
+    # Exercise the delivered binary's Excel round trip too: the amended charge
+    # must rebuild analysis without changing the source OCR observations.
+    workbook_path = root / "report.xlsx"
+    workbook = load_workbook(workbook_path)
+    review = workbook["Review & Corrections"]
+    headers = {cell.value: cell.column for cell in review[4]}
+    review.cell(5, headers["Period Charge (£)"], 140)
+    review.cell(5, headers["Reason for change"], "Frozen-build review smoke test")
+    workbook.save(workbook_path)
+    workbook.close()
+    subprocess.run(
+        [
+            str(executable),
+            "--review-workbook",
+            "--workbook",
+            str(workbook_path),
+            "--output-dir",
+            str(root / "reviewed"),
+            "--formats",
+            "xlsx,html",
+        ],
+        env=environment,
+        check=True,
+        timeout=180,
+    )
+    reviewed_path = next((root / "reviewed").glob("reviewed_*/result.json"))
+    reviewed = json.loads(reviewed_path.read_text(encoding="utf-8"))
+    assert reviewed["analysis"]["summary"]["charges"] == "140.00", reviewed["analysis"]["summary"]
+    assert reviewed["evidence"]["observations"][0]["raw"]["Period Charge (£)"] == 125
+    assert len(reviewed["evidence"]["legacy_state"]["review_history"]) == 2
+    assert (reviewed_path.parent / "Reviewed_Evidence.xlsx").is_file()
+    assert (reviewed_path.parent / "Reviewed_Evidence_Report.html").is_file()

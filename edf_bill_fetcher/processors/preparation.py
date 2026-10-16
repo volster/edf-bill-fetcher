@@ -98,10 +98,11 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         else:
             role = "Unknown"
     balance = money(row.get("Balance (£)"))
-    if balance is None and role == "Balance":
+    explicit = row.get("Review Explicit Amounts") is True
+    if balance is None and role == "Balance" and not explicit:
         balance = amount
     transaction = money(row.get("Transaction Amount (£)"))
-    if transaction is None:
+    if transaction is None and not explicit:
         if kind in {"Payment", "Credit"}:
             event_amount = (
                 charge if charge is not None else amount if role == "Transaction" else None

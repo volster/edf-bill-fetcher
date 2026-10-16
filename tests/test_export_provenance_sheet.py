@@ -108,12 +108,17 @@ def _provenance_sheet_rows(tmp_path: Path) -> dict[str, str]:
     return rows
 
 
-def test_provenance_sheet_exists_and_is_first(tmp_path: object) -> None:
-    """Full path: Provenance is present and is the opening tab."""
+def test_provenance_sheet_follows_review_workspace(tmp_path: object) -> None:
+    """Provenance remains prominent after the new review workspace tabs."""
     out = tmp_path / "prov.xlsx"  # type: ignore[operator]
     export_to_excel(_sample_df(), str(out), error_log=[], config=_config())
     wb = load_workbook(out)
-    assert wb.sheetnames[0] == "Provenance", wb.sheetnames
+    assert wb.sheetnames[:4] == [
+        "Start here",
+        "Review & Corrections",
+        "Review history",
+        "Provenance",
+    ], wb.sheetnames
 
 
 def test_provenance_records_tool_version(tmp_path: object) -> None:

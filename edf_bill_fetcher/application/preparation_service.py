@@ -10,8 +10,14 @@ from edf_bill_fetcher.processors.preparation import prepare_evidence
 
 def prepare_snapshot(extraction: ExtractionSnapshot) -> PreparedSnapshot:
     """Resolve canonical rows without mutating captured originals or reading a clock."""
+    inputs = [object_value(row.raw) for row in extraction.observations]
+    state = object_value(extraction.legacy_state)
+    if "human_review" in state:
+        from edf_bill_fetcher.application.record_review import apply_review
+
+        inputs, _ = apply_review(state["human_review"])
     prepared = prepare_evidence(
-        [object_value(row.raw) for row in extraction.observations],
+        inputs,
         object_value(extraction.request.config),
     )
     return PreparedSnapshot(

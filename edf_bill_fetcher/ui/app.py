@@ -16,8 +16,6 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any, cast
 
-import pandas as pd
-
 from edf_bill_fetcher.models.config import ConfigDict
 
 try:
@@ -934,8 +932,11 @@ class App:
             return
 
         try:
-            df = pd.read_excel(file_path, sheet_name="EDF Evidence Report")
-            if df.empty:
+            from edf_bill_fetcher.io.review_workbook import read_workbook
+
+            records, state, as_of = read_workbook(file_path)
+            reviewed = "human_review" in state
+            if not records and not reviewed:
                 self._show(
                     "warning",
                     "No Data",
@@ -943,7 +944,6 @@ class App:
                 )
                 return
 
-            records = df.to_dict("records")
             ro = getattr(self, "_report_options", {})
             fmt = ro.get("format", "both")
             sections = ro.get("sections", [s[0] for s in ReportOptionsDialog.SECTIONS])
@@ -969,6 +969,9 @@ class App:
                 )
                 return
 
+            if reviewed:
+                output_paths["xlsx"] = os.path.join(run_dir, stem + "_Reviewed.xlsx")
+
             self.set_status("Generating report…")
             self.load_report_btn.config(state="disabled")
 
@@ -987,25 +990,10 @@ class App:
             from edf_bill_fetcher.domain.json_values import freeze_json
             from edf_bill_fetcher.domain.requests import RunRequest
             from edf_bill_fetcher.models.report_view import RenderSelection
-            from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
 
-            # Workbook cells are a presentation export; preserve available context,
-            # but do not claim these rows are the original extraction evidence.
-            workbook_metadata = {}
-            with pd.ExcelFile(file_path) as workbook:
-                if "Provenance" in workbook.sheet_names:
-                    metadata_frame = pd.read_excel(workbook, sheet_name="Provenance", header=None)
-                    workbook_metadata = {
-                        str(row[0]): to_snapshot_json(row[1])
-                        for row in metadata_frame.itertuples(index=False, name=None)
-                        if len(row) > 1 and pd.notna(row[0])
-                    }
-                filtered = (
-                    pd.read_excel(workbook, sheet_name="Filtered (Below Min)").to_dict("records")
-                    if "Filtered (Below Min)" in workbook.sheet_names
-                    else []
-                )
-            config["as_of"] = str(workbook_metadata.get("as_of") or date.today().isoformat())
+            if reviewed:
+                config = state["review_config"]
+            config["as_of"] = as_of or date.today().isoformat()
             captured = RunRequest(
                 uuid4().hex,
                 datetime.now(timezone.utc),
@@ -1013,39 +1001,39 @@ class App:
                 (),
                 freeze_json(dict(config)),
             )
-            state = {
-                "records": records,
-                "filtered_records": filtered,
-                "pdf_count": 0,
-                "email_count": 0,
-                "source_manifest": {},
-                "imported_workbook": file_path,
-                "imported_workbook_metadata": workbook_metadata,
-                "provenance": "lossy_workbook_import",
-                "error_log": [
-                    "Workbook import: original observations, source files and analytical decisions are unavailable."
-                ],
-            }
             self.cancel_event.clear()
             self._set_extract_running()
 
             def _generate():
                 try:
+                    from edf_bill_fetcher.application.workbook_review import bundle_review_sources
+
                     outcome = run(
                         captured,
                         output_paths,
                         result_path=os.path.join(run_dir, "result.json"),
                         manifest_path=os.path.join(run_dir, "run.json"),
                         collect=lambda: (records, state),
+                        copy_sources=(
+                            lambda prepared: bundle_review_sources(prepared, run_dir, file_path)
+                        )
+                        if reviewed
+                        else None,
                         cancelled=self.cancel_event.is_set,
                         progress=lambda event: self.set_status(event.message),
                         selection=RenderSelection(tuple(output_paths), tuple(sections)),
                     )
                     if outcome.status in {"complete", "review_required"}:
                         self._show(
-                            "warning",
-                            "Reports Generated — Workbook Import",
-                            "Imported workbook rows have limited provenance. Original source evidence was not recovered.\n\n"
+                            "info" if reviewed and outcome.status == "complete" else "warning",
+                            "Reviewed Pack Generated"
+                            if reviewed
+                            else "Reports Generated — Workbook Import",
+                            (
+                                "Review decisions applied. A new workbook, reports and source bundle were saved. Check run.json for source warnings.\n\n"
+                                if reviewed
+                                else "Imported workbook rows have limited provenance. Original source evidence was not recovered.\n\n"
+                            )
                             + "\n".join(output_paths.values()),
                         )
                     else:
