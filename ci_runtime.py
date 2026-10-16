@@ -12,6 +12,8 @@ import tempfile
 import traceback
 from pathlib import Path
 
+from ci_tk import windows_tk_startup_retry
+
 
 def runtime_info() -> dict:
     """Collect an allowlist of runtime details without dumping environment secrets."""
@@ -118,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     save()
     try:
         if not args.inventory:
-            report["tk"] = check_tk()
+            with windows_tk_startup_retry():
+                report["tk"] = check_tk()
             save()
             report["qt"] = check_qt()
         report["status"] = "success"

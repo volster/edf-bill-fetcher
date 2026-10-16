@@ -15,6 +15,15 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(scope="session", autouse=True)
+def native_windows_tk_runtime():
+    """Recover only verified transient library reads before a native Tk root exists."""
+    from ci_tk import windows_tk_startup_retry
+
+    with windows_tk_startup_retry():
+        yield
+
+
 @pytest.fixture(autouse=True)
 def forbid_unmocked_dialogs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail on an uncontrolled modal instead of hanging CI waiting for a click.

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import struct
-import sys
 import tkinter as tk
 from collections.abc import Iterator
 from datetime import datetime
@@ -311,14 +310,6 @@ class TestCliEmlDirEndToEnd:
 # GUI source selector
 # ---------------------------------------------------------------------------
 
-pytestmark_gui = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason=(
-        "Windows CI intermittently fails with _tkinter.TclError: "
-        "invalid command name 'tcl_findLibrary'"
-    ),
-)
-
 
 def _walk_children(widget: tk.Misc) -> Iterator[tk.Misc]:
     for child in widget.winfo_children():
@@ -340,7 +331,6 @@ def _all_widget_text(widget: tk.Misc) -> list[str]:
     return texts
 
 
-@pytestmark_gui
 def test_gui_eml_msg_folder_source_appears(monkeypatch: pytest.MonkeyPatch) -> None:
     """Section 1 exposes an "EML/MSG Folder" selector backed by a StringVar."""
     from edf_bill_fetcher.ui.app import App
