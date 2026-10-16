@@ -212,3 +212,42 @@ def test_correction_and_revision_controls_remain_reachable(
         assert page.details_tabs.height() >= 100
     finally:
         application.setStyleSheet(stylesheet)
+
+
+def test_loading_another_analysis_locks_edits_even_when_selection_changes(
+    window, application, pack, monkeypatch
+):
+    from threading import Event
+
+    from edf_bill_fetcher.ui import qt_review
+
+    _, path, _, _, _ = pack
+    open_pack(window, application, path)
+    page = window.review_page
+    choose(page, "B1")
+    entered, release = Event(), Event()
+    original = qt_review.build_evidence_review
+
+    def delayed(*args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(qt_review, "build_evidence_review", delayed)
+    try:
+        page.load_analysis(str(path))
+        wait_until(application, entered.is_set)
+        assert not page.editor.isEnabled()
+        assert not page.revisions.isEnabled()
+        assert not page.regenerate.isEnabled()
+        choose(page, "B2")
+        assert not page.editor.isEnabled()
+        assert not page.revisions.isEnabled()
+        release.set()
+        wait_until(application, lambda: not page.has_workers())
+        assert page.editor.isEnabled()
+        assert page.revisions.isEnabled()
+        assert page.regenerate.isEnabled()
+    finally:
+        release.set()
+        wait_until(application, lambda: not page.has_workers())

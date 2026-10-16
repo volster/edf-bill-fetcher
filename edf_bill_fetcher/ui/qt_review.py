@@ -642,6 +642,7 @@ class EvidenceReviewPage(QWidget):
         worker.loaded.connect(self._loaded)
         worker.failed.connect(self._load_failed)
         worker.finished.connect(self._load_finished)
+        self._review_controls()
         worker.start()
         self.changed.emit()
 
@@ -1025,6 +1026,8 @@ class EvidenceReviewPage(QWidget):
 
     def _review_controls(self) -> None:
         ready = self.session is not None and self.loader is None and self.impact_worker is None
+        self.editor.setEnabled(ready and bool(self.editor.row_id))
+        self.revisions.setEnabled(ready)
         self.edit_record.setEnabled(ready and bool(self.editor.row_id))
         self.undo_button.setEnabled(ready and bool(self.session and self.session.undo_stack))
         self.redo_button.setEnabled(ready and bool(self.session and self.session.redo_stack))
