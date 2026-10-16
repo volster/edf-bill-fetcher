@@ -78,8 +78,10 @@ python ci_runtime.py       # Linux: xvfb-run -a python ci_runtime.py
 python ci_pytest.py        # Linux: xvfb-run -a python ci_pytest.py
 ```
 
-`pythonLocation`, when set by setup-python, must identify the interpreter that
-actually runs the job. Invoke pip, pytest, Ruff, mypy and PyInstaller through
+The preflight runs setup-python’s explicit `python-path` output directly.
+macOS framework Python can have a different `sys.prefix` from `pythonLocation`;
+those directory strings must not be compared as an identity check. Invoke pip,
+pytest, Ruff, mypy and PyInstaller through
 `python -m` to keep tools attached to that interpreter.
 
 `.github/ci-constraints.txt` pins CI/build tools to the reviewed versions;

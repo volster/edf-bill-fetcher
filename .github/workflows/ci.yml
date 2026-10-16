@@ -46,6 +46,7 @@ jobs:
       # Use the same CPython distribution for tests and executable builds.
       # Keep Tcl/Tk in its installed tree: no Conda PATH rewriting or temp mirror.
       - name: Set up Python ${{ matrix.python-version }}
+        id: python
         uses: actions/setup-python@v6.1.0
         with:
           python-version: ${{ matrix.python-version }}
@@ -55,7 +56,8 @@ jobs:
             .github/ci-constraints.txt
 
       - name: Record Python runtime
-        run: python ci_runtime.py --inventory --report .ci-diagnostics/python.json
+        run: >-
+          "${{ steps.python.outputs.python-path }}" ci_runtime.py --inventory --report .ci-diagnostics/python.json
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -106,11 +108,12 @@ jobs:
 
       - name: Check GUI runtimes (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run -a python ci_runtime.py
+        run: xvfb-run -a "${{ steps.python.outputs.python-path }}" ci_runtime.py
 
       - name: Check GUI runtimes (Windows / macOS)
         if: runner.os != 'Linux'
-        run: python ci_runtime.py
+        run: >-
+          "${{ steps.python.outputs.python-path }}" ci_runtime.py
 
       - name: Run tests with coverage (Linux)
         if: runner.os == 'Linux'

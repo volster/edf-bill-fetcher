@@ -1,7 +1,6 @@
 """Runtime failures must leave useful diagnostics without leaking environment values."""
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -60,41 +59,23 @@ def test_failed_native_library_probe_retains_runtime_and_traceback(
         assert report["tk"] == {"tcl": "checked"}
 
 
-def test_path_interpreter_mismatch_fails_before_gui_loading(
+def test_inventory_accepts_macos_framework_and_toolcache_prefix_differences(
     tmp_path, monkeypatch, isolated_runtime
 ):
-    monkeypatch.setenv("pythonLocation", str(tmp_path / "another-python"))
-    monkeypatch.setattr(
-        ci_runtime, "check_tk", lambda: pytest.fail("Loaded wrong interpreter's Tk")
-    )
-    path = tmp_path / "runtime.json"
-    assert ci_runtime.main(["--report", str(path)]) == 1
-    report = json.loads(path.read_text())
-    assert "pythonLocation" in report["error"]
-
-
-def test_matching_interpreter_location_is_accepted(tmp_path, monkeypatch, isolated_runtime):
-    monkeypatch.setenv("pythonLocation", str(Path(ci_runtime.sys.prefix).resolve()))
-    assert ci_runtime.main(["--inventory", "--report", str(tmp_path / "runtime.json")]) == 0
-
-
-@pytest.mark.parametrize("binary", ["bin/python", "python.exe"])
-def test_setup_python_prefix_supports_posix_and_windows_binary_layouts(
-    tmp_path, monkeypatch, isolated_runtime, binary
-):
-    prefix = tmp_path / "python"
-    monkeypatch.setenv("pythonLocation", str(prefix))
-    monkeypatch.setattr(ci_runtime.sys, "prefix", str(prefix))
-    monkeypatch.setattr(ci_runtime.sys, "executable", str(prefix / binary))
+    monkeypatch.setattr(ci_runtime.sys, "prefix", str(tmp_path / "framework-prefix"))
+    monkeypatch.setenv("pythonLocation", str(tmp_path / "toolcache-prefix"))
     assert ci_runtime.main(["--inventory", "--report", str(tmp_path / "runtime.json")]) == 0
 
 
 def test_actions_failure_annotation_escapes_traceback_lines(
     tmp_path, monkeypatch, isolated_runtime, capsys
 ):
+    def unavailable():
+        raise OSError("Native library cannot be read")
+
+    monkeypatch.setattr(ci_runtime, "check_tk", unavailable)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("pythonLocation", str(tmp_path / "wrong-prefix"))
-    assert ci_runtime.main(["--inventory", "--report", str(tmp_path / "runtime.json")]) == 1
+    assert ci_runtime.main(["--report", str(tmp_path / "runtime.json")]) == 1
     output = capsys.readouterr().out
     assert output.startswith("::error title=CI runtime preflight::")
     assert "%0A" in output

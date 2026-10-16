@@ -117,11 +117,6 @@ def main(argv: list[str] | None = None) -> int:
 
     save()
     try:
-        expected = os.environ.get("pythonLocation")
-        # setup-python exports the installation prefix. POSIX executables live
-        # in its bin/ directory; Windows executables live directly in it.
-        if expected and Path(sys.prefix).resolve() != Path(expected).resolve():
-            raise RuntimeError("Selected Python does not match setup-python's pythonLocation")
         if not args.inventory:
             report["tk"] = check_tk()
             save()

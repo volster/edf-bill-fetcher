@@ -40,6 +40,7 @@ jobs:
           ref: ${{ needs.validation.outputs.validated_sha }}
 
       - name: Set up Python 3.11
+        id: python
         uses: actions/setup-python@v6.1.0
         with:
           python-version: '3.11'
@@ -49,7 +50,8 @@ jobs:
             .github/ci-constraints.txt
 
       - name: Record Python runtime
-        run: python ci_runtime.py --inventory --report .ci-diagnostics/python.json
+        run: >-
+          "${{ steps.python.outputs.python-path }}" ci_runtime.py --inventory --report .ci-diagnostics/python.json
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -80,11 +82,12 @@ jobs:
 
       - name: Check GUI runtimes (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run -a python ci_runtime.py
+        run: xvfb-run -a "${{ steps.python.outputs.python-path }}" ci_runtime.py
 
       - name: Check GUI runtimes (Windows / macOS)
         if: runner.os != 'Linux'
-        run: python ci_runtime.py
+        run: >-
+          "${{ steps.python.outputs.python-path }}" ci_runtime.py
 
       - name: Build Executable
         shell: bash
