@@ -3,10 +3,39 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _publish_tk_recoveries() -> None:
+    """Publish outside pytest capture so recovered starts remain visible on GitHub."""
+    report = Path(".ci-diagnostics/tk-startup.jsonl")
+    if not report.is_file():
+        return
+    try:
+        events = [json.loads(line) for line in report.read_text(encoding="utf-8").splitlines()]
+        recovered = sum(event.get("recovered") is True for event in events)
+    except (OSError, ValueError, AttributeError):
+        sys.stderr.write("Could not summarize native Tk diagnostics; see the retained artifact.\n")
+        return
+    if recovered:
+        sys.stdout.write(
+            f"::warning title=Windows Tcl/Tk startup recovered::{recovered} native startup(s) "
+            "recovered after verified script reads; no tests were rerun. "
+            "See tk-startup.jsonl in the diagnostics artifact.\n"
+        )
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write(
+                f"### Native Tcl/Tk startup\n\n{len(events)} startup error(s); "
+                f"{recovered} recovered after one native-call retry. "
+                "Script readability and hashes are retained in `tk-startup.jsonl`. "
+                "The full suite ran once.\n\n"
+            )
 
 
 def main() -> int:
@@ -38,6 +67,7 @@ def main() -> int:
     (diagnostics / "attempts.json").write_text(
         json.dumps([{"attempt": 1, "exit_code": code}], indent=2) + "\n", encoding="utf-8"
     )
+    _publish_tk_recoveries()
     return code
 
 

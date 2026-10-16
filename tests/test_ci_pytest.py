@@ -48,3 +48,33 @@ def test_aborted_suite_cannot_publish_stale_results(tmp_path, monkeypatch):
     assert not Path("test-results.xml").exists()
     assert not Path("coverage.xml").exists()
     assert not Path(".ci-diagnostics/tests/attempt-1/test-results.xml").exists()
+
+
+def test_native_recovery_is_published_after_the_suite_without_changing_its_failure(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+
+    def execute(command):
+        Path(".ci-diagnostics/tk-startup.jsonl").write_text('{"recovered": true}\n')
+        return 1
+
+    monkeypatch.setattr(ci_pytest.subprocess, "call", execute)
+    assert ci_pytest.main() == 1
+    assert (
+        "::warning title=Windows Tcl/Tk startup recovered::1 native startup"
+        in capsys.readouterr().out
+    )
+    assert "The full suite ran once" in Path("summary.md").read_text()
+
+
+def test_malformed_native_diagnostics_do_not_replace_the_test_exit_code(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    def execute(command):
+        Path(".ci-diagnostics/tk-startup.jsonl").write_text("partial JSON\n")
+        return 2
+
+    monkeypatch.setattr(ci_pytest.subprocess, "call", execute)
+    assert ci_pytest.main() == 2
