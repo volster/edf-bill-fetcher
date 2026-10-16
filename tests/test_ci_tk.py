@@ -111,6 +111,29 @@ def test_repeated_library_failure_stays_fatal_after_one_retry(tmp_path):
     assert "retry_error" in evidence
 
 
+def test_files_are_verified_after_the_bounded_settling_delay(tmp_path, monkeypatch):
+    script = tmp_path / "button.tcl"
+    calls = []
+    delays = []
+
+    def settle(delay):
+        delays.append(delay)
+        script.write_text("# readable after a temporary lock settles")
+
+    def create():
+        calls.append(True)
+        if len(calls) == 1:
+            raise _error(script)
+        return "native interpreter"
+
+    monkeypatch.setattr(ci_tk.time, "sleep", settle)
+    assert (
+        ci_tk._create_with_retry(create, (), {}, tmp_path / "startup.jsonl") == "native interpreter"
+    )
+    assert delays == [0.25]
+    assert len(calls) == 2
+
+
 @pytest.mark.parametrize(("platform", "actions"), [("linux", "true"), ("win32", "false")])
 def test_guard_leaves_local_runs_and_other_platforms_untouched(monkeypatch, platform, actions):
     original = _tkinter.create

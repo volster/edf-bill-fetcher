@@ -46,6 +46,9 @@ def _create_with_retry(create: Callable[..., Any], args: tuple, kwargs: dict, re
             marker in detail for marker in ("no such file or directory", "permission denied")
         ):
             raise
+        # Let a transient read lock settle before verifying the files; a
+        # permanently absent or unreadable script still prevents any retry.
+        time.sleep(0.25)
         evidence = _script_evidence(error)
         retryable = bool(evidence) and all(item["readable"] for item in evidence)
         record = {
@@ -70,7 +73,6 @@ def _create_with_retry(create: Callable[..., Any], args: tuple, kwargs: dict, re
         if not retryable:
             save()
             raise
-        time.sleep(0.25)
         try:
             # Catching the first error does not rerun a fixture, test or app
             # operation. Only this native initialization call is repeated.
@@ -101,9 +103,10 @@ def windows_tk_startup_retry() -> Iterator[None]:
     import _tkinter
 
     original = _tkinter.create
+    report = Path(".ci-diagnostics/tk-startup.jsonl").resolve()
 
     def create(*args: Any, **kwargs: Any) -> Any:
-        return _create_with_retry(original, args, kwargs, Path(".ci-diagnostics/tk-startup.jsonl"))
+        return _create_with_retry(original, args, kwargs, report)
 
     _tkinter.create = create
     try:
