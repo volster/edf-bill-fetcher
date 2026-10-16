@@ -118,7 +118,9 @@ def main(argv: list[str] | None = None) -> int:
     save()
     try:
         expected = os.environ.get("pythonLocation")
-        if expected and Path(sys.executable).resolve().parent != Path(expected).resolve():
+        # setup-python exports the installation prefix. POSIX executables live
+        # in its bin/ directory; Windows executables live directly in it.
+        if expected and Path(sys.prefix).resolve() != Path(expected).resolve():
             raise RuntimeError("Selected Python does not match setup-python's pythonLocation")
         if not args.inventory:
             report["tk"] = check_tk()
@@ -130,6 +132,10 @@ def main(argv: list[str] | None = None) -> int:
         report["status"] = "failure"
         report["error"] = traceback.format_exc()
         traceback.print_exc()
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            detail = report["error"][-6000:]
+            detail = detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            sys.stdout.write("::error title=CI runtime preflight::" + detail + "\n")
         return 1
     finally:
         save()

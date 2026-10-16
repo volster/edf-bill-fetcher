@@ -11,6 +11,7 @@ import ci_runtime
 @pytest.fixture
 def isolated_runtime(monkeypatch):
     monkeypatch.delenv("pythonLocation", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(ci_runtime, "check_tk", lambda: {"tcl": "checked"})
     monkeypatch.setattr(ci_runtime, "check_qt", lambda: {"workspace": "opened"})
 
@@ -73,5 +74,28 @@ def test_path_interpreter_mismatch_fails_before_gui_loading(
 
 
 def test_matching_interpreter_location_is_accepted(tmp_path, monkeypatch, isolated_runtime):
-    monkeypatch.setenv("pythonLocation", str(Path(ci_runtime.sys.executable).resolve().parent))
+    monkeypatch.setenv("pythonLocation", str(Path(ci_runtime.sys.prefix).resolve()))
     assert ci_runtime.main(["--inventory", "--report", str(tmp_path / "runtime.json")]) == 0
+
+
+@pytest.mark.parametrize("binary", ["bin/python", "python.exe"])
+def test_setup_python_prefix_supports_posix_and_windows_binary_layouts(
+    tmp_path, monkeypatch, isolated_runtime, binary
+):
+    prefix = tmp_path / "python"
+    monkeypatch.setenv("pythonLocation", str(prefix))
+    monkeypatch.setattr(ci_runtime.sys, "prefix", str(prefix))
+    monkeypatch.setattr(ci_runtime.sys, "executable", str(prefix / binary))
+    assert ci_runtime.main(["--inventory", "--report", str(tmp_path / "runtime.json")]) == 0
+
+
+def test_actions_failure_annotation_escapes_traceback_lines(
+    tmp_path, monkeypatch, isolated_runtime, capsys
+):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("pythonLocation", str(tmp_path / "wrong-prefix"))
+    assert ci_runtime.main(["--inventory", "--report", str(tmp_path / "runtime.json")]) == 1
+    output = capsys.readouterr().out
+    assert output.startswith("::error title=CI runtime preflight::")
+    assert "%0A" in output
+    assert len(output.splitlines()) == 1
