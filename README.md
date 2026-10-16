@@ -667,6 +667,9 @@ This tool was created for personal use in an EDF billing dispute. It is provided
 
 CI defines Python 3.10 / 3.11 / 3.12 across Ubuntu, Windows and macOS. Check results for the actual revision; this document does not certify that matrix. Recorded local review checks and their limits are in [docs/REVIEW_FIXES.md](docs/REVIEW_FIXES.md). See [CHANGELOG.md](CHANGELOG.md) for the historical audit trail.
 
+See [CI troubleshooting](docs/CI.md) for Windows runtime checks, downloadable
+failure diagnostics, pinned runner/tool versions and the executable validation gates.
+
 ### Saved analysis and rerendering
 
 Every CLI/GUI extraction saves `result.json` (schema v3) and `run.json` in its unique run/source-bundle folder. The v3 result preserves original observations, prepared rows, duplicate decisions, captured configuration and valuation date, analytical methods, reference-data hash and all calculated models. Reports consume that saved analysis. JSON loading rejects duplicate keys, nonfinite numbers, inconsistent identities/dates and unsupported versions.

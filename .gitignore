@@ -82,3 +82,7 @@ scratch/
 # superpowers/ subtree is internal-only planning material that
 # should not be visible in a public docs tree.
 docs/superpowers/
+
+# CI reports and runtime manifests
+.ci-diagnostics/
+test-results.xml

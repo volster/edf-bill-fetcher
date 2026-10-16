@@ -15,293 +15,47 @@ permissions:
   actions: read
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   QT_QPA_PLATFORM: offscreen
+
+defaults:
+  run:
+    # Git Bash is available on Windows too. Its -e/pipefail behavior prevents
+    # a later successful command from hiding a pip/tool installation failure.
+    shell: bash
 
 jobs:
   test:
     name: Test (Python ${{ matrix.python-version }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-2025, macos-15]
         python-version: ['3.10', '3.11', '3.12']
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5.0.1
 
-      - name: Disable Windows Defender early (Windows)
-        # Defender real-time scanning corrupts the Tcl/Tk tree non-
-        # deterministically: it deletes individual .tcl files (icons.tcl,
-        # ttk/sizegrip.tcl, tcl_findLibrary init.tcl) during or after
-        # conda env creation, so each 3.10/3.11/3.12 leg fails on a
-        # DIFFERENT missing file.  Disabling it at the very start of the
-        # job — BEFORE the conda env is created and the Tcl/Tk mirror is
-        # copied — lets the whole job run with Defender off.  Best-effort:
-        # Tamper Protection can make Set-MpPreference no-op, so also stop
-        # the service and add explicit path exclusions.
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $disableAttempts = 0
-          $maxAttempts = 3
-          $verified = $false
-          while ($disableAttempts -lt $maxAttempts -and -not $verified) {
-            $disableAttempts++
-            try {
-              Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
-              Set-MpPreference -DisableIOAVProtection $true -ErrorAction Stop
-            } catch {
-              Write-Host "Set-MpPreference attempt $disableAttempts failed: $_"
-            }
-            Start-Sleep -Seconds 1
-            $status = Get-MpPreference | Select-Object -ExpandProperty DisableRealtimeMonitoring
-            if ($status -eq $true) {
-              $verified = $true
-              Write-Host "Defender real-time monitoring disabled (verified after $disableAttempts attempt(s))"
-            } else {
-              Write-Host "Defender real-time monitoring still enabled after attempt $disableAttempts"
-            }
-          }
-          if (-not $verified) {
-            try {
-              Set-Service -Name WinDefend -StartupType Disabled -ErrorAction Stop
-              Stop-Service -Name WinDefend -Force -ErrorAction Stop
-              SchTasks.exe /Change /TN "Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan" /Disable 2>$null
-              Write-Host "Defender services disabled outright (WinDefend stopped + disabled)"
-              $verified = $true
-            } catch {
-              Write-Host "Outright Defender disable failed (expected if not elevated): $_"
-            }
-          }
-          foreach ($excl in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)) {
-            try {
-              Add-MpPreference -ExclusionPath $excl -ErrorAction Stop
-            } catch {
-              Write-Host "Add-MpPreference exclusion failed for $excl (best-effort): $_"
-            }
-          }
-
+      # Use the same CPython distribution for tests and executable builds.
+      # Keep Tcl/Tk in its installed tree: no Conda PATH rewriting or temp mirror.
       - name: Set up Python ${{ matrix.python-version }}
-        # Linux + macOS: setup-python@v6 builds CPython from source,
-        # Tcl/Tk is intact.
-        #
-        # Windows: setup-python@v6 uses the actions/python-versions
-        # MSI snapshot.  Multiple versions in that snapshot ship a
-        # *broken* Tcl/Tk tree — ttk/altTheme.tcl, tk8.6/text.tcl,
-        # tcl8.6/init.tcl are missing or unreadable, so tkinter.Tk()
-        # aborts with "Can't find a usable tk.tcl".  Worse, the
-        # snapshot's contents change weekly, so any given 3.10/3.11/
-        # 3.12 leg is non-deterministically red.
-        #
-        # Workaround: use the pre-installed C:\Miniconda on
-        # windows-latest and create a fresh env per Python version.
-        # conda's `tk` package from defaults is a complete Tcl/Tk,
-        # so tkinter "just works" deterministically.
         uses: actions/setup-python@v6.1.0
-        if: runner.os != 'Windows'
         with:
           python-version: ${{ matrix.python-version }}
-          check-latest: true
-          cache: 'pip'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            .github/ci-constraints.txt
 
-      - name: Set up Python ${{ matrix.python-version }} (Windows, via conda)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # C:\Miniconda is pre-installed on windows-latest but not
-          # on PATH.  Create a per-version env from the 'defaults'
-          # channel only.  defaults ships Python 3.10.x / 3.11.x /
-          # 3.12.x builds that depend on tk 8.6.12 or 8.6.15, AND
-          # ships matching complete tk packages (including all
-          # ttk/*.tcl scripts — sizegrip.tcl, entry.tcl, etc.).
-          #
-          # Why NOT conda-forge: conda-forge's tk 8.6.12 build for
-          # win-64 is 3.7MB and is missing several ttk/*.tcl files
-          # (sizegrip.tcl at minimum).  Python 3.10/3.11 from
-          # conda-forge pin 'tk >=8.6.12,<8.7.0a0', so conda picks
-          # the broken conda-forge tk 8.6.12.  Test_idle_state then
-          # fails with "_tkinter.TclError: Can't find a usable
-          # tk.tcl ... couldn't read file .../ttk/sizegrip.tcl".
-          #
-          # Why Python 3.12 on Windows passed even with conda-forge
-          # in the channel list: conda-forge has no Python 3.12
-          # win-64 builds in the relevant range, so conda always
-          # fell back to defaults for python+tk anyway.
-          #
-          # Why no '-c conda-forge': the defaults packages are
-          # sufficient and the conda-forge packages actively break
-          # the tk install for Python 3.10/3.11 on Windows.
-          & "C:\Miniconda\Scripts\conda.exe" create -n edfci -y `
-            python=${{ matrix.python-version }} tk
-          & "C:\Miniconda\Scripts\conda.exe" run -n edfci `
-            python -c "import tkinter; r=tkinter.Tk(); print('Tk', tkinter.TkVersion, 'OK'); r.destroy()"
-
-      - name: Prepend conda env to PATH + mirror Tcl/Tk libs (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Put the conda env's python/pip/ruff/mypy ahead of any
-          # pre-installed CPython in PATH for the rest of the job.
-          # Write the env vars to $GITHUB_ENV so subsequent steps
-          # see them.
-          $envDir = & "C:\Miniconda\Scripts\conda.exe" run -n edfci python -c "import sys, os; print(os.path.dirname(sys.executable))"
-          $envDirScripts = Join-Path $envDir "Scripts"
-          "PATH=$envDir;$envDirScripts;$env:PATH" | Out-File -Append -FilePath $env:GITHUB_ENV
-          "pythonLocation=$envDir" | Out-File -Append -FilePath $env:GITHUB_ENV
-
-          # Mirror the Tcl/Tk library tree to the runner's $RUNNER_TEMP
-          # (D:\a\_temp on windows-latest) and repoint TCL_LIBRARY/TK_LIBRARY
-          # at the mirror. The runner temp directory is on GitHub Actions'
-          # built-in Defender exclusion list, so real-time scanning never
-          # races Tk init. This is a more reliable fix than pre-warming +
-          # Defender disable, which kept failing on different .tcl files
-          # (init.tcl, ttk/sizegrip.tcl, scale.tcl, etc.) week-over-week.
-          $tclLibSrc = Join-Path $envDir "Library\lib\tcl8.6"
-          $tkLibSrc  = Join-Path $envDir "Library\lib\tk8.6"
-          if (-not (Test-Path $tclLibSrc)) {
-            throw "Tcl lib dir missing: $tclLibSrc"
-          }
-          $tkTemp = Join-Path $env:RUNNER_TEMP "tklibs"
-          $tclLib = Join-Path $tkTemp "tcl8.6"
-          $tkLib  = Join-Path $tkTemp "tk8.6"
-          # Use robocopy (Windows-native) for reliable bulk copy —
-          # Copy-Item -Recurse with a wildcard path silently skips
-          # some files on PowerShell 5.x, leaving the mirror
-          # incomplete (listbox.tcl, dialog.tcl, etc.).  robocopy
-          # also retries on transient read locks, defeating any
-          # residual scanner race during the copy itself.
-          # /E   = copy subdirectories including empty ones
-          # /NFL = no file-listing in output (quiet)
-          # /NDL = no directory-listing in output
-          # /NJH = no job header
-          # /NJS = no job summary
-          # /R:10 /W:2 = retry 10× with 2s wait on locked files —
-          # observed transient Defender hold on ttk/combobox.tcl
-          # needed more than 3 retries to clear (Python 3.10 leg).
-          robocopy $tclLibSrc $tclLib /E /NFL /NDL /NJH /NJS /R:10 /W:2
-          robocopy $tkLibSrc  $tkLib  /E /NFL /NDL /NJH /NJS /R:10 /W:2
-          # robocopy exit codes 0-7 are success (1=files copied,
-          # 2=extra files, 3=both, etc.) — only 8+ indicates failure.
-          if ($LASTEXITCODE -ge 8) {
-            throw "robocopy failed with exit code $LASTEXITCODE"
-          }
-          # Clear $LASTEXITCODE so robocopy's success-but-non-zero
-          # return (exit 1 = files copied) does NOT propagate to the
-          # step's exit code. PowerShell treats $LASTEXITCODE from
-          # any native command as the process exit code at end of
-          # script — so a successful copy would otherwise mark the
-          # step as failed.
-          $LASTEXITCODE = 0
-
-          # robocopy can silently drop a file even when it reports
-          # success — a transient Defender lock on a single file makes
-          # it skip that file and continue, leaving a hole in the
-          # mirror (observed: tk.tcl present but icons.tcl missing).
-          # Walk the source trees and re-copy anything the mirror is
-          # missing, then re-verify — fail the step if any file is
-          # still absent after the retry.
-          foreach ($pair in @(@($tclLibSrc, $tclLib), @($tkLibSrc, $tkLib))) {
-            $srcDir = $pair[0]
-            $dstDir = $pair[1]
-            $missing = @()
-            foreach ($srcFile in Get-ChildItem -Path $srcDir -Recurse -File) {
-              $relPath = $srcFile.FullName.Substring($srcDir.Length).TrimStart('\')
-              if (-not (Test-Path -LiteralPath (Join-Path $dstDir $relPath))) {
-                $missing += $relPath
-              }
-            }
-            if ($missing.Count -gt 0) {
-              Write-Host "Mirror incomplete — re-copying $($missing.Count) file(s): $($missing -join ', ')"
-              foreach ($relPath in $missing) {
-                $dstFile = Join-Path $dstDir $relPath
-                New-Item -ItemType Directory -Force -Path (Split-Path $dstFile) | Out-Null
-                Copy-Item -LiteralPath (Join-Path $srcDir $relPath) -Destination $dstFile -Force
-              }
-              $stillMissing = @()
-              foreach ($srcFile in Get-ChildItem -Path $srcDir -Recurse -File) {
-                $relPath = $srcFile.FullName.Substring($srcDir.Length).TrimStart('\')
-                if (-not (Test-Path -LiteralPath (Join-Path $dstDir $relPath))) {
-                  $stillMissing += $relPath
-                }
-              }
-              if ($stillMissing.Count -gt 0) {
-                throw "Tcl/Tk mirror still incomplete after re-copy: $($stillMissing -join ', ')"
-              }
-            }
-          }
-          Write-Host "Tcl/Tk mirror verified complete"
-
-          # Second-pass completeness check: re-walk BOTH source trees
-          # and confirm every source file is present in the mirror.
-          # This is deliberately SOURCE-DERIVED (no hardcoded .tcl
-          # filename list): a hardcoded list drifted out of sync with
-          # the Tk 8.6 tree by naming ttk/text.tcl + ttk/theme.tcl —
-          # which do not exist (the text widget script is tk8.6/text.tcl
-          # and the ttk entry point is ttk/ttk.tcl) — which made every
-          # Windows job fail this step deterministically.  Walking the
-          # source means the check can never name a file the install
-          # does not actually ship, across any Tk version.
-          Start-Sleep -Milliseconds 250
-          foreach ($pair in @(@($tclLibSrc, $tclLib), @($tkLibSrc, $tkLib))) {
-            $srcDir = $pair[0]
-            $dstDir = $pair[1]
-            $missing = @()
-            foreach ($srcFile in Get-ChildItem -Path $srcDir -Recurse -File) {
-              $relPath = $srcFile.FullName.Substring($srcDir.Length).TrimStart('\')
-              if (-not (Test-Path -LiteralPath (Join-Path $dstDir $relPath))) {
-                $missing += $relPath
-              }
-            }
-            if ($missing.Count -gt 0) {
-              foreach ($relPath in $missing) {
-                $dstFile = Join-Path $dstDir $relPath
-                New-Item -ItemType Directory -Force -Path (Split-Path $dstFile) | Out-Null
-                Copy-Item -LiteralPath (Join-Path $srcDir $relPath) -Destination $dstFile -Force
-              }
-              $stillMissing = @()
-              foreach ($srcFile in Get-ChildItem -Path $srcDir -Recurse -File) {
-                $relPath = $srcFile.FullName.Substring($srcDir.Length).TrimStart('\')
-                if (-not (Test-Path -LiteralPath (Join-Path $dstDir $relPath))) {
-                  $stillMissing += $relPath
-                }
-              }
-              if ($stillMissing.Count -gt 0) {
-                throw "Tk mirror still incomplete after re-copy: $($stillMissing -join ', ')"
-              }
-            }
-          }
-          Write-Host "Tk mirror integrity check passed"
-
-          "TCL_LIBRARY=$tclLib" | Out-File -Append -FilePath $env:GITHUB_ENV
-          "TK_LIBRARY=$tkLib"   | Out-File -Append -FilePath $env:GITHUB_ENV
-
-          # Pre-read every Tcl/Tk script AND the tclIndex autoload
-          # manifest in the mirror so the file-system cache is warm
-          # even if a scanner (Search Indexer, SmartScreen) races Tk
-          # init. Read each file twice with a 200ms gap to defeat
-          # race-based read denial.  Wrapped in try/catch with
-          # -ErrorAction SilentlyContinue because non-existent paths
-          # or empty -Filter results would otherwise throw under
-          # $ErrorActionPreference='Stop' and abort the step.
-          $warmup = {
-            param($path)
-            try {
-              Get-ChildItem -Path $path -Recurse -Filter *.tcl -ErrorAction SilentlyContinue |
-                ForEach-Object { $_ | Out-Null }
-              Get-ChildItem -Path $path -Recurse -Filter tclIndex -ErrorAction SilentlyContinue |
-                ForEach-Object { $_ | Out-Null }
-            } catch {
-              Write-Host "Warmup warning for $path : $_"
-            }
-          }
-          & $warmup $tclLib
-          & $warmup $tkLib
-          Start-Sleep -Milliseconds 200
-          & $warmup $tclLib
-          & $warmup $tkLib
+      - name: Record Python runtime
+        run: python ci_runtime.py --inventory --report .ci-diagnostics/python.json
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -320,11 +74,7 @@ jobs:
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          # macOS-latest runners ship untrusted taps (aws/tap, azure/bicep)
-          # that aren't needed for this build.  Skip the verbose
-          # "tap not trusted" warnings so the install log stays focused.
-          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
-          brew install python-tk tesseract
+          brew install tesseract
           # autotools for libpff-python source build when no wheel
           # matches the macOS runner architecture / Python version.
           brew install autoconf automake libtool pkg-config
@@ -336,48 +86,39 @@ jobs:
           choco install tesseract --yes --no-progress
           if ($LASTEXITCODE -ne 0) { throw "Tesseract installation failed" }
 
-      - name: Install system dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          # Ensure the Python headers are present for any source build.
-          # The official python.org Windows installer places headers in
-          # include/, which pip finds via sysconfig.  MSVC is also
-          # available on windows-latest for the MSVC build path.
-          echo "Windows system deps: using default python.org headers + MSVC."
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --no-cache-dir -e ".[dev]"
-          mypy --version
+          python -m pip install -c .github/ci-constraints.txt -e ".[dev,msg]"
+          python -m pip freeze --all > .ci-diagnostics/dependencies.txt
 
       - name: Run linting (ruff)
         run: |
-          ruff check .
+          python -m ruff check .
 
       - name: Run formatting check (ruff)
         run: |
-          ruff format --check .
+          python -m ruff format --check .
 
       - name: Run type checking (mypy)
         run: |
-          mypy .
+          python -m mypy .
+
+      - name: Check GUI runtimes (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python ci_runtime.py
+
+      - name: Check GUI runtimes (Windows / macOS)
+        if: runner.os != 'Linux'
+        run: python ci_runtime.py
 
       - name: Run tests with coverage (Linux)
         if: runner.os == 'Linux'
-        run: |
-          # Headless Linux CI has no X server; xvfb-run spawns a
-          # virtual framebuffer so tkinter can create a Tk root.
-          xvfb-run -a pytest --cov=. --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
+        run: xvfb-run -a python ci_pytest.py
 
-      - name: Run tests with coverage (macOS / Windows)
+      - name: Run tests with coverage (Windows / macOS)
         if: runner.os != 'Linux'
-        run: |
-          # macOS Cocoa provides a display by default.
-          # Windows conda env ships a complete Tcl/Tk.
-          # Retry one complete suite only for the Windows runner's known
-          # intermittent Tcl/Tk library setup error; do not retry assertions.
-          python ci_pytest.py
+        run: python ci_pytest.py
 
       - name: Publish test failures in the job summary
         if: always()
@@ -417,9 +158,22 @@ jobs:
                       summary.write("Additional failures are listed in the pytest log.\n")
           PY
 
+      - name: Upload test and runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-${{ matrix.os }}-py${{ matrix.python-version }}-${{ github.run_attempt }}
+          path: |
+            .ci-diagnostics/
+            test-results.xml
+            coverage.xml
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        if: matrix.os == 'ubuntu-24.04' && matrix.python-version == '3.11'
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
@@ -428,7 +182,8 @@ jobs:
     name: Required validation
     needs: test
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       validated_sha: ${{ steps.revision.outputs.sha }}
     steps:

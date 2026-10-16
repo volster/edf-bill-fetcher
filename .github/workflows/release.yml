@@ -9,6 +9,13 @@ permissions:
   contents: read
   actions: read
 
+env:
+  QT_QPA_PLATFORM: offscreen
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   validation:
     name: Validate tagged revision
@@ -19,11 +26,12 @@ jobs:
     name: Build release executables (${{ matrix.os }})
     needs: validation
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.validation.result == 'success'
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-2025, macos-15, ubuntu-24.04]
 
     steps:
       - name: Checkout repository
@@ -35,7 +43,13 @@ jobs:
         uses: actions/setup-python@v6.1.0
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            .github/ci-constraints.txt
+
+      - name: Record Python runtime
+        run: python ci_runtime.py --inventory --report .ci-diagnostics/python.json
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -43,13 +57,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-tk tk-dev python3-dev tesseract-ocr tesseract-ocr-eng
           sudo apt-get install -y build-essential autoconf automake libtool pkg-config
-          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1
+          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1 xvfb
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
-          brew install python-tk tesseract
+          brew install tesseract
           brew install autoconf automake libtool pkg-config
 
       - name: Install OCR engine (Windows)
@@ -62,7 +75,16 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[build,msg]"
+          python -m pip install -c .github/ci-constraints.txt -e ".[build,msg]"
+          python -m pip freeze --all > .ci-diagnostics/dependencies.txt
+
+      - name: Check GUI runtimes (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python ci_runtime.py
+
+      - name: Check GUI runtimes (Windows / macOS)
+        if: runner.os != 'Linux'
+        run: python ci_runtime.py
 
       - name: Build Executable
         shell: bash
@@ -71,7 +93,7 @@ jobs:
           # are required because PyInstaller's static analysis can't
           # follow dynamic (find_spec/importlib) imports — see the
           # docstring in matrix_build.yml for the full rationale.
-          pyinstaller --onefile --windowed --name EDF_Evidence_Collector \
+          python -m PyInstaller --onefile --windowed --name EDF_Evidence_Collector \
             --hidden-import=PySide6.QtCore \
             --hidden-import=PySide6.QtGui \
             --hidden-import=PySide6.QtWidgets \
@@ -182,8 +204,21 @@ jobs:
           fi
           ls -la ./*.zip
 
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: build-diagnostics-${{ matrix.os }}-${{ github.run_attempt }}
+          path: |
+            .ci-diagnostics/
+            build/EDF_Evidence_Collector/warn-*.txt
+            build/EDF_Evidence_Collector/xref-*.html
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload release asset
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: EDF_Evidence_Collector-${{ matrix.os }}
           path: |
@@ -195,13 +230,15 @@ jobs:
     name: Publish GitHub Release
     needs: [validation, build]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
+          pattern: EDF_Evidence_Collector-*
           path: artifacts
 
       - name: Create GitHub Release

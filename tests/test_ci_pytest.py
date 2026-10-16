@@ -1,5 +1,6 @@
 """Keep CI infrastructure retries bounded and independent of test correctness."""
 
+import json
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -56,10 +57,12 @@ def test_windows_ci_retries_entire_suite_once_and_keeps_final_result(
     monkeypatch.setattr(ci_pytest.sys, "platform", "win32")
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     commands = []
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
 
     def execute(command):
         assert not Path("test-results.xml").exists()
         commands.append(command.copy())
+        Path("coverage.xml").write_text(f"coverage attempt {len(commands)}")
         _junit("test-results.xml", errors=[TK_ERROR] if len(commands) == 1 else [])
         return 1 if len(commands) == 1 else second_code
 
@@ -70,6 +73,43 @@ def test_windows_ci_retries_entire_suite_once_and_keeps_final_result(
     assert commands[0][1:3] == ["-m", "pytest"]
     assert "--cov-append" not in commands[0]
     assert "--lf" not in commands[0]
+    diagnostics = tmp_path / ".ci-diagnostics/tests"
+    assert ci_pytest._only_tk_setup_errors(diagnostics / "attempt-1/test-results.xml")
+    assert not ci_pytest._only_tk_setup_errors(diagnostics / "attempt-2/test-results.xml")
+    assert (diagnostics / "attempt-1/coverage.xml").read_text() == "coverage attempt 1"
+    assert (diagnostics / "attempt-2/coverage.xml").read_text() == "coverage attempt 2"
+    assert Path("coverage.xml").read_text() == "coverage attempt 2"
+    assert json.loads((diagnostics / "attempts.json").read_text()) == [
+        {"attempt": 1, "exit_code": 1},
+        {"attempt": 2, "exit_code": second_code},
+    ]
+    assert "Both attempts" in (tmp_path / "summary.md").read_text()
+
+
+def test_failed_retry_without_reports_does_not_publish_stale_first_attempt(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ci_pytest.sys, "platform", "win32")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    calls = []
+    stale = Path(".ci-diagnostics/tests/attempt-2")
+    stale.mkdir(parents=True)
+    (stale / "test-results.xml").write_text("stale previous invocation")
+
+    def execute(command):
+        calls.append(command)
+        if len(calls) == 1:
+            _junit("test-results.xml", errors=[TK_ERROR])
+            Path("coverage.xml").write_text("first attempt only")
+            return 1
+        assert not Path("coverage.xml").exists()
+        return 2
+
+    monkeypatch.setattr(ci_pytest.subprocess, "call", execute)
+    assert ci_pytest.main() == 2
+    assert not Path("test-results.xml").exists()
+    assert not Path("coverage.xml").exists()
+    assert Path(".ci-diagnostics/tests/attempt-1/test-results.xml").is_file()
+    assert not Path(".ci-diagnostics/tests/attempt-2/test-results.xml").exists()
 
 
 @pytest.mark.parametrize(
