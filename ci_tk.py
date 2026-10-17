@@ -17,6 +17,18 @@ from typing import Any
 def _script_evidence(error: Exception) -> list[dict]:
     """Verify each script Tcl reports unreadable, without copying or modifying it."""
     paths = list(dict.fromkeys(re.findall(r'couldn\'t read file "([^"\r\n]+)"', str(error))))
+    bootstrap = str(error).strip() == 'invalid command name "tcl_findLibrary"'
+    if not paths and bootstrap:
+        import _tkinter
+
+        # setup-python's Windows distribution keeps these scripts beside the
+        # runtime. Do not guess a different library when an override is set.
+        if os.environ.get("TCL_LIBRARY") or os.environ.get("TK_LIBRARY"):
+            return []
+        directory = Path(sys.base_prefix) / "tcl"
+        tcl = directory / f"tcl{_tkinter.TCL_VERSION}"
+        paths = [str(tcl / name) for name in ("init.tcl", "auto.tcl", "tclIndex")]
+        paths.append(str(directory / f"tk{_tkinter.TK_VERSION}" / "tk.tcl"))
     evidence = []
     for filename in paths:
         item: dict = {"path": filename}
@@ -25,6 +37,14 @@ def _script_evidence(error: Exception) -> list[dict]:
             item.update(
                 size=len(data), sha256=hashlib.sha256(data).hexdigest(), readable=bool(data)
             )
+            if bootstrap:
+                item["origin"] = "Default CPython Tcl/Tk installation"
+                if Path(filename).name == "auto.tcl":
+                    item["defines_bootstrap_command"] = bool(
+                        re.search(rb"(?m)^proc\s+(?:::)?tcl_findLibrary\s", data)
+                    )
+                elif Path(filename).name == "tclIndex":
+                    item["indexes_bootstrap_command"] = b"auto_index(tcl_findLibrary)" in data
         except OSError as problem:
             item.update(readable=False, error=str(problem))
         evidence.append(item)
@@ -39,7 +59,7 @@ def _create_with_retry(create: Callable[..., Any], args: tuple, kwargs: dict, re
         return create(*args, **kwargs)
     except _tkinter.TclError as error:
         detail = str(error)
-        if not any(
+        if detail.strip() != 'invalid command name "tcl_findLibrary"' and not any(
             marker in detail
             for marker in ("Can't find a usable tk.tcl", "Can't find a usable init.tcl")
         ):
@@ -48,7 +68,12 @@ def _create_with_retry(create: Callable[..., Any], args: tuple, kwargs: dict, re
         # permanently absent or unreadable script still prevents any retry.
         time.sleep(0.25)
         evidence = _script_evidence(error)
-        retryable = bool(evidence) and all(item["readable"] for item in evidence)
+        retryable = bool(evidence) and all(
+            item["readable"]
+            and item.get("defines_bootstrap_command", True)
+            and item.get("indexes_bootstrap_command", True)
+            for item in evidence
+        )
         record = {
             "executable": sys.executable,
             "error": detail,
@@ -82,8 +107,8 @@ def _create_with_retry(create: Callable[..., Any], args: tuple, kwargs: dict, re
         record["recovered"] = True
         save()
         message = (
-            "Native Tk startup recovered after one retry; the scripts Tcl reported "
-            "missing were readable and their hashes are retained in tk-startup.jsonl."
+            "Native Tk startup recovered after one retry; verified Tcl/Tk script "
+            "reads and hashes are retained in tk-startup.jsonl."
         )
         if os.environ.get("GITHUB_ACTIONS") == "true":
             sys.stdout.write("::warning title=Windows Tcl/Tk startup recovered::" + message + "\n")

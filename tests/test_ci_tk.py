@@ -143,17 +143,22 @@ def test_guard_leaves_local_runs_and_other_platforms_untouched(monkeypatch, plat
     assert _tkinter.create is original
 
 
+@pytest.mark.parametrize("failure", ["script_read", "autoload_bootstrap"])
 def test_native_recovery_inside_test_body_still_constructs_real_widgets(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, failure
 ):
     original = _tkinter.create
     script = tmp_path / "button.tcl"
     script.write_text("# synthetic read-race evidence")
+    if failure == "autoload_bootstrap":
+        _bootstrap_files(tmp_path, monkeypatch)
     calls = []
 
     def create(*args, **kwargs):
         calls.append(True)
         if len(calls) == 1:
+            if failure == "autoload_bootstrap":
+                raise _tkinter.TclError('invalid command name "tcl_findLibrary"')
             raise _error(script)
         return original(*args, **kwargs)
 
@@ -185,3 +190,96 @@ def test_native_guard_restores_constructor_after_failure(tmp_path, monkeypatch):
         with ci_tk.windows_tk_startup_retry():
             _tkinter.create()
     assert _tkinter.create is create
+
+
+def _bootstrap_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(ci_tk.sys, "base_prefix", str(tmp_path))
+    monkeypatch.delenv("TCL_LIBRARY", raising=False)
+    monkeypatch.delenv("TK_LIBRARY", raising=False)
+    directory = tmp_path / "tcl"
+    tcl = directory / f"tcl{_tkinter.TCL_VERSION}"
+    tk_library = directory / f"tk{_tkinter.TK_VERSION}"
+    tcl.mkdir(parents=True)
+    tk_library.mkdir()
+    files = {
+        "init.tcl": tcl / "init.tcl",
+        "auto.tcl": tcl / "auto.tcl",
+        "tclIndex": tcl / "tclIndex",
+        "tk.tcl": tk_library / "tk.tcl",
+    }
+    files["init.tcl"].write_text("# synthetic Tcl initialization")
+    files["auto.tcl"].write_text("proc tcl_findLibrary {args} {return}")
+    files["tclIndex"].write_text("set auto_index(tcl_findLibrary) {source auto.tcl}")
+    files["tk.tcl"].write_text("# synthetic Tk initialization")
+    return files
+
+
+def test_missing_bootstrap_command_requires_verified_definition_and_autoload_index(
+    tmp_path, monkeypatch
+):
+    files = _bootstrap_files(tmp_path, monkeypatch)
+    calls = []
+    sentinel = object()
+
+    def create(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise _tkinter.TclError('invalid command name "tcl_findLibrary"')
+        return sentinel
+
+    report = tmp_path / "startup.jsonl"
+    assert ci_tk._create_with_retry(create, ("screen",), {"wantTk": True}, report) is sentinel
+    assert calls == [(("screen",), {"wantTk": True})] * 2
+    evidence = json.loads(report.read_text())
+    assert evidence["recovered"] is True
+    assert len(evidence["scripts"]) == 4
+    for script in evidence["scripts"]:
+        assert (
+            script["sha256"]
+            == hashlib.sha256(files[ci_tk.Path(script["path"]).name].read_bytes()).hexdigest()
+        )
+    assert any(script.get("defines_bootstrap_command") for script in evidence["scripts"])
+    assert any(script.get("indexes_bootstrap_command") for script in evidence["scripts"])
+
+
+@pytest.mark.parametrize("problem", ["missing", "empty", "definition", "index", "override"])
+def test_missing_or_inconsistent_bootstrap_scripts_are_fatal(tmp_path, monkeypatch, problem):
+    files = _bootstrap_files(tmp_path, monkeypatch)
+    if problem == "missing":
+        files["auto.tcl"].unlink()
+    elif problem == "empty":
+        files["init.tcl"].write_text("")
+    elif problem == "definition":
+        files["auto.tcl"].write_text("# No bootstrap definition")
+    elif problem == "index":
+        files["tclIndex"].write_text("# No bootstrap index")
+    else:
+        monkeypatch.setenv("TCL_LIBRARY", str(tmp_path / "custom"))
+    calls = []
+
+    def create():
+        calls.append(True)
+        raise _tkinter.TclError('invalid command name "tcl_findLibrary"')
+
+    report = tmp_path / "startup.jsonl"
+    with pytest.raises(_tkinter.TclError, match="tcl_findLibrary"):
+        ci_tk._create_with_retry(create, (), {}, report)
+    assert len(calls) == 1
+    assert json.loads(report.read_text())["retryable"] is False
+
+
+def test_repeated_bootstrap_error_is_still_fatal_after_one_retry(tmp_path, monkeypatch):
+    _bootstrap_files(tmp_path, monkeypatch)
+    calls = []
+
+    def create():
+        calls.append(True)
+        raise _tkinter.TclError('invalid command name "tcl_findLibrary"')
+
+    report = tmp_path / "startup.jsonl"
+    with pytest.raises(_tkinter.TclError, match="tcl_findLibrary"):
+        ci_tk._create_with_retry(create, (), {}, report)
+    assert len(calls) == 2
+    evidence = json.loads(report.read_text())
+    assert evidence["recovered"] is False
+    assert "retry_error" in evidence
