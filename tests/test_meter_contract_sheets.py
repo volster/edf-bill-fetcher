@@ -113,11 +113,11 @@ def test_write_meter_readings_sheet_writes_eight_table_headers_including_excerpt
     expected = [
         "Date",
         "Reading (kWh)",
-        "Type (A/E/M)",
+        "Type (A/E/C/M)",
         "Estimated Source",
         "Invoice #",
         "Notes",
-        "Open PDF",
+        "Source Excerpt",
         "View on Evidence Report",
     ]
     assert headers == expected
@@ -255,7 +255,7 @@ def test_write_contract_history_sheet_renders_title_and_headers() -> None:
         "Tariff",
         "Days",
         "# Invoices",
-        "Open PDF",
+        "View source row",
         "View on Evidence Report",
     ]
     assert headers == expected
@@ -301,7 +301,7 @@ def test_write_contract_history_sheet_empty_renders_headers() -> None:
     headers = [ws.cell(row=7, column=c).value for c in range(1, 8)]
     assert headers[0] == "Contract From"
     # Open PDF + hotlink headers present even when no rows
-    assert "Open PDF" in headers
+    assert "View source row" in headers
     assert "View on Evidence Report" in headers
     assert ws.cell(row=8, column=1).value in (None, "")
 

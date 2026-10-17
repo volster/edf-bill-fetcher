@@ -1259,6 +1259,9 @@ def render_xlsx(
         account=account_label,
         evidence_df=df,
         evidence_index=analyses["evidence_index"],
+        sap_readings=list((sap_rows or {}).get("meter") or [])
+        if config.get("scan_sap_dumps", True)
+        else [],
     )
     write_contract_history_sheet(
         wb.create_sheet(title="Contract History"),

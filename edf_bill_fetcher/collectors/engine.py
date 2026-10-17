@@ -8,6 +8,7 @@ Task 8 strips them.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import re
@@ -57,6 +58,7 @@ from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pag
 from edf_bill_fetcher.io.persistence.run_manifest import is_run_directory
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.models.records import BillingRecord
+from edf_bill_fetcher.processors.bill_facts import bill_facts, payment_history
 from edf_bill_fetcher.processors.detection import detect_pdf_format
 from edf_bill_fetcher.processors.patterns import (
     _AMOUNT_PATTERN_NEW_BILL,
@@ -116,7 +118,7 @@ _OLD_PDF_KWH_RE = re.compile(r"([\d,]+)\s*kWh", re.IGNORECASE)
 _OLD_PDF_STANDING_RE = re.compile(r"(\d+\.\d{2})p\s*per day", re.IGNORECASE)
 _OLD_PDF_INV_RE = re.compile(r"Invoice number[\s:,\"\'\n]*([A-Z0-9\-]+)", re.IGNORECASE)
 _OLD_PDF_PERIOD_CHARGE_RE = re.compile(
-    r"total charges for this (?:period|bill|invoice)\s+£\s?([\d,]+(?:\.\d{2})?)",
+    r"total charges for this (?:period|bill|invoice)\s+£\s?([\d,]+(?:\.\d{2})?)(?:\s+(?:in\s+)?(credit|debit))?",
     re.IGNORECASE,
 )
 
@@ -186,6 +188,7 @@ class EvidenceEngine:
         self.skipped_attachment_count = 0
         self._attachment_dir: tempfile.TemporaryDirectory[str] | None = None
         self._ocr_reader: PdfOcrReader | None = None
+        self._archive_origin = ""
 
     # ------------------------------------------------------------------
     # Pickle support — Phase 1.4
@@ -332,6 +335,9 @@ class EvidenceEngine:
             return False  # didn't match
 
         sub_periods = extract_sub_periods(text)
+        facts = bill_facts(text, sub_periods)
+        facts["Document Role"] = "Invoice"
+        facts["Document Date"] = fields.get("date", fallback_date)
 
         # Account filter
         if self.config.get("use_acc_filter"):
@@ -404,8 +410,8 @@ class EvidenceEngine:
                 energy_unit_rate=self._energy_rate(text),
                 period_charge=fields.get("period_charge", "N/A"),
                 entry_type=entry_type,
-                reading=r_type,
-                units_kwh=fields.get("units_used", "N/A"),
+                reading=facts.get("Reading", r_type),
+                units_kwh=facts.get("Units (kWh)", fields.get("units_used", "N/A")),
                 standing_charge=fields.get("standing_charge", "N/A"),
                 tariff=fields.get("tariff", "N/A"),
                 attachment_name=attachment_name or "N/A",
@@ -416,6 +422,7 @@ class EvidenceEngine:
                 cancel_rebill_admitted=bool(extract_admit_phrase(text)),
                 sub_periods=sub_periods,
             ).to_dict()
+            | facts
         )
         return True
 
@@ -491,7 +498,28 @@ class EvidenceEngine:
             return
 
         clean_text = re.sub(r"\s+", " ", text)
-        self._source_context.update(document_identity(clean_text))
+        self._source_context.update(document_identity(text))
+
+        # Terms and conditions are supporting evidence, not a bill whose
+        # liability limit should be promoted to a financial observation.
+        if re.search(
+            r"terms (?:and|&) conditions", clean_text, re.I
+        ) and not _BILL_MARKERS_RE.search(clean_text.lower()):
+            self._add_record(
+                {
+                    "Source": source_type,
+                    "Sender": sender,
+                    "Date": fallback_date,
+                    "Attachment Name": attachment_name or "N/A",
+                    "Entry Type": "Supporting Document",
+                    "Document Role": "Terms and conditions",
+                    "Amount Kind": "Not monetary",
+                    "Details": detail[:60],
+                    "Logic Used": "Supporting document classification",
+                    "Source PDF Text": text[:4000],
+                }
+            )
+            return
 
         # Account filter
         if self.config.get("use_acc_filter"):
@@ -510,11 +538,26 @@ class EvidenceEngine:
                 if m:
                     try:
                         found_amt = float(m.group(1).replace(",", ""))
+                        if name in _AMOUNT_PATTERN_ONGOING_BALANCE and re.match(
+                            r"\s+(?:in\s+)?credit\b", clean_text[m.end(1) :], re.I
+                        ):
+                            found_amt = -found_amt
                         strategy = "Smart Context"
                         matched_pattern_name = name
                         break
                     except Exception:
                         continue
+
+            closing = re.search(
+                r"Your new account balance\s+£\s*([\d,]+(?:\.\d{2})?)(?:\s+(?:in\s+)?(credit|debit)\b)?",
+                clean_text,
+                re.I,
+            )
+            if closing:
+                found_amt = float(closing[1].replace(",", ""))
+                if (closing[2] or "").lower() == "credit":
+                    found_amt = -found_amt
+                matched_pattern_name, strategy = "your_new_account_balance", "Smart Context"
 
         if found_amt is None and self.config.get("use_large", True):
             matches = _POUND_AMOUNT_FALLBACK_RE.findall(clean_text)
@@ -562,6 +605,8 @@ class EvidenceEngine:
         if pc_m:
             try:
                 period_charge = float(pc_m.group(1).replace(",", ""))
+                if (pc_m.group(2) or "").lower() == "credit":
+                    period_charge = -period_charge
             except (ValueError, AttributeError):
                 pass
 
@@ -571,11 +616,17 @@ class EvidenceEngine:
         # so without this the ``Sub Periods`` column stays empty and the
         # Option C sub-period unlawful-charge computation never activates.
         sub_periods = extract_sub_periods(clean_text)
+        facts = bill_facts(text, sub_periods)
+        units_used = facts.pop("Units (kWh)", units_used)
+        r_type = facts.pop("Reading", r_type)
 
         # Classify Entry Type based on content
         entry_type = self._classify_entry_type(
             clean_text, matched_pattern_name, period_from, period_to, strategy
         )
+        if entry_type == "New Bill" and "PDF" in source_type:
+            facts["Document Role"] = "Invoice"
+            facts["Document Date"] = date_to_use
 
         self._add_record(
             BillingRecord(
@@ -604,7 +655,21 @@ class EvidenceEngine:
                 cancel_rebill_admitted=bool(extract_admit_phrase(clean_text)),
                 sub_periods=sub_periods,
             ).to_dict()
+            | facts
         )
+
+        if inv_num != "N/A" and period_charge != "N/A":
+            for payment in payment_history(text):
+                self._add_record(
+                    {
+                        "Source": source_type,
+                        "Sender": sender,
+                        "Attachment Name": attachment_name or "N/A",
+                        "Source Invoice #": inv_num,
+                        "Document Date": date_to_use,
+                        **payment,
+                    }
+                )
 
     def _classify_entry_type(
         self,
@@ -1066,9 +1131,11 @@ class EvidenceEngine:
             pst = pypff.file()
             try:
                 pst.open(path)
+                self._archive_origin = os.path.abspath(path)
                 root = pst.get_root_folder()
                 self.crawl_pst(root)
             finally:
+                self._archive_origin = ""
                 try:
                     pst.close()
                 except Exception:
@@ -1123,7 +1190,31 @@ class EvidenceEngine:
                         body_text = re.sub(r"[{}\\]", " ", body_text)
                 if not body_text.strip():
                     continue
-                self.process_text(body_text, source, subj, date_str, sender=sender)
+                if self._attachment_dir is None:
+                    self._attachment_dir = tempfile.TemporaryDirectory(prefix="edf-attachments-")
+                archive = getattr(self, "_archive_origin", "")
+                origin = f"{archive}\0{context}"
+                raw_body = body if isinstance(body, bytes) else str(body).encode("utf-8")
+                exported = (
+                    "Generated PST/OST message body export; not an original .eml file\n"
+                    f"Archive: {archive}\nOccurrence: {context}\n"
+                    f"From: {sender}\nSubject: {subj}\nDate: {date_str}\n"
+                    f"Body representation: {label}\n"
+                    f"Captured body base64 (UTF-8 if pypff returned text): {base64.b64encode(raw_body).decode('ascii')}\n\n{body_text}"
+                ).encode()
+                name = f"message-{hashlib.sha256(origin.encode()).hexdigest()[:16]}.txt"
+                path = os.path.join(self._attachment_dir.name, name)
+                with open(path, "wb") as handle:
+                    handle.write(exported)
+                self._source_context = {"Parent Message": origin}
+                self._source_context = self._register_source(path, name, exported)
+                self._source_context["Source Representation"] = "Generated PST/OST body text export"
+                self.source_manifest[self._source_context["Source ID"]]["Source Representation"] = (
+                    self._source_context["Source Representation"]
+                )
+                self.process_text(
+                    body_text, source, subj, date_str, sender=sender, attachment_name=name
+                )
                 return
             except Exception as error:
                 self.log_error(f"PST {label} body ({context})", str(error))
@@ -1213,7 +1304,7 @@ class EvidenceEngine:
                                 "PST PDF Attachment",
                                 date_str,
                                 sender_email,
-                                f"{subj} ({date_str})",
+                                f"{getattr(self, '_archive_origin', '')} | {context}",
                             )
                         except Exception as e:
                             self.log_error(

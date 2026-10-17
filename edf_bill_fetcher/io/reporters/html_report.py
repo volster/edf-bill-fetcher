@@ -20,8 +20,12 @@ loud-failure mode the PDF dispatcher uses.
 from __future__ import annotations
 
 import html as html_lib
+import json
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 import pandas as pd
 
@@ -96,6 +100,9 @@ a { color:#006b80; text-underline-offset:3px; }
 .skip-link:focus { top:16px; }
 .priorities { padding-left:24px; }
 .priorities li { margin-bottom:14px; }
+details.audit { margin:12px 0 24px; }
+details.audit > summary { cursor:pointer; color:var(--ink); font-weight:600; padding:12px;
+                         background:#edf3f6; border:1px solid var(--line); border-radius:6px; }
 .failed { color:#a12727; }
 ul { padding-left:24px; }
 @media (max-width:850px) {
@@ -116,6 +123,7 @@ ul { padding-left:24px; }
  thead { display:table-header-group; } thead th { color:black; background:#e7edf0; }
  tr { break-inside:avoid; } p { orphans:3; widows:3; }
  a { color:inherit; } p.note { border:1px solid #a9bcc6; }
+ details::details-content { content-visibility:visible; display:block; }
 }
 """
 
@@ -123,6 +131,48 @@ ul { padding-left:24px; }
 def _esc(value: object) -> str:
     """HTML-escape a value so user-derived text renders as visible text."""
     return html_lib.escape(str(value), quote=True)
+
+
+@dataclass(frozen=True)
+class _SourceLink:
+    """A local manifest path, never an arbitrary HTML string from evidence."""
+
+    href: str
+    label: str
+
+
+def _source_links(bundle_dir: str | None) -> dict[str, _SourceLink]:
+    """Resolve only saved, contained manifest paths beside this report."""
+    if not bundle_dir:
+        return {}
+    root = Path(bundle_dir).resolve()
+    try:
+        files = json.loads((root / "evidence_manifest.json").read_text(encoding="utf-8"))["files"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    links: dict[str, _SourceLink] = {}
+    ambiguous: set[str] = set()
+    if not isinstance(files, list):
+        return links
+    for entry in files:
+        if not isinstance(entry, dict) or entry.get("status") != "saved":
+            continue
+        path = entry.get("saved_path")
+        if not isinstance(path, str) or "\\" in path or ":" in path:
+            continue
+        relative = PurePosixPath(path)
+        if relative.is_absolute() or ".." in relative.parts:
+            continue
+        target = (root / path).resolve()
+        if root not in target.parents or not target.is_file():
+            continue
+        link = _SourceLink(quote(path, safe="/"), "Open source")
+        for key in (entry.get("source_id"), entry.get("attachment_name")):
+            if isinstance(key, str) and key:
+                if key in links and links[key] != link:
+                    ambiguous.add(key)
+                links[key] = link
+    return {key: link for key, link in links.items() if key not in ambiguous}
 
 
 def _table(rows: list[list[Any]], *, header: bool = True) -> str:
@@ -150,7 +200,9 @@ def _table(rows: list[list[Any]], *, header: bool = True) -> str:
     for i, row in enumerate(rows[body_start:], start=body_start):
         cls = ' class="alt"' if i % 2 == 0 else ""
         cells = "".join(
-            f'<td class="numeric">{_esc(c)}</td>'
+            f'<td><a href="{_esc(c.href)}">{_esc(c.label)}</a></td>'
+            if isinstance(c, _SourceLink)
+            else f'<td class="numeric">{_esc(c)}</td>'
             if isinstance(c, (int, float)) or str(c).startswith("£")
             else f"<td>{_esc(c)}</td>"
             for c in row
@@ -369,7 +421,13 @@ def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> 
     return "\n".join(parts)
 
 
-def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | None = None) -> str:
+def create_evidence_index(
+    df: pd.DataFrame,
+    engine: Any,
+    ctx: RenderContext | None = None,
+    *,
+    bundle_dir: str | None = None,
+) -> str:
     """Create the evidence index with source cross-references."""
     if ctx is None:
         ctx = RenderContext()
@@ -391,13 +449,24 @@ def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | No
         )
 
     parts.append("<h3>Source Document Inventory</h3>")
+    links = _source_links(bundle_dir)
     for src in source_counts.index:
         src_df = df[df["Source"] == src].copy()
         src_df["_dt"] = src_df["Date"].apply(parse_to_sort_date)
         src_df = src_df.sort_values("_dt")
 
-        detail_rows = [["Date", "Invoice #", "Amount", "Period", "Entry Type", "Reading"]]
+        detail_rows: list[list[Any]] = [
+            ["Date", "Invoice #", "Amount", "Period", "Entry Type", "Reading", "Source"]
+        ]
         for _, row in src_df.iterrows():
+            source_id = row.get("Source ID")
+            link = links.get(source_id) if source_id else links.get(row.get("Attachment Name"))
+            if (
+                link
+                and isinstance(row.get("Page From"), (int, float))
+                and pd.notna(row["Page From"])
+            ):
+                link = _SourceLink(f"{link.href}#page={int(row['Page From'])}", link.label)
             detail_rows.append(
                 [
                     fmt_date(row.get("Date")),
@@ -406,10 +475,15 @@ def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | No
                     f"{fmt_date(row.get('Period From'))}–{fmt_date(row.get('Period To'))}",
                     row.get("Entry Type", ""),
                     row.get("Reading", ""),
+                    link or "Unavailable",
                 ]
             )
         parts.append(f"<h3>{_esc(src)} ({len(src_df)} records)</h3>")
+        parts.append(
+            f'<details class="audit"><summary>{_esc(src)}: show {len(src_df)} source observations</summary>'
+        )
         parts.append(_table(detail_rows))
+        parts.append("</details>")
 
     parts.append("</div>")
     return "\n".join(parts)
@@ -490,7 +564,12 @@ def create_timeline_section(df: pd.DataFrame, flags: list, ctx: RenderContext | 
     heading = ctx.heading("timeline")
     parts = [f'<div id="sec-timeline"><h2 class="section">{_esc(heading)}</h2>']
 
-    parts.append(_table(timeline_table(df, flags)))
+    rows = timeline_table(df, flags)
+    parts.append(
+        f'<details class="audit"><summary>Show the full timeline ({max(0, len(rows) - 1)} events)</summary>'
+    )
+    parts.append(_table(rows))
+    parts.append("</details>")
     parts.append("</div>")
     return "\n".join(parts)
 
@@ -1201,7 +1280,7 @@ def render_html(view: ReportView, output_path: str) -> str:
             lambda kwargs: create_key_findings_table(**kwargs),
         ),
         "evidence_index": (
-            lambda: {"df": df, "engine": engine},
+            lambda: {"df": df, "engine": engine, "bundle_dir": str(Path(output_path).parent)},
             lambda kwargs: create_evidence_index(**kwargs),
         ),
         "detailed_findings": (

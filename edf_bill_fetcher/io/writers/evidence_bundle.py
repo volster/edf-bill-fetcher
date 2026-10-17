@@ -71,6 +71,10 @@ def _infer_section(attachment_name: str, fallback: str = "D") -> tuple[str, bool
     """
     name = str(attachment_name or "")
     base = os.path.basename(name)
+    if base.lower().endswith((".eml", ".msg")) or re.fullmatch(r"message-[a-f0-9]{16}\.txt", base):
+        return "B", False
+    if re.match(r"^A-\d{6,}(?:\D|$)", base, re.I):
+        return "D", False
     m = _PREFIX_RE.match(base)
     if m:
         letter = m.group(1).upper()
@@ -290,6 +294,8 @@ def build_bundle_manifest(
                 "attachment_name": att,
                 "original_filename": _text(row.get("Original Filename")) or att,
                 "parent_message": _text(row.get("Parent Message")) or None,
+                "source_representation": _text(row.get("Source Representation"))
+                or "Original source file",
                 "saved_path": os.path.relpath(saved, bundle_dir).replace(os.sep, "/")
                 if saved
                 else None,

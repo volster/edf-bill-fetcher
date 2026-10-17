@@ -68,15 +68,31 @@ def build_output_overview(view: ReportView) -> OutputOverview:
     coverage = (
         f"{min(dated):%d %b %Y} – {max(dated):%d %b %Y}" if dated else "No usable record dates"
     )
-    bills = [
-        row for row in records if row.get("Entry Type") in {"New Bill", "Ongoing Balance", "Charge"}
-    ]
+    bills = [row for row in records if row.get("Entry Type") in {"New Bill", "Charge"}]
     ledger_count = len({scope(row) for row in records})
     manifest = state.get("source_manifest", {})
     source_count = len(manifest) if isinstance(manifest, dict) else 0
     exclusions = len(state.get("review_excluded_records", []))
     notes = len(state.get("error_log", []))
     priorities = []
+    historical = sum(
+        row.get("Document Role") == "Historical account statement"
+        and row.get("Entry Type") == "Charge"
+        and not identity(row.get("First Billed Date"))
+        for row in records
+    )
+    unbalanced = sum(
+        row.get("Statement Reconciliation Status") == "Review required" for row in records
+    )
+    if historical or unbalanced:
+        priorities.append(
+            ReviewPriority(
+                "Reconcile historical statement evidence",
+                f"{historical} statement charge observations have no established first-billed date; {unbalanced} statement equations do not balance. Historical observations may repeat other sources. Review these relationships before relying on aggregate movement; undated historical charges are excluded from back-billing date assessments.",
+                "Review & Corrections",
+                "data_quality",
+            )
+        )
     needs_info = sum(
         item.get("status") == "needs_information"
         for item in state.get("human_review_statuses", {}).values()

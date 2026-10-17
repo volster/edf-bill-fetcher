@@ -93,7 +93,7 @@ def write_data_quality_sheet(ws, df, *, payload=None):
             else "FAIL",
         ),
         (
-            "Amount Complete",
+            "Numeric amount present (meaning not validated)",
             dq["amt_complete"],
             f"{(dq['amt_complete'] / dq['total_records']):.1%}",
             "PASS" if dq["amt_complete"] == dq["total_records"] else "WARN",
@@ -117,16 +117,38 @@ def write_data_quality_sheet(ws, df, *, payload=None):
             "PASS" if dq["ur_computable_rate"] > 0.3 else "INFO",
         ),
     ]
+    from edf_bill_fetcher.processors.preparation import identity
+
+    unknown = sum(identity(row.get("Amount Kind")) == "Unknown" for row in df.to_dict("records"))
+    unbalanced = sum(
+        row.get("Statement Reconciliation Status") == "Review required"
+        for row in df.to_dict("records")
+    )
+    checks.extend(
+        [
+            (
+                "Amounts with unverified meaning",
+                unknown,
+                "Review source context",
+                "WARN" if unknown else "PASS",
+            ),
+            (
+                "Statements requiring reconciliation",
+                unbalanced,
+                "Opening + signed events − closing",
+                "WARN" if unbalanced else "PASS",
+            ),
+        ]
+    )
     for check, result, rate, status in checks:
         _check_row(r, check, result, rate, status)
         r += 1
-
     r += 1
     _section_hdr(ws, r, "DUPLICATION CHECKS")
     r += 1
     _check_row(
         r,
-        "Duplicate Records (Date+Amount)",
+        "Duplicate source observations (identity checked)",
         dq["duplicate_count"],
         f"{dq['duplicate_rate']:.2%}",
         "PASS"

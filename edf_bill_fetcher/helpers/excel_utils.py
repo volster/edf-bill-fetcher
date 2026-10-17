@@ -262,13 +262,21 @@ def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[s
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return {}
     index: dict[str, int] = {}
+    ambiguous: set[str] = set()
+
+    def add(key: str, row_no: int) -> None:
+        if key in index:
+            ambiguous.add(key)
+        else:
+            index[key] = row_no
+
     rows_iter = df.iterrows()
-    for i, r in rows_iter:
+    for i, (_, r) in enumerate(rows_iter):
         row_no = header_row_offset + 1 + i  # Excel row (header row + i + 1)
         inv = r.get("Invoice #", "")
         if isinstance(inv, str) and inv and inv != "N/A":
             key = f"inv:{inv}"
-            index.setdefault(key, row_no)
+            add(key, row_no)
         amt = r.get("Amount (£)", "")
         pf = pd.to_datetime(r.get("Period From"), dayfirst=True, errors="coerce")
         pt = pd.to_datetime(r.get("Period To"), dayfirst=True, errors="coerce")
@@ -279,8 +287,49 @@ def build_evidence_index(df: pd.DataFrame, header_row_offset: int = 1) -> dict[s
         except (TypeError, ValueError):
             continue
         days = str((pt - pf).days)
-        index.setdefault(f"amt_days:{amt_f:.2f}|{days}", row_no)
-    return index
+        add(f"amt_days:{amt_f:.2f}|{days}", row_no)
+    return {key: value for key, value in index.items() if key not in ambiguous}
+
+
+def matching_evidence_row(evidence_df: pd.DataFrame | None, row: dict) -> tuple[int, dict] | None:
+    """Find a unique compatible occurrence, never joining missing placeholders."""
+    from edf_bill_fetcher.helpers.identity import account_key
+    from edf_bill_fetcher.processors.preparation import identity
+
+    if evidence_df is None or evidence_df.empty:
+        return None
+    candidates = []
+    source_id = identity(row.get("Source ID"))
+    invoice = identity(row.get("Invoice #"))
+    for pos, candidate in enumerate(evidence_df.to_dict("records"), 2):
+        if source_id:
+            if source_id != identity(candidate.get("Source ID")):
+                continue
+            source_row = identity(row.get("Source Row"))
+            other_row = identity(candidate.get("Source Row"))
+            if source_row and source_row != other_row:
+                try:
+                    if float(source_row) != float(other_row):
+                        continue
+                except ValueError:
+                    continue
+        elif not invoice or invoice != identity(candidate.get("Invoice #")):
+            continue
+        if any(
+            identity(row.get(key))
+            and identity(candidate.get(key))
+            and str(row[key]).casefold() != str(candidate[key]).casefold()
+            for key in ("Meter", "Fuel", "Register")
+        ):
+            continue
+        account = account_key(identity(row.get("Account")))
+        other = account_key(identity(candidate.get("Account")))
+        if account and other and account != other:
+            continue
+        if invoice and identity(candidate.get("Invoice #")) != invoice:
+            continue
+        candidates.append((pos, candidate))
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def evidence_report_hyperlink_cell(
@@ -295,13 +344,15 @@ def evidence_report_hyperlink_cell(
     ``None``/empty invoice numbers are skipped. Display is a right-arrow
     glyph; tooltip carries the invoice number for accessibility.
     """
-    if not invoice_number:
+    from edf_bill_fetcher.processors.preparation import identity
+
+    if not identity(invoice_number):
         return
     target_row = None
     if evidence_df is not None and not evidence_df.empty and "Invoice #" in evidence_df.columns:
         matches = evidence_df[evidence_df["Invoice #"].astype(str) == str(invoice_number)]
-        if not matches.empty:
-            target_row = matches.iloc[0].name + 2  # +2 for header rows
+        if len(matches) == 1:
+            target_row = evidence_df.index.get_loc(matches.index[0]) + 2
     if target_row is not None:
         cell = ws.cell(row=row, column=col, value="\u2192")
         cell.hyperlink = openpyxl.worksheet.hyperlink.Hyperlink(

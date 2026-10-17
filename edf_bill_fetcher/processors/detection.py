@@ -405,7 +405,12 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         pt = _safe_to_datetime(r.get("Period To"))
         if pd.isna(pf) or pd.isna(pt):
             continue
-        bill_date_dt = _safe_to_datetime(r.get("Date"))
+        if r.get("Document Role") == "Historical account statement":
+            # Receiving a historical statement does not establish when its
+            # constituent charges were first billed.
+            bill_date_dt = _safe_to_datetime(r.get("First Billed Date"))
+        else:
+            bill_date_dt = _safe_to_datetime(r.get("Date"))
         if pd.isna(bill_date_dt):
             continue
         # Legal gate: bill Date must be more than 365 days after Period From.
@@ -426,10 +431,20 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         excess = max(0, int((backbilling_cutoff(bill_date_dt) - pf).days))
         # Use a billed charge or known transaction, never an account balance.
         charge, value_source = _pull_period_charge(r)
+        gross = number(r.get("Gross Electricity Charges (£)"))
+        if charge is not None and charge < 0 and gross is not None and gross > 0:
+            charge, value_source = (
+                gross,
+                "Gross replacement electricity charges (net bill is a credit)",
+            )
         if charge is None or charge <= 0:
             continue
         admitted = str(r.get("Cancel/Rebill Admitted")).lower() == "true" if has_admit else False
-        bill_date_raw = r.get("Date", "")
+        bill_date_raw = (
+            bill_date_dt.strftime("%d/%m/%Y")
+            if r.get("Document Role") == "Historical account statement"
+            else r.get("Date", "")
+        )
         sub_periods = _parse_sub_periods(r.get("Sub Periods"))
         cutoff = backbilling_cutoff(bill_date_dt)
         if sub_periods:
@@ -505,6 +520,14 @@ def _ambiguous_invoice_references(df: pd.DataFrame) -> set[str]:
     observations: dict[str, set[tuple]] = defaultdict(set)
     for raw in df.to_dict("records"):
         record = normalize_record(raw)
+        if record.get(
+            "Document Role"
+        ) == "Historical account statement" or "Reconciliation Statement" in str(
+            record.get("Logic Used")
+        ):
+            # A statement reference identifies the container, whose many
+            # historical charges are not competing versions of one invoice.
+            continue
         if record["Entry Type"] not in {"Unknown", "New Bill", "Ongoing Balance", "Charge"}:
             continue
         invoice = identity(record.get("Invoice #"))
@@ -631,17 +654,26 @@ def detect_rebilling(
             continue
         pf = _safe_to_datetime(r.get("Period From"))
         pt = _safe_to_datetime(r.get("Period To"))
-        bd = _safe_to_datetime(r.get("Date"))
+        bd = _safe_to_datetime(
+            r.get("First Billed Date")
+            if r.get("Document Role") == "Historical account statement"
+            else r.get("Date")
+        )
         if pd.isna(pf) or pd.isna(pt) or pd.isna(bd):
             continue
         amount, _ = _pull_period_charge(r)
         if amount is not None and amount < 0:
-            continue
+            gross = number(r.get("Gross Electricity Charges (£)"))
+            if gross is None or gross <= 0:
+                continue
+            amount = gross
         admitted = str(r.get("Cancel/Rebill Admitted")).lower() == "true" if has_admit else False
         parsed.append(
             {
                 "Invoice #": invoice,
-                "Date_raw": r.get("Date", ""),
+                "Date_raw": bd.strftime("%d/%m/%Y")
+                if r.get("Document Role") == "Historical account statement"
+                else r.get("Date", ""),
                 "Date": bd,
                 "Period From": pf,
                 "Period To": pt,

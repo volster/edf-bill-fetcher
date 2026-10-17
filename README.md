@@ -337,6 +337,31 @@ Removing a section: same steps in reverse.
 
 ## Review and correct in Excel
 
+Net bill movements and closing account balances are separate values. A
+cancellation/rebill may be a net credit while containing positive replacement
+charges; **Gross Electricity Charges (£)** preserves those components for
+review without turning them into an additional ledger transaction.
+
+Historical statements carry a **Document Date** separately from the events they
+describe. Their date does not establish when a consumption charge was first
+billed. A unique matching original invoice can corroborate a statement line;
+both source occurrences remain auditable. Unresolved dates and relationships
+require review, and statement charge observations can still repeat other
+sources. A statement's opening balance plus its extracted signed events is
+checked against its printed closing balance; discrepancies appear in the
+evidence and review priorities.
+
+The meter history shows numeric register readings on their reading dates,
+including SAP readings, with account/meter/register context. Mixed bill-level
+reading bases remain separate from the closing reading's classification.
+PST/OST bodies are saved as explicitly labelled generated text exports, with
+the captured body bytes and archive occurrence retained; these are not original
+EML messages. Saved originals can be opened from the HTML source inventory.
+
+Existing `result.json` files retain their accepted historical calculations.
+Re-extract the original sources to apply parser corrections; opening an old
+report does not silently rewrite its evidence or financial figures.
+
 Every new workbook opens on **Start here**, with a financial overview, dated
 review priorities and links to every visible sheet. Balances are labelled as
 observations; combined balances remain unavailable for mixed ledgers. The

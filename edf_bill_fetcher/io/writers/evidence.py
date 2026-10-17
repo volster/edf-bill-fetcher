@@ -85,6 +85,19 @@ EVIDENCE_HEADERS: list[str] = [
     "OCR Pages",
     "OCR Minimum Confidence (%)",
     "OCR Review Required",
+    "Document Role",
+    "Document Date",
+    "First Billed Date",
+    "Billing Date Status",
+    "Original Invoice #",
+    "Source Row",
+    "Gross Electricity Charges (£)",
+    "Reading Date",
+    "Closing Reading Type",
+    "Statement Reconciliation Difference (£)",
+    "Statement Reconciliation Status",
+    "Reconciliation Review",
+    "Source Representation",
 ]
 COL_AMOUNT = EVIDENCE_HEADERS.index("Amount (£)") + 1
 
@@ -111,7 +124,14 @@ def write_evidence_sheet(ws, df, is_duplicate=False, saved_paths=None):
             previous[key] = (row_number, balance)
         for col, header in enumerate(headers, 1):
             value = record.get(header)
-            if header in {"Date", "Period From", "Period To"}:
+            if header in {
+                "Date",
+                "Period From",
+                "Period To",
+                "Document Date",
+                "First Billed Date",
+                "Reading Date",
+            }:
                 value = to_excel_date(value)
             cell = literal_cell(ws, row_number, col, value)
             cell.font = Font(name="Calibri", size=10)

@@ -457,18 +457,13 @@ def _evidence_df_with_unparseable_units() -> pd.DataFrame:
     )
 
 
-def test_write_meter_readings_sheet_unparseable_units_written_as_text() -> None:
-    """A non-numeric Units (kWh) value is written as text in col 2.
-
-    Covers lines 318-319 (units = units_raw on parse failure) and 332
-    (the ``_text`` branch for non-numeric units).
-    """
+def test_write_meter_readings_sheet_omits_rows_without_register_readings() -> None:
+    """Missing readings belong in source evidence, not in the meter history."""
     ws = _open_ws()
     write_meter_readings_sheet(ws, _evidence_df_with_unparseable_units(), pd.DataFrame())
-    # Row 8 = INV-N/A. Its Units cell (col 2) should hold the raw "N/A"
-    # string, not a number.
-    units_cell = ws.cell(row=8, column=2).value
-    assert units_cell == "N/A"
+    assert ws.cell(row=8, column=2).value == 350
+    assert ws.cell(row=8, column=5).value == "INV-002"
+    assert ws.cell(row=9, column=1).value is None
 
 
 def test_write_meter_readings_sheet_no_account_uses_plain_title() -> None:
@@ -545,7 +540,7 @@ def _evidence_df_empty_source_text() -> pd.DataFrame:
     )
 
 
-def test_write_meter_readings_sheet_empty_source_text_falls_back_to_hyperlink() -> None:
+def test_write_meter_readings_sheet_empty_excerpt_uses_separate_source_row_link() -> None:
     """An empty Source PDF Text leaves excerpt empty -> hyperlink fallback.
 
     Covers the 348->352 branch (source_text falsy) and the 354-355
@@ -558,7 +553,8 @@ def test_write_meter_readings_sheet_empty_source_text_falls_back_to_hyperlink() 
     # The invoice IS present in evidence_df, so evidence_report_hyperlink_cell
     # emits a '->' hyperlink.
     cell_val = ws.cell(row=8, column=7).value
-    assert cell_val == "\u2192"
+    assert cell_val is None
+    assert ws.cell(row=8, column=8).hyperlink.location == "'EDF Evidence Report'!A2"
 
 
 def _evidence_df_no_match_in_evidence() -> pd.DataFrame:

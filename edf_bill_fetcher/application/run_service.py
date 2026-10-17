@@ -261,10 +261,13 @@ def collect_engine(
             if constructor is None:
                 raise RuntimeError("pypff has no file constructor")
             archive = constructor()
+            previous_origin = getattr(engine, "_archive_origin", "")
             try:
                 archive.open(str(Path(source.path).absolute()))
+                engine._archive_origin = str(Path(source.path).absolute())
                 engine.crawl_pst(archive.get_root_folder())
             finally:
+                engine._archive_origin = previous_origin
                 archive.close()
         else:
             method = {

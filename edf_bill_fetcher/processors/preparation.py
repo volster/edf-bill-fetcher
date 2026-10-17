@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
 import warnings
 from collections.abc import Mapping
@@ -179,6 +180,9 @@ def scope(row: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _same_event(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    linked = identity(a.get("Reconciled Event ID"))
+    if linked and linked == identity(b.get("Reconciled Event ID")):
+        return True
     if scope(a) != scope(b) or a["Entry Type"] != b["Entry Type"]:
         return False
     ai, bi = identity(a.get("Invoice #")), identity(b.get("Invoice #"))
@@ -229,6 +233,113 @@ def _same_event(a: dict[str, Any], b: dict[str, Any]) -> bool:
     )
 
 
+def _link_statement_observations(rows: list[dict[str, Any]]) -> None:
+    """Link a uniquely supported historical line to its original invoice.
+
+    Account, consumption period and signed charge must agree. Known meters
+    and fuels must also agree; missing account identities never cross-join.
+    Ambiguous candidate invoices stay separate and explicitly require review.
+    """
+    for row in rows:
+        # Revalidate generated relationships after a review edit or reload.
+        row.pop("Reconciled Event ID", None)
+        if row.get("Billing Date Status") == "Corroborated by original invoice":
+            row["First Billed Date"] = "N/A"
+            row["Date"] = "N/A"
+            row.pop("Original Invoice #", None)
+            row["Billing Date Status"] = "Unknown: original relationship requires revalidation"
+    originals = [r for r in rows if r.get("Document Role") != "Historical account statement"]
+    for row in rows:
+        if row.get("Document Role") != "Historical account statement":
+            continue
+        kind = row["Entry Type"]
+        if kind not in {"Charge", "Credit"}:
+            continue
+        account = account_key(identity(row.get("Account")))
+        if not account or not all(identity(row.get(k)) for k in ("Period From", "Period To")):
+            continue
+        same_lines = [
+            other
+            for other in rows
+            if other.get("Document Role") == "Historical account statement"
+            and other.get("Entry Type") == kind
+            and scope(other) == scope(row)
+            and identity(other.get("Source ID") or other.get("Attachment Name"))
+            == identity(row.get("Source ID") or row.get("Attachment Name"))
+            and all(
+                other.get(key) == row.get(key)
+                for key in ("Account", "Period From", "Period To", "Transaction Amount (£)")
+            )
+        ]
+        if len(same_lines) > 1:
+            row["Reconciliation Review"] = (
+                "Repeated identical statement lines; event identity needs review"
+            )
+            continue
+        candidates = []
+        for original in originals:
+            if str(original.get("Source", "")).startswith("HTM"):
+                # Account-history posting/period-end dates are not evidence
+                # of the issue date printed on an original invoice.
+                continue
+            if original["Entry Type"] != ("New Bill" if kind == "Charge" else "Credit"):
+                continue
+            if account_key(identity(original.get("Account"))) != account:
+                continue
+            if not identity(original.get("Invoice #")):
+                continue
+            issued = parse_to_sort_date(original["Date"])
+            document_date = parse_to_sort_date(row.get("Document Date"))
+            if pd.isna(issued) or (not pd.isna(document_date) and issued > document_date):
+                continue
+            if any(
+                identity(row.get(k))
+                and identity(original.get(k))
+                and str(row[k]).casefold() != str(original[k]).casefold()
+                for k in ("Meter", "Fuel", "Register")
+            ):
+                continue
+            if any(
+                parse_to_sort_date(row[k]) != parse_to_sort_date(original[k])
+                for k in ("Period From", "Period To")
+            ):
+                continue
+            if row.get("Transaction Amount (£)") != original.get("Transaction Amount (£)"):
+                continue
+            if kind == "Credit" and parse_to_sort_date(row["Date"]) != parse_to_sort_date(
+                original["Date"]
+            ):
+                continue
+            candidates.append(original)
+        invoices = {identity(c["Invoice #"]) for c in candidates}
+        if len(invoices) != 1 or len({scope(candidate) for candidate in candidates}) != 1:
+            if candidates:
+                row["Reconciliation Review"] = (
+                    "Multiple original invoices match this historical line"
+                )
+            continue
+        original = candidates[0]
+        token = hashlib.sha256(
+            repr(
+                (
+                    scope(original),
+                    kind,
+                    original["Invoice #"],
+                    original["Period From"],
+                    original["Period To"],
+                    original["Transaction Amount (£)"],
+                )
+            ).encode()
+        ).hexdigest()
+        row["Reconciled Event ID"] = token
+        row["Original Invoice #"] = original["Invoice #"]
+        row["First Billed Date"] = original["Date"]
+        row["Date"] = original["Date"]
+        row["Billing Date Status"] = "Corroborated by original invoice"
+        for candidate in candidates:
+            candidate["Reconciled Event ID"] = token
+
+
 @dataclass
 class PreparedEvidence:
     """One preserved dataset and its auditable duplicate decisions."""
@@ -255,8 +366,10 @@ def prepare_evidence(
         if key in cfg and (number(cfg[key]) is None or float(cfg[key]) < 0):
             raise ValueError(f"{key} must be a finite non-negative number")
     rows = [normalize_record(r) for r in records]
+    _link_statement_observations(rows)
     rows.sort(
         key=lambda r: (
+            r.get("Document Role") == "Historical account statement",
             -completeness_score(r),
             SOURCE_PRECEDENCE.get(str(r["Source"]), 99),
             str(r["Source"]),
@@ -294,6 +407,11 @@ def prepare_evidence(
                     "Page To",
                     "Source PDF Text",
                     "_regex_trace",
+                    "Source Row",
+                    "Document Date",
+                    "First Billed Date",
+                    "Original Invoice #",
+                    "Document Role",
                 )
             }
         )

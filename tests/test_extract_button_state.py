@@ -38,6 +38,7 @@ def app(monkeypatch, tmp_path):
 
         monkeypatch.setattr(_app_module.threading, "Thread", _NoThread)
         widget = App(root)
+        widget._CONFIG_PATH = str(tmp_path / "settings.json")
         widget.pst_path.set(str(tmp_path / "nonexistent.pst"))
         widget.output_folder.set(str(tmp_path))
         yield widget

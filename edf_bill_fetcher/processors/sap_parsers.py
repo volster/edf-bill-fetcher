@@ -31,6 +31,7 @@ from collections.abc import Callable
 
 from edf_bill_fetcher.helpers.date_utils import parse_to_display_date, parse_to_sort_date
 from edf_bill_fetcher.helpers.formatting import parse_amount
+from edf_bill_fetcher.helpers.identity import document_identity
 from edf_bill_fetcher.processors.patterns import (
     _BILLING_PERIOD_RE,
     _CREDIT_NUMBER_RE,
@@ -54,7 +55,7 @@ _CURRENT_BAL_RE = re.compile(
 )
 _UNITS_USED_RE = re.compile(r"Electricity used\s+([\d,]+\.?\d*)\s+kWh", re.IGNORECASE)
 _STANDING_CHARGE_RE = re.compile(r"Standing charge\s+\d+\s+days\s+@\s+([\d.]+)p/day", re.IGNORECASE)
-_TARIFF_NAME_RE = re.compile(r"Tariff name\s+(\w[\w\s]+?)(?:Payment type|$)", re.IGNORECASE)
+_TARIFF_NAME_RE = re.compile(r"Tariff name[^\S\n]+([^\n]+)", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +468,8 @@ def extract_new_invoice_fields(text):
 
     # kWh used
     m = _UNITS_USED_RE.search(text)
+    if not m:
+        m = re.search(r"([\d,]+(?:\.\d+)?)\s+kWh\s+@\s*\n\s*Electricity used", text, re.I)
     if m:
         fields["units_used"] = m.group(1)
 
@@ -478,7 +481,9 @@ def extract_new_invoice_fields(text):
     # Tariff name
     m = _TARIFF_NAME_RE.search(text)
     if m:
-        fields["tariff"] = m.group(1).strip()
+        fields["tariff"] = re.split(
+            r"\s+(?:Payment (?:type|method)|Product type|Supply address)\b", m.group(1), flags=re.I
+        )[0].strip()
 
     return fields
 
@@ -658,11 +663,15 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
     bal_last_match = _RECON_BALANCE_LAST_RE.search(text)
     if bal_last_match:
         bal_last = _recon_money(bal_last_match.group(1))
+        if (bal_last_match.group(2) or "").lower() == "credit":
+            bal_last = -bal_last
 
     new_bal: object = "N/A"
     new_bal_match = _RECON_NEW_BALANCE_RE.search(text)
     if new_bal_match:
         new_bal = _recon_money(new_bal_match.group(1))
+        if (new_bal_match.group(2) or "").lower() == "credit":
+            new_bal = -new_bal
 
     # Charge rows
     for m in _RECON_CHARGE_RE.finditer(text):
@@ -697,7 +706,7 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
         # Look for a parenthetical period on the next non-empty line.
         details = "Reversed electricity charge"
         tail = text[m.end() : m.end() + 400]
-        period_match = _RECON_REVERSAL_PERIOD_RE.search(tail)
+        period_match = _RECON_REVERSAL_PERIOD_RE.match(tail.lstrip())
         if period_match:
             details = (
                 f"Reversed electricity charge ({period_match.group(1)} - {period_match.group(2)})"
@@ -707,8 +716,8 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
                 "Source": src,
                 "Sender": "",
                 "Date": date_iso,
-                "Period From": "N/A",
-                "Period To": "N/A",
+                "Period From": _recon_to_iso(period_match[1]) if period_match else "N/A",
+                "Period To": _recon_to_iso(period_match[2]) if period_match else "N/A",
                 "Invoice #": bill_ref or "N/A",
                 "Amount (£)": -abs(amount),
                 "Period Charge (£)": -abs(amount),
@@ -726,14 +735,25 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
             }
         )
 
-    # Late payment rows
-    for m in _RECON_LATE_PAYMENT_RE.finditer(text):
+    # The overview fee is repeated in the dated "Other charges" detail.
+    # Prefer all detailed events (including equal-valued fees); only consume
+    # overview entries when their section has no matching detail total.
+    detail_start = re.search(r"\bOther charges\b", text, re.I)
+    fee_matches = list(_RECON_LATE_PAYMENT_RE.finditer(text))
+    detailed = [m for m in fee_matches if detail_start and m.start() > detail_start.start()]
+    summary = [m for m in fee_matches if m not in detailed]
+    summary_total = round(sum(_recon_money(m[1]) for m in summary), 2)
+    detail_total = round(sum(_recon_money(m[1]) for m in detailed), 2)
+    fees = detailed if detailed else fee_matches
+    for m in fees:
         amount = _recon_money(m.group(1))
+        prefix = text[max(0, m.start() - 60) : m.start()]
+        fee_date = re.search(r"(\d{1,2}\s+[A-Za-z.]+\s+\d{4})\s*$", prefix)
         rows.append(
             {
                 "Source": src,
                 "Sender": "",
-                "Date": bill_date_display,
+                "Date": _recon_to_iso(fee_date[1]) if fee_date else "N/A",
                 "Period From": "N/A",
                 "Period To": "N/A",
                 "Invoice #": bill_ref or "N/A",
@@ -786,7 +806,7 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
                     "Details": "Payment received (reconciliation statement)",
                     "Logic Used": "Reconciliation Statement Payment",
                     "Balance Last Bill (£)": bal_last,
-                    "Source PDF Text": _excerpt_around(m),
+                    "Source PDF Text": payments_block[max(0, m.start() - 20) : m.end() + 200],
                     "_regex_trace": "recon _RECON_PAYMENT_RE",
                 }
             )
@@ -819,6 +839,41 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
             "_regex_trace": "recon meta",
         }
     )
+    context = document_identity(text)
+    for index, row in enumerate(rows, 1):
+        row.update(context)
+        row["Document Date"] = bill_date_display
+        row["Document Role"] = "Historical account statement"
+        row["Source Row"] = index
+        if row["Entry Type"] == "Charge":
+            row["Date"] = "N/A"
+            row["First Billed Date"] = "N/A"
+            row["Billing Date Status"] = (
+                "Unknown: historical statement does not establish first billing"
+            )
+        elif row["Entry Type"] in {"Payment", "Credit", "Late Payment"}:
+            row["Historical Activity"] = True
+    # A source equation tests extraction independently of cross-document
+    # reconciliation. Do not silently force a mismatch to the printed balance.
+    if isinstance(bal_last, float) and isinstance(new_bal, float):
+        movement = sum(
+            (
+                -abs(float(r["Amount (£)"]))
+                if r["Entry Type"] == "Payment"
+                else float(r["Amount (£)"])
+            )
+            for r in rows[:-1]
+        )
+        difference = round(bal_last + movement - new_bal, 2)
+        rows[-1]["Statement Reconciliation Difference (£)"] = difference
+        rows[-1]["Statement Reconciliation Status"] = (
+            "Balanced" if difference == 0 else "Review required"
+        )
+    if summary and detailed and summary_total != detail_total:
+        rows[-1]["Reconciliation Review"] = (
+            f"Fee summary £{summary_total:.2f} differs from dated fee details £{detail_total:.2f}; only details counted"
+        )
+        rows[-1]["Statement Reconciliation Status"] = "Review required"
     return rows
 
 

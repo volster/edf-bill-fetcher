@@ -25,6 +25,7 @@ from edf_bill_fetcher.helpers.excel_utils import (
 from edf_bill_fetcher.helpers.excel_utils import (
     hcell as _hcell,
 )
+from edf_bill_fetcher.helpers.excel_utils import matching_evidence_row
 from edf_bill_fetcher.helpers.excel_utils import (
     num as _num,
 )
@@ -34,6 +35,7 @@ from edf_bill_fetcher.helpers.excel_utils import (
 from edf_bill_fetcher.helpers.theme import CELL_BORDER
 from edf_bill_fetcher.processors.detection import detect_meter_rollover
 from edf_bill_fetcher.processors.matching import infer_contracts
+from edf_bill_fetcher.processors.preparation import identity
 from edf_bill_fetcher.writers._helpers import _reading_type_to_aem
 
 # ---- detect_meter_rollover, infer_contracts (re-exported from processors) ----
@@ -50,6 +52,7 @@ def _write_meter_readings_sheet_impl(
     *,
     evidence_df: pd.DataFrame | None = None,
     evidence_index: dict[str, int] | None = None,
+    sap_readings: list[dict] | None = None,
 ) -> None:
     """Render the Meter Readings tab (spec §4.3).
 
@@ -100,7 +103,7 @@ def _write_meter_readings_sheet_impl(
     # Row 2: legend subheader
     sub = (
         "A = Actual (supplier-confirmed reading)  |  E = Estimated  |  "
-        "U = Unknown | M = Meter rollover candidate (negative delta near rollover threshold)"
+        "C = Customer-provided | U = Unknown | M = Meter rollover candidate (negative delta near rollover threshold)"
     )
     sub_cell = ws.cell(row=2, column=1, value=sub)
     sub_cell.font = Font(name="Calibri", size=10, italic=True)
@@ -112,12 +115,15 @@ def _write_meter_readings_sheet_impl(
     headers = [
         "Date",
         "Reading (kWh)",
-        "Type (A/E/M)",
+        "Type (A/E/C/M)",
         "Estimated Source",
         "Invoice #",
         "Notes",
-        "Open PDF",
+        "Source Excerpt",
         "View on Evidence Report",
+        "Account",
+        "Meter",
+        "Register",
     ]
     for col, h in enumerate(headers, 1):
         _hcell(ws, 7, col, h, bg=NAVY)
@@ -126,6 +132,34 @@ def _write_meter_readings_sheet_impl(
     # Sort rows by Date before writing.
     work = df.copy() if df is not None and not df.empty else pd.DataFrame()
     if not work.empty:
+        work = work[
+            pd.to_numeric(
+                work.get("Register Reading (kWh)", pd.Series(index=work.index, dtype=float)),
+                errors="coerce",
+            ).notna()
+        ].copy()
+        work["Date"] = [
+            identity(row.get("Reading Date")) or row.get("Date") for row in work.to_dict("records")
+        ]
+    if sap_readings:
+        sap = pd.DataFrame(
+            [
+                {
+                    **row,
+                    "Date": row.get("Meter Read Date"),
+                    "Invoice #": "N/A",
+                    "Register Reading (kWh)": row.get("Reading (kWh)"),
+                    "Reading": {"A": "Actual", "E": "Estimated"}.get(
+                        str(row.get("Read Type", "")), "Unknown"
+                    ),
+                    "Details": f"SAP reading: {row.get('Read Source', '')}; {row.get('Source File', '')}",
+                }
+                for row in sap_readings
+            ]
+        )
+        sap = sap[pd.to_numeric(sap["Register Reading (kWh)"], errors="coerce").notna()]
+        work = pd.concat([work, sap], ignore_index=True)
+    if not work.empty:
         work["_dt"] = _safe_to_datetime(work.get("Date"))
         work = work.sort_values("_dt").drop(columns=["_dt"])
 
@@ -133,21 +167,29 @@ def _write_meter_readings_sheet_impl(
     for _, row in work.iterrows():
         bg = "EEF2FF" if r % 2 == 0 else None
         inv = str(row.get("Invoice #", ""))
-        reading = row.get("Reading", "")
+        reading = identity(row.get("Closing Reading Type")) or row.get("Reading", "")
         units_raw = row.get("Register Reading (kWh)", "N/A")
         try:
             units = float(units_raw)
         except (TypeError, ValueError):
             units = units_raw  # keep as-is in cell
         # Type code: M overrides if invoice flagged in rollovers.
-        type_code = "M" if inv in rollover_invoices else _reading_type_to_aem(str(reading))
+        type_code = (
+            "M"
+            if inv in rollover_invoices
+            else "C"
+            if reading == "Customer"
+            else _reading_type_to_aem(str(reading))
+        )
         est_src = ""
         if str(reading) == "Estimated":
             est_src = str(row.get("Details", "") or "")
         notes = (
             "Meter rollover candidate -- see rollover table." if inv in rollover_invoices else ""
         )
-        _text(ws, r, 1, row.get("Date", ""), fill_hex=bg)
+        if str(row.get("Details", "")).startswith("SAP reading:"):
+            notes = str(row["Details"])
+        _text(ws, r, 1, identity(row.get("Reading Date")) or row.get("Date", ""), fill_hex=bg)
         if isinstance(units, int | float):
             _num(ws, r, 2, units, fmt="#,##0.0", fill_hex=bg)
         else:
@@ -156,6 +198,8 @@ def _write_meter_readings_sheet_impl(
         _text(ws, r, 4, est_src, fill_hex=bg)
         _text(ws, r, 5, inv, fill_hex=bg)
         _text(ws, r, 6, notes, wrap=True, fill_hex=bg)
+        for column, key in enumerate(("Account", "Meter", "Register"), 9):
+            _text(ws, r, column, identity(row.get(key)), fill_hex=bg)
         # Colour the type cell for clarity: amber for E, blue for M.
         type_cell = ws.cell(row=r, column=3)
         if type_code == "M":
@@ -163,23 +207,20 @@ def _write_meter_readings_sheet_impl(
         elif type_code == "E":
             type_cell.font = Font(name="Calibri", size=10, color="C08000")
         excerpt = ""
-        if evidence_df is not None and not evidence_df.empty and "Invoice #" in evidence_df.columns:
-            matches = evidence_df[evidence_df["Invoice #"].astype(str) == str(inv)]
-            if not matches.empty:
-                source_text = matches.iloc[0].get("Source PDF Text", "")
-                if isinstance(source_text, str) and source_text:
-                    excerpt = source_text[:400]
-                    if len(source_text) > 400:
-                        excerpt += " ..."
+        match = matching_evidence_row(evidence_df, row.to_dict())
+        if match:
+            source_text = match[1].get("Source PDF Text", "")
+            if isinstance(source_text, str) and source_text:
+                excerpt = source_text[:400]
+                if len(source_text) > 400:
+                    excerpt += " ..."
         if excerpt:
             _text(ws, r, 7, excerpt, wrap=True, fill_hex=bg)
-        else:
-            _evidence_report_hyperlink_cell(ws, r, 7, evidence_df, inv)
         # View on Evidence Report (col 8): hyperlinked right-arrow
         # that jumps to the matched invoice's row on the Evidence
         # Report sheet.
-        target_row = None
-        if evidence_index is not None:
+        target_row = match[0] if match else None
+        if evidence_index is not None and evidence_df is None and identity(inv):
             target_row = evidence_index.get(f"inv:{inv}")
             if target_row is None:
                 # Fall back to date+units signature.
@@ -243,17 +284,24 @@ def write_contract_history_sheet(
     NAVY = "10367A"
     ORANGE = "FE5716"
 
-    def _first_matching_invoice(cf: pd.Timestamp, ct: pd.Timestamp) -> str:
+    def _first_matching_invoice(cf: pd.Timestamp, ct: pd.Timestamp, contract: dict) -> str:
         if evidence_df is None or evidence_df.empty or "Invoice #" not in evidence_df.columns:
             return ""
         for _, er in evidence_df.iterrows():
+            if any(
+                identity(contract.get(key))
+                and identity(er.get(key))
+                and str(contract[key]).casefold() != str(er[key]).casefold()
+                for key in ("Account", "Fuel", "Meter", "Register", "Tariff")
+            ):
+                continue
             ipf = _safe_to_datetime(er.get("Period From"))
             ipt = _safe_to_datetime(er.get("Period To"))
             if pd.isna(ipf) or pd.isna(ipt):
                 continue
             if (ipf <= ct) and (ipt >= cf):
                 inv = str(er.get("Invoice #", ""))
-                if inv:
+                if identity(inv):
                     return inv
         return ""
 
@@ -290,7 +338,7 @@ def write_contract_history_sheet(
         "Tariff",
         "Days",
         "# Invoices",
-        "Open PDF",
+        "View source row",
         "View on Evidence Report",
     ]
     for col, h in enumerate(headers, 1):
@@ -314,7 +362,7 @@ def write_contract_history_sheet(
         _num(ws, r, 4, int(row.get("Days", 0)), fmt="#,##0", fill_hex=bg)
         _num(ws, r, 5, int(row.get("# Invoices", 0)), fmt="#,##0", fill_hex=bg)
         matched_inv = (
-            _first_matching_invoice(cf, ct)
+            _first_matching_invoice(cf, ct, row.to_dict())
             if (
                 isinstance(cf, pd.Timestamp)
                 and not pd.isna(cf)
@@ -364,6 +412,7 @@ def write_meter_readings_sheet(
     *,
     evidence_df: pd.DataFrame | None = None,
     evidence_index: dict[str, int] | None = None,
+    sap_readings: list[dict] | None = None,
 ) -> None:
     """Adapter: test contract uses ``(ws, df)``; supply defaults for the rest."""
     return _write_meter_readings_sheet_impl(
@@ -373,6 +422,7 @@ def write_meter_readings_sheet(
         account,
         evidence_df=evidence_df,
         evidence_index=evidence_index,
+        sap_readings=sap_readings,
     )
 
 
