@@ -29,6 +29,8 @@ def document_identity(text: str) -> dict[str, str]:
             continue
         accounts.append(value)
     if not accounts:
+        accounts = re.findall(r"edfenergy\.com/myaccount/accounts/(A-\d+)\b", text, re.I)
+    if not accounts:
         account_block = re.search(r"Account\s+(?:number|reference)\b(.{0,160})", text, re.I | re.S)
         if account_block:
             accounts = re.findall(r"\bA-\d+\b|(?<!\d)(?:\d[ ]*){12}(?!\d)", account_block[1])

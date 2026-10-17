@@ -214,14 +214,32 @@ _PST_PR_ATTACH_LONG_FILENAME = 0x3707
 # vs "98875YOUR READ 33348 ESTIMATED"), so the middle is captured non-greedily
 # up to the trailing "<units> kWh <rate>p £<charge>" anchor.
 SUB_PERIOD_RE = re.compile(
-    r"(?P<pf>\d{1,2}\s+\w{3}\s+\d{2,4})\s+-\s+"
+    r"(?P<pf>\d{1,2}\s+\w{3}\s+\d{2,4})\s+(?:-\s+)?"
     r"(?P<pt>\d{1,2}\s+\w{3}\s+\d{2,4})\s+"
-    r"(?P<mid>.*?)\s+"
+    r"(?P<mid>[^£]*?)\s+"
     r"(?P<units>[\d,]+)\s*kWh\s+"
     r"(?P<rate>[\d.]+)p\s+"
     r"£(?P<charge>[\d,]+\.\d{2})",
     re.IGNORECASE,
 )
+
+
+def normalize_charge_table(text: str) -> str:
+    """Rejoin a year wrapped beneath an old-format charge-table row."""
+    text = re.sub(
+        r"(\b\d{1,2}\s+[A-Za-z]{3})[ \t]+(\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4})([^\n]+)\n(\d{2,4})\s*-",
+        r"\1 \4 - \2\3",
+        text,
+    )
+    text = re.sub(r"\s+", " ", text)
+    return re.sub(
+        r"(\b\d{1,2}\s+\w{3}\s+\d{2,4})\s+-\s+"
+        r"([\d,]+)\s+([\d,]+)\s+([\d,]+)\s*kWh\s+([\d.]+)p\s+£([\d,.]+)\s+"
+        r"(\d{1,2}\s+\w{3}\s+\d{2,4})\s+(OUR READ|YOUR READ|ESTIMATED)\s+(OUR READ|YOUR READ|ESTIMATED)",
+        r"\1 - \7 \2 \8 \3 \9 \4 kWh \5p £\6",
+        text,
+        flags=re.I,
+    )
 
 
 def extract_sub_periods(text: str) -> list[dict]:
@@ -237,7 +255,7 @@ def extract_sub_periods(text: str) -> list[dict]:
     out: list[dict] = []
     if not text:
         return out
-    for m in SUB_PERIOD_RE.finditer(text):
+    for m in SUB_PERIOD_RE.finditer(normalize_charge_table(text)):
         pf = parse_to_display_date(m.group("pf"))
         pt = parse_to_display_date(m.group("pt"))
         if pf == m.group("pf") or pt == m.group("pt"):

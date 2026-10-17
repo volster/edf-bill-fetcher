@@ -8,7 +8,45 @@ from typing import Any
 from edf_bill_fetcher.helpers.date_utils import parse_to_display_date
 from edf_bill_fetcher.models.records import BillingRecord
 
-__all__ = ["htm_excerpt", "parse_htm_account_history"]
+__all__ = [
+    "htm_excerpt",
+    "is_pdf_account_history",
+    "parse_htm_account_history",
+    "parse_pdf_account_history",
+]
+
+
+def is_pdf_account_history(text: str) -> bool:
+    """Identify printed MyAccount history by its title and customer URL."""
+    return bool(
+        re.search(r"Payments and Invoices\s*\|\s*EDF", text, re.I)
+        and re.search(r"edfenergy\.com/myaccount/accounts/A-\d+", text, re.I)
+    )
+
+
+def parse_pdf_account_history(text: str) -> list[dict[str, Any]]:
+    """Read printed history without treating posting dates as invoice dates."""
+    # Browser print headers can occur between a card's date and heading.
+    text = re.sub(r"(?im)^.*https?://edfenergy\.com/myaccount/[^\n]*$", "", text)
+    rows = parse_htm_account_history(text)
+    for row in rows:
+        posting = row["Date"]
+        charge = row["Entry Type"] == "New Bill"
+        row.update(
+            {
+                "Source": "PDF Account History",
+                "Amount Kind": "Balance",
+                "Entry Type": "Charge" if charge else row["Entry Type"],
+                "Document Role": "Historical account statement",
+                "Historical Activity": True,
+                "Posting Date": posting,
+                "Date": "N/A" if charge else posting,
+                "First Billed Date": "N/A",
+                "Billing Date Status": "Unknown: account history posting date is not an invoice issue date",
+            }
+        )
+    return rows
+
 
 _DATE = r"\d{1,2}\s+\w+\s+\d{4}"
 _ROW_START_RE = re.compile(
@@ -76,6 +114,12 @@ def parse_htm_account_history(text: str) -> list[dict[str, Any]]:
                 units = consumption.group(1)
                 period_from = parse_to_display_date(consumption.group(2))
                 period_to = parse_to_display_date(consumption.group(3))
+            elif re.search(r"\bLate Payment Charge\b", row_text, re.I):
+                entry_type, details, logic = (
+                    "Late Payment",
+                    "HTM: late payment charge",
+                    "HTM Late Payment",
+                )
         elif verb == "you paid us":
             entry_type, details, logic, trace = (
                 "Payment",

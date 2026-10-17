@@ -6,6 +6,7 @@ import copy
 import hashlib
 import math
 import warnings
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -252,7 +253,11 @@ def _link_statement_observations(rows: list[dict[str, Any]]) -> None:
     for row in rows:
         if row.get("Document Role") != "Historical account statement":
             continue
-        kind = row["Entry Type"]
+        kind = (
+            "Charge"
+            if row.get("Source") == "HTM Account History" and row["Entry Type"] == "New Bill"
+            else row["Entry Type"]
+        )
         if kind not in {"Charge", "Credit"}:
             continue
         account = account_key(identity(row.get("Account")))
@@ -262,7 +267,13 @@ def _link_statement_observations(rows: list[dict[str, Any]]) -> None:
             other
             for other in rows
             if other.get("Document Role") == "Historical account statement"
-            and other.get("Entry Type") == kind
+            and (
+                "Charge"
+                if other.get("Source") == "HTM Account History"
+                and other["Entry Type"] == "New Bill"
+                else other["Entry Type"]
+            )
+            == kind
             and scope(other) == scope(row)
             and identity(other.get("Source ID") or other.get("Attachment Name"))
             == identity(row.get("Source ID") or row.get("Attachment Name"))
@@ -340,6 +351,58 @@ def _link_statement_observations(rows: list[dict[str, Any]]) -> None:
             candidate["Reconciled Event ID"] = token
 
 
+def _link_account_history_formats(rows: list[dict[str, Any]]) -> None:
+    """Unify unique matching HTML/PDF history events, retaining both sources.
+
+    Equal payments in one source remain separate. A customer, posting date,
+    signed transaction, running balance, period and ledger must all agree.
+    """
+    groups: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row["Source"] not in {"HTM Account History", "PDF Account History"}:
+            continue
+        if not identity(row.get("Account")) or not identity(row.get("Source ID")):
+            continue
+        posting = parse_to_sort_date(row.get("Posting Date"))
+        if (
+            pd.isna(posting)
+            or row.get("Transaction Amount (£)") is None
+            or row.get("Balance (£)") is None
+        ):
+            continue
+        kind = "Charge" if row["Entry Type"] == "New Bill" else row["Entry Type"]
+        key = (
+            scope(row),
+            posting.isoformat(),
+            kind,
+            row["Transaction Amount (£)"],
+            row["Balance (£)"],
+            identity(row.get("Period From")),
+            identity(row.get("Period To")),
+        )
+        groups[key].append(row)
+    for key, group in groups.items():
+        if len(group) < 2:
+            continue
+        counts = Counter(row["Source ID"] for row in group)
+        if any(count > 1 for count in counts.values()):
+            for row in group:
+                row["Reconciliation Review"] = (
+                    "Repeated identical account-history events; review identity before merging"
+                )
+            continue
+        tokens = {row["Reconciled Event ID"] for row in group if row.get("Reconciled Event ID")}
+        if len(tokens) > 1:
+            continue
+        token = (
+            next(iter(tokens))
+            if tokens
+            else "history:" + hashlib.sha256(repr(key).encode()).hexdigest()
+        )
+        for row in group:
+            row["Reconciled Event ID"] = token
+
+
 @dataclass
 class PreparedEvidence:
     """One preserved dataset and its auditable duplicate decisions."""
@@ -367,6 +430,7 @@ def prepare_evidence(
             raise ValueError(f"{key} must be a finite non-negative number")
     rows = [normalize_record(r) for r in records]
     _link_statement_observations(rows)
+    _link_account_history_formats(rows)
     rows.sort(
         key=lambda r: (
             r.get("Document Role") == "Historical account statement",
@@ -409,9 +473,14 @@ def prepare_evidence(
                     "_regex_trace",
                     "Source Row",
                     "Document Date",
+                    "Posting Date",
                     "First Billed Date",
                     "Original Invoice #",
                     "Document Role",
+                    "Text Extraction",
+                    "OCR Pages",
+                    "OCR Minimum Confidence (%)",
+                    "OCR Review Required",
                 )
             }
         )

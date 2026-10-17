@@ -87,6 +87,7 @@ EVIDENCE_HEADERS: list[str] = [
     "OCR Review Required",
     "Document Role",
     "Document Date",
+    "Posting Date",
     "First Billed Date",
     "Billing Date Status",
     "Original Invoice #",

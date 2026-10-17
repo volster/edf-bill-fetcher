@@ -51,10 +51,18 @@ from edf_bill_fetcher.helpers.pst_resources import (
     pst_attachment_filename,
 )
 from edf_bill_fetcher.io.adapters.eml import parse_eml_message
-from edf_bill_fetcher.io.adapters.html import parse_htm_account_history
+from edf_bill_fetcher.io.adapters.html import (
+    is_pdf_account_history,
+    parse_htm_account_history,
+    parse_pdf_account_history,
+)
 from edf_bill_fetcher.io.adapters.msg import HAS_EXTRACT_MSG, parse_msg_message
 from edf_bill_fetcher.io.adapters.ocr import OcrCancelled, PdfOcrReader, requires_ocr
-from edf_bill_fetcher.io.adapters.pdf import extract_admit_phrase, slice_pdf_pages
+from edf_bill_fetcher.io.adapters.pdf import (
+    extract_admit_phrase,
+    join_sap_pdf_pages,
+    slice_pdf_pages,
+)
 from edf_bill_fetcher.io.persistence.run_manifest import is_run_directory
 from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.models.records import BillingRecord
@@ -503,13 +511,15 @@ class EvidenceEngine:
         # Terms and conditions are supporting evidence, not a bill whose
         # liability limit should be promoted to a financial observation.
         if re.search(
-            r"terms (?:and|&) conditions", clean_text, re.I
+            r"(?:^|\n)\s*(?:terms (?:and|&) conditions|THE PRINCIPAL TERMS|Contract for the supply of energy|Conditions of supplying energy)",
+            text[:1000],
+            re.I,
         ) and not _BILL_MARKERS_RE.search(clean_text.lower()):
             self._add_record(
                 {
                     "Source": source_type,
                     "Sender": sender,
-                    "Date": fallback_date,
+                    "Date": "N/A",
                     "Attachment Name": attachment_name or "N/A",
                     "Entry Type": "Supporting Document",
                     "Document Role": "Terms and conditions",
@@ -571,10 +581,45 @@ class EvidenceEngine:
         if found_amt is None:
             return
 
+        renewal = bool(
+            re.search(
+                r"Important news about your energy contract|Your business has transferred on to our variable",
+                text,
+                re.I,
+            )
+        )
+        if renewal:
+            balance_match = re.search(
+                r"(?:outstanding balance of|currently)\s+£([\d,]+\.\d{2})", text, re.I
+            )
+            if not balance_match:
+                self._add_record(
+                    {
+                        "Source": source_type,
+                        "Sender": sender,
+                        "Attachment Name": attachment_name or "N/A",
+                        "Date": "N/A",
+                        "Entry Type": "Supporting Document",
+                        "Document Role": "Contract notice",
+                        "Amount Kind": "Not monetary",
+                        "Details": detail[:60],
+                        "Logic Used": "Contract notice: no stated balance extracted",
+                        "Source PDF Text": text[:4000],
+                    }
+                )
+                return
+            found_amt = float(balance_match[1].replace(",", ""))
+            matched_pattern_name, strategy = (
+                "your_new_account_balance",
+                "Stated balance in contract notice",
+            )
+
         # Date extraction
         date_to_use = fallback_date
         if "PDF" in source_type or "old" in source_type.lower():
             date_m = _OLD_PDF_DATE_RE.search(clean_text)
+            if date_m is None:
+                date_m = re.match(r"\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})\b", text)
             if date_m:
                 date_to_use = parse_to_display_date(date_m.group(1))
 
@@ -615,7 +660,7 @@ class EvidenceEngine:
         # and arrive via this generic path (never ``_process_new_invoice``),
         # so without this the ``Sub Periods`` column stays empty and the
         # Option C sub-period unlawful-charge computation never activates.
-        sub_periods = extract_sub_periods(clean_text)
+        sub_periods = extract_sub_periods(text)
         facts = bill_facts(text, sub_periods)
         units_used = facts.pop("Units (kWh)", units_used)
         r_type = facts.pop("Reading", r_type)
@@ -624,6 +669,13 @@ class EvidenceEngine:
         entry_type = self._classify_entry_type(
             clean_text, matched_pattern_name, period_from, period_to, strategy
         )
+        if renewal:
+            entry_type = "Ongoing Balance"
+            period_from = period_to = "N/A"
+            units_used = standing_charge = "N/A"
+            period_charge = "N/A"
+            facts = {"Document Role": "Contract notice", "Document Date": date_to_use}
+            sub_periods = []
         if entry_type == "New Bill" and "PDF" in source_type:
             facts["Document Role"] = "Invoice"
             facts["Document Date"] = date_to_use
@@ -640,7 +692,7 @@ class EvidenceEngine:
                 amount_kind="Balance"
                 if matched_pattern_name in _AMOUNT_PATTERN_ONGOING_BALANCE
                 else "Unknown",
-                energy_unit_rate=self._energy_rate(clean_text),
+                energy_unit_rate=None if renewal else self._energy_rate(clean_text),
                 period_charge=period_charge,
                 entry_type=entry_type,
                 reading=r_type,
@@ -847,6 +899,7 @@ class EvidenceEngine:
                     return
                 pdf_text_parts: list[str] = []
                 ocr_pages: dict[int, dict[str, Any]] = {}
+                history_pdf = False
                 for page_index, p in enumerate(pdf.pages):
                     if self.is_cancelled():
                         return
@@ -866,6 +919,7 @@ class EvidenceEngine:
                         self.log_error(
                             f"PDF page {detail_label}", f"Page extraction failed: {page_err}"
                         )
+                    history_pdf = history_pdf or is_pdf_account_history(page_text or "")
                     # OCR only empty pages or image pages with a sparse text
                     # header. A short native amount-bearing page stays native.
                     if requires_ocr(page_text, p):
@@ -887,7 +941,13 @@ class EvidenceEngine:
                                 "Engine": "Tesseract (English)",
                             }
                             if recognized.text.strip():
+                                native_identity = document_identity(page_text or "")
+                                native_history = is_pdf_account_history(page_text or "")
                                 page_text = recognized.text
+                                # Preserve a readable native customer URL:
+                                # OCR can insert spaces inside its account ID.
+                                if native_identity["Account"] and native_history:
+                                    page_text += f"\nAccount number: {native_identity['Account']}"
                                 self.log_error(
                                     context,
                                     "OCR-generated evidence: verify amounts, dates and invoice references against the original. "
@@ -971,6 +1031,49 @@ class EvidenceEngine:
                 self.source_paths[slice_attachment] = path
 
                 try:
+                    if history_pdf or is_pdf_account_history(slice_text):
+                        extracted = 0
+                        for page_offset, page_text in enumerate(slice_pages):
+                            page_number = self._source_context["Page From"] + page_offset
+                            for source_row, record in enumerate(
+                                parse_pdf_account_history(page_text), 1
+                            ):
+                                self._add_record(
+                                    {
+                                        **record,
+                                        "Attachment Name": slice_attachment,
+                                        "Source Row": f"page:{page_number}:event:{source_row}",
+                                        "Page From": page_number,
+                                        "Page To": page_number,
+                                        "OCR Pages": [page_number]
+                                        if page_number in ocr_pages
+                                        else [],
+                                        "Text Extraction": "OCR"
+                                        if page_number in ocr_pages
+                                        else "PDF text",
+                                        "OCR Review Required": page_number in ocr_pages,
+                                        "OCR Minimum Confidence (%)": ocr_pages.get(
+                                            page_number, {}
+                                        ).get("Minimum Confidence (%)"),
+                                    }
+                                )
+                                extracted += 1
+                        if not extracted:
+                            self.log_error(
+                                f"PDF: {slice_detail}",
+                                "Account history dates or transaction headings are unreadable; manual review required",
+                            )
+                            self._add_record(
+                                {
+                                    "Source": source_label,
+                                    "Attachment Name": slice_attachment,
+                                    "Entry Type": "Supporting Document",
+                                    "Document Role": "Account history: incomplete text",
+                                    "Amount Kind": "Not monetary",
+                                    "Details": "Account history requires manual review; no transactions extracted",
+                                }
+                            )
+                        continue
                     # Stream P1: SAP CSV-in-PDF data dumps (Contract /
                     # Meter-Read / Financial-Transactions). Detected
                     # via the header-row marker; routed to dedicated
@@ -980,6 +1083,14 @@ class EvidenceEngine:
                     # ``export_to_excel(..., sap_rows=...)``).
                     sap_kind = detect_sap_dump(slice_text)
                     if sap_kind is not None:
+                        slice_text, repaired_pages = join_sap_pdf_pages(slice_pages)
+                        if repaired_pages:
+                            self.source_manifest[self._source_context["Source ID"]][
+                                "SAP PDF Boundary Repairs"
+                            ] = [
+                                self._source_context["Page From"] + page - 1
+                                for page in repaired_pages
+                            ]
                         source_file = slice_attachment or slice_detail or ""
 
                         def report_sap(message: str, label: str = source_file) -> None:
@@ -1098,10 +1209,27 @@ class EvidenceEngine:
                 self.log_error(f"HTM: {path}", "Some undecodable characters replaced")
             soup = BeautifulSoup(decoded.unicode_markup or "", "html.parser")
             text = soup.get_text(separator=" ", strip=True)
-            self._source_context.update(document_identity(text))
+            account_links = " ".join(
+                str(a.get("href", ""))
+                for a in soup.select("a[href]")
+                if re.match(
+                    r"https://edfenergy\.com/myaccount/accounts/A-\d+\b",
+                    str(a.get("href", "")),
+                    re.I,
+                )
+            )
+            self._source_context.update(document_identity(text + " " + account_links))
             recs = parse_htm_account_history(text)
-            for rec in recs:
+            for source_row, rec in enumerate(recs, 1):
                 rec["Attachment Name"] = self._source_context["Attachment Name"]
+                rec["Source Row"] = source_row
+                rec["Document Role"] = "Historical account statement"
+                rec["Historical Activity"] = True
+                rec["Posting Date"] = rec["Date"]
+                rec["First Billed Date"] = "N/A"
+                rec["Billing Date Status"] = (
+                    "Unknown: account history posting date is not an invoice issue date"
+                )
                 self._add_record(rec)
             self.update_ui(f"HTM: extracted {len(recs)} account history entries")
         except Exception as e:

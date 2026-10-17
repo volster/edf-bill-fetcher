@@ -351,6 +351,14 @@ sources. A statement's opening balance plus its extracted signed events is
 checked against its printed closing balance; discrepancies appear in the
 evidence and review priorities.
 
+Printed MyAccount histories can be imported as PDFs as well as HTML exports.
+**Posting Date** preserves each history event's date; it does not establish the
+original invoice issue date. Unique matching events across the two history
+formats retain both sources and appear once in the prepared evidence. Different
+balances, accounts, periods, and repeated identical events require review rather
+than automatic merging. Contract notices retain their stated account balance;
+quoted annual costs and contractual fee limits are not bill transactions.
+
 The meter history shows numeric register readings on their reading dates,
 including SAP readings, with account/meter/register context. Mixed bill-level
 reading bases remain separate from the closing reading's classification.
@@ -719,6 +727,8 @@ PDF pages without text, and image pages with only a sparse text header, are
 recognized locally with Tesseract OCR (English). Normal text pages use their
 existing text. This also applies to PDFs attached to PST/OST, EML and MSG messages;
 OCR cannot recover an attachment that the archive reader cannot extract.
+Printed MyAccount history pages with readable balances but missing transaction
+headings also use OCR: some browser exports draw dates and amounts as shapes.
 
 Packaged builds include the OCR engine and English language data. Source installs
 need Tesseract separately: `sudo apt install tesseract-ocr tesseract-ocr-eng` on
@@ -734,8 +744,8 @@ review: check invoice identifiers, dates, decimal points and amounts against the
 original, even when confidence is high. Missing engines, failed pages and pages
 with no recognized text are reported while readable pages continue. OCR work is
 bounded per page and can be cancelled. PDFs with a substantial but incorrect
-existing text layer currently require manual review; they are not automatically
-re-OCRed.
+existing text layer outside that recognized history layout require manual review;
+they are not automatically re-OCRed.
 
 Local PyInstaller builds must install Tesseract and add
 `--additional-hooks-dir=.github/pyinstaller_hooks` to include OCR. CI exercises an

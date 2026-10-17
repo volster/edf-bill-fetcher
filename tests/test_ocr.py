@@ -296,6 +296,29 @@ def test_ocr_subprocess_is_bounded_and_temporary_image_is_cleaned(tmp_path, monk
     assert process.kill.called is (mode in {"cancel", "timeout"})
 
 
+@pytest.mark.parametrize("explicit", [None, "2"])
+def test_ocr_bounds_default_threads_without_changing_host_preferences(
+    tmp_path, monkeypatch, explicit
+):
+    if explicit is None:
+        monkeypatch.delenv("OMP_THREAD_LIMIT", raising=False)
+    else:
+        monkeypatch.setenv("OMP_THREAD_LIMIT", explicit)
+    monkeypatch.setattr(
+        ocr, "find_tesseract", lambda: ocr.TesseractRuntime(tmp_path / "tesseract", None)
+    )
+    monkeypatch.setattr(ocr, "_render_page", lambda *args: None)
+    process = MagicMock()
+    process.returncode = 0
+    process.communicate.return_value = (HEADER.encode(), b"")
+    process.poll.return_value = 0
+    launch = MagicMock(return_value=process)
+    monkeypatch.setattr(ocr.subprocess, "Popen", launch)
+    assert ocr.PdfOcrReader().read_page(b"pdf", 0, lambda: False) == ocr.OcrPage("", None)
+    assert launch.call_args.kwargs["env"]["OMP_THREAD_LIMIT"] == (explicit or "1")
+    assert os.environ.get("OMP_THREAD_LIMIT") == explicit
+
+
 def test_sparse_selectable_header_does_not_hide_scanned_bill(tmp_path, engine, real_ocr):
     from reportlab.lib.utils import ImageReader
 

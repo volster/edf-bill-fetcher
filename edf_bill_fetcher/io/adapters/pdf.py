@@ -110,6 +110,31 @@ def slice_pdf_pages(page_texts: list[str]) -> list[list[str]]:
     return slices
 
 
+def join_sap_pdf_pages(page_texts: list[str]) -> tuple[str, list[int]]:
+    """Remove only verified repeated partial CSV tails at PDF page boundaries.
+
+    Some exports print the tail of the last row again at the top of the
+    next page. Never remove a complete quoted row, even if it repeats.
+    """
+    parts: list[str] = []
+    repaired: list[int] = []
+    for page_number, text in enumerate(page_texts, 1):
+        first, separator, rest = text.partition("\n")
+        if (
+            parts
+            and separator
+            and first
+            and not first.lstrip().startswith('"')
+            and first.count(",") >= 2
+            and parts[-1].rstrip().endswith(first)
+            and rest.lstrip().startswith('"')
+        ):
+            text = rest
+            repaired.append(page_number)
+        parts.append(text)
+    return "\n".join(parts), repaired
+
+
 def extract_admit_phrase(text: str) -> str | None:
     """Return the first admit-phrase match in *text*, or ``None``.
 

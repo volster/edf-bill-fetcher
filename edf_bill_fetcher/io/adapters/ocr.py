@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from edf_bill_fetcher.helpers.pdf_utils import PDF_LOCK
+from edf_bill_fetcher.io.adapters.html import is_pdf_account_history
 
 
 class OcrCancelled(Exception):
@@ -45,6 +46,14 @@ def requires_ocr(text: str | None, page: Any) -> bool:
     text = text or ""
     if not text.strip():
         return True
+    # Some browser PDFs draw bold dates/transaction headings as vector paths.
+    # Their regular-font balances survive extraction, so a currency or length
+    # check alone incorrectly treats the incomplete page as fully readable.
+    if is_pdf_account_history(text) and re.search(r"Balance\s+£", text, re.I):
+        if not re.search(
+            r"We charged your account|You paid us|Reversed account charge", text, re.I
+        ):
+            return True
     if len(re.sub(r"\W", "", text)) >= 80 or re.search(r"£\s*\d", text):
         return False
     images = page.images
@@ -173,11 +182,18 @@ class PdfOcrReader:
             if runtime.tessdata is not None:
                 command.extend(["--tessdata-dir", str(runtime.tessdata)])
             command.extend(["-c", "tessedit_create_tsv=1"])
+            # Tesseract's OpenMP workers can spend the page deadline
+            # contending under concurrent extraction or a constrained CPU
+            # quota. Bound its default without changing the host environment
+            # or overriding an explicit user-supplied threading preference.
+            environment = os.environ.copy()
+            environment.setdefault("OMP_THREAD_LIMIT", "1")
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                env=environment,
             )
             deadline = time.monotonic() + 60
             try:
