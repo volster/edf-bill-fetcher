@@ -59,9 +59,19 @@ def _create_with_retry(create: Callable[..., Any], args: tuple, kwargs: dict, re
         return create(*args, **kwargs)
     except _tkinter.TclError as error:
         detail = str(error)
-        if detail.strip() != 'invalid command name "tcl_findLibrary"' and not any(
-            marker in detail
-            for marker in ("Can't find a usable tk.tcl", "Can't find a usable init.tcl")
+        direct_read = re.fullmatch(
+            r'couldn\'t read file "([^"\r\n]+\.tcl)": [^\r\n]+', detail.strip()
+        )
+        installed_script = direct_read is not None and Path(
+            direct_read[1]
+        ).resolve().is_relative_to((Path(sys.base_prefix) / "tcl").resolve())
+        if (
+            not installed_script
+            and detail.strip() != 'invalid command name "tcl_findLibrary"'
+            and not any(
+                marker in detail
+                for marker in ("Can't find a usable tk.tcl", "Can't find a usable init.tcl")
+            )
         ):
             raise
         # Let a transient read lock settle before verifying the files; a

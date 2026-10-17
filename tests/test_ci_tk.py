@@ -143,15 +143,17 @@ def test_guard_leaves_local_runs_and_other_platforms_untouched(monkeypatch, plat
     assert _tkinter.create is original
 
 
-@pytest.mark.parametrize("failure", ["script_read", "autoload_bootstrap"])
+@pytest.mark.parametrize("failure", ["script_read", "autoload_bootstrap", "direct_library_read"])
 def test_native_recovery_inside_test_body_still_constructs_real_widgets(
     tmp_path, monkeypatch, capsys, failure
 ):
     original = _tkinter.create
     script = tmp_path / "button.tcl"
     script.write_text("# synthetic read-race evidence")
-    if failure == "autoload_bootstrap":
-        _bootstrap_files(tmp_path, monkeypatch)
+    if failure in {"autoload_bootstrap", "direct_library_read"}:
+        files = _bootstrap_files(tmp_path, monkeypatch)
+        if failure == "direct_library_read":
+            script = files["auto.tcl"]
     calls = []
 
     def create(*args, **kwargs):
@@ -159,6 +161,10 @@ def test_native_recovery_inside_test_body_still_constructs_real_widgets(
         if len(calls) == 1:
             if failure == "autoload_bootstrap":
                 raise _tkinter.TclError('invalid command name "tcl_findLibrary"')
+            if failure == "direct_library_read":
+                raise _tkinter.TclError(
+                    f'couldn\'t read file "{script}": no such file or directory'
+                )
             raise _error(script)
         return original(*args, **kwargs)
 
@@ -283,3 +289,50 @@ def test_repeated_bootstrap_error_is_still_fatal_after_one_retry(tmp_path, monke
     evidence = json.loads(report.read_text())
     assert evidence["recovered"] is False
     assert "retry_error" in evidence
+
+
+@pytest.mark.parametrize("reason", ["no such file or directory", "permission denied", "No error"])
+def test_direct_installed_library_read_failure_verifies_file_before_retry(
+    tmp_path, monkeypatch, reason
+):
+    files = _bootstrap_files(tmp_path, monkeypatch)
+    script = files["auto.tcl"]
+    calls = []
+
+    def create():
+        calls.append(True)
+        if len(calls) == 1:
+            raise _tkinter.TclError(f'couldn\'t read file "{script}": {reason}')
+        return "native interpreter"
+
+    report = tmp_path / "startup.jsonl"
+    assert ci_tk._create_with_retry(create, (), {}, report) == "native interpreter"
+    assert len(calls) == 2
+    evidence = json.loads(report.read_text())
+    assert evidence["recovered"] is True
+    assert evidence["scripts"][0]["sha256"] == hashlib.sha256(script.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("problem", ["missing", "empty", "outside_installation", "repeated"])
+def test_direct_library_read_recovery_stays_scoped_and_bounded(tmp_path, monkeypatch, problem):
+    files = _bootstrap_files(tmp_path, monkeypatch)
+    script = files["auto.tcl"]
+    if problem == "missing":
+        script.unlink()
+    elif problem == "empty":
+        script.write_text("")
+    elif problem == "outside_installation":
+        script = tmp_path / "application.tcl"
+        script.write_text("# outside the selected runtime")
+    calls = []
+
+    def create():
+        calls.append(True)
+        raise _tkinter.TclError(f'couldn\'t read file "{script}": no such file or directory')
+
+    report = tmp_path / "startup.jsonl"
+    with pytest.raises(_tkinter.TclError, match="couldn't read file"):
+        ci_tk._create_with_retry(create, (), {}, report)
+    assert len(calls) == (2 if problem == "repeated" else 1)
+    if report.exists():
+        assert json.loads(report.read_text())["recovered"] is False
