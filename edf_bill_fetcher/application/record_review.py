@@ -301,6 +301,7 @@ def review_inputs(
     relative_root: str | None = None,
     statuses: dict | None = None,
     revisions: list[dict] | None = None,
+    schedule: list[dict] | None = None,
 ) -> tuple[list[dict], dict, str]:
     """Build traceable review inputs shared by Excel and the desktop editor."""
     baseline = review_rows(snapshot)
@@ -429,5 +430,35 @@ def review_inputs(
                     }
                 )
         state["bill_revision_decisions"] = revisions
+    if schedule is not None:
+        from edf_bill_fetcher.processors.rebilling_ledger import validate_schedule
+
+        effective = [
+            {"id": row["Review Row ID"], "included": included, "record": row}
+            for included, rows in ((True, resolved), (False, excluded))
+            for row in rows
+        ]
+        schedule = validate_schedule(effective, schedule)
+        previous_positions = {d["row_id"]: d for d in state.get("dispute_schedule", [])}
+        current_positions = {d["row_id"]: d for d in schedule}
+        for row_id in sorted(previous_positions.keys() | current_positions.keys()):
+            before_position, after_position = (
+                previous_positions.get(row_id),
+                current_positions.get(row_id),
+            )
+            if before_position != after_position:
+                history.append(
+                    {
+                        "at": reviewed_at,
+                        "base_fingerprint": snapshot.input_fingerprint,
+                        "row_id": row_id,
+                        "invoice": by_id[row_id]["record"].get("Invoice #"),
+                        "field": "Dispute position",
+                        "before": str(before_position) if before_position else None,
+                        "after": str(after_position) if after_position else None,
+                        "reason": (after_position or before_position or {}).get("basis", ""),
+                    }
+                )
+        state["dispute_schedule"] = schedule
     state.pop("records", None)
     return originals, state, snapshot.prepared.extraction.request.as_of.isoformat()

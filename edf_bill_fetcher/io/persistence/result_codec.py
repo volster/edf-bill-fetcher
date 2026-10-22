@@ -116,6 +116,171 @@ def _validate_revisions(model: Any) -> None:
         _string(link["basis"])
 
 
+def _validate_ledger(value: Any) -> None:
+    """Validate accepted history and positions without recomputing their conclusions."""
+    from edf_bill_fetcher.processors.rebilling_ledger import validate_schedule
+
+    model = _object(
+        value, {"version", "notice", "documents", "comparisons", "suggestions_truncated"}
+    )
+    if (
+        type(model["version"]) is not int
+        or model["version"] != 1
+        or type(model["suggestions_truncated"]) is not bool
+    ):
+        raise ValueError("Unsupported rebilling ledger")
+    _string(model["notice"])
+    docs, comparisons = model["documents"], model["comparisons"]
+    if (
+        not isinstance(docs, list)
+        or len(docs) > 100000
+        or not isinstance(comparisons, list)
+        or len(comparisons) > 10500
+    ):
+        raise ValueError("Invalid rebilling ledger entries")
+    indexed = {}
+
+    def optional_date(day: Any) -> None:
+        if day is not None:
+            if not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+                raise ValueError("Invalid rebilling date")
+            date.fromisoformat(day)
+
+    for doc in docs:
+        doc = _object(
+            doc,
+            {
+                "row_id",
+                "record",
+                "included",
+                "invoice_date",
+                "reading_date",
+                "period_from",
+                "period_to",
+                "first_demand_date",
+                "cutoff_date",
+                "components",
+                "position",
+                "needs_review",
+                "incoming",
+                "outgoing",
+            },
+        )
+        key = _string(doc["row_id"])
+        if (
+            key in indexed
+            or not isinstance(doc["record"], dict)
+            or type(doc["included"]) is not bool
+            or type(doc["needs_review"]) is not bool
+        ):
+            raise ValueError("Invalid or duplicate rebilling document")
+        indexed[key] = doc
+        for field in (
+            "invoice_date",
+            "reading_date",
+            "period_from",
+            "period_to",
+            "first_demand_date",
+            "cutoff_date",
+        ):
+            optional_date(doc[field])
+        if doc["position"] is not None:
+            normalized = validate_schedule(
+                [{"id": key, "record": doc["record"]}], [doc["position"]]
+            )
+            if (
+                normalized[0] != doc["position"]
+                or doc["position"]["row_id"] != key
+                or doc["first_demand_date"] != doc["position"]["first_demand_date"]
+            ):
+                raise ValueError("Noncanonical stored dispute position")
+        elif (
+            doc["first_demand_date"] is not None
+            or doc["cutoff_date"] is not None
+            or doc["needs_review"]
+        ):
+            raise ValueError("Rebilling dates or review status lack a dispute position")
+        if not isinstance(doc["components"], list) or len(doc["components"]) > 10000:
+            raise ValueError("Invalid rebilling components")
+        for component in doc["components"]:
+            component = _object(
+                component, {"kind", "period_from", "period_to", "units", "rate", "amount", "detail"}
+            )
+            if component["kind"] not in {
+                "energy",
+                "standing",
+                "vat",
+                "cancellation",
+                "discount",
+            } or not isinstance(component["detail"], str):
+                raise ValueError("Invalid rebilling component kind")
+            optional_date(component["period_from"])
+            optional_date(component["period_to"])
+            _money(component["amount"], nullable=True)
+            if any(
+                component[field] is not None and type(component[field]) not in (int, float)
+                for field in ("units", "rate")
+            ):
+                raise ValueError("Invalid rebilling component quantity")
+    for doc in docs:
+        for field, endpoint in (("incoming", "newer"), ("outgoing", "older")):
+            if not isinstance(doc[field], list):
+                raise ValueError("Invalid rebilling relationships")
+            for link in doc[field]:
+                if (
+                    not isinstance(link, dict)
+                    or link.get(endpoint) != doc["row_id"]
+                    or link.get("older") not in indexed
+                    or link.get("newer") not in indexed
+                    or link.get("status") not in {"suggested", "confirmed", "rejected"}
+                ):
+                    raise ValueError("Rebilling relationship references an unknown document")
+    seen = set()
+    for comparison in comparisons:
+        comparison = _object(
+            comparison,
+            {"older", "newer", "status", "same_period", "components", "other_components"},
+        )
+        pair = (_string(comparison["older"]), _string(comparison["newer"]))
+        if (
+            pair in seen
+            or pair[0] == pair[1]
+            or any(key not in indexed for key in pair)
+            or type(comparison["same_period"]) is not bool
+            or comparison["status"] not in {"suggested", "confirmed", "rejected"}
+            or not isinstance(comparison["components"], list)
+        ):
+            raise ValueError("Invalid rebilling comparison")
+        seen.add(pair)
+        if not isinstance(comparison["other_components"], list):
+            raise ValueError("Invalid other component comparisons")
+        for component in comparison["other_components"]:
+            component = _object(component, {"kind", "earlier_amount", "later_amount", "difference"})
+            if component["kind"] not in {"standing", "vat", "discount"}:
+                raise ValueError("Invalid other component comparison kind")
+            for field in ("earlier_amount", "later_amount", "difference"):
+                _money(component[field], nullable=True)
+        for component in comparison["components"]:
+            component = _object(
+                component,
+                {
+                    "period_from",
+                    "period_to",
+                    "status",
+                    "charge_difference",
+                    "units_effect",
+                    "rate_effect",
+                    "residual",
+                },
+            )
+            optional_date(component["period_from"])
+            optional_date(component["period_to"])
+            if component["status"] not in {"matched", "unallocated"}:
+                raise ValueError("Invalid component comparison status")
+            for field in ("charge_difference", "units_effect", "rate_effect", "residual"):
+                _money(component[field], nullable=component["status"] == "unallocated")
+
+
 def _validate_models(value: Any) -> None:
     models = _object(value, set(MODEL_KEYS))
     expected = {
@@ -168,6 +333,8 @@ def _validate_models(value: Any) -> None:
                 raise ValueError("SAP payload is incomplete")
             if "bill_revisions" in restored:
                 _validate_revisions(restored["bill_revisions"])
+            if "rebilling_ledger" in restored:
+                _validate_ledger(restored["rebilling_ledger"])
             frames = restored["frames"]
             if (
                 not isinstance(frames, dict)

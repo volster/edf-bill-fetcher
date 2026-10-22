@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 from edf_bill_fetcher.application.record_review import (
     REVIEW_FIELDS,
@@ -20,6 +21,11 @@ from edf_bill_fetcher.domain.analysis import AnalysisSnapshot
 from edf_bill_fetcher.domain.json_values import canonical_text, object_value, strict_loads
 from edf_bill_fetcher.helpers.artifacts import write_json
 from edf_bill_fetcher.io.persistence.result_codec import encode_result
+from edf_bill_fetcher.processors.rebilling_ledger import (
+    build_ledger,
+    schedule_digest,
+    validate_schedule,
+)
 from edf_bill_fetcher.processors.revisions import build_revisions, validate_decisions
 
 MAX_DRAFT_BYTES = 8 * 1024 * 1024
@@ -42,6 +48,9 @@ class ReviewSession:
         self.revisions: dict[tuple[str, str], dict] = {
             (d["older"], d["newer"]): dict(d)
             for d in validate_decisions(self.rows, state.get("bill_revision_decisions", []))
+        }
+        self.schedule: dict[str, dict] = {
+            d["row_id"]: d for d in validate_schedule(self.rows, state.get("dispute_schedule", []))
         }
         self.undo_stack: list[list[tuple]] = []
         self.redo_stack: list[list[tuple]] = []
@@ -113,6 +122,7 @@ class ReviewSession:
                     included=include,
                 )
         validate_decisions(effective, list(self.revisions.values()))
+        validate_schedule(effective, list(self.schedule.values()))
         self._commit([("decisions", row_id, decision), ("statuses", row_id, annotation)])
 
     def set_revision(self, older: str, newer: str, kind: str, status: str, reason: str) -> None:
@@ -130,6 +140,34 @@ class ReviewSession:
             candidate[pair] = value
         validate_decisions(self.items(), list(candidate.values()))
         self._commit([("revisions", pair, value)])
+
+    def set_position(self, row_id: str, **fields: Any) -> None:
+        """Save a dispute position against current evidence as one undoable decision."""
+        if row_id not in self.index:
+            raise ValueError("Unknown dispute schedule row")
+        value = validate_schedule(
+            self.items(),
+            [
+                {
+                    "row_id": row_id,
+                    "source_digest": schedule_digest(
+                        self.items(), list(self.revisions.values()), row_id
+                    ),
+                    **fields,
+                }
+            ],
+        )[0]
+        self._commit([("schedule", row_id, value)])
+
+    def clear_position(self, row_id: str) -> None:
+        """Clear a position as an undoable command; regeneration preserves its audit trail."""
+        if row_id not in self.index:
+            raise ValueError("Unknown dispute schedule row")
+        self._commit([("schedule", row_id, None)])
+
+    def ledger_model(self) -> dict:
+        """Preview full history and stale positions without changing accepted totals."""
+        return build_ledger(self.items(), self.revision_model(), list(self.schedule.values()))
 
     def _commit(self, updates: list[tuple]) -> None:
         command = []
@@ -178,6 +216,7 @@ class ReviewSession:
                 "decisions": [self.decisions[key] for key in sorted(self.decisions)],
                 "statuses": self.statuses,
                 "revisions": [self.revisions[key] for key in sorted(self.revisions)],
+                "schedule": [self.schedule[key] for key in sorted(self.schedule)],
             }
         )
 
@@ -188,7 +227,25 @@ class ReviewSession:
         if (
             not isinstance(payload, dict)
             or set(payload)
-            != {"version", "base_fingerprint", "base_digest", "decisions", "statuses", "revisions"}
+            not in (
+                {
+                    "version",
+                    "base_fingerprint",
+                    "base_digest",
+                    "decisions",
+                    "statuses",
+                    "revisions",
+                },
+                {
+                    "version",
+                    "base_fingerprint",
+                    "base_digest",
+                    "decisions",
+                    "statuses",
+                    "revisions",
+                    "schedule",
+                },
+            )
             or type(payload["version"]) is not int
             or payload["version"] != 1
             or payload["base_fingerprint"] != snapshot.input_fingerprint
@@ -227,6 +284,9 @@ class ReviewSession:
             (d["older"], d["newer"]): d
             for d in validate_decisions(session.items(), payload["revisions"])
         }
+        session.schedule = {
+            d["row_id"]: d for d in validate_schedule(session.items(), payload.get("schedule", []))
+        }
         return session
 
     def save(self, path: str | Path) -> None:
@@ -256,6 +316,7 @@ class ReviewSession:
             origin="reviewed_in_app",
             statuses=self.statuses,
             revisions=[self.revisions[key] for key in sorted(self.revisions)],
+            schedule=[self.schedule[key] for key in sorted(self.schedule)],
         )
 
     def revision_model(self) -> dict:

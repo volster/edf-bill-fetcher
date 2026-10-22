@@ -32,6 +32,8 @@ from edf_bill_fetcher.application.record_review import (
 )
 from edf_bill_fetcher.domain.json_values import canonical_text, object_value, strict_loads
 from edf_bill_fetcher.helpers.excel_utils import literal_cell
+from edf_bill_fetcher.io.dispute_workbook import SHEET as DISPUTE_SHEET
+from edf_bill_fetcher.io.dispute_workbook import read_schedule, write_schedule
 from edf_bill_fetcher.io.persistence.result_codec import decode_result, encode_result
 from edf_bill_fetcher.io.writers.workbook_presentation import (
     polish_reference_sheets,
@@ -127,7 +129,7 @@ def write_review_sheets(
         ),
         (
             17,
-            "Report, summary, SAP and filtered tabs are reference outputs, not correction inputs. Excel does not recalculate the app's analysis. They show the previous result until you regenerate. Correct canonical evidence in Review & Corrections; new manual records and SAP dump editing are not supported here.",
+            "The Dispute schedule also accepts human challenge amounts, scope and EDF evidence requests. Report, summary, SAP and filtered tabs are reference outputs, not correction inputs. Excel does not recalculate the app's analysis. They show the previous result until you regenerate. Correct canonical evidence in Review & Corrections; new manual records and SAP dump editing are not supported here.",
         ),
         (
             20,
@@ -351,6 +353,7 @@ def write_review_sheets(
             literal_cell(history, row, column, change.get(key))
     history.freeze_panes = "E2"
     history.auto_filter.ref = history.dimensions
+    write_schedule(wb, view, saved_links)
     write_workbook_dashboard(wb, view)
     polish_reference_sheets(wb)
     # Calculated sheets are reference outputs. Protection prevents accidental
@@ -389,7 +392,7 @@ def write_review_sheets(
 def _reference_values(wb: Workbook) -> list[list]:
     result = []
     for ws in sorted(wb, key=lambda sheet: sheet.title):
-        if ws.title in {REVIEW_SHEET, PAYLOAD_SHEET}:
+        if ws.title in {REVIEW_SHEET, PAYLOAD_SHEET, DISPUTE_SHEET}:
             continue
         # Sparse iteration avoids materializing large formatted empty ranges.
         for (row, col), cell in sorted(ws._cells.items()):
@@ -485,7 +488,7 @@ def load_review_workbook(path: str) -> tuple[list[dict], dict, str] | None:
             raise ValueError(f"Cannot read preserved review analysis: {error}") from error
         if not _references_match(wb, payload["references"]):
             raise ValueError(
-                "A reference report tab was changed. Restore it and make corrections in Review & Corrections; only that table drives regeneration."
+                "A reference report tab was changed. Restore it and make corrections in Review & Corrections; only that table and Dispute schedule accept edits."
             )
         ws = wb[REVIEW_SHEET]
         if (
@@ -569,6 +572,7 @@ def load_review_workbook(path: str) -> tuple[list[dict], dict, str] | None:
             decisions,
             input_path=path,
             relative_root=relative_root,
+            schedule=read_schedule(wb, snapshot, decisions),
         )
     finally:
         wb.close()

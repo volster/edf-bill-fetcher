@@ -58,7 +58,7 @@ def write_workbook_dashboard(wb: Workbook, view: ReportView) -> None:
         3,
         1,
         12,
-        "Edit Review & Corrections, then regenerate in the app. These figures show the last generated result until you do.",
+        "Edit Review & Corrections or Dispute schedule, then regenerate in the app. These figures show the last generated result until you do.",
         fill="EAF7F5",
         color=NAVY,
         bold=True,
@@ -141,6 +141,10 @@ def write_workbook_dashboard(wb: Workbook, view: ReportView) -> None:
             "Review & Corrections",
             "EDF Evidence Report",
             "Dispute Flags",
+            "Dispute schedule",
+            "Rebilling ledger",
+            "Rebilling components",
+            "Rebilling comparisons",
             "Parse Errors",
             "Review history",
             "Workbook guide",
@@ -208,7 +212,13 @@ def polish_reference_sheets(wb: Workbook) -> None:
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
         ws.print_title_rows = "1:1"
-        if ws.title == "Bill revisions":
+        if ws.title in {
+            "Bill revisions",
+            "Rebilling ledger",
+            "Rebilling components",
+            "Rebilling comparisons",
+            "Dispute schedule",
+        }:
             ws.print_title_rows = "1:4"
             ws.page_setup.paperSize = ws.PAPERSIZE_A3
         ws.protection.formatColumns = False

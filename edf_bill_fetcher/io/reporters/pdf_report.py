@@ -1038,6 +1038,28 @@ def create_revision_section(model: dict | None) -> list:
     return elements
 
 
+def create_rebilling_section(model: dict | None) -> list:
+    """Wrap the complete accepted schedule, allowing long evidence reasons to span pages."""
+    from edf_bill_fetcher.models.rebilling_tables import report_tables
+
+    elements = []
+    for title, note, rows in report_tables(model):
+        elements.extend(
+            [
+                Paragraph(xml_escape(title), STYLES["SubSectionHeader"]),
+                Paragraph(xml_escape(note), STYLES["BodyText"]),
+            ]
+        )
+        if len(rows) > 1:
+            table = _wrapped_table(rows, [3.8, 4.0, 3.8, 4.4])
+            table.splitInRow = 1
+            table.setStyle(make_table_style(num_rows=len(rows), font_size=7))
+            elements.append(table)
+        else:
+            elements.append(Paragraph("No saved entries.", STYLES["BodyText"]))
+    return elements
+
+
 def create_timeline_section(
     df: pd.DataFrame, flags: list, ctx: RenderContext | None = None
 ) -> list:
@@ -2164,7 +2186,9 @@ def render_pdf(view: ReportView, output_path: str) -> str:
         "detailed_findings": (
             lambda: {"flags": flags, "df": df},
             lambda kwargs: (
-                create_anomaly_detail_section(**kwargs) + create_revision_section(view.revisions)
+                create_anomaly_detail_section(**kwargs)
+                + create_revision_section(view.revisions)
+                + create_rebilling_section(view.rebilling_ledger)
             ),
         ),
         "timeline": (

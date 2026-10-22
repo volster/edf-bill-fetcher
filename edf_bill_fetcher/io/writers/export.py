@@ -285,6 +285,9 @@ def _reorder_sheets(wb: openpyxl.Workbook) -> None:
         "Superseded Reconciliation",
         "Rebilling & Corrections",
         "Bill revisions",
+        "Rebilling ledger",
+        "Rebilling components",
+        "Rebilling comparisons",
         "Meter Readings",
         "Contract History",
         "Compensation",
@@ -305,7 +308,8 @@ def _reorder_sheets(wb: openpyxl.Workbook) -> None:
         "Filtered (Below Min)",
         "Parse Errors",
     ]
-    wb._sheets = [wb[name] for name in _SEVERITY_LED_ORDER if name in wb.sheetnames]
+    ordered = [wb[name] for name in _SEVERITY_LED_ORDER if name in wb.sheetnames]
+    wb._sheets = [*ordered, *(sheet for sheet in wb if sheet not in ordered)]
 
 
 # ---------------------------------------------------------------------------
@@ -1359,6 +1363,9 @@ def render_xlsx(
     from edf_bill_fetcher.io.writers.revisions import write_revision_sheet
 
     write_revision_sheet(wb, view)
+    from edf_bill_fetcher.io.writers.rebilling_ledger import write_ledger_sheets
+
+    write_ledger_sheets(wb, view, saved_links)
     _reorder_sheets(wb)
 
     from edf_bill_fetcher.io.review_workbook import write_review_sheets

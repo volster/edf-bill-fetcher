@@ -557,6 +557,38 @@ def create_revision_section(model: dict | None) -> str:
     )
 
 
+def create_rebilling_section(model: dict | None, bundle_dir: str | None = None) -> str:
+    """Render the accepted history and positions, linking contained original source pages."""
+    from edf_bill_fetcher.models.rebilling_tables import report_tables
+
+    parts = []
+    links = _source_links(bundle_dir)
+    for title, note, rows in report_tables(model):
+        parts.append(f'<h3>{_esc(title)}</h3><p class="note">{_esc(note)}</p>')
+        if title in {"Rebilling ledger", "Dispute schedule"} and model is not None:
+            docs = [
+                doc
+                for doc in model["documents"]
+                if title == "Rebilling ledger" or doc["position"] is not None
+            ]
+            linked_rows: list[list[Any]] = [[*rows[0], "Original source"]]
+            for values, doc in zip(rows[1:], docs, strict=True):
+                row = doc["record"]
+                link = links.get(row.get("Source ID")) or links.get(row.get("Attachment Name"))
+                page = row.get("Page From")
+                if (
+                    link
+                    and isinstance(page, (int, float))
+                    and not isinstance(page, bool)
+                    and page > 0
+                ):
+                    link = _SourceLink(f"{link.href}#page={int(page)}", "Open original PDF")
+                linked_rows.append([*values, link or "Unavailable beside this report"])
+            rows = linked_rows
+        parts.append(_table(rows) if len(rows) > 1 else "<p>No saved entries.</p>")
+    return "".join(parts)
+
+
 def create_timeline_section(df: pd.DataFrame, flags: list, ctx: RenderContext | None = None) -> str:
     """Create the chronological timeline of events."""
     if ctx is None:
@@ -1286,7 +1318,9 @@ def render_html(view: ReportView, output_path: str) -> str:
         "detailed_findings": (
             lambda: {"flags": flags, "df": df},
             lambda kwargs: (
-                create_anomaly_detail_section(**kwargs) + create_revision_section(view.revisions)
+                create_anomaly_detail_section(**kwargs)
+                + create_revision_section(view.revisions)
+                + create_rebilling_section(view.rebilling_ledger, str(Path(output_path).parent))
             ),
         ),
         "timeline": (

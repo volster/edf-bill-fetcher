@@ -672,10 +672,26 @@ def create_revision_section(doc: Any, styles: dict, model: dict | None) -> None:
         )
 
 
-def create_reviewed_findings(model: dict | None, **kwargs: Any) -> None:
+def create_reviewed_findings(model: dict | None, ledger: dict | None = None, **kwargs: Any) -> None:
     """Keep anomaly and revision details under one report section."""
     create_anomaly_detail_section(**kwargs)
     create_revision_section(kwargs["doc"], kwargs["styles"], model)
+    from edf_bill_fetcher.models.rebilling_tables import report_tables
+
+    doc, styles = kwargs["doc"], kwargs["styles"]
+    for title, note, rows in report_tables(ledger):
+        doc.add_paragraph(title, style=styles["SubSectionHeader"])
+        doc.add_paragraph(note, style=styles["BodyText"])
+        if len(rows) > 1:
+            table = doc.add_table(rows=1, cols=4)
+            for cell, value in zip(table.rows[0].cells, rows[0], strict=True):
+                cell.text = value
+            for values in rows[1:]:
+                for cell, value in zip(table.add_row().cells, values, strict=True):
+                    cell.text = value
+            _format_table(table)
+        else:
+            doc.add_paragraph("No saved entries.", style=styles["BodyText"])
 
 
 def create_timeline_section(
@@ -1625,7 +1641,9 @@ def render_docx(view: ReportView, output_path: str) -> str:
         ),
         "detailed_findings": (
             lambda: {"doc": doc, "styles": styles, "flags": flags, "df": df},
-            lambda kwargs: create_reviewed_findings(view.revisions, **kwargs),
+            lambda kwargs: create_reviewed_findings(
+                view.revisions, view.rebilling_ledger, **kwargs
+            ),
         ),
         "timeline": (
             lambda: {"doc": doc, "styles": styles, "df": df, "flags": flags},

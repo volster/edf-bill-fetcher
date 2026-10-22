@@ -59,6 +59,7 @@ from edf_bill_fetcher.domain.json_values import (
 )
 from edf_bill_fetcher.helpers.pdf_utils import PDF_LOCK
 from edf_bill_fetcher.io.persistence.result_store import load_result
+from edf_bill_fetcher.ui.qt_rebilling import RebillingPanel
 from edf_bill_fetcher.ui.qt_review_tools import RecordEditor, RevisionPanel
 from edf_bill_fetcher.ui.qt_widgets import button, label
 
@@ -499,13 +500,18 @@ class EvidenceReviewPage(QWidget):
         self.details_tabs.addTab(self.run_notes, "Review notes")
         self.editor = RecordEditor()
         self.revisions = RevisionPanel()
+        self.rebilling = RebillingPanel()
         self.details_tabs.addTab(self.editor, "Correct record")
         self.details_tabs.addTab(self.revisions, "Bill revisions")
+        self.details_tabs.addTab(self.rebilling, "Dispute ledger")
         self.editor.applied.connect(self._draft_changed)
         self.editor.failed.connect(self._message)
         self.revisions.changed.connect(self._draft_changed)
         self.revisions.failed.connect(self._message)
         self.revisions.show_record.connect(self.select_record)
+        self.rebilling.changed.connect(self._draft_changed)
+        self.rebilling.failed.connect(self._message)
+        self.rebilling.show_record.connect(self.select_record)
         records.addWidget(self.details_tabs, 2)
         self.splitter.addWidget(left)
         right = QWidget()
@@ -661,6 +667,7 @@ class EvidenceReviewPage(QWidget):
         self.impact.clear()
         self.impact.hide()
         self.revisions.refresh(self.session)
+        self.rebilling.refresh(self.session)
         self.model.beginResetModel()
         self.model.entries = review.entries
         self.model.rows = [object_value(entry.fields) for entry in review.entries]
@@ -1028,6 +1035,7 @@ class EvidenceReviewPage(QWidget):
         ready = self.session is not None and self.loader is None and self.impact_worker is None
         self.editor.setEnabled(ready and bool(self.editor.row_id))
         self.revisions.setEnabled(ready)
+        self.rebilling.setEnabled(ready)
         self.edit_record.setEnabled(ready and bool(self.editor.row_id))
         self.undo_button.setEnabled(ready and bool(self.session and self.session.undo_stack))
         self.redo_button.setEnabled(ready and bool(self.session and self.session.redo_stack))
@@ -1035,7 +1043,7 @@ class EvidenceReviewPage(QWidget):
             control.setEnabled(ready)
         if self.session:
             self.draft_status.setText(
-                f"Draft: {len(self.session.decisions)} record decisions · {len(self.session.revisions)} revision decisions. "
+                f"Draft: {len(self.session.decisions)} record decisions · {len(self.session.revisions)} revision decisions · {len(self.session.schedule)} dispute positions. "
                 + (
                     "Unsaved progress."
                     if self.draft_dirty
@@ -1058,6 +1066,7 @@ class EvidenceReviewPage(QWidget):
         )
         self.impact.show()
         self.revisions.refresh(self.session)
+        self.rebilling.refresh(self.session)
         self._review_controls()
         self._draft_timer.start()
 
@@ -1077,7 +1086,11 @@ class EvidenceReviewPage(QWidget):
 
     def allow_leave(self) -> bool:
         """Preserve unapplied edits and failed draft saves when changing analyses or closing."""
-        if not self.editor.allow_leave() or not self.revisions.allow_leave():
+        if (
+            not self.editor.allow_leave()
+            or not self.revisions.allow_leave()
+            or not self.rebilling.allow_leave()
+        ):
             return False
         if self.save_progress():
             return True
@@ -1094,6 +1107,7 @@ class EvidenceReviewPage(QWidget):
                 self.session = ReviewSession.restore(self.session.snapshot, self._saved_draft)
                 self.editor.set_record(self.session if row_id else None, row_id)
                 self.revisions.refresh(self.session)
+                self.rebilling.refresh(self.session)
             self.draft_dirty = False
             self._draft_timer.stop()
             return True
@@ -1104,6 +1118,7 @@ class EvidenceReviewPage(QWidget):
             self.session is None
             or not self.editor.allow_leave()
             or not self.revisions.allow_leave()
+            or not self.rebilling.allow_leave()
         ):
             return
         row_id = self.editor.row_id
@@ -1137,6 +1152,7 @@ class EvidenceReviewPage(QWidget):
         self.open_button.setEnabled(False)
         self.editor.setEnabled(False)
         self.revisions.setEnabled(False)
+        self.rebilling.setEnabled(False)
         self.impact.setText("Calculating the draft preview…")
         self.impact.show()
         worker.ready.connect(self._impact_ready)
@@ -1168,6 +1184,7 @@ class EvidenceReviewPage(QWidget):
         self.open_button.setEnabled(True)
         self.editor.setEnabled(bool(self.editor.row_id))
         self.revisions.setEnabled(self.session is not None)
+        self.rebilling.setEnabled(self.session is not None)
         self._review_controls()
         self._emit_idle()
 

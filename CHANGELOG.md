@@ -10,6 +10,8 @@ semver-friendly.
 
 ### Added
 
+- A full rebilling history, source-linked component comparisons and an editable dispute schedule shared by the desktop, Excel and regenerated HTML/PDF/DOCX packs. Positions preserve original account figures, flag changed evidence for review, and never automatically sum overlapping challenges or turn credits into a second reduction.
+
 - Source setup through `bootstrap.py run|develop|build`, with native prerequisite installation and working OCR checks.
 - `build_all.py` dispatches the three native GitHub builds, waits for its exact request, and downloads its platform artifacts.
 - Extraction readiness in the desktop, explicit acknowledgement of missing OCR/MSG support, `--doctor` diagnostics, and source revision information in About and packaged builds.

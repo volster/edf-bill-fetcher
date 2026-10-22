@@ -22,6 +22,37 @@ def prepare_snapshot(extraction: ExtractionSnapshot) -> PreparedSnapshot:
         inputs,
         object_value(extraction.request.config),
     )
+    schedule = state.get("dispute_schedule", [])
+    if schedule:
+        active_ids = {
+            row.get("Review Row ID")
+            for row in prepared.records + state.get("review_excluded_records", [])
+        }
+        duplicate_ids = {row.get("Review Row ID") for row in prepared.duplicates}
+        absorbed_positions = [
+            position for position in schedule if position["row_id"] not in active_ids
+        ]
+        if any(position["row_id"] not in duplicate_ids for position in absorbed_positions):
+            raise ValueError("Dispute position refers to an unknown record")
+        if absorbed_positions:
+            state.setdefault("archived_dispute_schedule", []).extend(absorbed_positions)
+            state["dispute_schedule"] = [
+                position for position in schedule if position["row_id"] in active_ids
+            ]
+            for position in absorbed_positions:
+                state.setdefault("review_history", []).append(
+                    {
+                        "at": extraction.request.created_at.isoformat(),
+                        "base_fingerprint": state.get("human_review", {}).get("base_fingerprint"),
+                        "row_id": position["row_id"],
+                        "invoice": None,
+                        "field": "Dispute position",
+                        "before": str(position),
+                        "after": "archived_after_deduplication",
+                        "reason": "Record merged by duplicate resolution; its proposal is archived, not added to the retained record's challenge.",
+                    }
+                )
+            extraction = replace(extraction, legacy_state=freeze_json(state))
     statuses = state.get("human_review_statuses", {})
     if statuses:
         # Correcting an invoice can merge two previously distinct rows. Keep

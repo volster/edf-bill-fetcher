@@ -17,7 +17,11 @@ def bill_facts(text: str, sub_periods: list[dict]) -> dict:
     A cancellation/rebill can have a negative net total and positive new
     electricity components. These amounts must never be interchangeable.
     """
+    from edf_bill_fetcher.processors.rebilling_ledger import component_facts
+
     facts: dict = {}
+    if components := component_facts(text):
+        facts["Rebilling Components"] = components
     gross = list(
         re.finditer(
             r"Total electricity charges for this period\s+£([\d,]+\.\d{2})(?:\s+(?:in\s+)?(credit|debit)\b)?",
@@ -33,6 +37,12 @@ def bill_facts(text: str, sub_periods: list[dict]) -> dict:
                 for match in gross
             ),
             2,
+        )
+    if gross:
+        facts["Gross Electricity Charges Basis"] = (
+            "Including VAT"
+            if "Subtotal of charges before VAT" in text
+            else "As printed; verify VAT basis"
         )
     usage = re.search(r"Your usage this bill\s+([\d,]+(?:\.\d+)?)\s*kWh", text, re.I)
     if usage:

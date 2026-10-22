@@ -91,6 +91,8 @@ def analytical_fingerprint(prepared: PreparedSnapshot, methods: FrozenJSON) -> s
         payload["relevant_legacy_state"]["bill_revision_decisions"] = state[
             "bill_revision_decisions"
         ]
+    if state.get("dispute_schedule"):
+        payload["relevant_legacy_state"]["dispute_schedule"] = state["dispute_schedule"]
     return hashlib.sha256(canonical_text(payload).encode()).hexdigest()
 
 

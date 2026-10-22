@@ -258,14 +258,17 @@ def _computed_models(
         live = live[~live["Invoice #"].astype(str).isin(domination)]
     source_indexes = {id(row): idx for idx, row in enumerate(state.get("sap_financial_rows", []))}
     from edf_bill_fetcher.application.record_review import review_row_data
+    from edf_bill_fetcher.processors.rebilling_ledger import build_ledger
     from edf_bill_fetcher.processors.revisions import build_revisions
 
+    review_items = review_row_data(
+        rows_value(prepared.records), state.get("review_excluded_records", []), fingerprint
+    )
+    revisions = build_revisions(review_items, state.get("bill_revision_decisions", []))
     sap = {
-        "bill_revisions": build_revisions(
-            review_row_data(
-                rows_value(prepared.records), state.get("review_excluded_records", []), fingerprint
-            ),
-            state.get("bill_revision_decisions", []),
+        "bill_revisions": revisions,
+        "rebilling_ledger": build_ledger(
+            review_items, revisions, state.get("dispute_schedule", [])
         ),
         "analyses": analyses,
         "domination": domination,
