@@ -945,3 +945,20 @@ def test_about_displays_exact_source_revision_without_interpreting_markup(window
     window._show_about()
     assert "a" * 40 in text[0]
     assert "local changes" in text[0]
+
+
+@pytest.mark.parametrize("closed", [False, True])
+def test_readiness_probe_finishing_after_signal_cleanup_exits_cleanly(application, closed):
+    from shiboken6 import delete
+
+    from edf_bill_fetcher.ui.qt_readiness import _Probe
+
+    probe = _Probe()
+    checks = (Capability("ocr", "Scans", True, "Available"),)
+    probe.check = lambda: checks
+    results: list[tuple[Capability, ...]] = []
+    probe.signals.finished.connect(results.append)
+    if closed:
+        delete(probe.signals)
+    probe.run()
+    assert results == ([] if closed else [checks])

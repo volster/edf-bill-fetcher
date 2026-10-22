@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from shiboken6 import isValid
 
 from edf_bill_fetcher.helpers.capabilities import Capability, check_capabilities
 from edf_bill_fetcher.ui.qt_widgets import Card, WrappedCheckBox, button, label
@@ -23,7 +24,13 @@ class _Probe(QRunnable):
             checks = self.check()
         except Exception as error:
             checks = (Capability("runtime", "Installation checks", False, str(error)),)
-        self.signals.finished.emit(checks)
+        try:
+            self.signals.finished.emit(checks)
+        except RuntimeError:
+            # QApplication cleanup can delete the signal while native checks
+            # finish. A closed desktop has no recipient for these results.
+            if isValid(self.signals):
+                raise
 
 
 class ReadinessCard(Card):

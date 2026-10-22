@@ -44,6 +44,7 @@ semver-friendly.
 ### Fixed
 
 - Tcl/Tk recovery tests preserve the real interpreter's library configuration, including Conda overrides, while verifying synthetic startup failures.
+- Native readiness checks stay hidden on Windows and discard late results safely during application shutdown.
 - The compensation estimator skips NaN amounts in the refund scan and
   NaN period charges, so they can no longer phantom-match a refund or
   emit NaN money rows.
