@@ -23,6 +23,7 @@ def source_build_info(root: Path) -> dict:
             text=True,
             check=True,
             timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout.strip()
         if re.fullmatch(r"[0-9a-f]{40,64}", revision):
             info["commit"] = revision
@@ -32,6 +33,7 @@ def source_build_info(root: Path) -> dict:
                 text=True,
                 check=True,
                 timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             info["dirty"] = bool(status.stdout.strip())
     except (OSError, subprocess.SubprocessError):

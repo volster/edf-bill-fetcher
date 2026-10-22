@@ -82,7 +82,10 @@ def test_frozen_provenance_never_uses_an_unrelated_git_checkout(tmp_path, monkey
 
 
 def test_source_provenance_captures_revision_and_local_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(build_info.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
     def run(command, **kwargs):
+        assert kwargs["creationflags"] == 0x08000000
         return SimpleNamespace(stdout="b" * 40 if "rev-parse" in command else " M app.py\n")
 
     monkeypatch.setattr(build_info.subprocess, "run", run)
@@ -98,12 +101,14 @@ def test_frozen_missing_metadata_is_unknown_rather_than_guessed(tmp_path, monkey
 
 
 def test_ocr_success_checks_executable_and_english_language(tmp_path, monkeypatch):
+    monkeypatch.setattr(capabilities.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(
         ocr, "find_tesseract", lambda: ocr.TesseractRuntime(tmp_path / "tesseract", tmp_path)
     )
     commands = []
 
     def run(command, **kwargs):
+        assert kwargs["creationflags"] == 0x08000000
         commands.append(command)
         return SimpleNamespace(
             stdout="tesseract 5\n" if "--version" in command else "Languages:\neng\n"

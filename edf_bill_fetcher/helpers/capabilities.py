@@ -44,6 +44,7 @@ def _ocr_check() -> Capability:
             text=True,
             check=True,
             timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout.splitlines()
         languages = subprocess.run(
             [str(runtime.executable), "--list-langs", "--tessdata-dir", str(runtime.tessdata)],
@@ -51,6 +52,7 @@ def _ocr_check() -> Capability:
             text=True,
             check=True,
             timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout.splitlines()
         if "eng" not in {line.strip() for line in languages}:
             raise RuntimeError("The OCR engine cannot find English language data")
