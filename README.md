@@ -57,6 +57,10 @@ Backward-compat note: the legacy `edf_collector.py` / `edf_report.py` / `edf_rep
 
 ## Installation
 
+For a complete source installation, including OCR prerequisites, see [running and building from source](docs/BUILDING.md). With Python 3.11 installed, use `py -3.11 bootstrap.py run --install-system` on Windows or `python3.11 bootstrap.py run --install-system` on macOS/Linux. Use `develop` for test/build tools or `build` to create a native executable. To build and download all three platforms through GitHub, run `python build_all.py` with GitHub CLI authenticated.
+
+**Python dependencies alone do not install the Tesseract OCR engine.** The setup command checks the executable and English language data before reporting readiness. Packaged applications include them.
+
 ```bash
 git clone https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher

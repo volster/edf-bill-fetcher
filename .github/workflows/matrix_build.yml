@@ -1,7 +1,13 @@
 name: Build Executables
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('EDF build {0}', inputs.request_id || github.run_id) || format('EDF build {0}', github.event.workflow_run.head_sha) }}
 
 on:
   workflow_dispatch:
+    inputs:
+      request_id:
+        description: Optional correlation ID for build_all.py
+        required: false
+        type: string
   workflow_run:
     workflows: ["CI"]
     types:

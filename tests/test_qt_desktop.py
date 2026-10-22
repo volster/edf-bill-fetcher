@@ -33,6 +33,7 @@ from edf_bill_fetcher.application.preparation_service import prepare_snapshot  #
 from edf_bill_fetcher.application.run_service import RunOutcome  # noqa: E402
 from edf_bill_fetcher.domain.json_values import freeze_json, object_value  # noqa: E402
 from edf_bill_fetcher.domain.requests import RunRequest  # noqa: E402
+from edf_bill_fetcher.helpers.capabilities import Capability  # noqa: E402
 from edf_bill_fetcher.io.persistence.result_store import load_result, save_result  # noqa: E402
 from edf_bill_fetcher.ui import qt_app, qt_jobs  # noqa: E402
 from edf_bill_fetcher.ui.qt_app import EvidenceWindow, ReportDialog  # noqa: E402
@@ -69,6 +70,7 @@ def window(application, font_metrics, tmp_path):
     widget = EvidenceWindow(tmp_path / "preferences.json")
     widget.show()
     application.processEvents()
+    wait_until(application, lambda: not widget.extraction_readiness.checking)
     yield widget
     if widget.worker is not None:
         widget.worker.cancel_event.set()
@@ -853,3 +855,93 @@ def test_build_gui_check_fails_when_report_cannot_be_written(application, tmp_pa
     from edf_bill_fetcher.ui.qt_smoke import check_gui
 
     assert check_gui(tmp_path / "missing" / "gui.json") == 1
+
+
+def unavailable(window, key):
+    """Replace one capability while retaining the real checks for every other feature."""
+    card = window.extraction_readiness
+    card.checks = tuple(
+        Capability(check.key, check.title, False, "Unavailable in this installation")
+        if check.key == key
+        else check
+        for check in card.checks
+    )
+    window._refresh_state()
+
+
+def test_missing_ocr_requires_explicit_consent_before_extraction(window, tmp_path, monkeypatch):
+    source_folder(window, tmp_path)
+    unavailable(window, "ocr")
+    assert not window.run_button.isEnabled()
+    assert "Scanned pages" in window.extraction_readiness.limitations.text()
+    assert window.extraction_readiness.allow_limited.isVisible()
+    started: list[qt_jobs.DesktopJob] = []
+    monkeypatch.setattr(window, "_begin_job", started.append)
+    window._start_or_cancel()
+    assert started == []
+    window.extraction_readiness.allow_limited.setChecked(True)
+    assert window.run_button.isEnabled()
+    window._start_or_cancel()
+    assert len(started) == 1
+    window.sources["htm_path"].entry.setText(str(tmp_path / "history.htm"))
+    assert not window.extraction_readiness.allow_limited.isChecked()
+    assert not window.run_button.isEnabled()
+
+
+def test_selected_archive_cannot_be_silently_skipped_when_reader_is_missing(window, tmp_path):
+    source_folder(window, tmp_path)
+    window.sources["pst_path"].entry.setText(str(tmp_path / "mail.pst"))
+    unavailable(window, "pst")
+    assert not window.run_button.isEnabled()
+    assert "Outlook archive support is unavailable" in window.readiness.text()
+    assert not window.extraction_readiness.allow_limited.isVisible()
+    window.sources["pst_path"].entry.clear()
+    assert window.run_button.isEnabled()
+
+
+def test_missing_extraction_support_does_not_block_saved_reports(window, tmp_path):
+    source_folder(window, tmp_path)
+    unavailable(window, "ocr")
+    window._navigate(1)
+    window.report_input.entry.setText(str(tmp_path / "result.json"))
+    assert window.run_button.isEnabled()
+
+
+def test_refresh_clears_consent_and_explains_missing_msg_reader(
+    window, tmp_path, application, monkeypatch
+):
+    from edf_bill_fetcher.ui import qt_readiness
+
+    window.sources["eml_msg_dir"].entry.setText(str(tmp_path))
+    unavailable(window, "msg")
+    card = window.extraction_readiness
+    assert "MSG support is unavailable" in card.limitations.text()
+    assert not window.run_button.isEnabled()
+    card.allow_limited.setChecked(True)
+    assert window.run_button.isEnabled()
+    checks = card.checks
+    monkeypatch.setattr(qt_readiness, "check_capabilities", lambda: checks)
+    card.refresh()
+    wait_until(application, lambda: not card.checking)
+    assert not card.allow_limited.isChecked()
+    assert not window.run_button.isEnabled()
+
+
+def test_about_displays_exact_source_revision_without_interpreting_markup(window, monkeypatch):
+    from edf_bill_fetcher.helpers import build_info
+
+    monkeypatch.setattr(
+        build_info,
+        "get_build_info",
+        lambda: {"version": "1.2.3", "commit": "a" * 40, "dirty": True, "mode": "source"},
+    )
+    text = []
+
+    def inspect(dialog):
+        text.append(dialog.findChild(QPlainTextEdit).toPlainText())
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", inspect)
+    window._show_about()
+    assert "a" * 40 in text[0]
+    assert "local changes" in text[0]

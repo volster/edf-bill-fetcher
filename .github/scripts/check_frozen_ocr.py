@@ -30,11 +30,22 @@ with tempfile.TemporaryDirectory(prefix="edf-frozen-ocr-") as directory:
     inputs.mkdir()
     shutil.copyfile("tests/fixtures/scanned_bill.pdf", inputs / "scanned.pdf")
     records_path = root / "records.json"
+    diagnostic_path = root / "diagnostics.json"
     # Hiding PATH prevents accidentally exercising a machine-installed engine.
     environment = os.environ.copy()
     environment["PATH"] = os.environ.get("SystemRoot", "/usr") + (
         "/System32" if os.name == "nt" else "/bin"
     )
+    subprocess.run(
+        [str(executable), "--doctor", "--output", str(diagnostic_path)],
+        env=environment,
+        check=True,
+        timeout=60,
+    )
+    diagnostics = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostics["ready"] is True, diagnostics
+    assert diagnostics["build"]["mode"] == "packaged", diagnostics
+    assert diagnostics["build"]["commit"] != "unknown", diagnostics
     subprocess.run(
         [
             str(executable),

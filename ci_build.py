@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
+
+from edf_bill_fetcher.helpers.build_info import build_metadata
 
 HIDDEN_IMPORTS = (
     "PySide6.QtCore",
@@ -54,7 +59,16 @@ def main() -> None:
         # Its default is to warn on a failed outer signature; distribution must fail.
         environment["PYINSTALLER_STRICT_BUNDLE_CODESIGN_ERROR"] = "1"
         environment["PYINSTALLER_VERIFY_BUNDLE_SIGNATURE"] = "1"
-    subprocess.run([*command, "main.py"], env=environment, check=True)
+    with tempfile.TemporaryDirectory(prefix="edf-build-") as directory:
+        metadata = Path(directory) / "build-info.json"
+        metadata.write_text(
+            json.dumps(build_metadata(Path(__file__).resolve().parent)), encoding="utf-8"
+        )
+        subprocess.run(
+            [*command, f"--add-data={metadata}{os.pathsep}edf_bill_fetcher/data", "main.py"],
+            env=environment,
+            check=True,
+        )
 
 
 if __name__ == "__main__":

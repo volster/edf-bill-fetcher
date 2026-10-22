@@ -3,6 +3,8 @@
 import _tkinter
 import hashlib
 import json
+import os
+import sys
 import tkinter as tk
 
 import pytest
@@ -144,9 +146,19 @@ def test_guard_leaves_local_runs_and_other_platforms_untouched(monkeypatch, plat
 
 
 @pytest.mark.parametrize("failure", ["script_read", "autoload_bootstrap", "direct_library_read"])
+@pytest.mark.parametrize("configured_libraries", [False, True])
 def test_native_recovery_inside_test_body_still_constructs_real_widgets(
-    tmp_path, monkeypatch, capsys, failure
+    tmp_path, monkeypatch, capsys, failure, configured_libraries
 ):
+    if configured_libraries:
+        probe = tk.Tk()
+        try:
+            monkeypatch.setenv("TCL_LIBRARY", str(probe.tk.eval("info library")))
+            monkeypatch.setenv("TK_LIBRARY", str(probe.tk.eval("set tk_library")))
+        finally:
+            probe.destroy()
+    native_prefix = sys.base_prefix
+    native_libraries = {name: os.environ.get(name) for name in ("TCL_LIBRARY", "TK_LIBRARY")}
     original = _tkinter.create
     script = tmp_path / "button.tcl"
     script.write_text("# synthetic read-race evidence")
@@ -166,7 +178,16 @@ def test_native_recovery_inside_test_body_still_constructs_real_widgets(
                     f'couldn\'t read file "{script}": no such file or directory'
                 )
             raise _error(script)
-        return original(*args, **kwargs)
+        # Synthetic scripts prove retry eligibility; they cannot initialize a
+        # real interpreter. In particular, Conda may require its library vars.
+        with monkeypatch.context() as native:
+            native.setattr(sys, "base_prefix", native_prefix)
+            for name, value in native_libraries.items():
+                if value is None:
+                    native.delenv(name, raising=False)
+                else:
+                    native.setenv(name, value)
+            return original(*args, **kwargs)
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(_tkinter, "create", create)

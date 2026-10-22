@@ -42,6 +42,7 @@ from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
 from edf_bill_fetcher.helpers.artifacts import write_json
 from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS
 from edf_bill_fetcher.ui.qt_jobs import DesktopJob, RunWorker
+from edf_bill_fetcher.ui.qt_readiness import ReadinessCard
 from edf_bill_fetcher.ui.qt_review import EvidenceReviewPage
 from edf_bill_fetcher.ui.qt_theme import apply_theme
 from edf_bill_fetcher.ui.qt_widgets import Card, PathField, WrappedCheckBox, button, label
@@ -247,6 +248,7 @@ class EvidenceWindow(QMainWindow):
         self.load_settings()
         self._loading = False
         self._refresh_state()
+        self.menuBar().addAction("About this build…", self._show_about)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -357,6 +359,9 @@ class EvidenceWindow(QMainWindow):
         self.source_grid = QGridLayout()
         self.source_grid.setSpacing(18)
         layout.addLayout(self.source_grid)
+        self.extraction_readiness = ReadinessCard()
+        self.extraction_readiness.changed.connect(self._refresh_state)
+        layout.addWidget(self.extraction_readiness)
         layout.addStretch()
         return page
 
@@ -660,13 +665,17 @@ class EvidenceWindow(QMainWindow):
             )
         else:
             count = sum(bool(field.value()) for field in self.sources.values())
+            self.extraction_readiness.update_sources(
+                {key for key, field in self.sources.items() if field.value()}
+            )
+            blocked = self.extraction_readiness.reason_not_ready()
             self.run_button.setText("Create evidence pack")
-            self.run_button.setEnabled(count > 0)
+            self.run_button.setEnabled(count > 0 and not blocked)
+            summary = f"{count} source{'s' if count != 1 else ''} selected · Excel" + (
+                " + reports" if self.include_reports.isChecked() else " workbook"
+            )
             self.readiness.setText(
-                f"{count} source{'s' if count != 1 else ''} selected · Excel"
-                + (" + reports" if self.include_reports.isChecked() else " workbook")
-                if count
-                else "Choose at least one source to get started."
+                (blocked or summary) if count else "Choose at least one source to get started."
             )
 
     def load_settings(self) -> None:
@@ -876,6 +885,14 @@ class EvidenceWindow(QMainWindow):
         if self.pages.currentIndex() == 2:
             self._navigate(0)
             return
+        if self.pages.currentIndex() == 0:
+            self.extraction_readiness.update_sources(
+                {key for key, field in self.sources.items() if field.value()}
+            )
+            blocked = self.extraction_readiness.reason_not_ready()
+            if blocked:
+                self._feedback(blocked, "warning")
+                return
         try:
             job = self.capture_job()
         except (ValueError, OSError) as error:
@@ -1077,6 +1094,29 @@ class EvidenceWindow(QMainWindow):
         if self.current_job is not None:
             lines.append("Output folder: " + self.current_job.directory)
         details.setPlainText("\n\n".join(line for line in lines if line))
+        layout.addWidget(details)
+        actions = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        actions.rejected.connect(dialog.reject)
+        layout.addWidget(actions)
+        dialog.exec()
+
+    def _show_about(self) -> None:
+        """Identify the source revision even when Git is absent on the user's machine."""
+        from edf_bill_fetcher.helpers.build_info import get_build_info
+
+        info = get_build_info()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("About EDF Evidence Collector")
+        dialog.resize(580, 260)
+        layout = QVBoxLayout(dialog)
+        details = QPlainTextEdit()
+        details.setReadOnly(True)
+        details.setPlainText(
+            f"EDF Evidence Collector {info['version']}\n"
+            f"Revision: {info['commit']}"
+            + (" (local changes)" if info.get("dirty") else "")
+            + f"\nInstallation: {info['mode']}\nBuilt: {info.get('built_at', 'running from source')}"
+        )
         layout.addWidget(details)
         actions = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         actions.rejected.connect(dialog.reject)

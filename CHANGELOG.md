@@ -10,6 +10,9 @@ semver-friendly.
 
 ### Added
 
+- Source setup through `bootstrap.py run|develop|build`, with native prerequisite installation and working OCR checks.
+- `build_all.py` dispatches the three native GitHub builds, waits for its exact request, and downloads its platform artifacts.
+- Extraction readiness in the desktop, explicit acknowledgement of missing OCR/MSG support, `--doctor` diagnostics, and source revision information in About and packaged builds.
 - **EML and MSG email ingestion** — the engine now accepts folders of
   `.eml` (parsed via stdlib `email`) and `.msg` (parsed via the optional
   `extract-msg` package) messages alongside the existing PST/OST/PDF/HTM
@@ -40,6 +43,7 @@ semver-friendly.
 
 ### Fixed
 
+- Tcl/Tk recovery tests preserve the real interpreter's library configuration, including Conda overrides, while verifying synthetic startup failures.
 - The compensation estimator skips NaN amounts in the refund scan and
   NaN period charges, so they can no longer phantom-match a refund or
   emit NaN money rows.

@@ -732,6 +732,11 @@ def run_cli_review(args: list[str]) -> None:
 
 def main() -> None:
     """Entry point for the EDF Evidence Collector CLI."""
+    if len(sys.argv) > 1 and sys.argv[1] == "--doctor":
+        from edf_bill_fetcher.helpers.capabilities import main as doctor
+
+        sys.exit(doctor(sys.argv[2:]))
+
     if len(sys.argv) > 1:
         if sys.argv[1] == "--review-workbook":
             run_cli_review(sys.argv[2:])

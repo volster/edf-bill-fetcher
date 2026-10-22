@@ -93,9 +93,14 @@ def test_launchservices_success_requires_fresh_cocoa_window_evidence(tmp_path, m
 def test_build_uses_standard_mac_bundle_and_propagates_pyinstaller_failure(monkeypatch, platform):
     calls = []
     monkeypatch.setattr(ci_build.sys, "platform", platform)
+    provenance = {"version": "1.2.3", "commit": "a" * 40, "dirty": False}
+    monkeypatch.setattr(ci_build, "build_metadata", lambda root: provenance)
 
     def failed(command, **kwargs):
         calls.append((command, kwargs))
+        data_argument = next(value for value in command if value.startswith("--add-data="))
+        metadata = data_argument.removeprefix("--add-data=").rsplit(ci_build.os.pathsep, 1)[0]
+        assert json.loads(Path(metadata).read_text()) == provenance
         raise subprocess.CalledProcessError(1, command)
 
     monkeypatch.setattr(subprocess, "run", failed)

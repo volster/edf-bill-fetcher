@@ -11,6 +11,7 @@ venv/
 
 # Build
 dist/
+dist-all/
 build/
 *.egg-info/
 *.spec
@@ -86,3 +87,4 @@ docs/superpowers/
 # CI reports and runtime manifests
 .ci-diagnostics/
 test-results.xml
+/diagnostics.json
