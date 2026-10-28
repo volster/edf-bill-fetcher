@@ -570,7 +570,7 @@ class EvidenceReviewPage(QWidget):
         controls.addWidget(self.zoom, 1)
         preview.addLayout(controls)
         self.open_source = button("Open original file", self._open_source)
-        preview.addWidget(self.open_source)
+        preview.addWidget(self.open_source, 0, Qt.AlignmentFlag.AlignLeft)
         self.splitter.addWidget(right)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.setSizes([540, 440])
@@ -600,13 +600,24 @@ class EvidenceReviewPage(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Stack source and records on smaller windows and refit the raster."""
         super().resizeEvent(event)
-        self.splitter.setOrientation(
-            Qt.Orientation.Vertical
-            if self.width() < 820 and self.height() >= 700
-            else Qt.Orientation.Horizontal
-        )
+        self._arrange_panes()
         self._display_image()
         self._focus_timer.start(0)
+
+    def _arrange_panes(self) -> None:
+        """Respect native font/control widths, including Windows display scaling."""
+        panes = (self.splitter.widget(0), self.preview_pane)
+        assert panes[0] is not None
+        minimum_width = (
+            panes[0].minimumSizeHint().width()
+            + panes[1].minimumSizeHint().width()
+            + self.splitter.handleWidth()
+        )
+        self.splitter.setOrientation(
+            Qt.Orientation.Vertical
+            if self.workspace_scroll.viewport().width() < max(820, minimum_width + 48)
+            else Qt.Orientation.Horizontal
+        )
 
     def _focus_tools(self, index: int) -> None:
         editing = self.details_tabs.widget(index) in {self.editor, self.revisions, self.rebilling}
@@ -618,16 +629,28 @@ class EvidenceReviewPage(QWidget):
 
     def _reveal_tools(self) -> None:
         editing = self.details_tabs.currentWidget() in {self.editor, self.revisions, self.rebilling}
+        self._arrange_panes()
         source_layout = self.preview_pane.layout()
         assert source_layout is not None
         needed = source_layout.totalHeightForWidth(max(1, self.preview_pane.width()))
-        self.splitter.setMinimumHeight(
-            max(
-                600 if editing else 420,
-                self.preview_pane.minimumSizeHint().height(),
-                needed + self.preview_scroll.minimumHeight(),
-            )
+        source_height = max(
+            self.preview_pane.minimumSizeHint().height(),
+            needed + self.preview_scroll.minimumHeight(),
         )
+        if self.splitter.orientation() == Qt.Orientation.Vertical:
+            records_pane = self.splitter.widget(0)
+            assert records_pane is not None
+            height = (
+                max(600 if editing else 420, records_pane.minimumSizeHint().height())
+                + source_height
+                + self.splitter.handleWidth()
+            )
+        else:
+            height = max(
+                600 if editing else 420,
+                source_height,
+            )
+        self.splitter.setMinimumHeight(height)
         if editing:
             self.workspace_scroll.ensureWidgetVisible(self.details_tabs)
 

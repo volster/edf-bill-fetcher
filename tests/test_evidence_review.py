@@ -409,7 +409,20 @@ def test_small_and_normal_windows_keep_preview_and_actions_accessible(
                     action.mapTo(viewport, action.rect().topLeft())
                 ) and viewport.rect().contains(action.mapTo(viewport, action.rect().bottomRight()))
 
-            wait_until(application, revealed)
+            try:
+                wait_until(application, revealed)
+            except AssertionError:
+                pytest.fail(
+                    f"Unreachable {action.accessibleName() or action.objectName() or type(action).__name__}: "
+                    f"action={action.geometry()}, viewport={viewport.size()}, "
+                    f"mapped={action.mapTo(viewport, action.rect().topLeft())} "
+                    f"to {action.mapTo(viewport, action.rect().bottomRight())}, "
+                    f"content={page.workspace_scroll.widget().size()}, "
+                    f"scroll={page.workspace_scroll.verticalScrollBar().value()}/"
+                    f"{page.workspace_scroll.verticalScrollBar().maximum()}, "
+                    f"horizontal={page.workspace_scroll.horizontalScrollBar().value()}/"
+                    f"{page.workspace_scroll.horizontalScrollBar().maximum()}"
+                )
             assert window.rect().contains(action.mapTo(window, action.rect().bottomRight()))
     finally:
         application.setStyleSheet(stylesheet)
