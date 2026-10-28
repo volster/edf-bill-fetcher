@@ -24,6 +24,7 @@ from edf_bill_fetcher.domain.json_values import freeze_json, object_value
 from edf_bill_fetcher.io.claim_workbook import CREDIT_SHEET, GROUP_SHEET, OVERLAP_SHEET
 from edf_bill_fetcher.io.dispute_workbook import HEADERS, SHEET
 from edf_bill_fetcher.io.persistence.result_codec import decode_result, encode_result
+from edf_bill_fetcher.io.persistence.result_store import load_result
 from edf_bill_fetcher.io.review_workbook import load_review_workbook, read_workbook
 from edf_bill_fetcher.io.writers.export import render_xlsx
 from edf_bill_fetcher.models.report_view import RenderSelection, build_report_view
@@ -266,7 +267,7 @@ def test_focused_pack_preserves_higher_history_exact_sources_and_one_adjustment(
         "complaint_schedule",
         "complaint_evidence_manifest",
     }
-    bundle = json.loads((destination / "evidence_manifest.json").read_text())
+    bundle = json.loads((destination / "evidence_manifest.json").read_text(encoding="utf-8"))
     invoices = {inv for source in bundle["files"] for inv in source["invoices"]}
     assert {"OLD", "REPLACEMENT", "CREDIT", "HIGHER-ESTIMATE"} <= invoices
     assert "UNRELATED-ACCOUNT" not in invoices
@@ -276,7 +277,7 @@ def test_focused_pack_preserves_higher_history_exact_sources_and_one_adjustment(
         assert hashlib.sha256(path.read_bytes()).hexdigest() == source["sha256"]
         assert source["page_ranges"] == [[1, 1]]
         assert not Path(source["saved_path"]).is_absolute()
-    html = (destination / "Complaint_Draft.html").read_text()
+    html = (destination / "Complaint_Draft.html").read_text(encoding="utf-8")
     assert "&lt;script&gt;" in html
     assert "<script>" not in html
     assert "#page=1" in html
@@ -345,7 +346,7 @@ def test_missing_or_changed_saved_evidence_never_falls_back_to_an_original(
         )
     artifacts, notes = complaint_pack.publish(view(base), str(tmp_path / "complaint_pack"))
     assert any("unavailable" in n or "inconsistent" in n for n in notes)
-    bundle = json.loads(Path(artifacts["complaint_evidence_manifest"]).read_text())
+    bundle = json.loads(Path(artifacts["complaint_evidence_manifest"]).read_text(encoding="utf-8"))
     assert (
         next(s for s in bundle["files"] if s["source_id"] == source_id)["status"] == "unavailable"
     )
@@ -487,7 +488,7 @@ def test_draft_incomplete_and_opted_out_cases_never_assert_a_combined_total(revi
         view(incomplete), str(tmp_path / "incomplete" / "complaint_pack")
     )
     assert any("reconciliation is incomplete" in note for note in notes)
-    text = Path(artifacts["complaint_html"]).read_text()
+    text = Path(artifacts["complaint_html"]).read_text(encoding="utf-8")
     assert "combined reduction is not yet asserted" in text
     assert "WITHHELD" in text
     assert "90.00" not in text
@@ -554,9 +555,9 @@ def test_excluded_group_members_and_withdrawn_details_stay_out_of_focused_claim_
     excluded = analyse_session(session, root / "excluded.json")
     artifacts, notes = complaint_pack.publish(view(excluded), str(tmp_path / "complaint_pack"))
     assert any("excluded or inactive members" in note for note in notes)
-    bundle = json.loads(Path(artifacts["complaint_evidence_manifest"]).read_text())
+    bundle = json.loads(Path(artifacts["complaint_evidence_manifest"]).read_text(encoding="utf-8"))
     assert "OLD" not in {inv for source in bundle["files"] for inv in source["invoices"]}
-    text = Path(artifacts["complaint_html"]).read_text()
+    text = Path(artifacts["complaint_html"]).read_text(encoding="utf-8")
     assert "90.00" not in text
     assert "One challenge to the same economic charges" not in text
 
@@ -588,7 +589,18 @@ def test_claims_on_absorbed_duplicate_records_are_archived_without_transferring_
     )
 
 
-def test_main_outputs_and_focused_pack_share_the_accepted_reconciled_amount(reviewed, tmp_path):
+@pytest.mark.parametrize("default_encoding", ["utf-8", "cp1252"])
+def test_main_outputs_and_focused_pack_share_the_accepted_reconciled_amount(
+    reviewed, tmp_path, monkeypatch, default_encoding
+):
+    # Exercise Windows' legacy default on every platform. Saved evidence must
+    # use its declared encoding so that £ field names keep their original hash.
+    original_read_text = Path.read_text
+
+    def platform_read_text(path, encoding=None, errors=None):
+        return original_read_text(path, encoding=encoding or default_encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", platform_read_text)
     _, snapshot = reviewed
     destination = tmp_path / "complete-reviewed-run"
     destination.mkdir()
@@ -608,12 +620,12 @@ def test_main_outputs_and_focused_pack_share_the_accepted_reconciled_amount(revi
     )
     with pdfplumber.open(outputs["pdf"]) as pdf:
         pdf_text = " ".join(p.extract_text() or "" for p in pdf.pages)
-    for content in (Path(outputs["html"]).read_text(), doc_text, pdf_text):
+    for content in (Path(outputs["html"]).read_text(encoding="utf-8"), doc_text, pdf_text):
         assert "Consolidated claim proposal" in content
-        assert "90.00" in content
+        assert "£90.00" in content
         assert "Cancellation offsets" in content
         assert "Historical account" not in content
-    model = view(decode_result(json.loads((destination / "result.json").read_text()))).claims
+    model = view(load_result(destination / "result.json")).claims
     assert model == view(snapshot).claims
     assert model["proposed_reduction"] == "90.00"
 
