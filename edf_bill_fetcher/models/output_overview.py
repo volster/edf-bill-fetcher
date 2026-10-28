@@ -10,6 +10,7 @@ from edf_bill_fetcher.domain.json_values import object_value
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.formatting import fmt_money
 from edf_bill_fetcher.helpers.identity import account_key
+from edf_bill_fetcher.processors.claim_reconciliation import has_active_claims
 from edf_bill_fetcher.processors.preparation import identity, number, scope
 
 if TYPE_CHECKING:
@@ -76,7 +77,7 @@ def build_output_overview(view: ReportView) -> OutputOverview:
     notes = len(state.get("error_log", []))
     priorities = []
     claims = view.claims
-    if claims and (claims["groups"] or claims["unresolved_positions"]):
+    if claims is not None and has_active_claims(claims):
         priorities.append(
             ReviewPriority(
                 ("Reconciled proposal: " + fmt_money(claims["proposed_reduction"]))

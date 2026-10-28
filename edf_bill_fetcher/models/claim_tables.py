@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from edf_bill_fetcher.helpers.formatting import fmt_money, report_date
 from edf_bill_fetcher.models.rebilling_tables import document_label, reference
+from edf_bill_fetcher.processors.claim_reconciliation import has_active_claims
 
 
 def scope_label(scope: dict) -> str:
@@ -25,7 +26,9 @@ def total_table(model: dict) -> list[list[str]]:
             "Further reduction proposed",
             fmt_money(model["proposed_reduction"])
             if model["ready"]
-            else "WITHHELD — unresolved claims",
+            else "WITHHELD — unresolved claims"
+            if has_active_claims(model)
+            else "No active claims",
             "Human proposal after explicitly allocated relief already received; not an entitlement finding",
             "All reviewed claim groups"
             if model["ready"]
@@ -82,7 +85,9 @@ def group_table(model: dict, ledger: dict) -> list[list[str]]:
     for group in model["groups"]:
         data = group["input"]
         status = (
-            "Reviewed for totaling"
+            "Withdrawn"
+            if data["status"] == "withdrawn"
+            else "Reviewed for totaling"
             if group["ready"]
             else "NEEDS REVIEW"
             if group["needs_review"]

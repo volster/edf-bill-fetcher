@@ -43,6 +43,7 @@ from edf_bill_fetcher.models.claim_tables import (
 )
 from edf_bill_fetcher.models.rebilling_tables import history_table, schedule_table
 from edf_bill_fetcher.models.report_view import ReportView
+from edf_bill_fetcher.processors.claim_reconciliation import has_active_claims
 from edf_bill_fetcher.processors.preparation import identity
 
 REFERENCE_MARKER = "EDF_COMPLAINT_SCHEDULE_REFERENCE"
@@ -59,14 +60,7 @@ TableData = tuple[str, str, list[list[str]]]
 def requested(view: ReportView) -> bool:
     """Only opted-in reviews with active challenges produce a complaint draft."""
     model = view.claims
-    return bool(
-        model
-        and model["input"]["context"]["include_pack"]
-        and (
-            any(g["input"]["status"] != "withdrawn" for g in model["groups"])
-            or model["unresolved_positions"]
-        )
-    )
+    return bool(model and model["input"]["context"]["include_pack"] and has_active_claims(model))
 
 
 def _compatible(a: dict, b: dict) -> bool:

@@ -43,6 +43,17 @@ def empty_state() -> dict:
     return {"version": 1, "groups": [], "separations": [], "context": dict(CONTEXT_DEFAULTS)}
 
 
+def has_active_claims(model: dict | None) -> bool:
+    """Distinguish unresolved work from a history containing only withdrawn proposals."""
+    return bool(
+        model
+        and (
+            model["unresolved_positions"]
+            or any(group["input"]["status"] != "withdrawn" for group in model["groups"])
+        )
+    )
+
+
 def _text(value: object, limit: int = 4000, *, required: bool = False) -> str:
     if not isinstance(value, str) or len(value) > limit or (required and not value.strip()):
         raise ValueError(

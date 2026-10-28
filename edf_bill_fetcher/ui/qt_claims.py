@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from edf_bill_fetcher.application.review_session import ReviewSession
 from edf_bill_fetcher.helpers.formatting import fmt_money
+from edf_bill_fetcher.processors.claim_reconciliation import has_active_claims
 from edf_bill_fetcher.processors.preparation import number
 from edf_bill_fetcher.processors.revisions import BILLS
 from edf_bill_fetcher.ui.qt_widgets import WrappedCheckBox, button, label
@@ -278,7 +279,9 @@ class ClaimDialog(QDialog):
         for group in model["groups"]:
             data = group["input"]
             state = (
-                "Needs review"
+                "Withdrawn"
+                if data["status"] == "withdrawn"
+                else "Needs review"
                 if group["needs_review"]
                 else "Reviewed"
                 if group["ready"]
@@ -309,7 +312,9 @@ class ClaimDialog(QDialog):
                 self.overlaps.setCurrentItem(item)
         self.overlap_reason.setPlainText(pending)
         self.summary.setText(
-            f"Further reduction proposed: {fmt_money(model['proposed_reduction'])}."
+            "No active claims. Withdrawn proposals remain in the review history."
+            if not has_active_claims(model)
+            else f"Further reduction proposed: {fmt_money(model['proposed_reduction'])}."
             if model["ready"]
             else f"Total withheld · reviewed subtotal {fmt_money(model['reviewed_subtotal'])} · {len(model['unresolved_positions'])} challenged documents still need reconciliation."
         )

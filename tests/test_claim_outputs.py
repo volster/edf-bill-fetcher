@@ -658,3 +658,42 @@ def test_disabling_focused_pack_does_not_hide_unresolved_claim_status(reviewed, 
     assert outcome.status == "review_required", outcome.error
     assert object_value(outcome.manifest)["warnings"]
     assert not (destination / "complaint_pack").exists()
+
+
+def test_withdrawn_history_is_retained_without_false_outstanding_work_or_a_complaint_pack(
+    reviewed, tmp_path
+):
+    from edf_bill_fetcher.models.claim_tables import group_table, total_table
+    from edf_bill_fetcher.models.output_overview import build_output_overview
+    from edf_bill_fetcher.processors.claim_reconciliation import has_active_claims
+
+    root, snapshot = reviewed
+    session = ReviewSession(snapshot)
+    fields = {k: v for k, v in session.claims["C1"].items() if k not in {"id", "source_digest"}}
+    fields["status"] = "withdrawn"
+    session.set_claim("C1", **fields)
+    # Withdrawing a group does not silently withdraw its individual positions.
+    assert has_active_claims(session.claim_model())
+    for key in ("a", "b"):
+        set_position(session, rid(key), status="withdrawn", first_demand_date="01/02/2024")
+    withdrawn = analyse_session(session, root / "withdrawn.json")
+    accepted = view(withdrawn)
+    assert not has_active_claims(accepted.claims)
+    assert accepted.claims["input"]["groups"][0]["status"] == "withdrawn"
+    assert "No active claims" in total_table(accepted.claims)[1]
+    assert "Withdrawn" in group_table(accepted.claims, accepted.rebilling_ledger)[1][0]
+    assert all(p.sheet != "Reconciled claims" for p in build_output_overview(accepted).priorities)
+    destination = tmp_path / "withdrawn-run"
+    destination.mkdir()
+    outcome = run(
+        withdrawn.prepared.extraction.request,
+        {},
+        result_path=str(destination / "result.json"),
+        manifest_path=str(destination / "run_manifest.json"),
+        accepted_result=withdrawn,
+        selection=RenderSelection(()),
+    )
+    assert outcome.status == "complete", outcome.error
+    assert not object_value(outcome.manifest)["warnings"]
+    assert not (destination / "complaint_pack").exists()
+    assert withdrawn.summary == snapshot.summary

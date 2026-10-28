@@ -18,6 +18,7 @@ from edf_bill_fetcher.io.persistence.result_store import save_result
 from edf_bill_fetcher.io.persistence.run_manifest import artifact_record, save_manifest
 from edf_bill_fetcher.models.report_view import RenderSelection, build_report_view
 from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
+from edf_bill_fetcher.processors.claim_reconciliation import has_active_claims
 
 
 class RunCancelled(Exception):
@@ -205,11 +206,7 @@ def run(
             registry = renderers if renderers is not None else default_renderers()
             view = build_report_view(snapshot, render_selection)
             claims = view.claims
-            if (
-                claims
-                and (claims["groups"] or claims["unresolved_positions"])
-                and not claims["ready"]
-            ):
+            if has_active_claims(claims) and claims is not None and not claims["ready"]:
                 manifest["warnings"].append(
                     "Claim reconciliation is incomplete; review overlaps, allocations and changed evidence before asserting one total."
                 )
