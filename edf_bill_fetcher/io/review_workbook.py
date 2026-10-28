@@ -32,6 +32,12 @@ from edf_bill_fetcher.application.record_review import (
 )
 from edf_bill_fetcher.domain.json_values import canonical_text, object_value, strict_loads
 from edf_bill_fetcher.helpers.excel_utils import literal_cell
+from edf_bill_fetcher.io.claim_workbook import (
+    CREDIT_SHEET,
+    INPUT_SHEETS,
+    read_claim_state,
+    write_claim_sheets,
+)
 from edf_bill_fetcher.io.dispute_workbook import SHEET as DISPUTE_SHEET
 from edf_bill_fetcher.io.dispute_workbook import read_schedule, write_schedule
 from edf_bill_fetcher.io.persistence.result_codec import decode_result, encode_result
@@ -354,6 +360,7 @@ def write_review_sheets(
     history.freeze_panes = "E2"
     history.auto_filter.ref = history.dimensions
     write_schedule(wb, view, saved_links)
+    write_claim_sheets(wb, view, saved_links)
     write_workbook_dashboard(wb, view)
     polish_reference_sheets(wb)
     # Calculated sheets are reference outputs. Protection prevents accidental
@@ -392,10 +399,14 @@ def write_review_sheets(
 def _reference_values(wb: Workbook) -> list[list]:
     result = []
     for ws in sorted(wb, key=lambda sheet: sheet.title):
-        if ws.title in {REVIEW_SHEET, PAYLOAD_SHEET, DISPUTE_SHEET}:
+        if ws.title in {REVIEW_SHEET, PAYLOAD_SHEET, DISPUTE_SHEET} or ws.title in INPUT_SHEETS - {
+            CREDIT_SHEET
+        }:
             continue
         # Sparse iteration avoids materializing large formatted empty ranges.
         for (row, col), cell in sorted(ws._cells.items()):
+            if ws.title == CREDIT_SHEET and col < 8:
+                continue
             value = cell.value
             if value is None or value == "":
                 continue
@@ -567,12 +578,15 @@ def load_review_workbook(path: str) -> tuple[list[dict], dict, str] | None:
                 )
             except (TypeError, ValueError) as error:
                 raise ValueError(f"{REVIEW_SHEET}, row {row_number}: {error}") from error
+        positions = read_schedule(wb, snapshot, decisions)
+        claims = read_claim_state(wb, snapshot, decisions, positions)
         return review_inputs(
             snapshot,
             decisions,
             input_path=path,
             relative_root=relative_root,
-            schedule=read_schedule(wb, snapshot, decisions),
+            schedule=positions,
+            claim_state=claims,
         )
     finally:
         wb.close()
@@ -588,6 +602,14 @@ def read_workbook(path: str) -> tuple[list[dict], dict, str | None]:
     from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
 
     with pd.ExcelFile(path) as workbook:
+        if "Read first" in workbook.sheet_names:
+            from edf_bill_fetcher.application.complaint_pack import REFERENCE_MARKER
+
+            first = pd.read_excel(workbook, sheet_name="Read first", header=None, nrows=1)
+            if not first.empty and first.iloc[0, 0] == REFERENCE_MARKER:
+                raise ValueError(
+                    "The complaint schedule is a reference output. Edit the main review workbook or use the app, then regenerate the pack."
+                )
         records = pd.read_excel(workbook, sheet_name="EDF Evidence Report").to_dict("records")
         metadata = {}
         if "Provenance" in workbook.sheet_names:

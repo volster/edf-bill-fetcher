@@ -75,6 +75,18 @@ def build_output_overview(view: ReportView) -> OutputOverview:
     exclusions = len(state.get("review_excluded_records", []))
     notes = len(state.get("error_log", []))
     priorities = []
+    claims = view.claims
+    if claims and (claims["groups"] or claims["unresolved_positions"]):
+        priorities.append(
+            ReviewPriority(
+                ("Reconciled proposal: " + fmt_money(claims["proposed_reduction"]))
+                if claims["ready"]
+                else "Resolve claim overlaps and credit allocations",
+                "Review each consolidated claim once, check relief already received, and regenerate the focused complaint draft. Remaining charges still require substantiation.",
+                "Reconciled claims",
+                "detailed_findings",
+            )
+        )
     historical = sum(
         row.get("Document Role") == "Historical account statement"
         and row.get("Entry Type") == "Charge"

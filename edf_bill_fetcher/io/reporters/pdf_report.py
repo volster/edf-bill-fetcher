@@ -1038,12 +1038,14 @@ def create_revision_section(model: dict | None) -> list:
     return elements
 
 
-def create_rebilling_section(model: dict | None) -> list:
+def create_rebilling_section(model: dict | None, claims: dict | None = None) -> list:
     """Wrap the complete accepted schedule, allowing long evidence reasons to span pages."""
     from edf_bill_fetcher.models.rebilling_tables import report_tables
 
     elements = []
-    for title, note, rows in report_tables(model):
+    from edf_bill_fetcher.models.claim_tables import report_tables as claim_tables
+
+    for title, note, rows in report_tables(model) + claim_tables(claims, model):
         elements.extend(
             [
                 Paragraph(xml_escape(title), STYLES["SubSectionHeader"]),
@@ -2188,7 +2190,7 @@ def render_pdf(view: ReportView, output_path: str) -> str:
             lambda kwargs: (
                 create_anomaly_detail_section(**kwargs)
                 + create_revision_section(view.revisions)
-                + create_rebilling_section(view.rebilling_ledger)
+                + create_rebilling_section(view.rebilling_ledger, view.claims)
             ),
         ),
         "timeline": (

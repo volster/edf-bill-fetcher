@@ -53,6 +53,51 @@ def prepare_snapshot(extraction: ExtractionSnapshot) -> PreparedSnapshot:
                     }
                 )
             extraction = replace(extraction, legacy_state=freeze_json(state))
+    claims = state.get("claim_reconciliation")
+    if claims:
+        active_ids = {
+            row.get("Review Row ID")
+            for row in prepared.records + state.get("review_excluded_records", [])
+        }
+        duplicate_ids = {row.get("Review Row ID") for row in prepared.duplicates}
+        archived = []
+        for group in claims["groups"]:
+            references = set(group["members"]) | {credit["row_id"] for credit in group["credits"]}
+            missing = references - active_ids
+            if missing and not missing <= duplicate_ids:
+                raise ValueError("Claim group refers to an unknown record")
+            if missing:
+                archived.append(group)
+        if archived:
+            archived_ids = {group["id"] for group in archived}
+            state.setdefault("archived_claim_groups", []).extend(archived)
+            claims["groups"] = [
+                group for group in claims["groups"] if group["id"] not in archived_ids
+            ]
+            removed = [
+                decision
+                for decision in claims["separations"]
+                if set(decision["groups"]) & archived_ids
+            ]
+            state.setdefault("archived_claim_separations", []).extend(removed)
+            claims["separations"] = [
+                decision
+                for decision in claims["separations"]
+                if not set(decision["groups"]) & archived_ids
+            ]
+            state.setdefault("review_history", []).append(
+                {
+                    "at": extraction.request.created_at.isoformat(),
+                    "base_fingerprint": state.get("human_review", {}).get("base_fingerprint"),
+                    "row_id": "",
+                    "invoice": None,
+                    "field": "Claim reconciliation",
+                    "before": str(sorted(archived_ids)),
+                    "after": "archived_after_deduplication",
+                    "reason": "A group member or allocated credit merged during duplicate resolution; the proposal is archived, not transferred or added to another claim.",
+                }
+            )
+            extraction = replace(extraction, legacy_state=freeze_json(state))
     statuses = state.get("human_review_statuses", {})
     if statuses:
         # Correcting an invoice can merge two previously distinct rows. Keep

@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, PatternFill, Protection
+from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -13,6 +14,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from edf_bill_fetcher.application.record_review import corrected_record, review_rows
 from edf_bill_fetcher.domain.analysis import AnalysisSnapshot
 from edf_bill_fetcher.helpers.excel_utils import literal_cell
+from edf_bill_fetcher.io.claim_workbook import member_groups
 from edf_bill_fetcher.io.writers.rebilling_ledger import reference_sheet, source_link
 from edf_bill_fetcher.models.output_tables import ledger_label
 from edf_bill_fetcher.models.rebilling_tables import position_state
@@ -26,7 +28,7 @@ from edf_bill_fetcher.processors.rebilling_ledger import (
 from edf_bill_fetcher.processors.revisions import BILLS
 
 SHEET = "Dispute schedule"
-EDITABLE = (
+POSITION_INPUTS = (
     "Status",
     "Challenged amount (£)",
     "Proposed reduction (£)",
@@ -34,8 +36,8 @@ EDITABLE = (
     "Basis / scope",
     "EDF must substantiate",
 )
-HEADERS = (
-    *EDITABLE,
+LEGACY_HEADERS = (
+    *POSITION_INPUTS,
     "Invoice",
     "Invoice date",
     "Account / ledger",
@@ -49,6 +51,9 @@ HEADERS = (
     "Evidence status",
     "Row ID",
 )
+
+EDITABLE = (*POSITION_INPUTS, "Claim groups")
+HEADERS = (*EDITABLE, *LEGACY_HEADERS[len(POSITION_INPUTS) :])
 
 
 def _values(doc: dict) -> tuple:
@@ -80,26 +85,41 @@ def write_schedule(wb: Workbook, view: ReportView, links: dict[str, str]) -> Non
     model = view.rebilling_ledger
     if model is None:
         return
+    current = view.claims is not None
+    headers = HEADERS if current else LEGACY_HEADERS
+    editable = EDITABLE if current else POSITION_INPUTS
+    membership = member_groups(view.claims)
     ws = reference_sheet(
         wb,
         SHEET,
         model["notice"]
         + " Edit pale green inputs, give the scope and evidence in Basis, then regenerate. First demand is a date you verify for the additional amount; leaving it blank does not use the invoice date. Re-save changed positions in the app to acknowledge changed evidence.",
-        HEADERS,
+        headers,
     )
     docs = [doc for doc in model["documents"] if doc["record"].get("Entry Type") in BILLS]
     for n, doc in enumerate(docs, 5):
-        for c, value in enumerate(_values(doc), 1):
+        values = _values(doc)
+        if current:
+            values = (*values[:6], membership.get(doc["row_id"], ""), *values[6:])
+        for c, value in enumerate(values, 1):
             cell = literal_cell(ws, n, c, value)
-            cell.protection = Protection(locked=c > len(EDITABLE))
-            cell.fill = PatternFill("solid", fgColor="EAF7F5" if c <= len(EDITABLE) else "F2F4F6")
+            cell.protection = Protection(locked=c > len(editable))
+            cell.fill = PatternFill("solid", fgColor="EAF7F5" if c <= len(editable) else "F2F4F6")
             cell.alignment = Alignment(wrap_text=True, vertical="top")
-            if c in (2, 3, 13, 14):
+            if c in (
+                2,
+                3,
+                headers.index("Period charge (£)") + 1,
+                headers.index("Gross electricity, printed (£)") + 1,
+            ):
                 cell.number_format = "£#,##0.00;[Red]-£#,##0.00"
-        source_link(ws.cell(n, 15), doc["record"], links)
+        source_link(ws.cell(n, headers.index("Source file") + 1), doc["record"], links)
         ws.row_dimensions[n].height = 65
     if docs:
-        table = Table(displayName="EDFDisputePositions", ref=f"A4:R{4 + len(docs)}")
+        table = Table(
+            displayName="EDFDisputePositions",
+            ref=f"A4:{get_column_letter(len(headers))}{4 + len(docs)}",
+        )
         table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=False)
         ws.add_table(table)
         status = DataValidation(type="list", formula1='"' + ",".join(STATUSES) + '"')
@@ -117,11 +137,11 @@ def write_schedule(wb: Workbook, view: ReportView, links: dict[str, str]) -> Non
             validation.errorStyle, validation.showErrorMessage = "stop", True
             ws.add_data_validation(validation)
             validation.add(f"{column}5:{column}{4 + len(docs)}")
-    ws.freeze_panes = "G5"
-    ws.column_dimensions["R"].hidden = True
+    ws.freeze_panes = f"{get_column_letter(len(editable) + 1)}5"
+    ws.column_dimensions[get_column_letter(len(headers))].hidden = True
     for column in ("E", "F"):
         ws.column_dimensions[column].width = 65
-    for n in range(1, 7):
+    for n in range(1, len(editable) + 1):
         ws.cell(4, n).comment = Comment(
             "Editable dispute position. Keep all rows and IDs. Unprotect the sheet (no password) to sort the whole table. Regenerate to update reports; reference figures do not update in Excel.",
             "EDF Collector",
@@ -132,7 +152,8 @@ def read_schedule(
     wb: Workbook, snapshot: AnalysisSnapshot, record_decisions: list[dict]
 ) -> list[dict] | None:
     """Reject invented/removed rows, altered source facts and formulas before importing."""
-    model = build_report_view(snapshot, RenderSelection()).rebilling_ledger
+    view = build_report_view(snapshot, RenderSelection())
+    model = view.rebilling_ledger
     if model is None:
         if SHEET in wb.sheetnames:
             raise ValueError("This analysis has no preserved dispute schedule baseline")
@@ -140,9 +161,11 @@ def read_schedule(
     if SHEET not in wb.sheetnames:
         raise ValueError("Dispute schedule was removed; restore it from the original workbook")
     ws = wb[SHEET]
+    headers = HEADERS if view.claims is not None else LEGACY_HEADERS
+    readonly_start = len(EDITABLE) if view.claims is not None else len(POSITION_INPUTS)
     if (
         ws.max_row > 100004
-        or tuple(ws.cell(4, col).value for col in range(1, len(HEADERS) + 1)) != HEADERS
+        or tuple(ws.cell(4, col).value for col in range(1, len(headers) + 1)) != headers
     ):
         raise ValueError("Dispute schedule headers were changed or row limit exceeded")
     docs = {
@@ -167,7 +190,7 @@ def read_schedule(
     )
     result, seen = [], set()
     for n in range(5, ws.max_row + 1):
-        cells = [ws.cell(n, c) for c in range(1, len(HEADERS) + 1)]
+        cells = [ws.cell(n, c) for c in range(1, len(headers) + 1)]
         if all(cell.value is None for cell in cells):
             continue
         try:
@@ -181,7 +204,7 @@ def read_schedule(
             seen.add(key)
             doc = docs[key]
             if tuple(
-                None if cell.value in (None, "") else cell.value for cell in cells[6:]
+                None if cell.value in (None, "") else cell.value for cell in cells[readonly_start:]
             ) != tuple(None if value in (None, "") else value for value in _values(doc)[6:]):
                 raise ValueError("Grey dispute source/identity cells were changed")
             values = [cell.value for cell in cells[:6]]

@@ -37,6 +37,7 @@ class RebillingPanel(QWidget):
     changed = Signal()
     failed = Signal(str)
     show_record = Signal(str)
+    reconcile_requested = Signal()
 
     def __init__(self, parent=None):
         """Build a scrollable history and human-review form for small desktop windows."""
@@ -76,6 +77,7 @@ class RebillingPanel(QWidget):
             "Open an analysis to inspect the rebilling history.", "hint", wrap=True
         )
         layout.addWidget(self.summary)
+        layout.addWidget(button("Reconcile claims…", self.reconcile_requested.emit))
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(("Document / date", "Type", "Dispute position"))
         self.tree.setMinimumHeight(140)

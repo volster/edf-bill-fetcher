@@ -141,6 +141,12 @@ class ReportView:
         result = self.model("sap").get("rebilling_ledger")
         return result if isinstance(result, dict) else None
 
+    @property
+    def claims(self) -> dict | None:
+        """Read accepted claim reconciliation without recomputing proposals."""
+        result = self.model("sap").get("claim_reconciliation")
+        return result if isinstance(result, dict) else None
+
     def frame(self, key: str = "evidence") -> pd.DataFrame:
         """Return a new precomputed frame stored with the analytical payload."""
         return self.model("sap")["frames"][key]

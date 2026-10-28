@@ -672,14 +672,18 @@ def create_revision_section(doc: Any, styles: dict, model: dict | None) -> None:
         )
 
 
-def create_reviewed_findings(model: dict | None, ledger: dict | None = None, **kwargs: Any) -> None:
+def create_reviewed_findings(
+    model: dict | None, ledger: dict | None = None, claims: dict | None = None, **kwargs: Any
+) -> None:
     """Keep anomaly and revision details under one report section."""
     create_anomaly_detail_section(**kwargs)
     create_revision_section(kwargs["doc"], kwargs["styles"], model)
     from edf_bill_fetcher.models.rebilling_tables import report_tables
 
     doc, styles = kwargs["doc"], kwargs["styles"]
-    for title, note, rows in report_tables(ledger):
+    from edf_bill_fetcher.models.claim_tables import report_tables as claim_tables
+
+    for title, note, rows in report_tables(ledger) + claim_tables(claims, ledger):
         doc.add_paragraph(title, style=styles["SubSectionHeader"])
         doc.add_paragraph(note, style=styles["BodyText"])
         if len(rows) > 1:
@@ -1642,7 +1646,7 @@ def render_docx(view: ReportView, output_path: str) -> str:
         "detailed_findings": (
             lambda: {"doc": doc, "styles": styles, "flags": flags, "df": df},
             lambda kwargs: create_reviewed_findings(
-                view.revisions, view.rebilling_ledger, **kwargs
+                view.revisions, view.rebilling_ledger, view.claims, **kwargs
             ),
         ),
         "timeline": (

@@ -557,13 +557,17 @@ def create_revision_section(model: dict | None) -> str:
     )
 
 
-def create_rebilling_section(model: dict | None, bundle_dir: str | None = None) -> str:
+def create_rebilling_section(
+    model: dict | None, bundle_dir: str | None = None, claims: dict | None = None
+) -> str:
     """Render the accepted history and positions, linking contained original source pages."""
     from edf_bill_fetcher.models.rebilling_tables import report_tables
 
     parts = []
     links = _source_links(bundle_dir)
-    for title, note, rows in report_tables(model):
+    from edf_bill_fetcher.models.claim_tables import report_tables as claim_tables
+
+    for title, note, rows in report_tables(model) + claim_tables(claims, model):
         parts.append(f'<h3>{_esc(title)}</h3><p class="note">{_esc(note)}</p>')
         if title in {"Rebilling ledger", "Dispute schedule"} and model is not None:
             docs = [
@@ -1320,7 +1324,9 @@ def render_html(view: ReportView, output_path: str) -> str:
             lambda kwargs: (
                 create_anomaly_detail_section(**kwargs)
                 + create_revision_section(view.revisions)
-                + create_rebilling_section(view.rebilling_ledger, str(Path(output_path).parent))
+                + create_rebilling_section(
+                    view.rebilling_ledger, str(Path(output_path).parent), view.claims
+                )
             ),
         ),
         "timeline": (

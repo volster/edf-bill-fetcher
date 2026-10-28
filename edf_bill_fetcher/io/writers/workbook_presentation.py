@@ -58,7 +58,7 @@ def write_workbook_dashboard(wb: Workbook, view: ReportView) -> None:
         3,
         1,
         12,
-        "Edit Review & Corrections or Dispute schedule, then regenerate in the app. These figures show the last generated result until you do.",
+        "Edit Review & Corrections, Dispute schedule and Claim groups, then regenerate in the app. These figures show the last generated result until you do.",
         fill="EAF7F5",
         color=NAVY,
         bold=True,
@@ -142,6 +142,10 @@ def write_workbook_dashboard(wb: Workbook, view: ReportView) -> None:
             "EDF Evidence Report",
             "Dispute Flags",
             "Dispute schedule",
+            "Reconciled claims",
+            "Claim groups",
+            "Credit allocations",
+            "Claim overlap review",
             "Rebilling ledger",
             "Rebilling components",
             "Rebilling comparisons",
@@ -218,6 +222,10 @@ def polish_reference_sheets(wb: Workbook) -> None:
             "Rebilling components",
             "Rebilling comparisons",
             "Dispute schedule",
+            "Reconciled claims",
+            "Claim groups",
+            "Credit allocations",
+            "Claim overlap review",
         }:
             ws.print_title_rows = "1:4"
             ws.page_setup.paperSize = ws.PAPERSIZE_A3

@@ -302,6 +302,7 @@ def review_inputs(
     statuses: dict | None = None,
     revisions: list[dict] | None = None,
     schedule: list[dict] | None = None,
+    claim_state: dict | None = None,
 ) -> tuple[list[dict], dict, str]:
     """Build traceable review inputs shared by Excel and the desktop editor."""
     baseline = review_rows(snapshot)
@@ -460,5 +461,39 @@ def review_inputs(
                     }
                 )
         state["dispute_schedule"] = schedule
+    if claim_state is not None:
+        from edf_bill_fetcher.processors.claim_reconciliation import (
+            validate_state as validate_claim_state,
+        )
+
+        effective = [
+            {"id": row["Review Row ID"], "included": included, "record": row}
+            for included, rows in ((True, resolved), (False, excluded))
+            for row in rows
+        ]
+        claim_state = validate_claim_state(effective, claim_state)
+        previous_claims = state.get("claim_reconciliation")
+        if previous_claims != claim_state and (
+            previous_claims is not None
+            or claim_state["groups"]
+            or claim_state["separations"]
+            or any(
+                claim_state["context"][key] for key in ("complaint_summary", "requested_outcome")
+            )
+            or claim_state["context"]["include_pack"] is False
+        ):
+            history.append(
+                {
+                    "at": reviewed_at,
+                    "base_fingerprint": snapshot.input_fingerprint,
+                    "row_id": "",
+                    "invoice": None,
+                    "field": "Claim reconciliation",
+                    "before": str(previous_claims) if previous_claims else None,
+                    "after": str(claim_state),
+                    "reason": "Human claim, credit, overlap or complaint-context review",
+                }
+            )
+        state["claim_reconciliation"] = claim_state
     state.pop("records", None)
     return originals, state, snapshot.prepared.extraction.request.as_of.isoformat()

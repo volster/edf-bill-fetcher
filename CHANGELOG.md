@@ -14,6 +14,9 @@ semver-friendly.
 
 ### Added
 
+- Consolidated claim groups and credit allocations shared by the app and Excel, with overlap review, evidence bindings, audited changes and a proposal that remains separate from recorded balances.
+- A focused complaint draft in HTML, Word and PDF, with a reference schedule, verified relevant originals, original page references, evidence manifest and portable ZIP. Unresolved claims and missing sources stay visible as review gaps.
+
 - A full rebilling history, source-linked component comparisons and an editable dispute schedule shared by the desktop, Excel and regenerated HTML/PDF/DOCX packs. Positions preserve original account figures, flag changed evidence for review, and never automatically sum overlapping challenges or turn credits into a second reduction.
 
 - Source setup through `bootstrap.py run|develop|build`, with native prerequisite installation and working OCR checks.

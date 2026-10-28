@@ -93,6 +93,17 @@ def analytical_fingerprint(prepared: PreparedSnapshot, methods: FrozenJSON) -> s
         ]
     if state.get("dispute_schedule"):
         payload["relevant_legacy_state"]["dispute_schedule"] = state["dispute_schedule"]
+    claims = state.get("claim_reconciliation")
+    claim_context = claims.get("context") if isinstance(claims, dict) else None
+    claim_context = claim_context if isinstance(claim_context, dict) else {}
+    if isinstance(claims, dict) and (
+        claims.get("groups")
+        or claims.get("separations")
+        or claim_context.get("complaint_summary")
+        or claim_context.get("requested_outcome")
+        or claim_context.get("include_pack") is False
+    ):
+        payload["relevant_legacy_state"]["claim_reconciliation"] = claims
     return hashlib.sha256(canonical_text(payload).encode()).hexdigest()
 
 

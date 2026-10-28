@@ -363,7 +363,7 @@ def test_excel_positions_regenerate_all_formats_and_match_native_review(review_p
     wb = load_workbook(root / "Reviewed_Evidence.xlsx")
     assert {"Rebilling ledger", "Rebilling components", SHEET} <= set(wb.sheetnames)
     assert wb[SHEET]["B5"].protection.locked is False
-    assert wb[SHEET]["G5"].protection.locked is True
+    assert wb[SHEET].cell(5, HEADERS.index("Invoice") + 1).protection.locked is True
     assert wb["Rebilling ledger"]["R5"].hyperlink.target.endswith("#page=1")
     wb.close()
 
@@ -500,6 +500,7 @@ def test_old_accepted_results_do_not_silently_gain_recomputed_ledger_tables():
     snapshot = result_snapshot()
     encoded = encode_result(snapshot, "old-without-ledger")
     encoded["analysis"]["models"]["sap"]["payload"].pop("rebilling_ledger", None)
+    encoded["analysis"]["models"]["sap"]["payload"].pop("claim_reconciliation", None)
     restored = decode_result(encoded)
     assert build_report_view(restored, RenderSelection()).rebilling_ledger is None
     assert len(ReviewSession(restored).ledger_model()["documents"]) >= 1

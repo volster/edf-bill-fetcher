@@ -265,10 +265,14 @@ def _computed_models(
         rows_value(prepared.records), state.get("review_excluded_records", []), fingerprint
     )
     revisions = build_revisions(review_items, state.get("bill_revision_decisions", []))
+    from edf_bill_fetcher.processors.claim_reconciliation import build_reconciliation
+
+    ledger = build_ledger(review_items, revisions, state.get("dispute_schedule", []))
     sap = {
         "bill_revisions": revisions,
-        "rebilling_ledger": build_ledger(
-            review_items, revisions, state.get("dispute_schedule", [])
+        "rebilling_ledger": ledger,
+        "claim_reconciliation": build_reconciliation(
+            review_items, ledger, state.get("claim_reconciliation")
         ),
         "analyses": analyses,
         "domination": domination,

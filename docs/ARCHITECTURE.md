@@ -101,3 +101,9 @@ comparisons within the existing Detailed findings section, retaining full source
 references and explicit decision states. Review history includes field,
 inclusion, verification and relationship decisions. Excel changes invalidate a
 record's previous verification state, while unchanged review metadata survives.
+
+## Claim reconciliation and focused complaint outputs
+
+`processors/claim_reconciliation.py` validates human claim groups, credit allocations and overlap decisions, binds them to the existing ledger's full source context, and computes a separate proposed reduction. It never changes `FinancialSummary`. `ReviewSession` is the shared native/Excel decision contract; `io/claim_workbook.py` binds editable source references to the preserved baseline and retains stale decisions until a human acknowledges changed evidence. Optional stored `claim_reconciliation` data is validated on decode; old accepted results are rendered without recalculation.
+
+`models/claim_tables.py` supplies identical wording/amounts to all formats. `application/complaint_pack.py` curates relevant stored history and copies verified originals, then stages its HTML/DOCX/PDF/reference workbook, index/manifest and ZIP. `run_service` owns progress, cancellation, artifact hashes and truthful review-required/failure status. Renderers do not infer an entitlement or recompute the accepted proposal. Private dispute fixtures do not belong in the repository.

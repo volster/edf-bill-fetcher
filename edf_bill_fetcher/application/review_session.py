@@ -21,6 +21,16 @@ from edf_bill_fetcher.domain.analysis import AnalysisSnapshot
 from edf_bill_fetcher.domain.json_values import canonical_text, object_value, strict_loads
 from edf_bill_fetcher.helpers.artifacts import write_json
 from edf_bill_fetcher.io.persistence.result_codec import encode_result
+from edf_bill_fetcher.processors.claim_reconciliation import (
+    GROUP_FIELDS,
+    build_reconciliation,
+    empty_state,
+    group_digest,
+    separation_digest,
+)
+from edf_bill_fetcher.processors.claim_reconciliation import (
+    validate_state as validate_claim_state,
+)
 from edf_bill_fetcher.processors.rebilling_ledger import (
     build_ledger,
     schedule_digest,
@@ -52,6 +62,12 @@ class ReviewSession:
         self.schedule: dict[str, dict] = {
             d["row_id"]: d for d in validate_schedule(self.rows, state.get("dispute_schedule", []))
         }
+        claim_state = validate_claim_state(self.rows, state.get("claim_reconciliation"))
+        self.claims = {group["id"]: group for group in claim_state["groups"]}
+        self.claim_separations = {
+            tuple(item["groups"]): item for item in claim_state["separations"]
+        }
+        self.complaint_context = claim_state["context"]
         self.undo_stack: list[list[tuple]] = []
         self.redo_stack: list[list[tuple]] = []
         self._validate_statuses(self.statuses)
@@ -123,6 +139,7 @@ class ReviewSession:
                 )
         validate_decisions(effective, list(self.revisions.values()))
         validate_schedule(effective, list(self.schedule.values()))
+        validate_claim_state(effective, self.claim_state())
         self._commit([("decisions", row_id, decision), ("statuses", row_id, annotation)])
 
     def set_revision(self, older: str, newer: str, kind: str, status: str, reason: str) -> None:
@@ -168,6 +185,100 @@ class ReviewSession:
     def ledger_model(self) -> dict:
         """Preview full history and stale positions without changing accepted totals."""
         return build_ledger(self.items(), self.revision_model(), list(self.schedule.values()))
+
+    def claim_state(self) -> dict:
+        """Detach human group, credit, overlap and complaint inputs for persistence."""
+        return copy.deepcopy(
+            {
+                "version": 1,
+                "groups": [self.claims[key] for key in sorted(self.claims)],
+                "separations": [
+                    self.claim_separations[key] for key in sorted(self.claim_separations)
+                ],
+                "context": self.complaint_context,
+            }
+        )
+
+    def claim_model(self) -> dict:
+        """Preview proposals; account figures remain the accepted snapshot's observations."""
+        return build_reconciliation(self.items(), self.ledger_model(), self.claim_state())
+
+    def set_claim(self, claim_id: str, **fields: Any) -> None:
+        """Save one consolidated human claim, bound to the current full billing history."""
+        if set(fields) != GROUP_FIELDS - {"id", "source_digest"}:
+            raise ValueError("Invalid claim group inputs")
+        state = empty_state()
+        state["groups"] = [{"id": claim_id, "source_digest": "0" * 64, **fields}]
+        group = validate_claim_state(self.items(), state)["groups"][0]
+        ledger = self.ledger_model()
+        group["source_digest"] = group_digest(self.items(), ledger, group)
+        if group["status"] == "reviewed":
+            state["groups"] = [group]
+            checked = build_reconciliation(self.items(), ledger, state)["groups"][0]
+            if not checked["ready"]:
+                raise ValueError("Cannot review this group: " + " ".join(checked["issues"]))
+        candidate = self.claim_state()
+        candidate["groups"] = [
+            value for value in candidate["groups"] if value["id"] != claim_id
+        ] + [group]
+        validate_claim_state(self.items(), candidate)
+        self._commit([("claims", claim_id, group)])
+
+    def clear_claim(self, claim_id: str) -> None:
+        """Remove a group and its overlap decisions together, with normal undo/history."""
+        if claim_id not in self.claims:
+            raise ValueError("Unknown claim group")
+        self._commit(
+            [
+                ("claims", claim_id, None),
+                *(
+                    ("claim_separations", pair, None)
+                    for pair in self.claim_separations
+                    if claim_id in pair
+                ),
+            ]
+        )
+
+    def separate_claims(self, left: str, right: str, reason: str) -> None:
+        """Record source-backed evidence that two potential overlaps are separate charges."""
+        pair = tuple(sorted((left, right)))
+        if left == right or any(key not in self.claims for key in pair):
+            raise ValueError("Select two different claim groups")
+        overlap = next(
+            (item for item in self.claim_model()["overlaps"] if tuple(item["groups"]) == pair), None
+        )
+        if overlap and overlap["kind"] == "shared_documents":
+            raise ValueError(
+                "The groups share a bill; merge or reassign it instead of waiving the duplicate"
+            )
+        value = {
+            "groups": list(pair),
+            "reason": reason,
+            "source_digest": separation_digest(
+                self.items(), self.ledger_model(), self.claims[left], self.claims[right]
+            ),
+        }
+        candidate = self.claim_state()
+        candidate["separations"] = [
+            item for item in candidate["separations"] if tuple(item["groups"]) != pair
+        ] + [value]
+        validate_claim_state(self.items(), candidate)
+        self._commit([("claim_separations", pair, value)])
+
+    def clear_separation(self, left: str, right: str) -> None:
+        """Return an overlap to unresolved without changing the claims themselves."""
+        self._commit([("claim_separations", tuple(sorted((left, right))), None)])
+
+    def set_complaint_context(self, summary: str, outcome: str, include_pack: bool) -> None:
+        """Save the user's complaint wording and optional focused-pack choice."""
+        candidate = self.claim_state()
+        candidate["context"] = {
+            "complaint_summary": summary,
+            "requested_outcome": outcome,
+            "include_pack": include_pack,
+        }
+        context = validate_claim_state(self.items(), candidate)["context"]
+        self._commit([("complaint_context", key, value) for key, value in context.items()])
 
     def _commit(self, updates: list[tuple]) -> None:
         command = []
@@ -217,6 +328,7 @@ class ReviewSession:
                 "statuses": self.statuses,
                 "revisions": [self.revisions[key] for key in sorted(self.revisions)],
                 "schedule": [self.schedule[key] for key in sorted(self.schedule)],
+                "claims": self.claim_state(),
             }
         )
 
@@ -244,6 +356,16 @@ class ReviewSession:
                     "statuses",
                     "revisions",
                     "schedule",
+                },
+                {
+                    "version",
+                    "base_fingerprint",
+                    "base_digest",
+                    "decisions",
+                    "statuses",
+                    "revisions",
+                    "schedule",
+                    "claims",
                 },
             )
             or type(payload["version"]) is not int
@@ -287,6 +409,10 @@ class ReviewSession:
         session.schedule = {
             d["row_id"]: d for d in validate_schedule(session.items(), payload.get("schedule", []))
         }
+        claims = validate_claim_state(session.items(), payload.get("claims", session.claim_state()))
+        session.claims = {group["id"]: group for group in claims["groups"]}
+        session.claim_separations = {tuple(item["groups"]): item for item in claims["separations"]}
+        session.complaint_context = claims["context"]
         return session
 
     def save(self, path: str | Path) -> None:
@@ -317,6 +443,7 @@ class ReviewSession:
             statuses=self.statuses,
             revisions=[self.revisions[key] for key in sorted(self.revisions)],
             schedule=[self.schedule[key] for key in sorted(self.schedule)],
+            claim_state=self.claim_state(),
         )
 
     def revision_model(self) -> dict:

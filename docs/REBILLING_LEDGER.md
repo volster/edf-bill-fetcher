@@ -71,3 +71,46 @@ The accepted result stores this analysis once. Excel, HTML, PDF and DOCX consume
 Original observations and source files stay unchanged. A record exclusion does not redact pages from a shared PDF. If a correction merges duplicate canonical records, a position on an absorbed record is archived with an audit entry rather than transferred or added to the retained record's proposal.
 
 Previously saved accepted results remain readable without silently gaining a newly calculated model. Open one in review and create a reviewed pack to generate the ledger and schedule. Older review drafts without schedule data remain readable. No private account evidence or complaint position belongs in repository fixtures; regression tests use synthetic examples.
+
+## Consolidate claims and account for credits
+
+In the app, choose **Dispute ledger → Reconcile claims…**. The separate editor has tabs for claims/credits, overlap review and complaint wording. It shares the review draft, undo/redo, autosave and reviewed-pack workflow.
+
+1. Create a short claim ID and title. Assign challenged bills representing the **same economic charges**. Supporting earlier bills remain in the history without becoming extra claims.
+2. Enter one consolidated challenged amount and one requested reduction **before relief already received**, including applicable VAT. These are human proposals. The app never adds successive invoice totals or caps a challenge at a net rebill increase. Blank means unknown; zero is an explicit value.
+3. Allocate recorded credit sources with a reason for each allocation:
+   - `already_applied_relief` is relief received for these charges and reduces the further adjustment requested;
+   - `cancellation_offset` explains cancellation of an earlier bill and is disclosed without a second deduction from the proposal.
+4. Mark the group reviewed only after checking its scope and the full earlier history. A source credit cannot be allocated beyond its recorded negative transaction, including allocations across different reviewed groups. Payments are not credit-allocation sources.
+5. Resolve potential overlaps. Repeated demands should normally share one group. Use **Confirm separate charges** only with evidence that the two proposals cover distinct charges. A document in two groups cannot be waived as independent. Decisions are bound to both groups and their evidence.
+6. Check **Reconciled claims**. A combined proposal is withheld while active challenges are ungrouped, overlapping, stale or otherwise unresolved. A reviewed subtotal is labelled separately. Conditional balances use a dated, unambiguous observation within the same ledger; they do not establish current liability or concede remaining charges.
+
+Known conflicting fuels, meters or registers cannot be consolidated. Linking different account references requires a shared known meter/fuel and an explicit source-backed account-link reason. Unknown account identities require review. Evidence changes make unchanged group and overlap decisions stale. Removing a group, changing its figures, credit allocations and complaint wording are audited when a reviewed pack is created. Duplicate absorption archives affected groups instead of transferring or adding their proposals.
+
+### Excel equivalents
+
+New workbooks include the same editable decisions:
+
+| Worksheet | Inputs |
+| --- | --- |
+| Dispute schedule | **Claim groups**: assign the short group ID after creating it below. Multiple temporary memberships use semicolons and prevent double counting until resolved. |
+| Claim groups | One consolidated amount, reduction before received relief, status, title, scope/evidence and any account-link evidence per ID. |
+| Credit allocations | Claim ID, source reference, amount, treatment and reason. Choose `CRED…` references from the protected source catalogue on the right; they bind to original row IDs, including after corrections in the same import. |
+| Claim overlap review | Two group IDs, `separate_charges` and a supporting reason, or `unreviewed`. |
+| Reconciled claims | Protected output showing the accepted proposal, credit treatment, issues and scope. Regenerate to update it. |
+
+Each input table supports up to 1,000 rows. Larger or malformed inputs are rejected before creating a run folder; rows are never silently dropped. Paste values rather than formulas, retain the catalogue/reference cells, and sort complete input tables when necessary. Unchanged inputs retain their earlier evidence binding. Correcting a source without changing a decision makes that decision stale. To acknowledge the changed evidence, verify and re-save in the app, or update the Excel decision's supporting reason after checking it.
+
+Older accepted results, review drafts and workbooks remain supported. Their existing schedule headers are retained until a new reviewed result contains claim reconciliation. Opening an old result does not silently calculate new proposals.
+
+## Focused complaint draft
+
+Creating reviewed outputs with active challenges also creates `complaint_pack/` and `Complaint_pack.zip`. Use the editor's **Complaint draft** tab to enter your summary/outcome or disable this additional pack. Nothing is sent automatically.
+
+The pack contains `Complaint_Draft.html`, `.docx`, `.pdf`, a reference-only `Claim_Schedule.xlsx`, a source index and portable `evidence_manifest.json`, and verified relevant original files. The letter leads with the requested outcome and a complete reconciled proposal when available. Otherwise it withholds one total and identifies the remaining work. It asks EDF to substantiate first demands, additional charges, readings and their receipt, and the cancellation/credit/replacement trail, without inventing eligibility, payment conduct or a percentage concession.
+
+Curation retains linked and overlapping compatible earlier history, including higher estimates. Excluded-only sources and withdrawn claim details are omitted. Shared source PDFs remain **whole** and may contain other pages; this is not redaction. The index preserves source identities, original page ranges, saved relative filenames and SHA256 hashes. Hashes establish which bytes were included, not the truth of their contents.
+
+Missing/changed originals, unverified page ranges or first demands, and unresolved reconciliation appear as review gaps and make the run require review. A missing saved copy is never replaced by a same-named file or an unchecked original. A recorded original can be used only when no saved copy was promised and its recorded hash verifies. Source absence does not discard the preserved extraction or invent a replacement.
+
+The focused schedule is an outward reference, **not** a review-import workbook. Make corrections in the main workbook or app and regenerate all artifacts together. The pack is staged and published with its ZIP only after successful generation; cancellation or failure removes temporary files while preserving the main run's accepted analysis. Existing complaint packs are never overwritten. Run manifests include hashes for the focused artifacts.

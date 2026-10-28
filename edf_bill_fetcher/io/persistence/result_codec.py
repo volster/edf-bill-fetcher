@@ -281,6 +281,165 @@ def _validate_ledger(value: Any) -> None:
                 _money(component[field], nullable=component["status"] == "unallocated")
 
 
+def _validate_claims(value: Any, ledger: dict) -> None:
+    """Check preserved proposal shapes and identities without recalculating totals."""
+    from edf_bill_fetcher.processors.claim_reconciliation import validate_state
+
+    model = _object(
+        value,
+        {
+            "version",
+            "notice",
+            "input",
+            "groups",
+            "overlaps",
+            "unresolved_positions",
+            "reviewed_subtotal",
+            "proposed_reduction",
+            "ready",
+            "ledgers",
+        },
+    )
+    if (
+        type(model["version"]) is not int
+        or model["version"] != 1
+        or type(model["ready"]) is not bool
+    ):
+        raise ValueError("Unsupported claim reconciliation model")
+    _string(model["notice"])
+    items = [
+        {"id": doc["row_id"], "included": doc["included"], "record": doc["record"]}
+        for doc in ledger["documents"]
+    ]
+    state = validate_state(items, model["input"])
+    if state != model["input"]:
+        raise ValueError("Stored claim inputs are not canonical")
+    inputs = {group["id"]: group for group in state["groups"]}
+    known = {item["id"] for item in items}
+    if not isinstance(model["unresolved_positions"], list) or any(
+        not isinstance(key, str) or key not in known for key in model["unresolved_positions"]
+    ):
+        raise ValueError("Unknown unresolved claim position")
+    if len(set(model["unresolved_positions"])) != len(model["unresolved_positions"]):
+        raise ValueError("Duplicate unresolved claim position")
+    _money(model["reviewed_subtotal"])
+    _money(model["proposed_reduction"], nullable=not model["ready"])
+    if not model["ready"] and model["proposed_reduction"] is not None:
+        raise ValueError("An unresolved reconciliation cannot publish a full proposed total")
+    if not isinstance(model["groups"], list) or len(model["groups"]) != len(inputs):
+        raise ValueError("Claim group membership disagrees")
+
+    def validate_scope(value: Any) -> None:
+        scope = _object(value, {"accounts", "Fuel", "Meter", "Register"})
+        if any(
+            not isinstance(values, list)
+            or any(not isinstance(item, str) for item in values)
+            or len(set(values)) != len(values)
+            for values in scope.values()
+        ):
+            raise ValueError("Invalid claim ledger scope")
+
+    seen = set()
+    for group in model["groups"]:
+        group = _object(
+            group,
+            {
+                "input",
+                "scope",
+                "needs_review",
+                "issues",
+                "relief_received",
+                "cancellation_offsets",
+                "further_reduction",
+                "ready",
+            },
+        )
+        source = group["input"]
+        if (
+            not isinstance(source, dict)
+            or not isinstance(source.get("id"), str)
+            or source["id"] in seen
+            or inputs.get(source["id"]) != source
+        ):
+            raise ValueError("Stored claim group disagrees with preserved inputs")
+        seen.add(source["id"])
+        if (
+            any(type(group[field]) is not bool for field in ("needs_review", "ready"))
+            or not isinstance(group["issues"], list)
+            or any(not isinstance(issue, str) for issue in group["issues"])
+        ):
+            raise ValueError("Invalid claim group review status")
+        validate_scope(group["scope"])
+        if group["ready"] and (
+            group["needs_review"]
+            or group["issues"]
+            or source["status"] != "reviewed"
+            or group["further_reduction"] is None
+        ):
+            raise ValueError("Unresolved claim group cannot be ready for totaling")
+        for field in ("relief_received", "cancellation_offsets", "further_reduction"):
+            _money(group[field], nullable=field == "further_reduction")
+    if (
+        not isinstance(model["overlaps"], list)
+        or len(model["overlaps"]) > 500000
+        or not isinstance(model["ledgers"], list)
+    ):
+        raise ValueError("Invalid claim overlap or ledger results")
+    for overlap in model["overlaps"]:
+        overlap = _object(overlap, {"groups", "kind", "resolved", "needs_review", "reason"})
+        pair = overlap["groups"]
+        if (
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or any(not isinstance(key, str) or key not in inputs for key in pair)
+            or pair[0] >= pair[1]
+            or overlap["kind"]
+            not in {
+                "shared_documents",
+                "unverified_account_relationship",
+                "unknown_periods",
+                "overlapping_periods",
+            }
+            or any(type(overlap[field]) is not bool for field in ("resolved", "needs_review"))
+            or not isinstance(overlap["reason"], str)
+        ):
+            raise ValueError("Invalid claim overlap review")
+        if overlap["resolved"] and (
+            overlap["kind"] == "shared_documents" or overlap["needs_review"]
+        ):
+            raise ValueError("A shared or stale claim overlap cannot be resolved")
+    for entry in model["ledgers"]:
+        entry = _object(
+            entry,
+            {
+                "scope",
+                "groups",
+                "reduction",
+                "observed_balance",
+                "balance_date",
+                "illustrative_balance",
+            },
+        )
+        if not isinstance(entry["groups"], list) or any(
+            not isinstance(key, str) or key not in inputs for key in entry["groups"]
+        ):
+            raise ValueError("Unknown ledger claim group")
+        validate_scope(entry["scope"])
+        if len(set(entry["groups"])) != len(entry["groups"]):
+            raise ValueError("Duplicate ledger claim group")
+        _money(entry["reduction"])
+        _money(entry["observed_balance"], nullable=True)
+        _money(entry["illustrative_balance"], nullable=True)
+        if entry["balance_date"] is not None:
+            date.fromisoformat(_string(entry["balance_date"]))
+    if model["ready"] and (
+        model["unresolved_positions"]
+        or any(not g["ready"] for g in model["groups"] if g["input"]["status"] != "withdrawn")
+        or any(not o["resolved"] for o in model["overlaps"])
+    ):
+        raise ValueError("Unresolved claims cannot publish a full proposed total")
+
+
 def _validate_models(value: Any) -> None:
     models = _object(value, set(MODEL_KEYS))
     expected = {
@@ -335,6 +494,10 @@ def _validate_models(value: Any) -> None:
                 _validate_revisions(restored["bill_revisions"])
             if "rebilling_ledger" in restored:
                 _validate_ledger(restored["rebilling_ledger"])
+            if "claim_reconciliation" in restored:
+                if "rebilling_ledger" not in restored:
+                    raise ValueError("Claim reconciliation needs a preserved rebilling ledger")
+                _validate_claims(restored["claim_reconciliation"], restored["rebilling_ledger"])
             frames = restored["frames"]
             if (
                 not isinstance(frames, dict)

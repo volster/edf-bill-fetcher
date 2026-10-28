@@ -523,6 +523,7 @@ class EvidenceReviewPage(QWidget):
         self.rebilling.changed.connect(self._draft_changed)
         self.rebilling.failed.connect(self._message)
         self.rebilling.show_record.connect(self.select_record)
+        self.rebilling.reconcile_requested.connect(self.open_claims)
         records.addWidget(self.details_tabs, 2)
         self.splitter.addWidget(left)
         right = QWidget()
@@ -1221,6 +1222,21 @@ class EvidenceReviewPage(QWidget):
         self.rebilling.setEnabled(self.session is not None)
         self._review_controls()
         self._emit_idle()
+
+    def open_claims(self) -> None:
+        """Reconcile the same audited session without adding another main-page layout."""
+        if self.session is None or not self.allow_leave():
+            return
+        from edf_bill_fetcher.ui.qt_claims import ClaimDialog
+
+        dialog = ClaimDialog(self.session, self)
+        dialog.changed.connect(self._draft_changed)
+        dialog.show_record.connect(self.select_record)
+        dialog.exec()
+        self.rebilling.refresh(self.session)
+        if dialog.publish_requested:
+            self.regenerate_draft()
+        dialog.deleteLater()
 
     def regenerate_draft(self) -> None:
         """Ask the owning window to publish a new reviewed pack using its output preferences."""

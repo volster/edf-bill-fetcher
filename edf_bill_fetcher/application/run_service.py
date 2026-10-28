@@ -204,16 +204,43 @@ def run(
         else:
             registry = renderers if renderers is not None else default_renderers()
             view = build_report_view(snapshot, render_selection)
+            claims = view.claims
+            if (
+                claims
+                and (claims["groups"] or claims["unresolved_positions"])
+                and not claims["ready"]
+            ):
+                manifest["warnings"].append(
+                    "Claim reconciliation is incomplete; review overlaps, allocations and changed evidence before asserting one total."
+                )
             for fmt, path in outputs.items():
                 stage("rendering_" + fmt)
                 registry[fmt](view, path)
                 manifest["artifacts"][fmt] = artifact_record(path)
                 save_manifest(manifest, manifest_path)
+            from edf_bill_fetcher.application import complaint_pack
+
+            if complaint_pack.requested(view):
+                stage("building_complaint_pack")
+                pack_paths, pack_notes = complaint_pack.publish(
+                    view,
+                    str(Path(result_path).parent / "complaint_pack"),
+                    source_roots=tuple(
+                        str(Path(source.path).parent)
+                        for source in request.sources
+                        if source.kind == "records_json"
+                    ),
+                    cancelled=cancelled,
+                )
+                manifest["warnings"].extend(pack_notes)
+                for key, path in pack_paths.items():
+                    manifest["artifacts"][key] = artifact_record(path)
+                save_manifest(manifest, manifest_path)
             check_cancelled(cancelled)
             manifest["status"] = (
                 "review_required"
                 if state.get("error_log")
-                or warnings
+                or manifest["warnings"]
                 or any(
                     annotation.get("status") == "needs_information"
                     for annotation in state.get("human_review_statuses", {}).values()
