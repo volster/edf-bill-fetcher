@@ -1,5 +1,7 @@
 # CI and executable build troubleshooting
 
+[Documentation index](README.md) · [Development](DEVELOPMENT.md) · [Builds](BUILDING.md)
+
 The required CI matrix runs Python 3.10, 3.11 and 3.12 on Ubuntu 24.04,
 Windows Server 2025 and macOS 15. Executable builds use Python 3.11 from
 the same `actions/setup-python` distribution. Runner major versions are
@@ -11,32 +13,6 @@ The coverage requirement remains 90%. Automatic executable builds require
 successful CI for the source revision recorded in `build-provenance.json`.
 Manual builds remain labelled `manual-unvalidated`. Tagged releases validate
 and build the tagged revision before publication.
-
-## What the Windows investigation established
-
-- [CI #201](https://github.com/volster/edf-bill-fetcher/actions/runs/38071063546)
-  and #202 caught actual Qt layout defects under Windows font metrics. These
-  were addressed by the later layout changes; such assertions must keep failing
-  when the interface regresses.
-- [CI #205](https://github.com/volster/edf-bill-fetcher/actions/runs/38801700446)
-  failed during one Tk fixture's setup because Tcl could not read
-  `D:/a/_temp/tklibs/tk8.6/tk.tcl`. That was the workflow's copied runtime,
-  rather than the Python installation's own library tree.
-- The previous workflow mixed an incompletely activated Conda environment,
-  inherited runner DLL paths and a manually copied Tcl/Tk tree. Several native
-  command failures could be overwritten by subsequent commands' exit codes.
-  Its supposed file warmup enumerated paths without reading file contents.
-  Defender changes and repeated mirror checks did not eliminate the failures.
-- Available failure annotations establish the missing/unreadable runtime path.
-  They do **not** prove that Defender deleted files or that the official Python
-  installation was corrupt. The old speculative scanner workarounds were removed.
-- [CI #214](https://github.com/volster/edf-bill-fetcher/actions/runs/38908627975)
-  reproduced the failure under the installed CPython 3.10 tree after a successful
-  preflight: a Tk root created **inside a test body** could not read `button.tcl`.
-  The other eight jobs passed. Thus neither a temp mirror nor fixture setup is
-  essential to the failure, and the old setup-error-only suite retry missed it.
-- A historical run reached the six-hour platform limit. Test/build jobs now have
-  a 30-minute limit; superseded branch CI and executable builds are cancelled.
 
 ## Diagnosing a new failure
 
@@ -79,6 +55,10 @@ signing does not provide Gatekeeper trust or Apple notarization.
 
 ## Reproduce and maintain
 
+Use the project environment after [native prerequisite setup](BUILDING.md).
+The following uses Bash (including Git Bash on Windows); in PowerShell, set
+`$env:QT_QPA_PLATFORM = "offscreen"` before `python ci_runtime.py`.
+
 ```bash
 python -m pip install -c .github/ci-constraints.txt -e ".[dev,msg]"
 python ci_runtime.py --inventory
@@ -98,3 +78,35 @@ deliberately and validate all nine jobs and all three executable builds. Pip
 caches are keyed by the project and constraints files. Installed dependency
 reports help identify changes in runtime packages, which are not fully locked.
 Review runner-image updates separately from application changes where practical.
+
+## Historical Windows investigations
+
+- [CI #201](https://github.com/volster/edf-bill-fetcher/actions/runs/38071063546)
+  and #202 caught actual Qt layout defects under Windows font metrics. These
+  were addressed by the later layout changes; such assertions must keep failing
+  when the interface regresses.
+- [CI #205](https://github.com/volster/edf-bill-fetcher/actions/runs/38801700446)
+  failed during one Tk fixture's setup because Tcl could not read
+  `D:/a/_temp/tklibs/tk8.6/tk.tcl`. That was the workflow's copied runtime,
+  rather than the Python installation's own library tree.
+- The previous workflow mixed an incompletely activated Conda environment,
+  inherited runner DLL paths and a manually copied Tcl/Tk tree. Several native
+  command failures could be overwritten by subsequent commands' exit codes.
+  Its supposed file warmup enumerated paths without reading file contents.
+  Defender changes and repeated mirror checks did not eliminate the failures.
+- Available failure annotations establish the missing/unreadable runtime path.
+  They do **not** prove that Defender deleted files or that the official Python
+  installation was corrupt. The old speculative scanner workarounds were removed.
+- [CI #214](https://github.com/volster/edf-bill-fetcher/actions/runs/38908627975)
+  reproduced the failure under the installed CPython 3.10 tree after a successful
+  preflight: a Tk root created **inside a test body** could not read `button.tcl`.
+  The other eight jobs passed. Thus neither a temp mirror nor fixture setup is
+  essential to the failure, and the old setup-error-only suite retry missed it.
+- A historical run reached the six-hour platform limit. Test/build jobs now have
+  a 30-minute limit; superseded branch CI and executable builds are cancelled.
+
+A later Windows regression involved reading UTF-8 saved results with the default
+Windows encoding in an integration test. Production loading already used explicit
+UTF-8. The test now uses the production loader and exercises both UTF-8 and cp1252
+defaults. When JSON identities or pound-sign field names differ across platforms,
+check file decoding before weakening the identity validation.

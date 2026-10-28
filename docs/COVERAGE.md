@@ -1,175 +1,103 @@
-# Test Coverage
+# Test coverage
 
-This document describes the test-coverage measurement protocol, the strict `# pragma: no cover` policy, the CI gate, and how to extend coverage.
+[Documentation index](README.md) · [Development](DEVELOPMENT.md) · [CI](CI.md)
 
-## Current baseline
+CI requires **90% combined statement and branch coverage**. The threshold is in
+`pyproject.toml` under `[tool.coverage.report]`. Passing it does not establish that
+a particular change is tested well: a small untested addition can still leave the
+overall percentage above the floor.
 
-- **Date measured**: 2026-08-02
-- **Total**: 71% (4180 of 5868 statements covered)
-- **Branch coverage**: branch=true
-- **Floor gate**: 90% (`coverage report --fail-under=90` in CI)
-- **Aspiration target**: 100% of testable code
+## Reproduce the CI measurement
 
-The point-in-time measurement is preserved at [`coverage/baseline-2026-08-02.txt`](coverage/baseline-2026-08-02.txt) (text format) and [`coverage/html-2026-08-02/`](coverage/html-2026-08-02/index.html) (HTML format with per-line highlight).
+After [development setup](BUILDING.md#development-and-checks), run with the
+project environment's Python:
 
-## Measurement protocol
-
-### Running coverage locally
-
-```bash
-# Install dev extras (one-time):
-pip install -e ".[dev]"
-
-# Run the full test suite under coverage:
-coverage run --branch -m pytest
-
-# Text report to stdout:
-coverage report
-
-# HTML report at htmlcov/index.html:
-coverage html
-
-# Fail if total < 90% (CI behavior):
-coverage report --fail-under=90
+```console
+python ci_pytest.py
 ```
 
-### Configuration
+The runner executes:
 
-Coverage is configured in `pyproject.toml`:
-
-```toml
-[tool.coverage.run]
-source = ["edf_bill_fetcher"]   # only the package — tests/ is omitted
-branch = true                    # branch coverage in addition to statement coverage
-
-[tool.coverage.report]
-fail_under = 90                  # CI gate — fail the build below 90%
-show_missing = true              # show missed line numbers per file
-skip_covered = true              # hide 100%-covered files from the report
+```console
+python -m pytest --cov=. --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
 ```
 
-### What IS measured
+Pytest-cov applies the configured branch measurement, omissions and 90% threshold.
+The runner retains the reports and original exit code under `.ci-diagnostics/tests/`.
+CI uploads these together with interpreter/runtime/dependency diagnostics.
 
-- All `.py` files under `edf_bill_fetcher/` (the package)
-- Both statement and branch coverage (branch=true)
+To inspect the resulting coverage locally:
 
-### What is NOT measured
-
-- `tests/` — coverage of the tests themselves isn't a goal
-- `edf_collector.py` / `edf_report.py` / `edf_report_docx.py` — compat shims that only re-export; covered by twin-identity tests on the canonical modules
-- `main.py` — three-line console-script launcher; covered by the `edf-collector` console-script smoke unit test
-- `.git/`, `__pycache__`, `build/`, `dist/`, `*.spec` — excluded by `[tool.coverage.run] omit`
-
-## The 90% floor + 100% aspiration
-
-- **90% is the CI floor**: a PR that drops coverage below 90% fails CI. `coverage report --fail-under=90` enforces this.
-- **100% is the aspiration target**: pursue with diminishing-returns threshold. Where a line or branch genuinely cannot be exercised by a test, mark it `# pragma: no cover` with a one-line justification.
-
-## Strict `# pragma: no cover` policy
-
-The pragma is load-bearing — it tells the reader "I, the author, attest that this line cannot be tested in this environment, and here is why." Game the metric and you lose the reader's trust.
-
-### When `# pragma: no cover` IS allowed
-
-Each `# pragma: no cover` MUST include a one-line comment explaining why the line is unreachable. Examples:
-
-```python
-# 1. Platform guard for an OS we don't test on Linux CI:
-if sys.platform == "darwin":  # pragma: no cover, macOS-only path not tested on Linux CI
-    ...
-
-# 2. Type-checking-only block — never executed at runtime:
-if TYPE_CHECKING:  # pragma: no cover, type-only branch
-    ...
-
-# 3. ImportError fallback for a hard-required dependency in dev/CI extras:
-try:
-    import scipy  # type: ignore
-except ImportError:  # pragma: no cover, scipy is in dev extras — ImportError impossible in CI
-    HAS_SCIPY = False
-
-
-# 4. Defensive fallback that the public API contract makes unreachable:
-def f(x: int) -> int:
-    if x < 0:
-        raise ValueError("negative")
-    # unreachable from public API (= >0 by type contract)
-    if x is None:  # pragma: no cover, ruled out by type contract
-        return 0
-    return x * 2
+```console
+python -m coverage report --sort=cover
+python -m coverage html
 ```
 
-### When `# pragma: no cover` is FORBIDDEN
+Open `htmlcov/index.html` for missing lines and branch paths. These commands can
+also return a failure when the measured total is below the configured threshold.
 
-The pragma is not a "this is annoying to test" escape hatch:
+## Measurement scope
 
-- ❌ Pragma'ing a branch just because mocking the dependency is hard
-- ❌ Pragma'ing an `else:` clause for an error path that COULD be tested by injecting bad input
-- ❌ Pragma'ing a Qt dialog call just because it needs a mock (`unittest.mock.patch("PySide6.QtWidgets.QFileDialog.getExistingDirectory")` works fine)
-- ❌ Pragma'ing a defensive `assert` you could test by passing the violating input
+There are two scopes to distinguish:
 
-If you find yourself wanting to pragma a line for any of these reasons, write the test instead. The pragma is for "no test could exercise this branch in this environment", not "the test would take effort".
+- **CI:** `--cov=.` measures the repository's Python code, including root scripts
+  such as `bootstrap.py`, `ci_runtime.py` and `main.py`, subject to omissions.
+- **Bare `coverage run`:** `[tool.coverage.run] source = ["edf_bill_fetcher"]`
+  selects the package. This is useful for package-only investigation but is not
+  the same denominator as the CI command.
 
-### Review discipline
+The configured omissions include tests, bytecode caches, build/dist contents and
+spec files. Branch measurement and report exclusions are also configured in
+`pyproject.toml`. Do not compare percentages from different scopes or platforms
+as if they were the same measurement.
 
-Every `# pragma: no cover` gets scrutinized in code review. The reviewer asks:
-1. Is the branch genuinely unreachable in our test environment?
-2. Does the comment explain WHY (not just WHAT)?
-3. Could a test be written with reasonable effort?
+## Investigate a gap
 
-If the answer to #3 is yes, the test gets written and the pragma gets removed.
+1. Read the missing lines/branches and identify the behavior that should be
+   exercised: successful parsing, invalid input, unavailable evidence, cancellation
+   or a publication failure, for example.
+2. Add a small synthetic example with an independently known expected result.
+   Prefer exercising real parsing/calculation paths over mocking their results.
+3. Run the focused regression, then the full CI-equivalent measurement when
+   verifying the overall gate.
 
-## How to extend coverage
+For a focused coverage view without imposing the full-suite threshold:
 
-### 1. Find the gap
-
-```bash
-coverage report --skip-covered   # sort by lowest coverage
-coverage html                    # then open htmlcov/index.html and click into a file
+```console
+python -m pytest tests/test_excel_review.py --cov=. --cov-report=term-missing --cov-fail-under=0
 ```
 
-The HTML view highlights uncovered lines in red and uncovered branches in dim red.
+The override is for a deliberately incomplete local subset only. It does not
+replace `python ci_pytest.py` or change the CI requirement. Coverage runs normally
+replace the existing local measurement, so run the full suite again before
+reporting a full-suite percentage.
 
-### 2. Read the gap
+If the full gate fails, inspect the missing behavior and execution reports.
+Changes in exercised paths, dependencies or platform behavior can matter as well
+as newly added code. Do not assume that merely adding more assertions improves
+coverage or that covering a line verifies its financial meaning.
 
-Uncovered lines fall into three buckets:
+## Coverage exclusions
 
-- **Easy**: a public function with no test → write a unit test calling it with synthetic input.
-- **Branchy**: a conditional branch with no test for one side → add a test that takes the uncovered branch.
-- **Boundary**: a Qt dialog / file I/O / external-API call → mock at the boundary (`unittest.mock.patch("PySide6.QtWidgets.QFileDialog.getExistingDirectory", return_value="/tmp/x")`), assert on the resulting state change (never on call counts).
+Every new `# pragma: no cover` must have a concise justification and be reviewed.
+Use it only for a path that cannot reasonably execute under the supported test
+contract. A type-checking-only block can qualify; an inconvenient error path does
+not.
 
-### 3. Write the test
+Before excluding a branch, check whether synthetic input, a temporary file,
+fault injection or a boundary mock can exercise it. Missing dependencies and
+filesystem errors are often testable. An OS-specific branch is not automatically
+unreachable: CI includes Windows, macOS and Linux. A type annotation alone also
+does not make invalid runtime input impossible.
 
-Prefer real synthetic fixtures over mocked dependencies. The test suite already has synthetic frozen DataFrames in `tests/fixtures/` — extend those rather than mocking pandas.
+Do not exclude code, skip regression tests or lower the gate to hide a failure.
+Tests should assert meaningful outcomes, including preservation of earlier files
+and clear failure status when an operation fails.
 
-For Qt dialogs in `ui/qt_app.py`, mock at the `QFileDialog`/`QMessageBox` boundary — invoke the handler, assert state changes (variable values, button states). Never assert mock-call counts (brittle to refactor).
+## Historical measurement
 
-For CLI paths in `io/cli.py`, use `monkeypatch.setattr("sys.argv", [...])` + `capsys` for stdout. Never invoke real file paths.
-
-### 4. Run the focused test under coverage
-
-```bash
-coverage run --branch --source=edf_bill_fetcher -m pytest tests/test_your_new_test.py
-coverage report -m
-```
-
-Confirm the targeted lines moved from missed to covered.
-
-### 5. Run the full suite + gate
-
-```bash
-coverage run --branch -m pytest
-coverage report --fail-under=90
-```
-
-If the gate passes, ship. If it fails, the new code dropped overall coverage — write more tests.
-
-## Coverage regression over time
-
-The 90% floor is the durable defense. A PR that adds new code without tests will drop coverage below 90% and fail CI. Adding new code without tests is therefore self-defeating — the gate forces you to write the test in the same PR.
-
-## When to update this doc
-
-- Bump the floor (e.g. 90% → 95%) — note the date and the new floor in this doc + update `pyproject.toml [tool.coverage.report] fail_under`.
-- Change the source set (e.g. include `tests/` in coverage) — update the "What IS measured" section.
-- Add a new measurement baseline — save it under `docs/coverage/baseline-YYYY-MM-DD.txt` and link it from the "Current baseline" section above.
+The [2026-08-02 baseline](coverage/baseline-2026-08-02.txt) records an earlier
+coverage campaign. It is not the current result. Current measurements belong to
+an exact revision, command and platform; use that revision's CI reports rather
+than a static number in this guide. The old generated HTML baseline is not stored
+in the repository.

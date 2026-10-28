@@ -1,5 +1,7 @@
 # Rebilling ledger and dispute schedule
 
+[Documentation index](README.md) · [General correction workflow](USER_GUIDE.md)
+
 The ledger answers which documents changed a bill, what changed in the observed components, and which amounts you propose to challenge. It preserves recorded account figures separately from your proposed reduction.
 
 ## Review in the app
@@ -66,7 +68,7 @@ An unchanged proposal retains its original evidence binding. If you also correct
 
 The accepted result stores this analysis once. Excel, HTML, PDF and DOCX consume that stored model rather than recomputing relationships during rendering. The detailed findings section includes the full document history and every saved dispute position, including stale, excluded and withdrawn labels. Reports include all explicit component comparisons and up to 30 automatic suggestions; the workbook contains every stored comparison. HTML source links use saved source identities and original page numbers, with unavailable sources labelled explicitly.
 
-**Schedule amounts are not summed.** Successive revised bills may demand the same charges. Credits already applied must not be claimed twice. The app does not convert proposals into a revised account balance or a confirmed legal entitlement. Reconcile overlap and credit allocation before asserting a single total to EDF.
+**Individual schedule amounts are not summed.** Successive revised bills may demand the same charges, and credits already applied must not be claimed twice. Use [claim reconciliation](#consolidate-claims-and-account-for-credits) to produce a consolidated proposal after resolving overlap and credit allocation. Its conditional balance illustration uses a dated observation within the same ledger; it does not change recorded balances or establish current liability or legal entitlement.
 
 Original observations and source files stay unchanged. A record exclusion does not redact pages from a shared PDF. If a correction merges duplicate canonical records, a position on an absorbed record is archived with an audit entry rather than transferred or added to the retained record's proposal.
 
@@ -87,9 +89,11 @@ In the app, choose **Dispute ledger → Reconcile claims…**. The separate edit
 
 Known conflicting fuels, meters or registers cannot be consolidated. Linking different account references requires a shared known meter/fuel and an explicit source-backed account-link reason. Unknown account identities require review. Evidence changes make unchanged group and overlap decisions stale. Removing a group, changing its figures, credit allocations and complaint wording are audited when a reviewed pack is created. Duplicate absorption archives affected groups instead of transferring or adding their proposals.
 
+Withdrawing a group does **not** withdraw its individual dispute positions. If you intend to stop challenging those charges, withdraw the positions too; otherwise they remain unresolved active work. Withdrawn-only history is retained without triggering a new complaint pack or an incomplete-claim warning.
+
 ### Excel equivalents
 
-New workbooks include the same editable decisions:
+New workbooks include the same editable claim decisions. The complaint summary/outcome and pack inclusion setting are edited in the app's **Complaint draft** tab and preserved by workbook review:
 
 | Worksheet | Inputs |
 | --- | --- |
@@ -99,7 +103,7 @@ New workbooks include the same editable decisions:
 | Claim overlap review | Two group IDs, `separate_charges` and a supporting reason, or `unreviewed`. |
 | Reconciled claims | Protected output showing the accepted proposal, credit treatment, issues and scope. Regenerate to update it. |
 
-Each input table supports up to 1,000 rows. Larger or malformed inputs are rejected before creating a run folder; rows are never silently dropped. Paste values rather than formulas, retain the catalogue/reference cells, and sort complete input tables when necessary. Unchanged inputs retain their earlier evidence binding. Correcting a source without changing a decision makes that decision stale. To acknowledge the changed evidence, verify and re-save in the app, or update the Excel decision's supporting reason after checking it.
+Each claim/credit/overlap input table supports up to 1,000 rows. Up to 20 spare rows are preformatted; append further inputs within the table's allowed input columns up to that limit. Unprotect without a password if needed to work with the sheet, and keep the source catalogue intact. Larger or malformed inputs are rejected before creating a run folder; rows are never silently dropped. Paste values rather than formulas, retain the catalogue/reference cells, and sort complete input tables when necessary. Unchanged inputs retain their earlier evidence binding. Correcting a source without changing a decision makes that decision stale. To acknowledge the changed evidence, verify and re-save in the app, or update the Excel decision's supporting reason after checking it.
 
 Older accepted results, review drafts and workbooks remain supported. Their existing schedule headers are retained until a new reviewed result contains claim reconciliation. Opening an old result does not silently calculate new proposals.
 

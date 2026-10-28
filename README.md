@@ -1,758 +1,112 @@
 # EDF Energy Billing Evidence Collector
 
-A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, message files, local PDF bills, and HTM account history exports. It produces a multi-sheet Excel evidence workbook and PDF, DOCX or HTML reports for dispute preparation and review.
-
-The project is designed for evidence discovery, not legal advice. It preserves
-source material and deterministic analysis outputs so a reviewer can inspect
-how each finding was produced.
-
-## What it does
-
-1. Extracts invoice, payment, meter, tariff, and account-history data from the
-   supported EDF sources.
-2. Deduplicates records while retaining dropped siblings for audit.
-3. Runs deterministic pandas-based analysis for balances, payments, disputes,
-   forecasts, tariffs, meter rollovers, contracts, back-billing, and rebilling.
-4. Optionally parses EDF SAP contract-history, meter-reading, and
-   financial-transaction PDFs and reconciles them against EDF invoice evidence.
-5. Writes Excel, PDF, DOCX and HTML outputs with provenance, hyperlinks, and
-   configuration details captured for later review.
-
-## Features
-
-- **Multi-source extraction**: PST/OST email files, EML/MSG message files, local PDF folders, HTM account exports.
-- **Dual format support**: Parses both old-style and new-style (KI/KCR) EDF invoice formats.
-- **Smart amount detection**: Prioritized regex patterns with configurable fallback.
-- **Cross-source deduplication**: compatible account/fuel/meter/register identity and supported invoice, transaction or source-row relationships determine duplicate membership. Equal dates and amounts alone do not establish the same event. Completeness selects the kept row, with source precedence as a tie-breaker. Optional amalgamation fills missing fields; original siblings and source occurrences remain available for audit.
-- **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets — see the *Output Sheets* section for the full conditional-emission list.
-- **SAP financial-ledger integration**: when `scan_sap_dumps` is on (default), the engine also digests EDF's three SAP-CSV-in-PDF dumps (`*_Contract-History.pdf`, `*_Meter-Readings.pdf`, `*_Financial-Transactions.pdf`) and renders three source sheets + two analyser sheets (`SAP Back-billing Events` and `SAP ↔ EDF Matched Events`) + a cross-source `Reconciliation` sheet. See the *SAP ledger integration* section below for the full design.
-- **PDF, DOCX and HTML output**: 15 selectable sections with linked contents, concrete review priorities and explicit balance/transaction columns. PDF and Word use landscape evidence appendices; HTML has responsive navigation and print styles and works offline. Numbering derives from `models/report_sections.py` so headings and contents agree for the selected sections.
-- **Indicative compensation scenarios**: supported bill-period allocations and configured credit-interest scenarios feed the workbook and reports. Interest has no assumed statutory rate; eligibility requires assessment of the original evidence. Back-billing age detection uses a nominal 365-day window.
-- **Rebilling ledger and dispute schedule**: trace original bills, repeated revisions and credits; compare matched energy components and separate standing charges/VAT; edit proposed challenges in the app or Excel, with reasons and EDF evidence requests carried into regenerated reports. See [the review workflow and methodology](docs/REBILLING_LEDGER.md).
-- **Claim reconciliation and complaint draft**: consolidate overlapping challenges, distinguish cancellation credits from relief already received, and generate a focused HTML/Word/PDF pack with a reference schedule and verified relevant originals. Edit the same decisions in Excel or the app; totals remain withheld until unresolved overlaps and allocations are reviewed. See [the workflow](docs/REBILLING_LEDGER.md#consolidate-claims-and-account-for-credits).
-- **Qt desktop workspace**: separate extraction, saved-report and preference flows, with visible progress, cancellation and review notes.
-  - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
-  - **Unique run folders**: each extraction reserves its own directory for workbook, requested reports, source copies, JSON and run status. Repeated runs preserve earlier bundles.
-  - **Auto-generate report**: produce the workbook and selected document formats in the same run folder.
-  - **Three-state EXTRACT button**: `EXTRACT TO EXCEL → Cancel → Cancelling... → EXTRACT TO EXCEL` — the EXTRACT and Cancel buttons are collapsed into one.
-  - **Config persistence**: GUI state and report options stored at `~/.edf_collector/config.json` (atomic write, `0o600`); deleting the file resets state cleanly.
-  - **Amalgamate toggle**: the `amalgamate_duplicates` checkbox surfaces as a nested child under Deduplication (enabled only when both *Drop duplicates* and *Record dropped duplicates* are on; default OFF).
-- **CLI mode**: Headless batch/report generation for automation.
-
-## Package layout (post-modularization)
-
-The codebase has been split from its original monolith into the `edf_bill_fetcher/` package. Actual responsibilities and remaining processor/writer coupling are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the short version:
-
-| Subpackage             | Layer            | Responsibility                                                                 |
-| ---------------------- | ---------------- | ------------------------------------------------------------------------------ |
-| `edf_bill_fetcher.helpers`      | utilities       | Date math, formatting, artifacts and Excel helpers; some depend on pandas/openpyxl |
-| `edf_bill_fetcher.processors`   | stdlib + pandas   | Business logic: dedup, pattern detection, reconciliation, forecasting        |
-| `edf_bill_fetcher.collectors`   | framework boundary| `EvidenceEngine` orchestrator; ingests PDF / HTM / PST                          |
-| `edf_bill_fetcher.io.writers`   | openpyxl          | Excel sheet builders — one submodule per sheet (13 writers)                    |
-| `edf_bill_fetcher.io.reporters` | format libraries | PDF, DOCX and self-contained HTML renderers                                    |
-| `edf_bill_fetcher.io.adapters`  | libpff-python      | PST/OST archive adapter                                                        |
-| `edf_bill_fetcher.ui`            | PySide6 / Qt       | Qt evidence workspace: `qt_app.EvidenceWindow` |
-| `edf_bill_fetcher.models`       | dataclasses       | Event / data models                                                            |
-| `edf_bill_fetcher.writers`      | internal facade  | Re-exports `writers._helpers` analysis helpers; canonical writer entry points live in `edf_bill_fetcher.io.writers` |
-
-Backward-compat note: the legacy `edf_collector.py` / `edf_report.py` / `edf_report_docx.py` modules at the repo root were deleted in the modularization (no top-level shims remain — existing scripts must import from `edf_bill_fetcher.*`). The temporary PEP 562 re-export layers were removed after consumers migrated; writer functions import from the canonical `edf_bill_fetcher.io.writers` path (or the per-sheet submodule, e.g. `edf_bill_fetcher.io.writers.export`).
-
-## Installation
-
-For a complete source installation, including OCR prerequisites, see [running and building from source](docs/BUILDING.md). With Python 3.11 installed, use `py -3.11 bootstrap.py run --install-system` on Windows or `python3.11 bootstrap.py run --install-system` on macOS/Linux. Use `develop` for test/build tools or `build` to create a native executable. To build and download all three platforms through GitHub, run `python build_all.py` with GitHub CLI authenticated.
-
-**Python dependencies alone do not install the Tesseract OCR engine.** The setup command checks the executable and English language data before reporting readiness. Packaged applications include them.
-
-```bash
-git clone https://github.com/volster/edf-bill-fetcher.git
-cd edf-bill-fetcher
-
-# Runtime install (MSG support uses the optional extra below):
-# GUI, CLI, PST/OST archive parsing, Holt-Winters forecasting,
-# Excel + PDF + DOCX report generation.
-pip install -e .
-pip install -e ".[msg]"       # optional Outlook MSG parsing
-
-# Optional toolchains (only needed if you are contributing or
-# packaging binaries — the default extras-as-runtime policy above
-# typical installs at one command):
-#
-#   [dev]    test + lint + typecheck toolchain (pytest,
-#            pytest-cov, ruff, mypy)
-#   [build]  PyInstaller for Windows / Linux binaries and macOS app bundles
-pip install -e ".[dev,build]"   # recommended for contributors
-```
-
-### Platform notes
-
-- Python 3.10, 3.11, and 3.12 are tested in CI on Linux, macOS, and Windows.
-- PST/OST parsing requires `libpff-python`. The application records a clear
-  error and continues with other sources if that optional parser cannot load
-  in a particular environment.
-- GUI use requires a desktop display. Headless Linux test runs use Xvfb; use
-  CLI mode for servers and automation.
-- The desktop uses PySide6 Essentials (Qt Core, Gui and Widgets); WebEngine is
-  not required. On Debian/Ubuntu, Qt's X11 backend also needs
-  `libxcb-cursor0`, `libxkbcommon-x11-0` and `libegl1`.
-- macOS and Windows packaged builds are produced by CI. Local PyInstaller
-  builds require the `[build]` extra. The Mac download targets Apple silicon
-  and requires a one-time **Open Anyway** approval because it is ad-hoc signed,
-  without Apple notarization. See [Mac opening instructions](docs/MACOS.md).
-
-What `pip install -e .` actually pulls in (current version):
-
-| Library            | Used for                                                                      |
-| ------------------ | ----------------------------------------------------------------------------- |
-| PySide6 Essentials | Qt desktop widgets, layouts, accessibility and background job signals.        |
-| pypdfium2          | Renders original PDF pages in the evidence review screen.                      |
-| pandas / numpy     | DataFrame plumbing across extraction, dedup, statistical analysis, export.    |
-| pdfplumber         | Reading text + tables out of EDF bill PDFs.                                     |
-| beautifulsoup4     | Stripping HTML into text body for PST / HTM ingestion.                         |
-| openpyxl           | Writing the multi-sheet evidence workbook.                                      |
-| reportlab          | PDF report rendering (cover, TOC, sections, summary tables, appendix).         |
-| python-docx        | DOCX report rendering (sister surface to PDF).                                  |
-| scipy              | Rolling stats, Shapiro-Wilk normality, linregress fallback forecasting.          |
-| **`libpff-python`** | Outlook PST / OST archive ingestion — used by `EvidenceEngine.process_pst_file`. |
-| **`statsmodels`**   | Holt-Winters forecasting in the Forecast section — falls back to linear+EMA     |
-|                    | projection if missing (with a warning in the report).                          |
-
-Adding optional toolchains later does not require re-installing everything:
-
-```bash
-pip install -e ".[dev]"     # bring in pytest / pytest-cov / ruff / mypy only
-pip install -e ".[build]"   # add PyInstaller
-```
-
-## Usage
-
-### GUI Mode
-
-```bash
-# Either via the installed console-script entry point:
-edf-collector
-
-# Or via the main.py launcher at the repo root:
-python main.py
-```
-
-Or run the built executable `EDF_Evidence_Collector.exe`.
-
-The Qt workspace has four pages:
-
-- **Build evidence pack**: choose PDF and email folders, an Outlook archive,
-  or an account-history export. Set an output folder and pack name, then
-  create the workbook, saved analysis and optional reports. Each run uses a
-  fresh folder so earlier exports remain available.
-- **Review evidence**: search records, bills, payments, findings, duplicates
-  and filtered rows beside their original PDF pages. **Source files** also
-  exposes originals that have no ordinary bill rows, including SAP dumps.
-  Open `result.json` from
-  an earlier pack or review the latest run. Previewing preserves the saved
-  calculations and valuation date. Use **Correct record** to edit or exclude a row
-  with a reason; **Preview changes** recalculates the draft without publishing it.
-  **Create reviewed pack** saves a new workbook, analysis and selected reports.
-  Source IDs, hashes and page ranges keep merged PDFs and moved packs traceable.
-  Findings with only a saved date offer explicitly labelled related records,
-  rather than claiming a source relationship that was never recorded.
-- **Generate reports**: open `result.json` from an earlier run to preserve
-  its original calculations and valuation date. Corrections are also available
-  directly in **Review evidence**. For Excel review, edit the workbook's **Review & Corrections** table, then select that `.xlsx`
-  here to rebuild the analysis and bundle. Older workbooks import with explicit
-  notes about their limited provenance.
-  Report settings remember the chosen formats and sections.
-- **Preferences**: account and sender filters, extraction methods, duplicate
-  handling and SAP reconciliation. Existing settings are restored from
-  `~/.edf_collector/config.json`.
-
-The action area stays visible while content scrolls. Cancellation waits for
-the current processing step and cleanup; failed exports retain any analysis
-and files that were successfully saved. Use **Details** to inspect review
-notes and **Open folder** to find the run's output.
-
-Evidence packs include `evidence_manifest.json`, which maps source IDs and
-original filenames to the actual copied files, their SHA-256 hashes, invoice
-references and page ranges. The Word index links to those files and displays
-the filename mapping. A merged PDF is copied whole once, even when several
-invoice rows refer to it. Single-invoice PDFs may be renamed to the invoice
-number; workbook links follow the saved mapping. Missing, ambiguous or changed
-source files produce review notes instead of invented links. Recursive scans
-skip recognised output folders from earlier runs.
-
-1. **Select Sources** (at least one required):
-   - **PST/OST File**: Outlook email archive containing EDF emails (`.pst` / `.ost` are read via `libpff-python`; the `process_pst_file` wrapper auto-logs an error if the lib is missing, so the rest of the pipeline still runs)
-   - **EML/MSG File**: individual Outlook/email message files (`.eml` / `.msg`) containing EDF emails
-   - **PDF Folder**: Directory containing EDF bill PDFs
-   - **HTM Export**: EDF MyAccount "Payments and Invoices" HTM export
-2. **Configure Options**:
-   - **Account Filter**: Filter by EDF account number (e.g., `A-12345678` or `123 456 789 012`). Both compact and grouped-digit renderings are matched against the bill — `extract_new_invoice_fields` accepts the spaceless `A-NNNNNNNN` shape and the bank-row-style `NNN NNN NNN NNN` shape.
-   - **Domain Filter**: Filter PST emails by sender domain (default: edfenergy.com)
-   - **Minimum Amount**: Optional magnitude filter; filtered evidence is retained separately
-   - **Analysis Threshold**: Minimum bill magnitude for analysis selection (default: £0); payments/credits and nominal old-consumption cases are retained
-   - **Report Account Ref**: Override account reference in report header
-3. **Click "EXTRACT TO EXCEL"** — produces the evidence workbook. The same button toggles to `Cancel` while running and `Cancelling...` after you click Cancel; it returns to `EXTRACT TO EXCEL` when the worker exits.
-4. **Optional: pick Output Folder** (Section 1) — defaults to the source-file directory; override to send xlsx + reports elsewhere.
-5. **Optional: tick "Auto-generate report after extraction"** (Section 2) — produces a PDF + DOCX report (per the saved Report Options) in the same batch as the xlsx, sharing the same sequential counter.
-6. **Report Options**: the navy `Report Options` button opens the format + section-picker dialog; selections persist across sessions.
-7. **Click "LOAD & REPORT"** — load an existing xlsx and regenerate the report from it (uses sequential naming into the output folder, no save-as dialog).
-
-### CLI Mode — headless report generation
-
-```bash
-# Generate a PDF report from already-extracted records
-python main.py --pdf-report -i records.json -o report.pdf
-
-# DOCX variant
-python main.py --docx-report -i records.json -o report.docx
-
-# HTML variant
-python main.py --html-report -i records.json -o report.html
-
-# Compare two records.json exports — prints added/removed/changed counts
-# plus one line per delta row; --diff-output adds a 3-sheet Excel workbook
-python main.py --diff old_records.json new_records.json --diff-output diff.xlsx
-```
-
-Pass `-c config.json` and `-e engine.pkl` to forward config + filtered-records state. The CLI dispatch logic lives in `edf_bill_fetcher.io.cli`; the `main()` entry point at the repo root is a one-line re-export of `edf_bill_fetcher.io.cli.main`.
-
-For automation, add `--strict` to return a non-zero exit status when the
-extraction produces no usable records. Without `--strict`, an empty result is
-still a valid run and produces the available error/provenance output.
-
-## Data handling and limitations
-
-- Input files are processed locally. The application does not require an EDF
-  API account or a cloud processing service.
-- Source PDFs, email archives, and generated workbooks may contain personal
-  and financial information. Store them securely and remove them before
-  sharing diagnostics or bug reports.
-- The parser is tailored to EDF formats observed in the project fixtures and
-  real exports. Unrecognised layouts are logged as parse errors rather than
-  silently treated as valid evidence.
-- Analysis is deterministic and intentionally conservative, but extracted
-  fields still require human review against the original bill or ledger.
-- SAP analysis only runs when the expected SAP dump PDFs are available and
-  `scan_sap_dumps` is enabled.
-
-### Programmatic Usage
-
-> Per-source API is symmetric — all five source types expose
-> `process_<source>_file(path, source_label, detail_label, fallback_date)`
-> so you can plug in any combination via the same
-> call signature. PST requires `libpff-python` (a runtime dep
-> since `0.1.0+`); if it's missing in some hand-built
-> environment, the wrapper logs the error and the rest of the
-> pipeline still runs.
->
-> The canonical post-refactor import paths are shown below; all
-> writer functions import from `edf_bill_fetcher.io.writers`
-> (the flat `edf_bill_fetcher.writers` facade only re-exports the
-> `writers._helpers` analysis helpers).
-
-```python
-from edf_bill_fetcher.collectors import EvidenceEngine
-from edf_bill_fetcher.io.writers.export import export_to_excel
-from edf_bill_fetcher.io.reporters.pdf_report import generate_pdf_from_gui
-from edf_bill_fetcher.io.reporters.docx_report import generate_docx_from_gui
-
-config = {
-    "use_anchors": True,
-    "use_large": True,
-    "use_reading_classification": True,
-    "use_pdf_fields": True,
-    "use_acc_filter": False,
-    "acc_num": "",
-    "min_amount": 50.0,
-    "analysis_min": 500.0,
-    "filter_below": False,
-    "save_filtered": True,
-    "use_dedup": True,
-    "save_dups": True,
-    "use_domain_filter": True,
-    "domain_filter": "edfenergy.com",
-    # report_sections tells the report generator which sections to include.
-    # If absent, every section in `edf_bill_fetcher.models.report_sections.REPORT_SECTIONS` is selected.
-    "report_sections": [
-        "exec_summary",
-        "key_findings",
-        "evidence_index",
-        "detailed_findings",
-        "timeline",
-        "ofgem",
-        "statistical",
-        "payment",
-        "forecast",
-        "data_quality",
-        "tariff",
-        "appendix_methodology",
-        "appendix_glossary",
-        "appendix_full_evidence",
-    ],
-}
-
-engine = EvidenceEngine(config, print)
-engine.process_pdf_file(
-    "path/to/a.pdf", source_label="Local PDF", detail_label="bill.pdf", fallback_date="2026-03-01"
-)
-engine.process_htm_file("path/to/export.htm", fallback_date="2026-03-01")
-engine.process_pst_file("path/to/archive.pst")
-# …each call extracts whatever it can and appends to engine.records.
-
-# Excel export
-export_to_excel(engine.records, "output.xlsx", engine.error_log, config, engine.filtered_records)
-
-# PDF export
-generate_pdf_from_gui(
-    records=engine.records,
-    output_path="report.pdf",
-    config=config,
-    engine=engine,
-    filtered=engine.filtered_records,
-)
-
-# DOCX export — same arguments, sees the same config / same registry
-generate_docx_from_gui(
-    records=engine.records,
-    output_path="report.docx",
-    config=config,
-    engine=engine,
-    filtered=engine.filtered_records,
-)
-```
-
-## Report Section Layout
-
-The PDF and DOCX reports are both built from a single section-registry so the titles and numbering always line up. The registry lives in `edf_bill_fetcher.models.report_sections.REPORT_SECTIONS`:
-
-| Class          | Sections                                                                                                                                                                                                              |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main (numeric) | Executive Summary · Key Findings Summary · Evidence Index & Source Cross-Reference · Detailed Findings · Timeline of Events · OFGEM Price Cap Comparison · Statistical Analysis · Payment & Credit Analysis · Forecast & Projection · Data Quality Assessment · Tariff Impact Analysis · Compensation Analysis |
-| Appendix       | Methodology & Data Sources · Glossary · Full Evidence Table                                                                                                                                                                                                              |
-
-Main sections are numbered **1, 2, 3, …** and appendices are lettered **A, B, C, …**, computed at render time based on the user's `report_sections` selection.
-
-A `tests/test_dispatch_parity.py` structural test pins the invariant that the PDF dispatcher's `section_builders`, the DOCX dispatcher's `section_builders`, and `REPORT_SECTIONS` all expose exactly the same set of keys — so a future contributor who adds a section to the registry without wiring both dispatchers breaks CI, not the rendered report.
-
-### Adding a new section
-
-1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/models/report_sections.py` with `key`, `title`, and optionally `is_appendix`.
-2. The Qt report dialog reads the shared section registry automatically. The retired Tk interface is not packaged or tested.
-3. Add a `def create_<name>(...)` builder function in `edf_bill_fetcher/io/reporters/pdf_report.py`.
-4. Wire the builder into the `section_builders` dispatch dict in `render_pdf`, `render_docx` and `render_html`. Forgetting this raises a clear `RuntimeError` at report-render time — that's the loud-failure mode that keeps the dispatch in lockstep with the registry.
-
-Removing a section: same steps in reverse.
-
-## Review and correct in Excel
-
-Net bill movements and closing account balances are separate values. A
-cancellation/rebill may be a net credit while containing positive replacement
-charges; **Gross Electricity Charges (£)** preserves those components for
-review without turning them into an additional ledger transaction.
-
-Historical statements carry a **Document Date** separately from the events they
-describe. Their date does not establish when a consumption charge was first
-billed. A unique matching original invoice can corroborate a statement line;
-both source occurrences remain auditable. Unresolved dates and relationships
-require review, and statement charge observations can still repeat other
-sources. A statement's opening balance plus its extracted signed events is
-checked against its printed closing balance; discrepancies appear in the
-evidence and review priorities.
-
-Printed MyAccount histories can be imported as PDFs as well as HTML exports.
-**Posting Date** preserves each history event's date; it does not establish the
-original invoice issue date. Unique matching events across the two history
-formats retain both sources and appear once in the prepared evidence. Different
-balances, accounts, periods, and repeated identical events require review rather
-than automatic merging. Contract notices retain their stated account balance;
-quoted annual costs and contractual fee limits are not bill transactions.
-
-The meter history shows numeric register readings on their reading dates,
-including SAP readings, with account/meter/register context. Mixed bill-level
-reading bases remain separate from the closing reading's classification.
-PST/OST bodies are saved as explicitly labelled generated text exports, with
-the captured body bytes and archive occurrence retained; these are not original
-EML messages. Saved originals can be opened from the HTML source inventory.
-
-Existing `result.json` files retain their accepted historical calculations.
-Re-extract the original sources to apply parser corrections; opening an old
-report does not silently rewrite its evidence or financial figures.
-
-Every new workbook opens on **Start here**, with a financial overview, dated
-review priorities and links to every visible sheet. Balances are labelled as
-observations; combined balances remain unavailable for mixed ledgers. The
-**Workbook guide** explains the correction workflow. Less frequently used
-columns are grouped and hidden; use Excel's outline controls or Unhide Columns
-to expand them. If Excel disables outlines on a protected sheet, unprotect it
-without a password.
-Use **Review & Corrections** to fix invoice references, dates, account/meter
-identifiers, charges, balances, signed transactions, consumption, rates or notes.
-Pale green cells are editable; grey source fields and the hidden row ID identify
-the original record. Give a reason for each change. Set **Include = No** to
-exclude a record; keep the row so the decision remains traceable. To sort the
-whole table in Excel, use **Review → Unprotect Sheet** first (no password).
-
-Balances and transactions have different meanings. A period-charge correction
-also updates a transaction that previously matched that charge, unless you edit
-the transaction explicitly. Payments and credits are negative transactions;
-refunds are positive. Blank amounts remain unknown, including after regeneration.
-Use real Excel dates, `DD/MM/YYYY` or `YYYY-MM-DD`, and paste values rather than
-formulas. Keep identifiers formatted as Text to preserve leading zeroes.
-
-Save an amended copy beside `evidence_files/`, then use **Generate reports**.
-The app preserves the original valuation date, analysis settings, original
-extraction observations, SAP data and source identities, recalculates all models,
-and writes a **new** pack with an updated workbook. The old pack and input
-spreadsheet remain untouched. **Review history** records before/after values and
-reasons across repeated review rounds. Previously excluded rows remain in the
-table and can be reinstated. Their original files are recoverable while the
-earlier pack is available; otherwise missing evidence is reported.
-
-Summary, evidence, SAP and filtered tabs are protected reference outputs. They
-show the last generated analysis until the app regenerates it; changing them
-does not provide a supported correction input. Import rejects changed reference
-values, formulas, missing/duplicate row IDs, malformed dates and unexplained
-changes with an actionable error. Adding manual records and editing SAP dump rows
-are outside this Excel workflow. Workbooks generated before this feature retain
-the older, explicitly lossy import path; export a fresh workbook from their
-`result.json` to obtain the full review workflow.
-
-Exclusions omit records from the new analysis and files referenced only by those
-records from the new source bundle. Shared PDFs remain whole, including pages
-belonging to excluded records. This is **not PDF redaction**: original extraction
-data and review history also remain in the saved analysis. Keep original packs
-for provenance and prepare a separately redacted pack when needed. Workbook
-protection and payload checksums detect mistakes; they are not encryption or
-digital signatures. Sources are linked, not embedded in Excel.
-
-### In-app corrections and bill revisions
-
-Open an analysis in **Review evidence**, select a canonical record and choose
-**Edit selected record**. Compare the fields with the adjacent original PDF.
-Correct fields or clear **Include**, record a reason and choose **Apply to draft**.
-Mark evidence **Verified against source** or **Needs information** when useful.
-Dates, money, signs and identifiers use the same validation rules as Excel.
-Source text, files, hashes and occurrence metadata cannot be edited.
-
-Applied decisions are automatically saved beside the analysis as
-`result.review-draft.json`; **Save draft** also saves immediately. Reopening that
-analysis resumes the draft. Drafts are bound to the entire accepted result;
-a draft from a different or changed analysis is rejected. Keep the draft beside
-its original `result.json`. If a draft is corrupt or stale, preserve/rename it
-before reopening the analysis. **Undo** and **Redo** apply within the current
-session; the undo stack itself is not restored after restart. Unapplied forms
-prompt before navigation or closing. Failed saves keep progress open unless you
-explicitly discard it.
-
-**Preview changes** shows recalculated charges and net credits without creating
-files. The accepted figures remain visible until **Create reviewed pack**
-finishes. Generation uses the original analysis date and settings, always writes
-an updated Excel workbook and uses **Report settings** for document formats and
-sections. Successful generation opens the new analysis; failure or cancellation
-keeps the original analysis and draft available.
-
-In **Bill revisions**, select an earlier bill and a later bill or credit.
-Suggestions use overlapping consumption periods or an explicit invoice reference
-in a credit document and require a known matching account with no conflicting
-fuel, meter or register. They are **suggestions**, not cancellation findings.
-Use the selectors to add a relationship the suggestions missed, compare the
-fields, inspect either source, then confirm or reject it with a reason. Multiple
-links can describe a chain or partial replacements; no single survivor is
-silently selected. Confirmed links require usable dates in earlier-to-later
-order and cannot form cycles. Clear conflicting decisions before changing a
-linked record's account, fuel, meter, register, date or type. Explicit rejection
-is retained. Automatic suggestions are capped at 500 and visibly labelled when
-truncated; explicit decisions are retained beyond that cap.
-
-**A revision link does not remove a charge or credit from the ledger.** A cancelled
-original may already be offset by a credit; excluding it again can double adjust
-the account. Inclusion remains a separate reasoned decision. Document charge
-differences are comparisons, not refunds or changes to liability. Existing
-back-billing and compensation rules are unchanged. The **Bill revisions** Excel
-reference tab lists stored comparisons and decisions; PDF, Word and HTML include
-a revision subsection under **Detailed findings** (up to 30 relationships,
-prioritising explicit decisions). Older saved results are rendered as preserved;
-regenerate through a review workflow to calculate revision suggestions.
-
-Excel changes to previously reviewed records reset their verification status to
-**Needs review**. Unchanged statuses and revision decisions carry forward between
-review rounds. Review history records field, inclusion, status and relationship
-decisions, while original observations remain preserved. When corrections merge
-duplicate records, verification of an absorbed row is archived in review history
-and the saved analysis; it is not transferred to a different record.
-
-The same workflow is available without the desktop:
-
-```bash
-edf-collector --review-workbook --workbook amended.xlsx --output-dir reviewed-packs
-# Optionally select document formats; an updated Excel workbook is always included.
-edf-collector --review-workbook -i amended.xlsx -o reviewed-packs --formats xlsx,html
-```
-
-## Output Sheets (Excel)
-
-Sheets are written in roughly this order; conditional sheets only appear when their gating input is non-empty and the relevant toggle is on:
-
-| Sheet | When emitted | Description |
-| --- | --- | --- |
-| **Start here** | always (first tab) | Financial overview, analysis date, evidence coverage, concrete review priorities and sheet directory |
-| **Review & Corrections** | always | Validated editable inputs, inclusion decisions, reasons and source links |
-| **Review history** | always | Before/after values, reasons and lineage for imported review decisions |
-| **Bill revisions** | newly analysed results | Suggested, confirmed and rejected document relationships, inclusion states, differences and full source references |
-| **Workbook guide** | always | Correction instructions, financial meanings and regeneration guidance |
-| **Provenance** | always | Tool version, generation timestamp, account reference, record counts, and a full snapshot of the run configuration — so a filed workbook is self-documenting about how its conclusions were produced |
-| **Annual Summary** | always | Yearly balance range, average, peak, low |
-| **EDF Evidence Report** | always | All extracted records with live formulas |
-| **Duplicate Entries** | `use_dedup and save_dups` (default on/ off respectively) | Deduplicated records, retained for audit so the dropped siblings are visible |
-| **Filtered (Below Min)** | `filter_below and save_filtered` (default off/on) when there *are* records whose **absolute** amount is below the minimum-threshold | Records whose `abs(Amount)` is below the minimum threshold (refunds like `-£1000` are KEPT in the main report — only small-magnitude amounts are shelved here) |
-| **Parse Errors** | when the engine captured one or more extraction errors | Any extraction errors encountered |
-| **Key Statistics** | always (when ≥2 records survive dedup) | Account overview, balance figures, periodic charges, reading quality, unit rates |
-| **Balance Trend** | always (≥2 records) | Time-series chart with rolling average and linear trend |
-| **Year-on-Year** | always (≥2 records) | Yearly comparison with YoY changes |
-| **Period Charges** | always (≥2 records) | Per-period charges with daily rates and dispute flags |
-| **Dispute Flags** | always (≥2 records) | Automated detection of anomalies — large jumps, billing gaps, estimated runs, reconciliation mismatches |
-| **Dispute Timeline** | always (≥2 records) | Chronological event timeline for the dispute narrative |
-| **Statistical Analysis** | always (≥2 records) | Descriptive stats, rolling 6-period stats, EMA, momentum, volatility, z-score/IQR anomalies, Shapiro-Wilk normality tests |
-| **Payment Analysis** | always (≥2 records) | Payment/credit patterns, intervals, amounts, chronological detail with chart |
-| **Forecast & Projection** | always (≥2 records) | Linear regression, Holt-Winters exponential smoothing, EMA projection, confidence intervals, accuracy metrics |
-| **Data Quality Report** | always | Completeness and read-quality metrics |
-| **Tariff Analysis** | always (≥2 records) | Tariff impact analysis |
-| **Back-billing Analysis** | always (≥2 records) | Invoices with consumption older than 365 days when the bill was issued, assessed per consumption day against the bill date. Shows the unlawful slice, prorated charge, period-charge source, and recursive supersession status. |
-| **Rebilling & Corrections** | always (≥2 records) | Killer/killed invoice pairs identified by period overlap > 30 days OR jump-back > 30 days OR long-period killer ≥ 60 days reaching back into a prior invoice's window. Trigger Reason lists every matching heuristic. |
-| **Meter Readings** | always (≥2 records) | Actual vs Estimated timeline with meter-rollover candidates flagged `M`. Estimated Source mirrors the row's `Details` column (e.g. `Automatic estimate`). |
-| **Contract History** | always (≥2 records) | Contract periods inferred from tariff transitions, with ≤ 30-day gaps merging across same-tariff runs. |
-| **Compensation** | always (≥2 records) | Indicative compensation claims — SLC 7A back-billing excess, credit-hold interest, late-credit interest — estimated deterministically from the evidence records, grouped by claim category with a total and a disclaimer. |
-| **SAP Contract History** | `scan_sap_dumps` (default on) and a SAP Contract History PDF is supplied | Contract periods extracted from the SAP Contract History PDF dump |
-| **SAP Meter Readings** | `scan_sap_dumps` and a SAP Meter Readings PDF is supplied | Meter readings from the SAP Meter Readings PDF dump, parsed by a multi-regex fallback chain |
-| **SAP Financial Transactions** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | Per-row extract of every financial transaction from the SAP Financial Transactions PDF. The widened parser surfaces **26 columns** per row (the 16 historically-surfaced columns plus 10 analyser-relevant extensions: Contract, Sub Item, Clearing Posting Date, Clearing Amount, Statistical Key Flag, Tax Code / Tax Code Description, G/L Account / G/L Description, Deferral Date). |
-| **SAP Back-billing Events** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | One summary row per **Clearing Document cluster** of ≥4 underlying SAP rows, sorted by Clearing Date ascending. Each summary row carries # rows, net amount, has-credit-for-consum-billing flag, largest single posting, posting-date range, an evidence trail narrative, and a hyperlink to its first underlying row on `SAP Financial Transactions`. Underlying rows are written as collapsible outline-group sub-rows beneath each summary (default collapsed); click `+` in the left margin to expand. Debt-management rows (`Statistical Key Flag == 'Installment Plan Item'`) are filtered out of clustering. See the design spec at `scratch/Docs/Superpowers/Specs/2026-07-21-sap-back-billing-analysis-design.md`. |
-| **SAP ↔ EDF Matched Events** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | One row per SAP back-billing event × EDF invoice candidate pair whose fuzzy match confidence is Low or better. Confidence is computed by the §3.3 algorithm in the spec: date score (in-span = 50, within 3 days = 25, within 14 days = 5) + amount score (within 5% = 40, within 25% = 20, within 50% = 5); net-zero clusters match any EDF invoice whose gross equals some cluster row's gross within the same bands → bands High (≥75) / Medium (≥40) / Low (≥10) / unmatched (omitted). Bidirectional hyperlinks: SAP Clearing Doc cell links to the event on the previous sheet, EDF Invoice # cell links to the row on `EDF Evidence Report`. |
-| **Reconciliation** | `scan_sap_dumps` and `generate_reconciliation_sheet` (independent toggle, default on) | Cross-source reconciliation between SAP-ledger signals (clearing clusters, credit-for-consum-billing postings) and EDF-invoice signals (back-billing / rebilling / meter-rollover detections). Toggled separately so a reviewer can keep just the SAP-ledger sheets without the cross-source view. |
-
-## Back-billing & rebilling detection
-
-The workbook carries four analysis tabs after the existing sheet set:
-
-- **Back-billing Analysis**: applies the per-consumption-day 12-month test: a charge is potentially back-billed when the bill `Date` is more than 365 days after the relevant consumption day. A short period billed years late can therefore qualify, while a long period billed promptly does not qualify merely because its span exceeds 365 days. The sheet shows `Period Charge (£)` as the canonical charge, an `Amount (£)` fallback only when needed, the unlawful slice and prorated `Unlawful Charge (£)`, plus recursive live/superseded status. Cancel-and-reissue evidence is considered alongside slow billing, not as a substitute for the legal timing test.
-- **Rebilling & Corrections**: pairs of invoices where a "killer" later-issued bill effectively cancels and reposts a "killed" earlier bill. Heuristics — period overlap > 30 days, jump-back > 30 days, or long-period (≥60 days) killer reaching back into the killed's start. Trigger Reason lists every trigger that fired.
-- **Meter Readings**: A/E/M timeline (`A`=Actual, `E`=Estimated, `M`=Meter rollover candidate). Actual/Smart readings only count toward rollover detection; a negative kWh delta within 94,999 of the 5-digit cap flags the row.
-- **Contract History**: one row per inferred tariff run. Adjacent same-tariff runs merge when their gap is ≤30 days (default).
-
-The four detectors are pure-pandas functions keyed off the deduplicated evidence DataFrame — no LLM, no external service. Detectors:
-
-| Detector | Output columns |
+Turn a folder of EDF bills and emails into an organised evidence pack you can
+check, correct and use to prepare a billing complaint.
+
+The app brings together invoices, payments, meter readings and account history.
+You can compare records with their original PDFs, trace revised bills and credits,
+and review the figures either in the app or in Excel. When you make corrections,
+it creates a new pack and keeps a record of what changed.
+
+## What you can do
+
+- **Gather the evidence:** import PDF bills, Outlook PST/OST archives, EML/MSG
+  emails and EDF account-history exports. Scanned PDF pages use local OCR.
+- **Understand the account:** follow balances, payments, readings and bill
+  revisions, with missing information and possible billing problems highlighted.
+- **Check and correct it:** inspect original pages, fix extracted values or exclude
+  records, and carry your reasons into the next version of the pack.
+- **Prepare a complaint:** record disputed charges, reconcile overlapping claims
+  and credits, and produce a focused complaint draft with supporting originals.
+- **Choose your outputs:** an Excel workbook for review, plus HTML, PDF and Word
+  reports for reading and sharing.
+
+Processing happens on your computer; no EDF login or cloud service is needed.
+The app was built for a personal EDF dispute and understands the EDF document
+layouts covered by its parsers. Check findings against the originals: a flagged
+charge or proposed reduction is not a confirmed entitlement to a refund.
+
+## Get the app
+
+### Download a build
+
+Open [Build Executables on GitHub Actions](https://github.com/volster/edf-bill-fetcher/actions/workflows/matrix_build.yml),
+choose a successful run for `how-its-going`, and download the
+`EDF_Evidence_Collector-…-ci-validated` artifact for your computer from the bottom
+of the run page. GitHub may ask you to sign in to download artifacts.
+
+| Your computer | What to open after extracting the download |
 | --- | --- |
-| `detect_back_billing(df)` | Invoice #, Bill Date, Period From, Period To, Days Billed, Period Charge (£), Value Source, 12-Month Limit (days), Excess Days, Unlawful Charge (£), Cancel/Rebill Admitted, Reason Assessment |
-| `detect_rebilling(df)` | Killer Invoice, Killed Invoice, Killer Date, Killed Date, Period Overlap (days), Jump-back (days), Trigger Reason, Cancel/Rebill Admitted (Killer) |
-| `detect_meter_rollover(df, rollover_threshold=94999)` | Date, Invoice #, Prev Units (kWh), Curr Units (kWh), Delta, Reading Type, Notes |
-| `infer_contracts(df, merge_gap_days=30)` | Contract From, Contract To, Tariff, Days, # Invoices |
+| Windows | `EDF_Evidence_Collector.exe` |
+| Mac with Apple silicon | `EDF_Evidence_Collector.app` — follow the [first-launch instructions](docs/MACOS.md) |
+| Linux | `EDF_Evidence_Collector` |
 
-The detectors live in `edf_bill_fetcher.processors.detection` and `edf_bill_fetcher.processors.matching`. They can be called directly from Python:
+These builds include the OCR engine and English language data. You do not need
+Python. The Mac build is ad-hoc signed and needs a one-time **Open Anyway**
+approval; it is not Apple-notarized. Build artifacts can expire; see
+[building from source](docs/BUILDING.md) if a download is no longer available.
 
-```python
-from edf_bill_fetcher.processors.detection import (
-    detect_back_billing,
-    detect_rebilling,
-    detect_meter_rollover,
-)
-from edf_bill_fetcher.processors.matching import infer_contracts
-from edf_bill_fetcher.io.writers.analysis import run_analysers
+### Run from source
 
-# One-shot — returns a dict with keys back_billing, rebilling,
-# meter_rollover, contracts.
-analyses = run_analysers(deduped_df)
+Install Git and **64-bit Python 3.11**, then clone the working branch:
+
+```console
+git clone --branch how-its-going https://github.com/volster/edf-bill-fetcher.git
+cd edf-bill-fetcher
 ```
 
-Multi-invoice (merged) PDF inputs — e.g. a bundle of 30+ pages containing 8 T-series invoices or 40 pages containing 10 KI-series invoices — are sliced at invoice boundaries before parsing, so each invoice gets its own row instead of being lost in the whole-file concat. The slicer looks for either an `Invoice number:` line or a `Page 1 of N` boundary marker (variants `1 of 4`, `one of four`, `1/4`).
+On Windows:
 
-## SAP ledger integration
-
-EDF's SAP ledger PDFs are the *behind-the-scenes* truth of every billing event; the EDF-branded invoice PDFs only show what EDF chose to send the customer. The three SAP source PDFs the engine looks for (under the `Scan SAP dumps` GUI toggle, default on, or `config["scan_sap_dumps"]` programmatic key) are:
-
-- **SAP Contract History** (`*_Contract-History.pdf`) → `SAP Contract History` sheet
-- **SAP Meter Readings** (`*_Meter-Readings.pdf`) → `SAP Meter Readings` sheet
-- **SAP Financial Transactions** (`*_Financial-Transactions.pdf`) → `SAP Financial Transactions` sheet
-
-The Financial-Transactions parser surfaces **26 columns** per row (16 historical + 10 analyser extensions).
-
-Two analyser sheets sit adjacent to `SAP Financial Transactions`, deriving their data from it:
-
-- **SAP Back-billing Events** — one summary row per Clearing Document cluster of ≥4 underlying rows. Each cluster's net amount, evidence trail narrative, and link back to its underlying rows on `SAP Financial Transactions`. Sub-rows are hidden under collapsible outline groups (default collapsed) so the sheet opens at a readable ~62 rows. Debt-management rows whose `Statistical Key Flag == 'Installment Plan Item'` are excluded from clustering up-front.
-- **SAP ↔ EDF Matched Events** — fuzzy-joins SAP events to EDF invoice records using SAP posting and clearing dates against EDF `[Period From, Period To]`, plus SAP net amount against the EDF `Period Charge (£)`. Each matched pair includes a confidence band and bidirectional hyperlinks. Events inside a known back-billing cluster that do not match an invoice within the amount bands are labelled as internal cluster mechanisms rather than being forced onto a nearby invoice.
-
-  Bands: **High** ≥ 75, **Medium** ≥ 40, **Low** ≥ 10. SAP events that produce no candidate at Low-or-above are omitted from Sheet 2 (but remain on Sheet 1).
-
-Both new sheets honour the same `scan_sap_dumps` toggle as the existing three SAP sheets — there is no separate "Show SAP back-billing" checkbox (YAGNI).
-
-The full design spec is preserved at
-`scratch/Docs/Superpowers/Specs/2026-07-21-sap-back-billing-analysis-design.md`.
-
-## Supported EDF Formats
-
-### New-Style Invoices (KI-XXXXXXXX)
-- "Current balance £X in debit" or "Current balance £X in credit"
-- "Total charges for this period £X in debit" or "… in credit"
-- "Your charges: DD Mon YYYY - DD Mon YYYY"
-- kWh usage, standing charge, tariff name
-- Account number rendered as `A-NNNNNNNN` (compact) **or** `NNN NNN NNN NNN` (spaced) — both parsed since audit-pass-1
-
-### New-Style Credit Notes (KCR-XXXXXXXX)
-- "Total credits for this bill £X"
-
-### Old-Style Bills
-- "Your new account balance £X"
-- Generic amount patterns with "balance", "total charges", "amount to pay"
-
-### HTM Account History (since the #15 fix)
-- "DD Mon YYYY We charged your account £X For Y kWh ... Balance £Z in debit"
-- "DD Mon YYYY We charged your account £X For Y kWh ... Balance £Z in credit"
-- "DD Mon YYYY You paid us £X ... Balance £Z in debit"
-- "DD Mon YYYY You paid us £X ... Balance £Z in credit"
-- "DD Mon YYYY Reversed account charge £X ... Balance £Z in debit | credit"
-- Plus standalone opening-balance lines:
-  "DD Mon YYYY Balance £X in credit" (only the credit side — debit-only opening balances get summarised by the next transaction)
-
-## Requirements
-
-- Python 3.10+
-- Runtime (all installed by `pip install -e .`):
-  PySide6 Essentials, pandas, numpy, pdfplumber, beautifulsoup4, openpyxl, reportlab,
-  python-docx, scipy, **libpff-python**, **statsmodels**.
-- Toolchain (only for contributors / packagers, install via
-  `pip install -e ".[dev,build]"`):
-  pytest, pytest-cov, coverage, ruff, mypy, pyinstaller.
-
-## Development
-
-```bash
-pip install -e ".[dev]"
-pytest -v
+```powershell
+py -3.11 bootstrap.py run --install-system
 ```
 
-Tests are organised into three lake levels:
+On macOS or Debian/Ubuntu Linux:
 
-- **Unit tests** (most files in `tests/test_*.py`) pin the
-  behaviour of public functions and structural invariants of the
-  registry/dispatcher.
-- **Audit regression tests** (`tests/test_audit_pass_1.py`,
-  `tests/test_report_version.py`, `tests/test_dispatch_parity.py`)
-  pin the contracts the report depends on. These exist
-  *because* real-data review exposed one or more real defects — see
-  `CHANGELOG.md` for the audit trail. Do not edit these without
-  re-running audit-pass analysis:
-  1. `tests/test_audit_pass_1.py` — reading-pattern ordering,
-     `detect_pdf_format`, `process_text` heuristic-fallback,
-     `_detect_payment_patterns`, `_analyze_tariff_impact`,
-     `_data_quality_report`, `process_pst_file` / `process_ost_file`,
-     `compute_dispute_flags`.
-  2. `tests/test_report_version.py` — cover page reflects the
-     `pyproject.toml` version; falls back to a stable default when
-     `pyproject.toml` is unreadable.
-  3. `tests/test_dispatch_parity.py` — REGISTRY ↔ PDF dispatcher ↔
-     DOCX dispatcher key-set parity is locked in.
-- **Integration smoke** (`tests/test_integration_pipeline.py`) drives
-  the bundled synthetic bill PDF (`tests/fixtures/sample_bill.pdf`)
-  through the full PDF → engine → reportlab PDF + openpyxl XLSX
-  pipeline and asserts the extracted fields. The fixture is
-  regenerated via `tests/fixtures/generate_bill_fixture.py` if
-  missing — a fully-synthetic, deterministic dataset (FAFA policy,
-  no real EDF data).
-
-The desktop and GUI tests use Qt. On headless Linux the test configuration selects Qt’s offscreen platform; Tcl/Tk, Xvfb and display-bootstrap plugins are not required.
-
-Qt desktop tests use the `offscreen` platform and real widgets and worker
-threads. They cover input capture, remembered settings, cancellation,
-saved-analysis reuse, workbook imports and truthful output status. Legacy
-The retired Tk interface is excluded from builds and no longer imports with the UI package.
-
-### Linting / formatting / type-checking
-
-```bash
-ruff check .
-ruff format --check .
-mypy .
+```console
+python3.11 bootstrap.py run --install-system
 ```
 
-All three are enforced in CI on Python 3.10 / 3.11 / 3.12 ×
-ubuntu / windows / macos — see `.github/workflows/ci.yml`. Packaged runtime and source/evidence checks are also needed before distribution.
+Setup creates a local Python environment, installs dependencies, checks OCR and
+launches the app. Native package installation may request administrator access.
+For other Linux distributions, development setup or executable builds, use the
+[source and build guide](docs/BUILDING.md). Installing Python requirements alone
+does not install Tesseract.
 
-### Test coverage
+## Your first evidence pack
 
-Coverage is measured with `coverage` (configured in `pyproject.toml [tool.coverage.run]`) over the `edf_bill_fetcher/` source tree. The CI gate is **`fail_under = 90`** in `pyproject.toml [tool.coverage.report]` — CI runs `pytest --cov=. --cov-report=xml` (Qt uses its offscreen platform in headless CI) — see [`docs/COVERAGE.md`](docs/COVERAGE.md) for the measurement protocol, the strict `# pragma: no cover` policy, and how to extend coverage.
+1. Open **Build evidence pack** and choose your PDF folder, email sources or
+   account-history file. You can combine sources in one run.
+2. Choose where to save it. Keep **Include original source files** selected so
+   the pack can link records back to the evidence. Use **Report settings…** if
+   you also want HTML, PDF or Word reports.
+3. Click **Create evidence pack**. When it finishes, read any review notes and
+   open the workbook's **Start here** sheet for the overview and priorities.
+4. Check flagged records against their originals in **Review evidence**, or
+   edit the workbook's **Review & Corrections** sheet. Create a reviewed pack
+   to apply your changes and regenerate the outputs.
 
-## Configuration
+Keep the whole output folder together, including `result.json` and
+`evidence_files/`. Each desktop run gets a new folder, so earlier packs remain
+available. The [user guide](docs/USER_GUIDE.md) walks through both review routes.
 
-All options are available in the GUI. For programmatic use, see the `config` dict in the usage example above. The configuration contract is typed as `edf_bill_fetcher.models.config.ConfigDict` (a `TypedDict` — every key optional, documented with its default in one place); passing a dict literal with a misspelled key or wrong value type to any consumer is a `mypy` error, and the GUI/CLI boundary normalises the legacy short key names (`use_acc_filt`, `use_reading_class`) to the canonical long ones.
+## Where to go next
 
-Key options:
-- `use_anchors`: enable smart-context amount patterns
-- `use_large`: enable large-amount fallback
-- `use_reading_classification`: classify Estimated/Actual/Smart readings
-- `use_pdf_fields`: extract kWh, standing charge, invoice number
-- `use_acc_filter`: filter by account number
-- `min_amount`: minimum amount threshold (compared against `abs(amount)` — high-magnitude refunds are kept in the main report)
-- `analysis_min`: threshold for analysis tabs
-- `use_dedup`: enable cross-source deduplication
-- `use_domain_filter`: filter PST emails by sender domain
-- `scan_sap_dumps`: (default `True`) emit the three SAP source sheets + the two new SAP analyser sheets when a SAP-dump PDF is supplied. See *SAP ledger integration*.
-- `generate_reconciliation_sheet`: (default `True`) emit the cross-source Reconciliation sheet. Independent of `scan_sap_dumps` for cases where the SAP sheets alone are wanted.
-- `report_sections`: list of registry keys to include in PDF/DOCX/HTML reports — absent enables every section; an explicit empty list enables none
+| I want to… | Guide |
+| --- | --- |
+| Correct records in the app or Excel | [Using and reviewing evidence](docs/USER_GUIDE.md) |
+| Understand the workbook, reports and saved files | [Understanding your outputs](docs/OUTPUTS.md) |
+| Review rebills, credits and a proposed complaint | [Rebilling and claim review](docs/REBILLING_LEDGER.md) |
+| Fix a startup, extraction or import problem | [Troubleshooting](docs/TROUBLESHOOTING.md) |
+| Automate extraction or report generation | [Command-line usage](docs/CLI.md) |
+| Work on the code | [Development guide](docs/DEVELOPMENT.md) |
 
-## License
+The [documentation index](docs/README.md) also covers architecture, testing,
+builds and historical review notes. See the [changelog](CHANGELOG.md) for changes.
 
-MIT License — see `LICENSE` for details.
+Found a bug? Include your OS, **About this build** information and the exact
+error in a [GitHub issue](https://github.com/volster/edf-bill-fetcher/issues).
+Use a synthetic or redacted example; bills, workbooks and saved analyses can
+contain personal and financial information.
 
-## Disclaimer
-
-This tool was created for personal use in an EDF billing dispute. It is provided as-is without warranty. Always verify extracted data against original documents before using in any formal dispute.
-
-## Release & Test Status
-
-CI defines Python 3.10 / 3.11 / 3.12 across Ubuntu, Windows and macOS. Check results for the actual revision; this document does not certify that matrix. Recorded local review checks and their limits are in [docs/REVIEW_FIXES.md](docs/REVIEW_FIXES.md). See [CHANGELOG.md](CHANGELOG.md) for the historical audit trail.
-
-See [CI troubleshooting](docs/CI.md) for Windows runtime checks, downloadable
-failure diagnostics, pinned runner/tool versions and the executable validation gates.
-
-### Saved analysis and rerendering
-
-Every CLI/GUI extraction saves `result.json` (schema v3) and `run.json` in its unique run/source-bundle folder. The v3 result preserves original observations, prepared rows, duplicate decisions, captured configuration and valuation date, analytical methods, reference-data hash and all calculated models. Reports consume that saved analysis. JSON loading rejects duplicate keys, nonfinite numbers, inconsistent identities/dates and unsupported versions.
-
-The existing `--records-json` and `--save-engine-json` flags explicitly retain **v2 compatibility JSON**. Report commands accept v3 results, v1/v2 exports and bare record lists. Legacy input is recomputed using a newly captured context when historical information is missing, with migration limitations recorded. A changed analytical configuration creates a separate result revision; accepted input files remain unchanged.
-
-```bash
-python main.py --pdf-report --records /path/to/run/result.json --output report.pdf
-python main.py --docx-report --records /path/to/run/result.json --output report.docx
-python main.py --html-report --records /path/to/run/result.json --output report.html
-```
-
-Each command also saves `report.<format>.result.json` and `report.<format>.run.json`. A v3 rerender restores the saved calculations. A report failure leaves the saved analysis and earlier completed artifacts available, with a failed run manifest. Cancellation is checked between stages and while supported collectors run; an active document render completes before the next cancellation check.
-
-Workbook imports preserve available rows and metadata, label provenance as lossy, and create a new run. They cannot recover original source files or extraction decisions.
-
-### Scanned PDFs and OCR
-
-PDF pages without text, and image pages with only a sparse text header, are
-recognized locally with Tesseract OCR (English). Normal text pages use their
-existing text. This also applies to PDFs attached to PST/OST, EML and MSG messages;
-OCR cannot recover an attachment that the archive reader cannot extract.
-Printed MyAccount history pages with readable balances but missing transaction
-headings also use OCR: some browser exports draw dates and amounts as shapes.
-
-Packaged builds include the OCR engine and English language data. Source installs
-need Tesseract separately: `sudo apt install tesseract-ocr tesseract-ocr-eng` on
-Debian/Ubuntu, `brew install tesseract` on macOS, or the Tesseract Windows installer
-(default `C:\Program Files\Tesseract-OCR`). No documents are uploaded and no model
-downloads occur during extraction.
-
-The original PDF is preserved unchanged. OCR records show their page numbers,
-extraction method, lowest word confidence and a review-required flag in the
-review screen. Recognized page text and failures are retained in the source
-manifest, including pages that yield no billing records. OCR always requires
-review: check invoice identifiers, dates, decimal points and amounts against the
-original, even when confidence is high. Missing engines, failed pages and pages
-with no recognized text are reported while readable pages continue. OCR work is
-bounded per page and can be cancelled. PDFs with a substantial but incorrect
-existing text layer outside that recognized history layout require manual review;
-they are not automatically re-OCRed.
-
-Local PyInstaller builds must install Tesseract and add
-`--additional-hooks-dir=.github/pyinstaller_hooks` to include OCR. CI exercises an
-image-only bill through every built executable before publishing artifacts.
+[MIT licence](LICENSE).

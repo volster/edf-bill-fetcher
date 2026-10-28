@@ -1,4 +1,13 @@
-# Application review fixes
+# Application review fixes — historical record
+
+[Documentation index](README.md)
+
+This records the earlier R01–R20 application review and the checks performed at
+that time. It is not a current feature inventory or certification of the latest
+revision. The Tk implementation described in R19 has since been removed; the
+supported desktop uses Qt. See [architecture](ARCHITECTURE.md) for current
+contracts, [development](DEVELOPMENT.md) for checks, and [CI](CI.md) for the
+platform workflow.
 
 The review identified errors in monetary interpretation, evidence identity, calculations, ingestion and run handling. These changes prioritize preserving observations and making unavailable information explicit.
 
@@ -29,8 +38,8 @@ The section registry now lives independently of the PDF renderer. Dependency ran
 
 Missing account identity, unavailable cumulative readings, unknown tariff applicability and incomplete historical cap data remain visible limitations of the source evidence. The app preserves them without inventing financial or legal conclusions.
 
-## Validation
+## Validation at the time of the review
 
 Local verification passed linting, formatting and type checking across 222 source files, 534 regression checks in the changed test files, and a wheel build whose contents exclude tests. Functional checks exercised fixture PDF extraction, evidence copying/indexing, version 2 JSON and report reloads, XLSX/PDF/DOCX/HTML generation, and SAP-only workbooks.
 
-A real Tk worker run verified that changing controls during extraction does not change its captured inputs or output location. A second run preserved the complete first bundle, and window shutdown allowed worker cleanup to finish. The full operating-system/Python matrix remains in GitHub CI.
+A real Tk worker run verified that changing controls during extraction does not change its captured inputs or output location. A second run preserved the complete first bundle, and window shutdown allowed worker cleanup to finish. Those local checks did not establish a full operating-system/Python matrix result.

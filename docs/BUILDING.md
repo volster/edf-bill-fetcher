@@ -1,5 +1,7 @@
 # Run, develop and build from source
 
+[Documentation index](README.md) · [Download a build](../README.md#download-a-build)
+
 Use **64-bit Python 3.11** and Git. Python 3.10 and 3.12 are also tested; the current dependency set does not support Python 3.13 or newer. Ordinary CPython from python.org is recommended for release builds, matching CI. Conda is not required.
 
 Clone the `how-its-going` branch and open a terminal in the checkout. On Windows, use `py -3.11` below; on macOS/Linux use `python3.11`.
@@ -18,7 +20,15 @@ For subsequent runs:
 .\.venv\Scripts\python.exe main.py
 ```
 
-On macOS/Linux, the environment interpreter is `.venv/bin/python`.
+On macOS/Linux, run the equivalent setup and subsequent launch commands:
+
+```console
+python3.11 bootstrap.py run --install-system
+.venv/bin/python main.py
+```
+
+Use `python3.11` in place of `py -3.11` and `.venv/bin/python` in place of
+`.\.venv\Scripts\python.exe` in the examples below.
 
 ## Development and checks
 
@@ -80,6 +90,8 @@ This builds the **remote `how-its-going` branch**, waits for this exact request 
 Use `--ref <remote-branch-or-tag>`, `--repo <owner/repository>` or `--output <folder>` to change those defaults. You need permission to dispatch workflows and download their artifacts. These manually dispatched builds retain their `manual-unvalidated` label; automatic builds follow successful CI. Downloading all three does not mean all three can run on your computer.
 
 Without GitHub CLI, open **Actions → Build Executables → Run workflow**, select the branch and download the three application artifacts when the run succeeds.
+
+For day-to-day checks and contribution guidance, continue to [Development](DEVELOPMENT.md).
 
 ## GUI test runtime
 

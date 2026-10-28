@@ -1,5 +1,7 @@
 # Opening EDF Evidence Collector on a Mac
 
+[Documentation index](README.md) · [Downloads](../README.md#download-a-build)
+
 This download is for Apple silicon Macs (M1, M2, M3, M4 and later).
 It uses an ad-hoc code signature and is not notarized by Apple. macOS will
 normally ask you to approve the first launch of a downloaded copy.

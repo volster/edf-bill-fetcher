@@ -1,202 +1,159 @@
 # Development
 
-How to run tests, add features, and ship changes to the EDF Bill Fetcher codebase.
+[Documentation index](README.md) · [Architecture](ARCHITECTURE.md) · [CI troubleshooting](CI.md)
 
-## Set up
+## Set up once
 
-```bash
-git clone https://github.com/volster/edf-bill-fetcher.git
-cd edf-bill-fetcher
+Follow [source setup](BUILDING.md) and use `bootstrap.py develop --install-system`
+to create `.venv` with the constrained `[dev,build,msg]` dependencies and native
+prerequisites. Reuse a working environment rather than installing into a second
+Python by accident.
 
-# Default install: runtime only:
-pip install -e .
+Commands below use `python` to mean that environment's interpreter. Without
+activation, use `.venv/bin/python` on macOS/Linux or
+`.\.venv\Scripts\python.exe` on Windows.
 
-# Dev install: runtime + test + lint + type-check toolchain:
-pip install -e ".[dev]"
-pip install -e ".[dev,msg]"  # include optional Outlook MSG parsing
+## Daily checks
 
-# Build install: + PyInstaller for one-file executables:
-pip install -e ".[dev,build]"
+```console
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy .
+python -m pytest tests/test_excel_review.py
 ```
 
-Reuse a working environment where available. Qt is the supported desktop. Headless Linux tests use its offscreen platform without a virtual display. Native PST/OST builds may require compiler/autotools headers when no compatible wheel is available.
+Choose tests for the behavior you change. Use `python -m ruff format <paths>` to
+format edited Python files. For the full suite with the same coverage/reporting
+command as CI:
 
-## Running tests
-
-```bash
-pytest -v
+```console
+python ci_pytest.py
 ```
 
-CI declares the following matrix; inspect results for the actual revision before claiming it passes:
+That runner executes the suite once and preserves its exit code, JUnit and coverage
+reports. See [coverage guidance](COVERAGE.md) for measurement details. CI runs on
+Python 3.10, 3.11 and 3.12 across Ubuntu, Windows and macOS; a local pass does not
+establish results for the other platforms.
 
-- **Linux**: Python 3.10 / 3.11 / 3.12
-- **macOS**: same
-- **Windows**: same
-- **Headless Linux** (CI / containers): tests automatically select Qt's offscreen platform.
+Useful pytest options are `-k expression` to select names, `-x` to stop on the first
+failure, `--lf` to rerun previous failures and `-q` for shorter output. For example:
 
-To run a native desktop test locally, select the platform supplied by the desktop
-session (for example `QT_QPA_PLATFORM=xcb` on Linux with an X server). Normal
-app startup does not force the offscreen test platform.
-
-### Test layers
-
-The suite is organized into three lake levels (largest first):
-
-- **Unit tests** (`tests/test_*.py`) — most files. Pin the behavior of public functions and the structural invariants of the registry/dispatcher.
-- **Audit regression tests** — pin the contracts the report depends on. Exist *because* real-data review exposed one or more real defects. Do not edit these without re-running the audit-pass analysis:
-  1. `tests/test_audit_pass_1.py` — reading-pattern ordering, `detect_pdf_format`, `process_text` heuristic-fallback, `_detect_payment_patterns`, `_analyze_tariff_impact`, `_data_quality_report`, `process_pst_file` / `process_ost_file`, `compute_dispute_flags`.
-  2. `tests/test_report_version.py` — cover page reflects the `pyproject.toml` version; falls back to a stable default when `pyproject.toml` is unreadable.
-  3. `tests/test_dispatch_parity.py` — REGISTRY ↔ PDF dispatcher ↔ DOCX dispatcher key-set parity is locked in.
-- **Integration smoke** (`tests/test_integration_pipeline.py`) — drives the bundled synthetic bill PDF (`tests/fixtures/sample_bill.pdf`) through the full PDF → engine → reportlab PDF + openpyxl XLSX pipeline and asserts the extracted fields. The fixture is regenerated via `tests/fixtures/generate_bill_fixture.py` if missing — a fully-synthetic, deterministic dataset (FAFA policy, no real EDF data).
-
-### Running a focused subset
-
-```bash
-pytest tests/test_writers.py              # one file
-pytest tests/test_writers.py::TestWriters # one class
-pytest tests/test_writers.py::TestWriters::test_evidence_sheet_is_written    # one test
-pytest -k "reconciliation"               # by name pattern
-pytest -m "not slow"                      # by marker
+```console
+python -m pytest tests/test_claim_reconciliation.py -q
+python -m pytest -k "reconciliation" -x
 ```
 
-### Common pytest flags
+### GUI and native checks
 
-| Flag                       | Effect                                                 |
-| -------------------------- | ----------------------------------------------------- |
-| `--no-header`              | strip the leading pytest version banner                |
-| `-q`                       | quiet — one dot per test                              |
-| `-v`                       | verbose — full test name per line                       |
-| `--lf`                     | rerun only the tests that failed last time             |
-| `QT_QPA_PLATFORM`          | choose Qt offscreen or the native desktop platform |
-| `-x`                      | stop on first failure                                  |
-| `-k <expr>`                | run tests matching the expression                      |
+Tests automatically select Qt's offscreen platform on headless Linux. CI sets
+`QT_QPA_PLATFORM=offscreen` on every OS. For an interactive Linux desktop check,
+select the desktop's platform, such as `QT_QPA_PLATFORM=xcb`, instead. Normal
+app startup does not force the test platform. Tk and Xvfb are not prerequisites.
 
-## Linting / formatting / type-checking
+Use `python ci_runtime.py` for the workspace startup preflight and
+`python main.py --doctor` for installed capabilities. Worker, cancellation,
+shutdown and layout changes also need a real desktop check. Frozen application
+changes need the [native build checks](BUILDING.md#build-for-this-computer);
+source tests alone do not exercise bundled dependencies.
 
-```bash
-ruff check .           # PEP 8 + PEP 257 + import-ordering — fast
-ruff format --check .   # formatting check (no write)
-ruff format .           # apply formatting
-mypy .                 # matches the current CI invocation
-```
+## Where to make a change
 
-All three are enforced by the CI workflow. See `.github/workflows/ci.yml` for the exact invocation; do not infer branch protection or successful checks from this document.
+| Change | Main areas and useful regression examples |
+| --- | --- |
+| PDF/email extraction | `collectors/`, `io/adapters/`, `processors/`; `test_integration_pipeline.py`, `test_extraction_recovery.py`. |
+| Financial interpretation or deduplication | Preparation/analysis services and processors; `test_financial_contracts.py`, `test_review_financial_2026.py`. |
+| Saved results and rerendering | `domain/`, `io/persistence/`, `models/report_view.py`; `test_result_snapshot.py`, `test_saved_result_validation.py`, `test_saved_result_rendering.py`. |
+| Corrections or review drafts | `application/record_review.py`, `review_session.py`, `io/review_workbook.py`, Qt review widgets; `test_excel_review.py`, `test_native_review.py`, `test_native_review_ui.py`. |
+| Claims and complaint packs | `processors/claim_reconciliation.py`, `io/claim_workbook.py`, `application/complaint_pack.py`; `test_claim_reconciliation.py`, `test_claim_outputs.py`, `test_claim_ui.py`. |
+| Desktop behavior | `ui/qt_app.py` and related Qt modules; `test_qt_desktop.py`, `test_review_gui_2026.py`. |
+| Output presentation | `io/writers/`, `io/reporters/`, shared table models; `test_output_usability.py`, `test_dispatch_parity.py`. |
 
-### Ruff rule selection
+Test filenames in the table are under `tests/`. Read the
+[architecture contracts](ARCHITECTURE.md) before changing shared calculations or
+persistence. Use synthetic evidence: private bills, account exports and complaint
+positions must not enter repository fixtures.
 
-Configured in `pyproject.toml [tool.ruff.lint]`:
+### Add an analysis or output section
 
-- `E`, `W` — PEP 8 (style + warning)
-- `F` — pyflakes (unused imports, undefined names)
-- `I` — isort (import ordering)
-- `D` — pydocstyle (PEP 257 docstring conventions)
+1. Define the analytical result and compute it through the preparation/analysis
+   services. Keep financial calculations out of renderers.
+2. Store it in the accepted snapshot and expose it through `ReportView`. Define
+   missing/insufficient-data behavior and compatibility with older saved results.
+3. For an Excel view, follow a nearby writer's actual signature and wire it into
+   `io/writers/export.py`. Re-export a new public writer through
+   `io/writers/__init__.py` when needed.
+4. For a document section, add its key/title to
+   `models/report_sections.py` and wire all three PDF, DOCX and HTML dispatchers.
+   The Qt report selector reads this registry.
+5. Verify independently calculated expected values, persistence round trips and
+   consistent rendering across formats. Extend dispatch-parity checks where
+   appropriate. Rerender a saved result with calculation functions disabled to
+   prove that formatting does not silently recompute it.
 
-### PEP 257 D-rule relaxations
+Legacy generator entry points still capture/analyse data and delegate to the
+shared pipeline. New features should work through the accepted result. The old
+root `edf_collector.py` and `edf_report*.py` modules have been removed; canonical
+imports live under `edf_bill_fetcher`. Some processors still use the historical
+`writers` helper facade. Avoid adding renderer dependencies to analysis code.
 
-The `D` rule family is enforced in near-full strict mode: the nine rules relaxed during the refactor window (`D100`, `D104`, `D105`, `D107`, `D400`, `D401`, `D406`–`D409`) were un-ignored in the docstring compliance pass, and the retroactive class/method/parameter backlog (`D101`/`D102`/`D103`/`D415`/`D417`) was cleared during modularization. The only remaining relaxations are deliberate style conflicts, each with a comment in `pyproject.toml`:
+### Add a review input
 
-| Rule    | Why relaxed                                                            |
-| ------- | -------------------------------------------------------------------- |
-| `D203`  | blank line before class docstring conflicts with `D211` — we use no-blank-line |
-| `D213`  | multi-line docstring summary on second line — we use first-line summary (`D212`) |
+Use the shared validation/audit contract for native and Excel edits. Preserve
+original observations, stable IDs and evidence bindings. Changed evidence must
+invalidate dependent decisions rather than quietly retain their old approval.
+Exercise both import paths, missing/invalid inputs, draft recovery and repeated
+review rounds. A reviewed pack is a new accepted result; it must not overwrite
+the input pack.
 
-Tests (`tests/*`) remain exempt from all `D` rules via per-file-ignores.
+### Write a useful regression
 
-## Type checking
+Reproduce the defect at its public boundary with a small synthetic example and
+an expected result derived independently of the implementation. For monetary
+changes, show the arithmetic. Include a plausible neighboring case that should
+behave differently, such as a repeated balance versus a new transaction.
 
-```bash
-mypy .
-```
+Use temporary files for I/O and mock external boundaries where needed. For GUI
+tests, inspect user-visible state and behavior. Call counts are useful only when
+the count itself is the contract, such as preventing duplicate publication.
+Preserve failure and cancellation evidence, source hashes and filename mappings.
+Read/write JSON and other UTF-8 artifacts with an explicit encoding; Windows'
+default encoding can differ from Linux/macOS.
 
-Configured in `pyproject.toml [tool.mypy]`:
+## Style and type checking
 
-- `check_untyped_defs = true` — even untyped functions get checked
-- `disallow_incomplete_defs = true` — partially-typed function signatures fail
+`pyproject.toml` is the source of truth for Ruff, mypy and pytest settings. Ruff
+checks style, imports, docstrings and additional correctness rules; tests have
+specified per-file exceptions. Do not copy a partial rule list into a new config.
 
-New code MUST have complete type annotations. Test fixtures count: any new test function with parameters must have types on all parameters including pytest fixtures (`def test_x(capfox, tmp_path)` fails; `def test_x(capfox: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:` passes).
+Prefer complete annotations for new functions. Mypy checks untyped function
+bodies and rejects partially annotated signatures (`check_untyped_defs` and
+`disallow_incomplete_defs` are enabled). Fully unannotated definitions are still
+allowed by the current configuration; they do not fail merely for lacking types.
+If you annotate a test, include its fixture parameters and return type.
 
-## Test coverage
+Coverage is a useful gap detector, not proof of correctness. Do not lower the
+90% gate or add exclusions to make a failing change pass. See the
+[coverage policy](COVERAGE.md#coverage-exclusions).
 
-See [`docs/COVERAGE.md`](COVERAGE.md) for the full coverage protocol. The short version:
+## Documentation and delivery
 
-- CI gate: `coverage report --fail-under=90` — any PR that drops below 90% fails
-- Aspiration: 100% of testable code, with `# pragma: no cover` allowed only for genuinely unreachable lines (each with a one-line justification comment)
-- Run locally: `coverage run --branch -m pytest && coverage report`
+Update the guide that owns the changed behavior. User instructions belong in
+[the user guides](README.md#using-the-app), implementation contracts in
+[architecture](ARCHITECTURE.md), and setup/build commands in [building](BUILDING.md).
+Keep the root README short. Record notable product changes in
+[CHANGELOG.md](../CHANGELOG.md); historical checks must be labelled as historical.
 
-## How to add a new feature
+Use a commit subject that describes the concrete change. Existing history uses
+both plain subjects and prefixes such as `fix:`, `feat:` and `docs:`; no commit
+prefix is enforced by the project tooling.
 
-### A new Excel sheet writer
+CI is configured for pushes and pull requests targeting the branches listed in
+[ci.yml](../.github/workflows/ci.yml), and is reusable for releases. Its aggregate
+validation succeeds only when all nine matrix legs pass. Automatic executable
+builds use the validated revision; manually dispatched builds remain labelled
+`manual-unvalidated`. Tagged releases validate the tagged revision before building
+and publishing it. See [CI](CI.md) for diagnostics and provenance.
 
-1. Create the writer function in `edf_bill_fetcher/io/writers/<sheet_name>.py`. Follow the existing pattern (file signature: takes `ws: openpyxl.Workbook.active`, `df: pandas.DataFrame`, optional config args).
-2. Add the writer's name to `__all__` in `edf_bill_fetcher/io/writers/__init__.py` (eager re-exports — the PEP 562 shim layers were removed, so no `__getattr__` is needed).
-3. Wire the writer into `export_to_excel` in `edf_bill_fetcher/io/writers/export.py` — call it in the correct sheet-order position with the correct conditional-emission gating.
-4. Add the writer to the `tests/test_writers.py` import test (if it's a new function symbol that should be importable from `edf_bill_fetcher.io.writers`).
-5. Add unit tests in `tests/test_<sheet_name>_writer.py` calling the writer with synthetic DataFrames covering the empty / single-row / multi-row branches.
-6. Run gates: `ruff check .`, `mypy edf_bill_fetcher`, `pytest -v`. If the writer adds new statements, also run `coverage run --branch -m pytest && coverage report --fail-under=90`.
-
-### A new PDF/DOCX report section
-
-1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/models/report_sections.py` with `key`, `title`, and optionally `is_appendix`.
-2. The Qt `ReportDialog` reads the shared section registry; verify its selection and renderer dispatch tests.
-3. Add a `def create_<name>(...)` builder function in `edf_bill_fetcher/io/reporters/pdf_report.py`.
-4. Wire the builder into PDF, DOCX and HTML dispatchers. Missing sections fail the artifact rather than publishing a partial success.
-5. The structural parity test `tests/test_dispatch_parity.py` will catch missing dispatcher wiring in CI.
-
-### A new detector (processors layer)
-
-1. Add the detector function in `edf_bill_fetcher/processors/<area>.py` (e.g. `detection.py` for billing-pattern detection, `matching.py` for account/contract matching).
-2. Detectors receive DataFrames as function arguments — never pull from module-scope state.
-3. New detectors should return data for writers to format. Existing processors still import some writer-facade helpers; strict dependency inversion is not currently enforced. Avoid adding renderer dependencies to analytical code.
-4. Add the detector to `run_analysers` in `io/writers/analysis.py` if it should be one-shot available.
-5. Add unit tests in `tests/test_<area>.py` calling the detector with synthetic DataFrames covering each branch.
-
-## Architecture reference
-
-See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) for:
-- The full package layout
-- Actual dependencies and remaining processor/writer coupling
-- The public import API (flat `from edf_bill_fetcher.io.writers import X` and submodule-scoped `from edf_bill_fetcher.io.writers.export import export_to_excel`)
-- The maintenance rule (no backward-compat shims remain: top-level `edf_collector.py` / `edf_report*.py` were removed in the modularization, as were the temporary `writers` / `io.writers` PEP 562 layers — new symbols re-export eagerly via `io/writers/__init__.py`'s `__all__`)
-
-## Commit conventions
-
-The repo uses [Conventional Commits](https://www.conventionalcommits.org/):
-
-- `feat:` new feature
-- `fix:` bugfix
-- `refactor:` code change that neither adds a feature nor fixes a bug
-- `docs:` documentation-only change
-- `test:` test-only change
-- `chore:` tooling, dependency, config
-- `style:` formatting, PEP 8/257/20 conformance fixes
-
-Scopes are optional. Examples: `refactor(writers): extract export_to_excel to io/writers/export.py`, `test(processors): add comprehensive detection coverage`, `chore(deps): update the Qt toolchain`.
-
-## CI
-
-CI runs on every push and every PR. The matrix is Python 3.10 / 3.11 / 3.12 × ubuntu / windows / macos. All four gates must pass on every cell:
-
-1. `ruff check .`
-2. `ruff format --check .`
-3. `mypy .`
-4. `pytest --cov=. --cov-report=xml --cov-report=term-missing` (headless GUI checks use Qt offscreen)
-
-CI is a regression gate. Functional extraction, saved-state reload, all requested exports, source links, GUI lifecycle and packaged runtime capabilities also need verification. Record focused checks separately from full matrix results.
-
-## Shared result architecture
-
-`domain/` contains standard-library-only immutable request, evidence and analysis types. Nested data uses canonical `FrozenJSON`; thawing or model decoding creates fresh objects. Money at the result boundary uses finite Decimal values and canonical two-decimal JSON strings. Missing values remain unavailable.
-
-The service pipeline is `capture_legacy` → `prepare_snapshot` → `analyse_prepared`. The shared analysis stores all ten model entries, availability reasons, analytical frames, the workbook timeline and SAP source indexes. Keep financial calculations here. `ReportView` exposes fresh decoded frames/models; `render_xlsx`, `render_pdf`, `render_docx` and `render_html` format these values. Legacy public generator functions capture/analyse once and delegate. A new analytical section needs a stored model and explicit renderer wiring; it must not calculate inside the renderer.
-
-`io/persistence/result_codec.py` implements the exact v3 envelope; `result_store.py` provides strict reads and atomic publication. V3 loading does not prepare or recalculate. Legacy migration preserves unknown fields and original/canonical distinctions and records historical provenance gaps. Changing analytical configuration creates a new accepted result, rather than editing a previously accepted file.
-
-`application/run_service.py` coordinates injected collection, source-copy, result-storage and renderer functions. It records atomic stage manifests with hashes of published result/report bytes, preserves successful artifacts after failure, checks cancellation between stages and always cleans resources. The CLI supplies explicit destinations; the GUI reserves unique folders before launching a non-daemon worker. UI widget values are captured on the main thread, and progress/messages return through the event queue.
-
-When extending this pipeline, verify an independently calculated money example, a strict persistence round trip, failure preservation and a rerender with calculation functions disabled. Exercise the real Qt workspace for worker/cancel/close changes. Keep the CI matrix, coverage threshold and lint/type checks intact; successful local examples do not establish cross-platform support.
-
-## Validation and release provenance
-
-CI has one required aggregate validation job which succeeds only if every Python/OS matrix leg succeeds. Tag releases call that same reusable CI workflow for their own revision. Release build and publication depend on validation; checkout and build provenance use its validated SHA. All `v*` tags use this gate. Branch CI still triggers automatic executable builds after aggregate success. Manual executable builds record `manual-unvalidated` provenance and never publish a release.
-
-Changing workflow YAML requires reviewing the dependency graph and proving that a failing sibling matrix leg blocks publication. Remote workflow results remain the evidence for actual cross-platform builds; syntax validation alone is insufficient. Do not tag or publish as a side effect of implementation work.
+Workflow changes need review of the dependency graph, including whether a failing
+matrix leg blocks publication. Record actual local and remote checks separately;
+YAML validation alone does not establish that a packaged app runs.
