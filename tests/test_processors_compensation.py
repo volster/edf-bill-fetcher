@@ -77,7 +77,8 @@ def test_back_billing_excess_pro_ration() -> None:
     assert row["rate"] is None
     assert row["indicative_amount"] == pytest.approx(round(1200.00 * 425 / 788, 2), abs=0.01)
     assert 0 < row["indicative_amount"] < row["base_amount"]
-    assert "Indicative consumption" in row["legal_basis"]
+    assert "Potential historic charge" in row["legal_basis"]
+    assert "Not a reviewed claim" in row["legal_basis"]
     assert "live union allocation" in row["legal_basis"]
     assert row["disclaimer"] == DISCLAIMER
 

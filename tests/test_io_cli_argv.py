@@ -385,11 +385,11 @@ class TestRunCliExtract:
 
         assert records_json.exists()
         loaded = json.loads(records_json.read_text(encoding="utf-8"))
+        from edf_bill_fetcher.processors.ledger_context import resolve_ledger_context
         from edf_bill_fetcher.processors.preparation import prepare_evidence
 
-        assert (
-            loaded["records"] == prepare_evidence(stub_engine.records, stub_engine.config).records
-        )
+        resolved, _ = resolve_ledger_context(stub_engine.records, [])
+        assert loaded["records"] == prepare_evidence(resolved, stub_engine.config).records
         assert loaded["original_records"] == stub_engine.records
         assert loaded["filtered_records"] == stub_engine.filtered_records
         assert loaded["error_log"] == stub_engine.error_log

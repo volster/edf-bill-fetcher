@@ -484,3 +484,31 @@ def test_annual_summary_ignores_nonmonetary_sources_but_keeps_ledger_boundary(
         assert sheet["A3"].value == "OVERALL"
         assert sheet.max_row == 3
     workbook.close()
+
+
+@pytest.mark.parametrize("use_context", [False, True])
+@pytest.mark.parametrize(
+    ("fuel", "account", "expected"),
+    [("Elec", "A-45678901", True), ("Gas", "A-45678901", False), ("Elec", "A-98765432", False)],
+)
+def test_sap_alternate_identity_fields_preserve_matching_boundaries(
+    use_context, fuel, account, expected
+):
+    raw = {"Account": "N/A", "Kraken ID": "A-45678901", "Fuel Type": fuel, "Amount": 100}
+    invoice = {
+        "Account": account,
+        "Fuel": "Electricity",
+        "Invoice #": "TEST-INVOICE",
+        "Period From": "01/01/2025",
+        "Period To": "31/01/2025",
+        "Period Charge (£)": 100,
+    }
+    context = None
+    if use_context:
+        resolved, sap = resolve_ledger_context([invoice], [raw])
+        invoice = resolved[0]
+        context = {id(raw): scope(sap[0])}
+    event = SapBackBillingEvent(
+        "CLEAR", pd.Timestamp("2025-01-15"), "Reversal", rows=[raw], net_amount=100
+    )
+    assert bool(match_sap_events_to_edf([event], [invoice], ledger_context=context)) == expected

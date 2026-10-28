@@ -628,13 +628,11 @@ def test_match_sap_events_ratio_bands() -> None:
 
 
 def test_match_sap_events_out_of_span_day_bands() -> None:
-    # Event 2 months before the period -> out of span, date_delta_days = 45 -> no band.
+    # Equal amounts cannot establish a match 45 days before the billed period.
     events = [_event(cdate="2024-01-15", net=100.0)]
     records = [_rec(amt="100.00")]
     matches = h.match_sap_events_to_edf(events, records)
-    assert len(matches) == 1
-    assert matches[0].confidence_band == "Medium"
-    assert "Within 76d of period-end" in matches[0].notes
+    assert matches == []
 
 
 def test_match_sap_events_low_out_of_span_note() -> None:
@@ -644,7 +642,7 @@ def test_match_sap_events_low_out_of_span_note() -> None:
     matches = h.match_sap_events_to_edf(events, records)
     assert len(matches) == 1
     assert matches[0].confidence_band == "Low"
-    assert "Within 3d of period-end; may be coincidental" in matches[0].notes
+    assert "Within 3d of period boundary; may be coincidental" in matches[0].notes
 
 
 def test_match_sap_events_low_in_span_coincidental_note() -> None:

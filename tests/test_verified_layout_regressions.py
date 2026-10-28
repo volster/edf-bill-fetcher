@@ -463,7 +463,8 @@ def test_meter_history_shows_real_read_dates_and_sap_readings():
     assert ws["A8"].value == "01/08/2024"
     assert ws["B8"].value == 1500
     assert ws["B9"].value == 2000
-    assert ws["C9"].value == "A"
+    assert ws["C9"].value == "U"
+    assert "raw type A" in ws["F9"].value
     assert "SAP reading" in ws["F9"].value
     assert ws["A10"].value is None
 

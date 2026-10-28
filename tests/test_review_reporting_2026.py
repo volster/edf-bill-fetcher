@@ -307,17 +307,21 @@ def test_noncontiguous_compensation_categories_keep_every_row_under_its_own_head
     ]
     assert [len(table._cellvalues) - 1 for table in pdf_tables] == [2, 1]
     assert all(
-        row[0].getPlainText() == "back_billing_excess" for row in pdf_tables[0]._cellvalues[1:]
+        row[0].getPlainText() == "Potential back-billing adjustment"
+        for row in pdf_tables[0]._cellvalues[1:]
     )
     document = Document()
     docx_compensation(document, _get_or_create_styles(document), pd.DataFrame(), payload=payload)
     assert [len(table.rows) - 1 for table in document.tables] == [2, 1]
-    assert all(row.cells[0].text == "back_billing_excess" for row in document.tables[0].rows[1:])
+    assert all(
+        row.cells[0].text == "Potential back-billing adjustment"
+        for row in document.tables[0].rows[1:]
+    )
     soup = BeautifulSoup(html_compensation(pd.DataFrame(), payload=payload), "html.parser")
     tables = soup.select("table")
     assert [len(table.select("tr")) - 1 for table in tables] == [2, 1]
     assert [row.select("td")[0].text for row in tables[0].select("tr")[1:]] == [
-        "back_billing_excess"
+        "Potential back-billing adjustment"
     ] * 2
 
 

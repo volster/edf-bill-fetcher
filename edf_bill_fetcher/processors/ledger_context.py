@@ -56,7 +56,7 @@ def resolve_ledger_context(
             or identity(row.get("Kraken ID"))
         )
         row["Ledger Account"] = aliases.get(account, account)
-        row["Ledger Fuel"] = fuel_key(row.get("Fuel"))
+        row["Ledger Fuel"] = fuel_key(identity(row.get("Fuel")) or row.get("Fuel Type"))
         row["Ledger Meter"] = identity(row.get("Meter")).casefold()
         row["Ledger Register"] = identity(row.get("Register")).casefold()
     for field, parents in (("Fuel", ()), ("Meter", ("Fuel",)), ("Register", ("Fuel", "Meter"))):
@@ -72,7 +72,7 @@ def resolve_ledger_context(
     for row in rows:
         observed = (
             account_key(identity(row.get("Account"))),
-            fuel_key(row.get("Fuel")),
+            fuel_key(identity(row.get("Fuel")) or row.get("Fuel Type")),
             identity(row.get("Meter")).casefold(),
             identity(row.get("Register")).casefold(),
         )

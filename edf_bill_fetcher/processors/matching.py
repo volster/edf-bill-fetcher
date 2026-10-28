@@ -19,7 +19,7 @@ from edf_bill_fetcher.helpers.date_utils import TimestampOrNaT, _safe_to_datetim
 from edf_bill_fetcher.helpers.excel_utils import build_evidence_index as _build_evidence_index
 from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
 from edf_bill_fetcher.processors.ledgers import invoice_reference, scoped_analysis
-from edf_bill_fetcher.processors.preparation import number, scope
+from edf_bill_fetcher.processors.preparation import identity, number, scope
 from edf_bill_fetcher.processors.sap_parsers import _parse_amount_for_event
 
 # SAP match band constants — local definitions to keep module self-contained.
@@ -179,7 +179,17 @@ def match_sap_events_to_edf(
         parsed_edf.append((i, pf, pt, amt, invoice))
 
     def event_scope(row: dict) -> tuple[str, ...]:
-        return (ledger_context or {}).get(id(row), scope(row))
+        if ledger_context is not None and id(row) in ledger_context:
+            return ledger_context[id(row)]
+        return scope(
+            {
+                **row,
+                "Account": identity(row.get("Account"))
+                or identity(row.get("Kraken ID"))
+                or identity(row.get("SAP Account Number")),
+                "Fuel": identity(row.get("Fuel")) or identity(row.get("Fuel Type")),
+            }
+        )
 
     matches: list[SapEdfMatch] = []
     for ev in events:
