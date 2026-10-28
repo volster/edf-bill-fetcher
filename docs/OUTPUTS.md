@@ -30,6 +30,40 @@ reference-only `Claim_Schedule.xlsx`, its manifest and verified relevant origina
 Make corrections in the **main** workbook or app, then regenerate; the focused
 schedule cannot be imported as a review workbook.
 
+## Run status
+
+The desktop completion message and `run.json` describe the operation, rather than
+certify the underlying bill or legal position. Inspect the notes as well as the
+status:
+
+| Status | Meaning and next action |
+| --- | --- |
+| `complete` | Requested artifacts were produced without the coordinator recording a review condition. Still verify evidence before relying on it. |
+| `review_required` | Outputs were produced, but logged extraction errors, missing information or warnings need attention. Review the named records/sources/claims. |
+| `empty` | No billing observations or SAP rows were available to render. Saved analysis/status can exist without a workbook or report. Check source selection, filters and parse notes. |
+| `failed` | A stage or cleanup failed. Keep the accepted result and earlier successful artifacts; inspect `error` and the last stage before retrying. |
+| `cancelled` | Cancellation was observed between processing steps. Some completed artifacts can remain. |
+| `interrupted` | When loaded, a manifest left in a nonterminal state is interpreted as interrupted, for example after a forced process exit. Preserve the folder and rerun into a new destination. |
+
+The coordinator can have saved the analysis before a later report fails. Conversely,
+a failure during collection may leave no accepted result. The manifest records
+actual artifact paths, sizes and SHA-256 hashes. Absolute paths describe the
+location at generation time; a moved pack's manifest is not a relocation tool.
+
+## Choosing what to reopen
+
+| Goal | Input to use |
+| --- | --- |
+| Different report format/sections, same accepted figures | `result.json` through Generate reports or a report CLI command. |
+| Correct values or reinstate/exclude records | `result.json` in Review evidence, or the main amended review workbook. |
+| Change a complaint proposal or credit allocation | The app's Dispute ledger/Reconcile claims tools, or the main workbook's claim input sheets. |
+| Apply new extraction/parser behavior | Original PDFs/messages/archives in a new extraction run. |
+| Recover the most complete state from an old run | Its `result.json` and sources, if available; compatibility records/workbooks can contain less provenance. |
+
+A draft is not an accepted result, a focused claim schedule is not a review
+workbook, and a hand-edited report is not a replacement for either. Keep these
+roles distinct when naming or archiving copies.
+
 ## Finding your way around Excel
 
 The **Workbook guide** explains the review workflow within the file. The
@@ -147,3 +181,20 @@ Generating another report from a saved result can retain links to originals in
 the earlier pack rather than copying them into the new report folder. Keep that
 source pack available too. Exclusion is not redaction, and checksums identify
 file contents rather than certify their truth.
+
+## Before sharing a pack
+
+1. Check the **run status**, evidence gaps and selected source pages. Resolve
+   extraction mistakes through a reviewed pack so reports and workbook agree.
+2. For a complaint total, inspect **Reconciled claims**, actual relief allocations
+   and remaining unresolved positions. A reviewed subtotal may cover only part
+   of the dispute.
+3. Extract a copy of `Complaint_pack.zip` into a new location and open its draft,
+   index and a few source links. Check the invoice and original page referenced,
+   rather than only whether a file with a similar name opens.
+4. Inspect whole shared PDFs and generated text/JSON for material you do not intend
+   to disclose. Exclusion does not remove pages or original observation history.
+
+Keep an intact private master pack. A separately redacted sharing copy must be
+labelled as such; editing copied originals can invalidate recorded hashes. Do not
+rewrite the master manifest to make changed bytes appear to be the preserved source.

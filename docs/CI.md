@@ -14,6 +14,25 @@ successful CI for the source revision recorded in `build-provenance.json`.
 Manual builds remain labelled `manual-unvalidated`. Tagged releases validate
 and build the tagged revision before publication.
 
+## Workflow and artifact map
+
+| Workflow | Trigger and revision | Result |
+| --- | --- | --- |
+| [CI](../.github/workflows/ci.yml) | Push/PR on configured branches, or reusable invocation for a tagged revision. | Nine OS/Python legs and the aggregate Required validation job. |
+| [Build Executables](../.github/workflows/matrix_build.yml) | Successful CI completion on `how-its-going`, or manual dispatch. | Three native application artifacts and separate diagnostics. Automatic builds check out the completed CI SHA. |
+| [Release](../.github/workflows/release.yml) | A `v*` tag. | Reuses CI for that tag, builds its validated SHA and publishes only after validation and all native builds succeed. |
+
+An automatic artifact's name ends in `ci-validated`; manual dispatch uses
+`manual-unvalidated`, even if the selected revision previously passed CI. The Mac
+artifact also contains `arm64-ad-hoc`. Provenance inside the download records the
+SHA and validation mode. The artifact belongs to that revision, not necessarily
+the latest branch tip by the time it is downloaded.
+
+Branch application artifacts expire after 7 days; diagnostics after 14 days.
+Release workflow artifacts are retained for 90 days. The published release assets
+are distinct from temporary Actions artifacts. GitHub sign-in can be required to
+download an Actions artifact.
+
 ## Diagnosing a new failure
 
 Start with the failing job and step, rather than rerunning the whole workflow.
@@ -53,6 +72,25 @@ workflows use `ci_build.py` and `ci_macos.py` so release packaging cannot drift
 from the ordinary build. See [Mac opening and trust status](MACOS.md): ad-hoc
 signing does not provide Gatekeeper trust or Apple notarization.
 
+## Triage by failing step
+
+| Failure location | First evidence and next check |
+| --- | --- |
+| Setup Python / native packages | The setup action/package-manager log. Python diagnostics may not exist yet. |
+| Pip installation | Dependency resolver/build error and `dependencies.txt` if written; compare supported Python/architecture and constrained tool versions. |
+| Runtime preflight | `runtime.json` and `python.json`; distinguish an importable package from a working native library or real workspace. |
+| Pytest | First failing test, JUnit traceback and original attempt exit code. Reproduce that case before rerunning the full suite. |
+| Coverage gate | The failing leg's full-suite report and command, not a different local subset. See [coverage scope](COVERAGE.md#measurement-scope). |
+| PyInstaller | Warning/import reports, exact dependency inventory and build log. A successful source preflight does not establish the frozen imports. |
+| Frozen OCR/review smoke | The executable's diagnostics and smoke failure. Check native OCR/data inclusion and generated artifacts rather than bypassing the check. |
+| Mac extracted app | Signature/archive verification and Cocoa-window diagnostics. See [Mac integrity checks](MACOS.md#inspect-an-opening-problem). |
+| Release publication | Validation/build dependency results and release asset selection. Do not publish an older or manually built binary as if it passed for this tag. |
+
+On Windows, use explicit UTF-8 when reading the app's JSON/HTML/text artifacts.
+Keep JSON decoding failures, layout failures and native library startup failures
+separate: they have different causes and fixes. The diagnostics are evidence of
+what happened, not a reason to add retries or disable assertions.
+
 ## Reproduce and maintain
 
 Use the project environment after [native prerequisite setup](BUILDING.md).
@@ -78,6 +116,17 @@ deliberately and validate all nine jobs and all three executable builds. Pip
 caches are keyed by the project and constraints files. Installed dependency
 reports help identify changes in runtime packages, which are not fully locked.
 Review runner-image updates separately from application changes where practical.
+
+## Maintainer verification after a workflow change
+
+Review the source ref at checkout, the aggregate dependency graph, tool/interpreter
+selection, diagnostic retention and asset selection together. A successful sibling
+matrix job cannot stand in for a failed one. Confirm that cancellation of an older
+branch run does not relabel a newer or unrelated build as validated.
+
+After the relevant remote checks finish, record the exact run URL and SHA. State
+which jobs succeeded, failed or were not run. Do not describe a parsed YAML file,
+a queued job or a local Linux check as a completed three-platform build.
 
 ## Historical Windows investigations
 

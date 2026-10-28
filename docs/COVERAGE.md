@@ -94,6 +94,28 @@ Do not exclude code, skip regression tests or lower the gate to hide a failure.
 Tests should assert meaningful outcomes, including preservation of earlier files
 and clear failure status when an operation fails.
 
+## Keep measurements comparable
+
+Before comparing two percentages, record the commit, Python version, OS,
+dependency set and exact command. Confirm that both are full-suite runs with the
+same source/omit configuration and branch measurement. JUnit skip/failure counts
+matter: an interrupted suite can report a valid-looking percentage over only the
+paths it reached.
+
+Use `COVERAGE_FILE` if you need to preserve a full-run measurement while exploring
+a subset. For example, Bash accepts
+`COVERAGE_FILE=.coverage-focused python -m pytest tests/test_excel_review.py --cov=. --cov-fail-under=0`.
+In PowerShell set `$env:COVERAGE_FILE = ".coverage-focused"` before that command,
+then remove the temporary variable when finished. The report command must use
+the same variable to inspect that file. Do not accidentally publish the focused
+measurement as the CI-equivalent result.
+
+When choosing the next test, prefer an uncovered financial sign/identity case,
+source failure or cancellation path over assertions that merely mirror a helper's
+implementation. A high percentage can still miss double counting, stale review
+bindings, wrong page links and platform-specific decoding. Those need explicit
+behavioral regressions as described in [development](DEVELOPMENT.md#write-a-useful-regression).
+
 ## Historical measurement
 
 The [2026-08-02 baseline](coverage/baseline-2026-08-02.txt) records an earlier

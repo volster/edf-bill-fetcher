@@ -9,11 +9,23 @@ older downloads may have different controls or fewer review features.
 | Guide | What it covers |
 | --- | --- |
 | [User guide](USER_GUIDE.md) | Build a pack, inspect evidence, correct records in the app or Excel, and regenerate outputs. |
+| [Configuration](CONFIGURATION.md) | Preferences, CLI JSON, filters, duplicate handling, valuation dates and report sections. |
 | [Understanding your outputs](OUTPUTS.md) | Which files to keep, where to find information, what figures mean and how source links work. |
 | [Rebilling and claim review](REBILLING_LEDGER.md) | Bill relationships, dispute positions, consolidated claims, credit allocations and complaint packs. |
 | [Troubleshooting](TROUBLESHOOTING.md) | Startup, OCR, extraction gaps, workbook imports and missing evidence. |
 | [Opening on macOS](MACOS.md) | Apple silicon downloads and the first-launch approval. |
 | [Command-line usage](CLI.md) | Extraction, saved reports, amended workbooks, record comparisons and diagnostics. |
+
+## Suggested reading routes
+
+- **First run:** [source setup or downloads](../README.md#get-the-app) →
+  [user guide](USER_GUIDE.md) → [output meanings](OUTPUTS.md).
+- **Correct an existing pack:** [review workflow](USER_GUIDE.md#correct-records-in-excel) →
+  [claim review](REBILLING_LEDGER.md) → [sharing checks](OUTPUTS.md#before-sharing-a-pack).
+- **Maintain the code:** [development setup](BUILDING.md#development-and-checks) →
+  [architecture](ARCHITECTURE.md) → [development recipes](DEVELOPMENT.md#where-to-make-a-change).
+- **Investigate a failure:** [app troubleshooting](TROUBLESHOOTING.md) or
+  [CI troubleshooting](CI.md), depending on where it happened.
 
 ## Developing and distributing
 
@@ -40,3 +52,9 @@ and setup commands in the build guide. Link to the owning guide instead of
 copying its instructions into several places. Update the relevant guide when
 controls, input formats or output behavior change; retain old validation claims
 only when they are clearly labelled as history.
+
+Each guide has a specific owner topic. Configuration defaults live in the
+configuration reference; output file/status meanings live in the output guide;
+financial and persistence contracts live in architecture. Historical review
+counts stay in historical records. The current docs describe implemented behavior,
+not proposed features.

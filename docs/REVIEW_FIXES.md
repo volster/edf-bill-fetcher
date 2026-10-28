@@ -9,6 +9,11 @@ supported desktop uses Qt. See [architecture](ARCHITECTURE.md) for current
 contracts, [development](DEVELOPMENT.md) for checks, and [CI](CI.md) for the
 platform workflow.
 
+For present behavior, use [financial/output meanings](OUTPUTS.md#understanding-the-figures),
+[review and recovery](USER_GUIDE.md), and [claim reconciliation](REBILLING_LEDGER.md).
+The historical test counts below are deliberately retained as evidence of that
+review, not refreshed from a different revision.
+
 The review identified errors in monetary interpretation, evidence identity, calculations, ingestion and run handling. These changes prioritize preserving observations and making unavailable information explicit.
 
 | Finding | Change |

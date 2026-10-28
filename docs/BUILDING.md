@@ -215,3 +215,51 @@ For day-to-day checks and contribution guidance, continue to [Development](DEVEL
 ## GUI test runtime
 
 Use `python -m pytest` from the intended environment so an unrelated pytest installation is not selected. The supported desktop and runtime preflight use Qt. Headless Linux tests select Qt's offscreen platform automatically; CI sets it explicitly on every platform. The retired Tk desktop, Tcl/Tk startup probes and library recovery wrapper have been removed, and frozen builds explicitly exclude Tk.
+
+## What platform support means
+
+| Target | Build/test environment and practical limit |
+| --- | --- |
+| Windows | Native Windows builds; the CI runner is Windows Server 2025. Use a 64-bit Python matching the intended architecture for a local build. |
+| macOS | Distributed CI app is Apple silicon, built/tested on macOS 15. It is not an Intel or universal app. |
+| Linux | Built on Ubuntu 24.04. A frozen Linux executable is not guaranteed to run on an older distribution or one with incompatible system libraries. |
+
+Installing the app in Conda does not enable cross-compilation. Build on each
+intended OS and architecture. For unsupported Python/wheel combinations, use a
+tested interpreter before trying to assemble mixed-version native libraries.
+If pip builds `libpff-python` from source, install the platform compiler/autotools
+prerequisites rather than omitting PST support from a build advertised as complete.
+
+## Inspect the built application
+
+Keep the app's source revision, build mode and resolved dependency information
+with any copy you distribute. Branch build artifacts include
+`build-provenance.json` and `build-dependencies.txt`; the Mac distribution also
+contains `macos-trust.json` and `START_HERE.txt`. A local `ci_build.py` invocation
+embeds About/build metadata but does not itself create every CI distribution file.
+
+Automatic branch artifacts are retained for **7 days**; diagnostic artifacts for
+**14 days**. Tagged release workflow artifacts use **90 days**, and successfully
+published release assets are available from the release page. An expired branch
+artifact does not mean the source is unavailable: dispatch a new build or build
+that revision locally. Preserve a known-good download and its provenance together.
+
+Use a fresh output directory for smoke data, then check the built executable:
+
+- Run `--doctor --output diagnostics.json` through the executable, not source
+  Python, and inspect every capability.
+- Run `.github/scripts/check_frozen_ocr.py` with the selected environment's Python
+  as shown above. It drives the executable through a scanned bill and review/output
+  workflow; it does not substitute for interacting with its GUI.
+- Launch the actual app, open a source page, apply/preview a correction, cancel a
+  run and close it while work is active. Confirm earlier packs remain usable.
+
+On macOS, the executable inside a local app is
+`dist/EDF_Evidence_Collector.app/Contents/MacOS/EDF_Evidence_Collector`.
+CI additionally packages, extracts, verifies and opens the distributed app through
+LaunchServices. Opening a source Qt window does not exercise that packaging path.
+
+For a GitHub download, keep the application artifact separate from
+`build-diagnostics-*`. A `manual-unvalidated` build completed packaging checks but
+has not gained the automatic CI validation label. Check the actual revision and
+workflow result rather than inferring validation from a filename alone.

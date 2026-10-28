@@ -107,6 +107,37 @@ Each claim/credit/overlap input table supports up to 1,000 rows. Up to 20 spare 
 
 Older accepted results, review drafts and workbooks remain supported. Their existing schedule headers are retained until a new reviewed result contains claim reconciliation. Opening an old result does not silently calculate new proposals.
 
+## Worked example: repeated bills and two kinds of credit
+
+This synthetic example explains the review inputs; the source evidence must
+establish the amounts and treatment in your own case.
+
+Suppose two revised invoices repeat the same disputed charges. You assess one
+consolidated challenge of **£750**, rather than adding both invoice totals. The
+history also contains a **£300 cancellation of an earlier bill** and **£100 of
+relief already received for these disputed charges**.
+
+| Input | Example decision |
+| --- | --- |
+| Claim group | `REBILL-1`, containing both challenged demands for the same charges. |
+| Consolidated challenged amount | £750.00. |
+| Requested reduction before received relief | £750.00, with an evidenced scope/reason. |
+| £300 credit allocation | `cancellation_offset`, explaining the old bill's cancellation. |
+| £100 credit allocation | `already_applied_relief`, identifying actual relief already received. |
+| Further requested reduction | **£650.00**, after the £100 received relief. |
+
+The cancellation offset is disclosed without a second deduction from the £750
+proposal. Neither revised invoice is counted again merely because the supplier
+repeated the demand. If the £100 credit concerns different charges, allocating
+it here needs a different source-backed explanation; do not classify it solely
+to achieve a desired total.
+
+Mark the group reviewed only after checking memberships, amounts and credit
+capacity. If another group overlaps this history, put the repeated charges in
+the same group or record evidence of genuinely separate charges. A shared member
+cannot be made independent by adding an overlap note. Until unresolved work is
+closed, a reviewed subtotal can be visible while the full proposal is withheld.
+
 ## Focused complaint draft
 
 Creating reviewed outputs with active challenges also creates `complaint_pack/` and `Complaint_pack.zip`. Use the editor's **Complaint draft** tab to enter your summary/outcome or disable this additional pack. Nothing is sent automatically.
@@ -118,3 +149,21 @@ Curation retains linked and overlapping compatible earlier history, including hi
 Missing/changed originals, unverified page ranges or first demands, and unresolved reconciliation appear as review gaps and make the run require review. A missing saved copy is never replaced by a same-named file or an unchecked original. A recorded original can be used only when no saved copy was promised and its recorded hash verifies. Source absence does not discard the preserved extraction or invent a replacement.
 
 The focused schedule is an outward reference, **not** a review-import workbook. Make corrections in the main workbook or app and regenerate all artifacts together. The pack is staged and published with its ZIP only after successful generation; cancellation or failure removes temporary files while preserving the main run's accepted analysis. Existing complaint packs are never overwritten. Run manifests include hashes for the focused artifacts.
+
+## Final review before using the complaint draft
+
+- Check that every active challenged position belongs to the intended group and
+  that the group's amount describes the economic charges, not a sum of successive
+  printed balances.
+- Check each credit's original negative transaction, allocation treatment and
+  reason. A credit may be split, but the source cannot be spent twice.
+- Check the verified first-demand dates and original pages. Unknown dates remain
+  gaps; a meter-read date does not prove when EDF first demanded additional charges.
+- Read the draft alongside the full main workbook. Conditional balance illustrations
+  use dated observations and do not certify a current balance or concede the rest.
+- Use the [sharing checks](OUTPUTS.md#before-sharing-a-pack) for the actual ZIP.
+
+The focused letter is generated from the accepted review. To change a figure or
+scope, correct the main workbook or app and regenerate. If you edit the letter's
+prose separately, keep track of that copy; a later regeneration will not import
+its edits back into the analytical decisions.

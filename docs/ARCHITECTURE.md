@@ -115,3 +115,77 @@ record's previous verification state, while unchanged review metadata survives.
 `processors/claim_reconciliation.py` validates human claim groups, credit allocations and overlap decisions, binds them to the existing ledger's full source context, and computes a separate proposed reduction. It never changes `FinancialSummary`. `ReviewSession` is the shared native/Excel decision contract; `io/claim_workbook.py` binds editable source references to the preserved baseline and retains stale decisions until a human acknowledges changed evidence. Optional stored `claim_reconciliation` data is validated on decode; old accepted results are rendered without recalculation.
 
 `models/claim_tables.py` supplies identical wording/amounts to all formats. `application/complaint_pack.py` curates relevant stored history and copies verified originals, then stages its HTML/DOCX/PDF/reference workbook, index/manifest and ZIP. `run_service` owns progress, cancellation, artifact hashes and truthful review-required/failure status. Renderers do not infer an entitlement or recompute the accepted proposal. Private dispute fixtures do not belong in the repository.
+
+## Persistence boundaries for maintainers
+
+The exact transport is owned by
+[`result_codec.py`](../edf_bill_fetcher/io/persistence/result_codec.py), not a
+renderer or UI widget. Its top-level v3 fields are:
+
+| Field | Contract |
+| --- | --- |
+| `schema_version`, `result_id` | Supported transport version and identity of this saved result. |
+| `request` | Run ID, UTC creation timestamp, valuation date, captured sources and request configuration. |
+| `evidence` | Original observations with stable observation IDs, legacy/source state, prepared records, removed duplicates and effective configuration. |
+| `analysis` | Financial summary, accepted models, methods/reference metadata and analytical input fingerprint. |
+
+Canonical financial summary amounts use finite Decimal values internally and
+canonical two-decimal strings in JSON; unavailable balances are `null`. Analytical
+frames and model payloads also contain other explicitly encoded numeric/date
+values; do not treat every number in the file as a money string. Nested immutable
+JSON prevents callers from mutating an accepted result through shared dictionaries.
+`ReportView` decodes fresh presentation objects.
+
+The fixed model registry contains payment, data quality, statistics, forecast,
+Ofgem, tariff, dispute, compensation, SAP and reconciliation entries. Each has
+availability, a reason code and a payload. Newer bill revision, rebilling ledger
+and claim assessments are optional extensions within the stored SAP payload;
+they do not silently appear when loading an older result. Availability and
+unavailable values must survive all renderers, not turn into zero or a passed check.
+
+The analytical fingerprint covers relevant preserved records, settings, source
+facts, methods and nonempty review decisions. It excludes output destinations and
+some presentation controls. The review draft's **baseline digest** binds to the
+entire encoded baseline and has a different purpose. Neither digest is a signature
+or an independent certification that the source observations are true.
+
+Strict UTF-8 loading rejects duplicate JSON keys, nonfinite values, unsupported
+versions, inconsistent observation identities and invalid stored models. Encoding
+also validates the transport before publication. To extend it, update encoder,
+decoder and compatibility checks together. Do not relax checks to accept an edited
+internal file; corrections belong in the shared review contract.
+
+## Identity and source references
+
+Keep three identities distinct:
+
+- An **observation** identifies preserved extraction input, including its occurrence.
+- A **review row ID** binds a correction to a canonical or previously excluded row.
+- A **source ID** links to bytes, origin metadata and available original page ranges.
+
+Filename equality is insufficient for any of these. A copied filename may be
+renamed or disambiguated; merged PDFs may serve many records. Source occurrences
+survive duplicate resolution. Renderers use the saved mapping and manifest rather
+than assembling links from invoice numbers. Source resolution checks available
+bytes against recorded hashes; unknown/missing/changed sources remain explicit.
+
+The source manifest/index and `run.json` answer different questions. The former
+maps evidence to originals; the latter records the outputs actually published,
+their hashes, warnings, stage and terminal status. Use the
+[user-facing status definitions](OUTPUTS.md#run-status) when presenting outcomes.
+
+## Extending a workflow without changing its meaning
+
+| Boundary | Keep this behavior | Verification to consider |
+| --- | --- | --- |
+| New parser/layout | Preserve text, source/page identity and partial failures; separate period charges, balances and transactions. | Synthetic PDF/message with independently known values, including missing fields and repeated events. |
+| New analysis | Compute through `analyse_prepared`, pin methods/settings and store unavailable reasons. | Financial example, multi-ledger case, strict save/load and rerender without calculation. |
+| New correction field | Use shared validation, stable IDs, reasons and dependency invalidation. | Equivalent native/Excel decisions and repeated review round trips. |
+| New output | Read accepted models and source mappings; preserve missing information and failure status. | Cross-format values, empty/partial data, source links and an injected renderer failure. |
+| New background work | Capture inputs before starting; send results through Qt signals; ignore stale completions and clean up on cancellation. | Input changes during work, close/cancel and no orphaned worker/resource. |
+
+Source collection can log recoverable errors and continue. A renderer failure is
+fatal to that artifact/run; successful earlier artifacts remain. Publication is
+atomic **per file**, not across the entire run. A requested focused complaint pack
+stages its directory/ZIP before publication; it does not make the already saved
+main analysis dependent on every original being available.

@@ -120,6 +120,49 @@ Preserve failure and cancellation evidence, source hashes and filename mappings.
 Read/write JSON and other UTF-8 artifacts with an explicit encoding; Windows'
 default encoding can differ from Linux/macOS.
 
+## Reproduce and document a defect
+
+For a bug report, capture the source revision and environment, the input shape,
+the observed result, and the independently expected result. A useful financial
+regression might say “£120 charge − £30 credit − £50 payment = £40 movement;
+the £200 printed balance is a separate observation.” Do not derive the expected
+answer by calling the same helper you are testing.
+
+Use source links and page ranges to decide whether a defect is extraction,
+interpretation, preparation, analysis or presentation. Fixing the HTML label will
+not correct a misclassified transaction in the accepted model. A parser fix also
+needs a new extraction before it can change a user's old accepted result.
+
+### Synthetic fixtures
+
+Keep real dispute material outside the repository. Build the smallest synthetic
+PDF/message/DataFrame that exhibits the layout or relationship. Retain the
+important trigger: spacing, page breaks, missing text, repeated demands or account
+identity, for example. Use fictional account/invoice references and inspect the
+fixture's visible text and metadata before committing it.
+
+[`tests/fixtures/generate_bill_fixture.py`](../tests/fixtures/generate_bill_fixture.py)
+creates the simple bill fixture used by the pipeline tests. OCR, merged-document,
+review and claim regressions have more specialized fixtures in their test files;
+follow the nearest example instead of changing a global sample for every case.
+If a new binary fixture is needed, include its synthetic generator or a clear
+construction explanation so a future maintainer can reproduce it.
+
+### A change-specific validation record
+
+| Change | Useful evidence beyond a green aggregate percentage |
+| --- | --- |
+| Parser/identity | Extracted scalar fields, original page/occurrence references and a neighboring document that must remain distinct. |
+| Money/claims | Hand-calculated values, unknown/zero/sign cases, overlapping history and actual credit capacity. |
+| Review/persistence | Equivalent Excel/native edits, unchanged baseline bytes, stale-decision rejection and a second review round. |
+| Renderer | Matching accepted values across formats, unavailable labels, real links and preservation after injected failure. |
+| Environment/bootstrap | Selection/creation/failure tests; a live check in each available environment, clearly distinguished from simulated Conda/Windows cases. |
+| Documentation | Resolve links/anchors, check flags against help/source and execute changed examples with synthetic inputs where meaningful. |
+
+Record what ran, its revision and any limits. Routine doc-only edits do not need
+another full application suite. A GUI screenshot does not establish cancellation
+cleanup, and a source run does not establish frozen native-library inclusion.
+
 ## Style and type checking
 
 `pyproject.toml` is the source of truth for Ruff, mypy and pytest settings. Ruff
@@ -141,7 +184,8 @@ Coverage is a useful gap detector, not proof of correctness. Do not lower the
 Update the guide that owns the changed behavior. User instructions belong in
 [the user guides](README.md#using-the-app), implementation contracts in
 [architecture](ARCHITECTURE.md), and setup/build commands in [building](BUILDING.md).
-Keep the root README short. Record notable product changes in
+Keep the root README readable while retaining enough detail to choose a workflow;
+link full reference material from it. Record notable product changes in
 [CHANGELOG.md](../CHANGELOG.md); historical checks must be labelled as historical.
 
 Use a commit subject that describes the concrete change. Existing history uses

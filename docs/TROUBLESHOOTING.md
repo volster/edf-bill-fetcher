@@ -119,3 +119,61 @@ exact error and whether it occurs in a packaged build or source installation.
 Diagnostics omit selected evidence/account details, but native error messages
 can contain local paths. Check before sharing. Use synthetic or redacted samples
 in public issues; never upload an entire private evidence pack just to report a bug.
+
+## A run finished but says review is required
+
+Read **Details**, **Parse Errors**, **Data Quality Report** and **Reconciled
+claims** as applicable. Review-required means the outputs were created with
+recorded gaps or warnings; it does not mean every record failed. Correct a
+misread value in review, supply a missing source through a new extraction, or
+record the unresolved information explicitly. See [run statuses](OUTPUTS.md#run-status).
+
+An `empty` run can save analysis/status without a workbook. A failed or cancelled
+run can retain a valid `result.json` and completed earlier reports. Preserve the
+folder, inspect `run.json` and regenerate into a fresh destination. Do not overwrite
+the only usable pack while investigating a later export failure.
+
+## An older result lacks a new sheet or feature
+
+Reopening a saved analysis preserves its accepted models. A newer app version
+does not automatically rewrite old financial results. Generate a reviewed pack
+to calculate newer review models from preserved records, or re-extract originals
+when the parser itself has improved. A lossy old workbook cannot recreate source
+text, hashes or decisions that it never stored. Prefer its accompanying
+`result.json` when available.
+
+## A review draft is stale, invalid or too large
+
+Keep the accepted result and a copy of the draft before changing anything.
+The draft is bound to one complete baseline, so a draft from an earlier/different
+result cannot be applied by renaming its IDs. Rename it out of the way and reopen
+the original result to start a new draft, following
+[review recovery](USER_GUIDE.md#verification-and-recovery).
+
+The sidecar has an 8 MiB limit. If saving reports that limit, the current session
+can still contain unsaved decisions: retain it, record the error, and publish a
+manageable review round where possible. Do not close/discard the only copy of
+unsaved work or hand-truncate the JSON to force it to load.
+
+## OCR data exists but the readiness check still fails
+
+Run `tesseract --version` and `tesseract --list-langs` in the selected source
+environment. English must appear as `eng`. If using a nonstandard location, ensure
+the engine is on `PATH`; `TESSDATA_PREFIX` should point to the directory containing
+`eng.traineddata`. A stale prefix can select the wrong data. Refresh checks after
+repairing it. Packaged apps use their bundled engine/data and fail explicitly if
+those are missing; reinstall an intact build instead of relying on a system OCR
+installation to conceal a packaging defect.
+
+## Linux download reports permission or GLIBC errors
+
+Extract the app completely. If the executable permission was lost, restore it
+for your downloaded file with `chmod +x EDF_Evidence_Collector`. CI's Linux build
+runs on Ubuntu 24.04; it is not a universal binary for every older distribution.
+A `GLIBC_… not found` error calls for a compatible source/local build or supported
+host libraries, not copying random shared libraries into the download.
+
+For startup or build failures on any platform, include the exact command,
+interpreter and architecture. Use the [build guide](BUILDING.md#what-platform-support-means)
+and [CI diagnostics](CI.md#triage-by-failing-step) to distinguish environment,
+application and packaging problems.

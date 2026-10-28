@@ -42,14 +42,17 @@ semver-friendly.
   both a `Compensation` workbook sheet and a `Compensation Analysis`
   report section (PDF/DOCX/HTML), each carrying an indicative-figures
   disclaimer.
-- **Engine-state round-trip via versioned JSON** — the pickled engine
-  state now round-trips as versioned JSON (legacy pickle reads preserved),
-  picked up by the report CLI entry points.
+- **Saved accepted analysis** — schema-v3 `result.json` preserves observations,
+  preparation, settings, valuation date and calculated models for rerendering.
+  Explicit compatibility exports remain version 2 JSON. Legacy pickle loading is
+  an internal compatibility API, not a supported report interchange format.
 
 ### Changed
 
 - Source bootstrap prefers an existing named Conda project environment, creates it with Python 3.11 when needed, and falls back to venv when Conda is absent. Explicit environment selection and read-only readiness checks are supported.
-- Expanded the README with supported sources, output contents, both review workflows and manual pip setup alongside the bootstrap route.
+- Expanded the README and supporting user/developer guides with source setup,
+  configuration, review/recovery, output/status meanings, worked claim examples
+  and native build/CI provenance. Manual pip setup remains supported.
 
 - The main GUI window is scrollable and sized to fit 768px-tall screens.
 

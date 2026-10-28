@@ -1,6 +1,6 @@
 # Command-line usage
 
-[Documentation index](README.md) · [Source setup](BUILDING.md)
+[Documentation index](README.md) · [Source setup](BUILDING.md) · [Configuration](CONFIGURATION.md)
 
 Run commands from the checkout using the selected project environment. With
 Conda, run `conda activate edf-bill-fetcher` first, or prefix commands with
@@ -49,7 +49,15 @@ Useful options:
 
 Use `python main.py --extract --help` for all flags. Without `--strict`, a clean
 empty extraction can exit successfully; inspect run status and review notes as
-well as the process exit code.
+well as the process exit code. `--min-amount` sets the threshold without enabling
+`filter_below`; use the [config file](CONFIGURATION.md#filters-and-duplicates)
+to enable it. Do not pass the nested desktop preferences file as CLI config.
+
+Extraction creates Excel, saved analysis and the source bundle; it does not also
+create document reports. Use the printed saved-result path with a report command.
+For example, a workbook `output/evidence.xlsx` can have a sibling bundle
+`output/evidence_<unique-id>/result.json`. The actual suffix is generated at run
+time; do not assume it from the workbook name.
 
 ## Render a saved analysis
 
@@ -85,7 +93,7 @@ python main.py --review-workbook -i "amended.xlsx" -o "reviewed-packs" --formats
 ```
 
 This validates the review inputs, recalculates using the preserved analysis
-context and creates a new pack. An updated workbook is always included. Supported
+context and creates a new pack. The command prints its directory and status. An updated workbook is always included. Supported
 format names are `xlsx`, `pdf`, `docx` and `html`; the default includes all four.
 Follow the [Excel review rules](USER_GUIDE.md#correct-records-in-excel), including
 keeping source copies accessible. `Claim_Schedule.xlsx` is reference-only and
@@ -110,3 +118,27 @@ python main.py --doctor --output diagnostics.json
 The diagnostic checks installed capabilities and identifies the build. A nonzero
 status means a capability is missing. See [troubleshooting](TROUBLESHOOTING.md)
 for interpreting failures.
+
+## Exit status and automation
+
+| Result | What to check |
+| --- | --- |
+| Process exits `0` | Operation completed under that command's rules. This can include `review_required`, and extraction can be empty without `--strict`. |
+| Extraction/report failure | The command returns nonzero. Inspect stderr and any saved `run.json`; preserve successful artifacts. |
+| CLI argument error | Argument parsing can return `2`. Correct the flags/paths before retrying. |
+| `--doctor` exits `1` | At least one capability is missing; consult the diagnostic details. |
+
+For automation, capture stdout/stderr and inspect the run manifest's `status`,
+`warnings`, `error` and `artifacts`. The [status reference](OUTPUTS.md#run-status)
+explains what each outcome establishes. A report or claim proposal needing review
+is not made verified by an exit code of zero.
+
+Use a fresh output destination for each batch. Individual artifacts are written
+atomically, but the whole run is not a single transaction: a PDF failure can leave
+an already completed workbook and accepted analysis. Do not treat the presence
+of one file as proof that every requested format was produced.
+
+Legacy JSON can have migration limits; prefer `result.json` for a complete
+saved analysis. `--diff` accepts record lists or compatibility
+objects containing `records`, not a complete v3 result. Use the compatibility
+`records.json` files for comparisons.

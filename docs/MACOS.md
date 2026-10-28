@@ -31,6 +31,46 @@ Mac is managed and has no approval option, stop and record the exact wording.
 That is a different condition from an unidentified developer warning.
 Apple's instructions: https://support.apple.com/en-gb/102445
 
+## Updating an existing installation
+
+Quit the app before replacing it in Applications. Extract the new download fully,
+then replace the `.app` as a unit rather than copying files into the old bundle.
+A new downloaded version may need its own first-launch approval. Keep your evidence
+packs outside the application bundle; replacing the app does not migrate or
+recalculate saved results. Preferences live in your home folder under
+`.edf_collector/config.json`.
+
+The CI download is for Apple silicon. On an Intel Mac, use a source installation
+and compatible native dependencies or a native Intel build; changing the filename
+or Gatekeeper approval does not change the binary's architecture.
+
+## Inspect an opening problem
+
+If the app still fails after the normal approval, record the exact macOS message,
+macOS version, chip type, download/run and whether the app is in Applications.
+Different messages can mean unidentified developer, damaged/incomplete extraction,
+incompatible architecture or a runtime crash.
+
+For a copy installed in Applications, these read-only Terminal commands inspect
+signature integrity and write capability diagnostics:
+
+```console
+codesign --verify --deep --strict --verbose=2 "/Applications/EDF_Evidence_Collector.app"
+"/Applications/EDF_Evidence_Collector.app/Contents/MacOS/EDF_Evidence_Collector" --doctor --output "$HOME/Desktop/edf-diagnostics.json"
+```
+
+No output from a successful signature check can be normal; inspect its exit
+status. Capability diagnostics can identify missing native components but do not
+exercise a normal interactive window. A Gatekeeper block may need the first-launch
+approval before the executable can run. Preserve the original archive if a check
+fails and include the error with the download's provenance in a bug report.
+
+Do not repair a damaged download by replacing individual signed libraries or
+recursively removing quarantine as a routine installation step. Re-extract an
+intact project download first. Full online instructions are also available at
+https://github.com/volster/edf-bill-fetcher/blob/how-its-going/docs/MACOS.md
+(the distribution includes a text copy as `START_HERE.txt`).
+
 ## What the download checks cover
 
 The Mac build uses a standard `.app` bundle. CI verifies its nested code
