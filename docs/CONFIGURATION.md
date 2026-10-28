@@ -106,7 +106,7 @@ keys control report framing; the numbered registry contains:
 | `forecast` | Forecast & Projection |
 | `data_quality` | Data Quality Assessment |
 | `tariff` | Tariff Impact Analysis |
-| `compensation` | Compensation Analysis |
+| `compensation` | Potential Billing Adjustments |
 | `appendix_methodology` | Methodology & Data Sources |
 | `appendix_glossary` | Glossary |
 | `appendix_full_evidence` | Full Evidence Table |
@@ -140,3 +140,9 @@ For a v3 rerender, changing only section selection or the display account refere
 reuses accepted models. Changing analytical options through the report CLI creates
 an analysed result revision; it does not re-read PDFs. Re-extract originals for
 parser changes, and use a reviewed pack for record/claim corrections.
+
+Ledger grouping is derived from the supplied source identities, not an account-name
+preference or report-heading override. Changing `report_account_ref` cannot merge
+accounts or validate an alias. When source identity is conflicting or unassigned,
+review the evidence and use the supported correction path; no hidden setting
+forces all records into one account.

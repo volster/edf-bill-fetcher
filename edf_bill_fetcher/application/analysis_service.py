@@ -16,7 +16,6 @@ from edf_bill_fetcher.domain.evidence import PreparedSnapshot
 from edf_bill_fetcher.domain.json_values import freeze_json, object_value, rows_value
 from edf_bill_fetcher.domain.money import parse_money
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
-from edf_bill_fetcher.helpers.identity import account_key
 from edf_bill_fetcher.io.writers.analysis import run_analysers
 from edf_bill_fetcher.models import report_models as models
 from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
@@ -52,14 +51,7 @@ from edf_bill_fetcher.writers._helpers import (
 
 
 def _compatible(left: dict, right: dict) -> bool:
-    for key in ("Account", "Meter", "Register", "Fuel"):
-        a, b = identity(left.get(key)), identity(right.get(key))
-        if key == "Account":
-            a = account_key(a or left.get("Kraken ID") or left.get("SAP Account Number"))
-            b = account_key(b)
-        if a and b and a.casefold() != b.casefold():
-            return False
-    return True
+    return all(not a or not b or a == b for a, b in zip(scope(left), scope(right), strict=True))
 
 
 def _reconciliation(state: dict, frame: pd.DataFrame, contracts: pd.DataFrame) -> dict:
@@ -203,6 +195,25 @@ def _computed_models(
         object_value(prepared.effective_config),
         object_value(prepared.extraction.legacy_state),
     )
+    from edf_bill_fetcher.processors.ledger_context import resolve_ledger_context
+
+    keys = ("sap_contract_rows", "sap_meter_rows", "sap_financial_rows")
+    _, derived = resolve_ledger_context(
+        frame.to_dict("records"), [row for key in keys for row in state.get(key, [])]
+    )
+    scoped_state = dict(state)
+    context_scopes = {}
+    offset = 0
+    for key in keys:
+        count = len(state.get(key, []))
+        scoped_state[key] = derived[offset : offset + count]
+        context_scopes.update(
+            {
+                id(raw): scope(resolved)
+                for raw, resolved in zip(state.get(key, []), scoped_state[key], strict=True)
+            }
+        )
+        offset += count
     payment = models.compute_payment_analysis(frame)
     quality = models.compute_data_quality_report(
         frame, duplicate_count=len(rows_value(prepared.duplicates))
@@ -219,20 +230,20 @@ def _computed_models(
     analyses = run_analysers(selected, evidence_index_df=frame)
     domination = compute_transitive_domination(analyses["rebilling"], analyses["back_billing"])
     events = detect_sap_back_billing_events(state.get("sap_financial_rows", []))
-    matches = match_sap_events_to_edf(events, selected.to_dict("records"))
+    matches = match_sap_events_to_edf(
+        events, selected.to_dict("records"), ledger_context=context_scopes
+    )
     clusters = _build_bb_clusters(analyses["back_billing"])
     for event in events:
         candidates = [match for match in matches if match.event is event]
-        if candidates:
-            best = min(
-                candidates,
-                key=lambda m: (
-                    {"High": 0, "Medium": 1, "Low": 2}.get(m.confidence_band, 3),
-                    m.date_delta_days,
-                ),
-            )
-            event.matched_edf_invoice = str(best.edf_record.get("Invoice #") or "") or None
-        else:
+        confirmed = [match for match in candidates if match.confidence_band == "High"]
+        identities = {
+            (scope(match.edf_record), str(match.edf_record.get("Invoice #") or ""))
+            for match in confirmed
+        }
+        if len(identities) == 1:
+            event.matched_edf_invoice = next(iter(identities))[1] or None
+        elif not candidates:
             tag = handle_cluster_unmatched(event, clusters)
             if tag is not None:
                 event.matched_edf_invoice = tag["Matched EDF Invoice #"]
@@ -268,7 +279,10 @@ def _computed_models(
     from edf_bill_fetcher.processors.claim_reconciliation import build_reconciliation
 
     ledger = build_ledger(review_items, revisions, state.get("dispute_schedule", []))
+    from edf_bill_fetcher.processors.ledger_overview import ledger_overview
+
     sap = {
+        "ledger_overview": ledger_overview(frame),
         "bill_revisions": revisions,
         "rebilling_ledger": ledger,
         "claim_reconciliation": build_reconciliation(
@@ -309,7 +323,7 @@ def _computed_models(
         "compensation": (estimate_compensation(selected, cfg), True, None),
         "sap": (sap, bool(state.get("sap_financial_rows")), "NO_SAP_FINANCIAL_EVIDENCE"),
         "reconciliation": (
-            _reconciliation(state, frame, analyses["contracts"]),
+            _reconciliation(scoped_state, frame, analyses["contracts"]),
             bool(
                 any(
                     state.get(key)
@@ -355,9 +369,9 @@ def analyse_prepared(prepared: PreparedSnapshot) -> AnalysisSnapshot:
     reference = resources.files("edf_bill_fetcher.data").joinpath("ofgem_caps.json").read_bytes()
     methods = freeze_json(
         {
-            "preparation": "legacy-v1",
+            "preparation": "source-context-v2",
             "financial": "legacy-v1",
-            "models": "snapshot-v2",
+            "models": "snapshot-v3-source-context",
             "reference_sha256": hashlib.sha256(reference).hexdigest(),
             "reference_context": {
                 key: cfg.get(key) for key in ("fuel", "payment_method", "tariff_type", "cap_region")

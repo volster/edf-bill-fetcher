@@ -177,3 +177,15 @@ For startup or build failures on any platform, include the exact command,
 interpreter and architecture. Use the [build guide](BUILDING.md#what-platform-support-means)
 and [CI diagnostics](CI.md#triage-by-failing-step) to distinguish environment,
 application and packaging problems.
+
+## A reminder or meter-reading label looks wrong in an older pack
+
+Older extraction could mistake the £50 late-charge threshold in reminder boilerplate
+for a balance, or treat conditional estimated-reading advice as a reading basis.
+Re-extract with the updated app; preserved old results are not silently corrected.
+A reminder's repeated demand should not create another transaction.
+
+For SAP reads, retain the read-source description as well as the raw code. A deemed
+opening reading repeated several times is not several independent actual readings.
+For SAP invoice candidates, check the supporting date and confidence; a similar
+amount years apart does not establish a relationship.

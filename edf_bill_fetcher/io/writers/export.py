@@ -366,8 +366,9 @@ def render_xlsx(
     df = view.frame()
     dup_df = pd.DataFrame(view.duplicates) if config.get("save_dups", True) else pd.DataFrame()
 
-    # Years for summary tab
-    years = sorted(y for y in df["_dt"].dropna().dt.year.astype(int).unique())
+    # Only dated balance observations determine annual balance eligibility.
+    balance_summary = view.frame("balance")
+    years = sorted(y for y in balance_summary["_dt"].dropna().dt.year.astype(int).unique())
 
     wb = openpyxl.Workbook()
     wb.calculation.fullCalcOnLoad = True
@@ -415,7 +416,7 @@ def render_xlsx(
 
     # Tab 2: Annual Summary
     ws_summary = wb.create_sheet(title="Annual Summary", index=0)
-    if len({scope(r) for r in df.to_dict("records")}) <= 1 and years:
+    if len({scope(r) for r in balance_summary.to_dict("records")}) == 1 and years:
         write_summary_sheet(ws_summary, years, ws_main.title, last_data_row=len(df) + 1)
     else:
         literal_cell(
@@ -1366,6 +1367,19 @@ def render_xlsx(
     from edf_bill_fetcher.io.writers.rebilling_ledger import write_ledger_sheets
 
     write_ledger_sheets(wb, view, saved_links)
+    if view.ledger_overview:
+        from edf_bill_fetcher.io.writers.rebilling_ledger import reference_sheet
+        from edf_bill_fetcher.models.ledger_tables import NOTICE as LEDGER_NOTICE
+        from edf_bill_fetcher.models.ledger_tables import ledger_table
+
+        table = ledger_table(view.ledger_overview)
+        sheet = reference_sheet(wb, "Ledger overview", LEDGER_NOTICE, tuple(table[0]))
+        for row_number, values in enumerate(table[1:], 5):
+            for column, value in enumerate(values, 1):
+                literal_cell(sheet, row_number, column, value)
+        sheet.column_dimensions["A"].width = 50
+        for letter in ("E", "F"):
+            sheet.column_dimensions[letter].width = 35
     _reorder_sheets(wb)
 
     from edf_bill_fetcher.io.review_workbook import write_review_sheets

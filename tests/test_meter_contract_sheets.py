@@ -113,7 +113,7 @@ def test_write_meter_readings_sheet_writes_eight_table_headers_including_excerpt
     expected = [
         "Date",
         "Reading (kWh)",
-        "Type (A/E/C/M)",
+        "Type (A/E/C/D/U/M)",
         "Estimated Source",
         "Invoice #",
         "Notes",

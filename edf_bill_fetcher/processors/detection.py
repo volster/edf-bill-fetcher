@@ -432,10 +432,18 @@ def detect_back_billing(df: pd.DataFrame) -> pd.DataFrame:
         # Use a billed charge or known transaction, never an account balance.
         charge, value_source = _pull_period_charge(r)
         gross = number(r.get("Gross Electricity Charges (£)"))
-        if charge is not None and charge < 0 and gross is not None and gross > 0:
+        components = r.get("Rebilling Components")
+        cancelled = isinstance(components, (list, tuple)) and any(
+            component.get("kind") == "cancellation" and (number(component.get("amount")) or 0) < 0
+            for component in components
+            if isinstance(component, dict)
+        )
+        if charge is not None and gross is not None and gross > 0 and (charge < 0 or cancelled):
+            net = charge
             charge, value_source = (
                 gross,
-                "Gross replacement electricity charges (net bill is a credit)",
+                f"Gross replacement electricity charges; net bill adjustment £{net:,.2f}; "
+                + str(r.get("Gross Electricity Charges Basis") or "verify VAT basis"),
             )
         if charge is None or charge <= 0:
             continue

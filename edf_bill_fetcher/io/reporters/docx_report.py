@@ -9,6 +9,7 @@ section in one place keeps both surfaces aligned.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -16,6 +17,7 @@ from docx import Document
 from docx.enum.section import WD_ORIENT, WD_SECTION_START
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import qn
 from docx.shared import (
@@ -36,7 +38,11 @@ from edf_bill_fetcher.helpers.formatting import (
 )
 from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
 from edf_bill_fetcher.helpers.version import get_package_version as _get_package_version
+from edf_bill_fetcher.io.reporters.source_links import record_source_link, source_links
+from edf_bill_fetcher.models.compensation_labels import TOTAL_LABEL, category_label
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.ledger_tables import NOTICE as LEDGER_NOTICE
+from edf_bill_fetcher.models.ledger_tables import ledger_table
 from edf_bill_fetcher.models.output_overview import (
     OutputOverview,
     build_output_overview,
@@ -349,6 +355,26 @@ def create_cover_page(
     doc.add_page_break()
 
 
+def _executive_with_ledgers(view: ReportView, **kwargs: Any) -> None:
+    """Keep the accepted ledger overview alongside the executive summary."""
+    create_executive_summary(**kwargs)
+    _ledger_overview(kwargs["doc"], view)
+
+
+def _ledger_overview(doc: Any, view: ReportView) -> None:
+    """Render stored ledger balances without recalculating them."""
+    if not view.ledger_overview:
+        return
+    doc.add_paragraph("Ledger overview", style="Heading 2")
+    doc.add_paragraph(LEDGER_NOTICE)
+    values = ledger_table(view.ledger_overview)
+    table = doc.add_table(rows=len(values), cols=len(values[0]))
+    for row, cells in zip(table.rows, values, strict=True):
+        for cell, value in zip(row.cells, cells, strict=True):
+            cell.text = value
+    _format_table(table, font_size=8)
+
+
 def create_table_of_contents(doc: Any, styles: Any, ctx: RenderContext | None = None) -> None:
     """Create a single-column TOC driven by the registry.
 
@@ -544,6 +570,8 @@ def create_evidence_index(
     df: pd.DataFrame,
     engine: Any,
     ctx: RenderContext | None = None,
+    *,
+    bundle_dir: str | None = None,
 ) -> None:
     """Create evidence index with source cross-references."""
     if ctx is None:
@@ -580,6 +608,38 @@ def create_evidence_index(
     _format_table(table)
 
     doc.add_paragraph("")
+
+    links = source_links(bundle_dir)
+    doc.add_paragraph("Original source links", style=styles["SubSectionHeader"])
+    table = doc.add_table(rows=len(df) + 1, cols=3)
+    for cell, heading in zip(
+        table.rows[0].cells, ("Date", "Invoice / source", "Original file / page"), strict=True
+    ):
+        cell.text = heading
+    for cells, (_, record) in zip(table.rows[1:], df.iterrows(), strict=True):
+        cells.cells[0].text = fmt_date(record.get("Date"))
+        cells.cells[1].text = (
+            str(record.get("Invoice #", "")) + " · " + str(record.get("Attachment Name", ""))
+        )
+        link = record_source_link(record.to_dict(), links)
+        if link:
+            paragraph = cells.cells[2].paragraphs[0]
+            relationship = paragraph.part.relate_to(
+                link.href, RELATIONSHIP_TYPE.HYPERLINK, is_external=True
+            )
+            element = OxmlElement("w:hyperlink")
+            element.set(qn("r:id"), relationship)
+            run = OxmlElement("w:r")
+            text = OxmlElement("w:t")
+            text.text = "Open original" + (
+                " · page " + str(int(record["Page From"])) if "#page=" in link.href else ""
+            )
+            run.append(text)
+            element.append(run)
+            paragraph._p.append(element)
+        else:
+            cells.cells[2].text = "Source unavailable"
+    _format_table(table, font_size=8)
 
     # Extraction metadata
     if engine and hasattr(engine, "pdf_count"):
@@ -1164,7 +1224,7 @@ def create_compensation_section(
 
     if not rows:
         doc.add_paragraph(
-            "No compensation claims identified in the extracted records.",
+            "No potential adjustment scenarios identified in the extracted records.",
             style=styles["BodyText"],
         )
         doc.add_page_break()
@@ -1176,24 +1236,24 @@ def create_compensation_section(
         categories.setdefault(cat, []).append(row)
 
     for cat, cat_rows in categories.items():
-        doc.add_paragraph(cat, style=styles["SubSectionHeader"])
+        doc.add_paragraph(category_label(cat), style=styles["SubSectionHeader"])
         table = doc.add_table(rows=len(cat_rows) + 1, cols=8)
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
         headers = [
             "Category",
             "Invoice #",
             "Date",
-            "Base Amount",
+            "Calculation base",
             "Days",
             "Rate",
             "Indicative Amount",
-            "Legal Basis",
+            "Calculation / evidence basis",
         ]
         for i, h in enumerate(headers):
             table.rows[0].cells[i].text = h
         for i, r in enumerate(cat_rows, 1):
             row = table.rows[i]
-            row.cells[0].text = str(r.get("category", ""))
+            row.cells[0].text = category_label(r.get("category", ""))
             row.cells[1].text = str(r.get("invoice_ref", ""))
             row.cells[2].text = str(r.get("date", ""))
             row.cells[3].text = fmt_money(r.get("base_amount"))
@@ -1205,9 +1265,7 @@ def create_compensation_section(
         doc.add_paragraph("")
 
     total = sum(float(r.get("indicative_amount") or 0.0) for r in rows)
-    doc.add_paragraph(
-        f"Total Indicative Compensation: {fmt_money(total)}", style=styles["SubSectionHeader"]
-    )
+    doc.add_paragraph(f"{TOTAL_LABEL}: {fmt_money(total)}", style=styles["SubSectionHeader"])
     doc.add_paragraph(DISCLAIMER, style=styles["BodyText"])
 
     doc.add_page_break()
@@ -1633,14 +1691,20 @@ def render_docx(view: ReportView, output_path: str) -> str:
                 "closing_balance": closing_balance,
                 "overview": build_output_overview(view),
             },
-            lambda kwargs: create_executive_summary(**kwargs),
+            lambda kwargs: _executive_with_ledgers(view, **kwargs),
         ),
         "key_findings": (
             lambda: {"doc": doc, "styles": styles, "flags": flags},
             lambda kwargs: create_key_findings_table(**kwargs),
         ),
         "evidence_index": (
-            lambda: {"doc": doc, "styles": styles, "df": df, "engine": engine},
+            lambda: {
+                "doc": doc,
+                "styles": styles,
+                "df": df,
+                "engine": engine,
+                "bundle_dir": str(Path(output_path).parent),
+            },
             lambda kwargs: create_evidence_index(**kwargs),
         ),
         "detailed_findings": (

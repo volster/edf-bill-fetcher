@@ -75,7 +75,11 @@ def estimate_compensation(
                         "days": int(bill["Excess Days"]),
                         "rate": None,
                         "indicative_amount": allocated,
-                        "legal_basis": "Indicative consumption outside the back-billing window; live union allocation",
+                        "legal_basis": "Potential historic charge; live union allocation. "
+                        + str(bill.get("Value Source", ""))
+                        + ". Calculation: "
+                        + str(bill.get("Sub-Period Basis", "verify basis"))
+                        + ". Not a reviewed claim; check earlier demands, credits and VAT.",
                         "disclaimer": DISCLAIMER,
                     }
                 )

@@ -552,7 +552,7 @@ def _write_sap_bb_matches_sheet(
     ncol = len(header_cols)
 
     # Rows 1-3: banner + intro
-    title = "SAP ↔ EDF MATCHED EVENTS"
+    title = "SAP ↔ EDF MATCH CANDIDATES"
     if account:
         title = f"{title}  |  Account {account}"
     t1 = literal_cell(ws, row=1, column=1, value=title)
@@ -569,10 +569,10 @@ def _write_sap_bb_matches_sheet(
     ws.row_dimensions[2].height = 4
 
     intro = (
-        "Each row pairs a SAP back-billing event (sheet 'SAP Back-billing\n"
+        "Each row proposes a SAP back-billing event (sheet 'SAP Back-billing\n"
         "Events') with the EDF invoice(s) whose period overlaps the\n"
         "event's clear date. Confidence is computed from date proximity\n"
-        "and amount agreement; Low-confidence rows may be coincidental.\n"
+        "and amount agreement; candidates need source verification. Only a unique High-confidence invoice is assigned in event summaries. Low/Medium candidates are not confirmed relationships.\n"
         "Click the SAP Clearing Doc link to view the event's underlying\n"
         "SAP rows on sheet 'SAP Back-billing Events'. Click the EDF\n"
         "Invoice # link to view the matched row on the EDF Evidence\n"

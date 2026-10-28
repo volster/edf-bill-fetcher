@@ -630,6 +630,35 @@ class EvidenceEngine:
                     r_type = label
                     break
 
+        if source_type.startswith("Email Body"):
+            # Advice about what to do IF a bill is estimated, or advertising a
+            # smart meter, does not classify the reading used for this bill.
+            r_type = "Unknown"
+            if self.config.get("use_reading_classification", True):
+                for label, phrase in (
+                    (
+                        "Estimated",
+                        r"(?:this|your) bill (?:is |was )?based on (?:an? |our )?estimat(?:e|ed readings?)",
+                    ),
+                    (
+                        "Smart",
+                        r"(?:this|your) bill (?:uses|is based on) (?:your )?smart (?:meter )?readings?",
+                    ),
+                    (
+                        "Actual",
+                        r"(?:this|your) bill (?:uses|is based on) (?:an? |your )?actual (?:meter )?readings?",
+                    ),
+                ):
+                    for match in re.finditer(phrase, clean_text, re.I):
+                        prefix = re.split(
+                            r"[.!?;:]", clean_text[max(0, match.start() - 100) : match.start()]
+                        )[-1]
+                        if not re.search(r"\b(?:if|whether|when)\b", prefix, re.I):
+                            r_type = label
+                            break
+                    if r_type != "Unknown":
+                        break
+
         units_used = standing_charge = inv_num = "N/A"
         if self.config.get("use_pdf_fields", True):
             u_m = _OLD_PDF_KWH_RE.search(clean_text)
@@ -676,6 +705,16 @@ class EvidenceEngine:
             period_charge = "N/A"
             facts = {"Document Role": "Contract notice", "Document Date": date_to_use}
             sub_periods = []
+        if matched_pattern_name == "payment_reminder_demand":
+            entry_type = "Ongoing Balance"
+            period_charge = "N/A"
+            facts.update(
+                {
+                    "Document Role": "Payment reminder",
+                    "Demand Amount (£)": found_amt,
+                    "Balance Basis": "Demand repeated in a reminder; not a new charge",
+                }
+            )
         if entry_type == "New Bill" and "PDF" in source_type:
             facts["Document Role"] = "Invoice"
             facts["Document Date"] = date_to_use

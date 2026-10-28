@@ -13,6 +13,7 @@ dispatcher ↔ DOCX dispatcher key set parity.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
@@ -43,7 +44,11 @@ from edf_bill_fetcher.helpers.formatting import (
     fmt_number,
 )
 from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
+from edf_bill_fetcher.io.reporters.source_links import SourceLink, record_source_link, source_links
+from edf_bill_fetcher.models.compensation_labels import TOTAL_LABEL, category_label
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.ledger_tables import NOTICE as LEDGER_NOTICE
+from edf_bill_fetcher.models.ledger_tables import ledger_table
 from edf_bill_fetcher.models.output_overview import (
     OutputOverview,
     build_output_overview,
@@ -366,7 +371,17 @@ def _wrapped_table(
             textColor=Colors.WHITE if row_number == 0 else Colors.DARK_GREY,
             splitLongWords=True,
         )
-        cells.append([Paragraph(xml_escape(str(value)), style) for value in row])
+        cells.append(
+            [
+                Paragraph(
+                    f'<link href="{xml_escape(value.href, {chr(34): "&quot;"})}"><u>{xml_escape(value.label)}</u></link>'
+                    if isinstance(value, SourceLink)
+                    else xml_escape(str(value)),
+                    style,
+                )
+                for value in row
+            ]
+        )
     table = Table(cells, colWidths=column_widths, repeatRows=1)
     table.setStyle(make_table_style(num_rows=len(data), font_size=font_size))
     return table
@@ -863,7 +878,13 @@ def create_key_findings_table(flags: list, ctx: RenderContext | None = None) -> 
 # =============================================================================
 
 
-def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | None = None) -> list:
+def create_evidence_index(
+    df: pd.DataFrame,
+    engine: Any,
+    ctx: RenderContext | None = None,
+    *,
+    bundle_dir: str | None = None,
+) -> list:
     """Create evidence index with source cross-references."""
     elements = []
     if ctx is None:
@@ -889,6 +910,8 @@ def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | No
     elements.append(Paragraph("<b>Source Document Inventory</b>", STYLES["SubSectionHeader"]))
     elements.append(Spacer(1, 0.2 * cm))
 
+    links = source_links(bundle_dir)
+
     # Group by source and show key details
     for src in source_counts.index:
         src_df = df[df["Source"] == src].copy()
@@ -903,12 +926,21 @@ def create_evidence_index(df: pd.DataFrame, engine: Any, ctx: RenderContext | No
         )
 
         # Summary table for this source
-        detail_data = [["Date", "Invoice #", "Amount", "Period", "Entry Type", "Reading"]]
+        detail_data: list[list[Any]] = [
+            ["Date", "Invoice #", "Amount", "Period", "Entry Type", "Reading"]
+        ]
         for _, row in src_df.iterrows():
+            link = record_source_link(row.to_dict(), links)
+            invoice = str(row.get("Invoice #", "N/A"))
+            source = (
+                SourceLink(link.href, invoice + " — open original")
+                if link
+                else invoice + " (source unavailable)"
+            )
             detail_data.append(
                 [
                     fmt_date(row.get("Date")),
-                    str(row.get("Invoice #", "N/A")),
+                    source,
                     fmt_money(row.get("Amount (£)")),
                     f"{fmt_date(row.get('Period From'))}–{fmt_date(row.get('Period To'))}",
                     str(row.get("Entry Type", "")),
@@ -1684,7 +1716,7 @@ def create_compensation_section(
     if not rows:
         elements.append(
             Paragraph(
-                "No compensation claims identified in the extracted records.",
+                "No potential adjustment scenarios identified in the extracted records.",
                 STYLES["BodyText"],
             )
         )
@@ -1698,23 +1730,25 @@ def create_compensation_section(
         categories.setdefault(cat, []).append(row)
 
     for cat, cat_rows in categories.items():
-        elements.append(Paragraph(f"<b>{xml_escape(cat)}</b>", STYLES["SubSectionHeader"]))
+        elements.append(
+            Paragraph(f"<b>{xml_escape(category_label(cat))}</b>", STYLES["SubSectionHeader"])
+        )
         table_rows: list[list[str]] = [
             [
                 "Category",
                 "Invoice #",
                 "Date",
-                "Base Amount",
+                "Calculation base",
                 "Days",
                 "Rate",
                 "Indicative Amount",
-                "Legal Basis",
+                "Calculation / evidence basis",
             ]
         ]
         for r in cat_rows:
             table_rows.append(
                 [
-                    str(r.get("category", "")),
+                    category_label(r.get("category", "")),
                     str(r.get("invoice_ref", "")),
                     str(r.get("date", "")),
                     fmt_money(r.get("base_amount")),
@@ -1730,9 +1764,7 @@ def create_compensation_section(
 
     total = sum(float(r.get("indicative_amount") or 0.0) for r in rows)
     elements.append(
-        Paragraph(
-            f"<b>Total Indicative Compensation: {fmt_money(total)}</b>", STYLES["SubSectionHeader"]
-        )
+        Paragraph(f"<b>{TOTAL_LABEL}: {fmt_money(total)}</b>", STYLES["SubSectionHeader"])
     )
     elements.append(Spacer(1, 0.3 * cm))
     elements.append(Paragraph(DISCLAIMER, STYLES["BodyText"]))
@@ -2175,14 +2207,29 @@ def render_pdf(view: ReportView, output_path: str) -> str:
                 "closing_balance": closing_balance,
                 "overview": build_output_overview(view),
             },
-            lambda kwargs: create_executive_summary(**kwargs),
+            lambda kwargs: (
+                create_executive_summary(**kwargs)
+                + (
+                    [
+                        Paragraph("Ledger overview", STYLES["SubSectionHeader"]),
+                        Paragraph(xml_escape(LEDGER_NOTICE), STYLES["BodyText"]),
+                        _wrapped_table(
+                            ledger_table(view.ledger_overview),
+                            [5, 1.2, 2.4, 2.4, 3.5, 3.5],
+                            font_size=7,
+                        ),
+                    ]
+                    if view.ledger_overview
+                    else []
+                )
+            ),
         ),
         "key_findings": (
             lambda: {"flags": flags},
             lambda kwargs: create_key_findings_table(**kwargs),
         ),
         "evidence_index": (
-            lambda: {"df": df, "engine": engine},
+            lambda: {"df": df, "engine": engine, "bundle_dir": str(Path(output_path).parent)},
             lambda kwargs: create_evidence_index(**kwargs),
         ),
         "detailed_findings": (

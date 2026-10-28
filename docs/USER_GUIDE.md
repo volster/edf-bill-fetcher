@@ -210,3 +210,17 @@ Excluding a record does not redact a PDF. Shared PDFs remain whole, and saved
 analysis retains original observations and review history. Inspect the files you
 intend to share; prepare redacted copies separately if needed. Workbook protection
 prevents accidental edits but is not encryption.
+
+## Review linked identity and repeated transactions
+
+Use **Ledger overview** to see dated observations for linked account references
+and unresolved ledgers. Inspect **Ledger Identity Basis** in record details when
+original identities are incomplete. An analytical context inferred uniquely from
+the supplied evidence is not a replacement for the original field or proof that
+every possible meter/account has been supplied.
+
+If a transaction remains flagged as ambiguous, compare both sources before
+excluding anything. Equal dates and amounts alone do not identify one payment.
+Keep the rows and reasons when using the correction workflow. To benefit from
+new reminder parsing, source identity or SAP matching logic, re-extract the
+originals into a fresh pack; reopening the old `result.json` preserves its figures.

@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 from edf_bill_fetcher.domain.json_values import object_value
 from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.formatting import fmt_money
-from edf_bill_fetcher.helpers.identity import account_key
 from edf_bill_fetcher.processors.claim_reconciliation import has_active_claims
 from edf_bill_fetcher.processors.preparation import identity, number, scope
 
@@ -49,7 +48,7 @@ def report_account_label(view: ReportView) -> str:
     config = view.config
     if config.get("report_account_ref") or config.get("acc_num"):
         return str(config.get("report_account_ref") or config["acc_num"])
-    accounts = {account_key(identity(row.get("Account"))) for row in view.records}
+    accounts = {scope(row)[0] for row in view.records}
     known = sorted(account for account in accounts if account)
     if len(known) == 1:
         return known[0] + (" + unassigned records" if "" in accounts else "")
@@ -70,7 +69,11 @@ def build_output_overview(view: ReportView) -> OutputOverview:
         f"{min(dated):%d %b %Y} – {max(dated):%d %b %Y}" if dated else "No usable record dates"
     )
     bills = [row for row in records if row.get("Entry Type") in {"New Bill", "Charge"}]
-    ledger_count = len({scope(row) for row in records})
+    ledger_count = (
+        len(view.ledger_overview)
+        if "ledger_overview" in view.model("sap")
+        else len({scope(row) for row in records})
+    )
     manifest = state.get("source_manifest", {})
     source_count = len(manifest) if isinstance(manifest, dict) else 0
     exclusions = len(state.get("review_excluded_records", []))
@@ -86,6 +89,25 @@ def build_output_overview(view: ReportView) -> OutputOverview:
                 "Review each consolidated claim once, check relief already received, and regenerate the focused complaint draft. Remaining charges still require substantiation.",
                 "Reconciled claims",
                 "detailed_findings",
+            )
+        )
+    unresolved = sum(bool(row.get("Transaction Identity Review")) for row in records)
+    if unresolved:
+        priorities.append(
+            ReviewPriority(
+                "Review ambiguous repeated transactions",
+                f"{unresolved} source observations have repeated or conflicting posting identities. Compare originals before changing inclusion or relying on aggregate totals.",
+                "Review & Corrections",
+                "detailed_findings",
+            )
+        )
+    if any(row.get("Ledger Identity Basis") for row in records):
+        priorities.append(
+            ReviewPriority(
+                "Check source-linked ledger context",
+                "Ledger overview shows dated balances by derived context. Original account, fuel, meter and register fields remain preserved; unresolved identities stay separate.",
+                "Ledger overview",
+                "exec_summary",
             )
         )
     historical = sum(

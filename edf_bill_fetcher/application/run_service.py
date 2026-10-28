@@ -205,6 +205,11 @@ def run(
         else:
             registry = renderers if renderers is not None else default_renderers()
             view = build_report_view(snapshot, render_selection)
+            uncertain = sum(bool(row.get("Transaction Identity Review")) for row in view.records)
+            if uncertain:
+                manifest["warnings"].append(
+                    f"{uncertain} transaction observations have ambiguous or conflicting cross-source identities; review them before relying on aggregate totals."
+                )
             claims = view.claims
             if has_active_claims(claims) and claims is not None and not claims["ready"]:
                 manifest["warnings"].append(

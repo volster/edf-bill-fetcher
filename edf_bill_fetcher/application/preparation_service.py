@@ -18,6 +18,16 @@ def prepare_snapshot(extraction: ExtractionSnapshot) -> PreparedSnapshot:
         from edf_bill_fetcher.application.record_review import apply_review
 
         inputs, _ = apply_review(state["human_review"])
+    from edf_bill_fetcher.processors.ledger_context import resolve_ledger_context
+
+    inputs, _ = resolve_ledger_context(
+        inputs,
+        [
+            row
+            for key in ("sap_contract_rows", "sap_meter_rows", "sap_financial_rows")
+            for row in state.get(key, [])
+        ],
+    )
     prepared = prepare_evidence(
         inputs,
         object_value(extraction.request.config),

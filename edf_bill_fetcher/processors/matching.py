@@ -17,10 +17,9 @@ import pandas as pd
 
 from edf_bill_fetcher.helpers.date_utils import TimestampOrNaT, _safe_to_datetime
 from edf_bill_fetcher.helpers.excel_utils import build_evidence_index as _build_evidence_index
-from edf_bill_fetcher.helpers.identity import account_key
 from edf_bill_fetcher.models.events import SapBackBillingEvent, SapEdfMatch
 from edf_bill_fetcher.processors.ledgers import invoice_reference, scoped_analysis
-from edf_bill_fetcher.processors.preparation import identity, number
+from edf_bill_fetcher.processors.preparation import number, scope
 from edf_bill_fetcher.processors.sap_parsers import _parse_amount_for_event
 
 # SAP match band constants — local definitions to keep module self-contained.
@@ -142,6 +141,8 @@ def infer_contracts(df: pd.DataFrame, merge_gap_days: int = 30) -> pd.DataFrame:
 def match_sap_events_to_edf(
     events: list[SapBackBillingEvent],
     edf_records: list[dict],
+    *,
+    ledger_context: dict[int, tuple[str, ...]] | None = None,
 ) -> list[SapEdfMatch]:
     """Fuzzy-match SAP events to EDF Evidence Report rows.
 
@@ -177,6 +178,9 @@ def match_sap_events_to_edf(
             continue
         parsed_edf.append((i, pf, pt, amt, invoice))
 
+    def event_scope(row: dict) -> tuple[str, ...]:
+        return (ledger_context or {}).get(id(row), scope(row))
+
     matches: list[SapEdfMatch] = []
     for ev in events:
         if pd.isna(ev.clearing_date):
@@ -192,49 +196,39 @@ def match_sap_events_to_edf(
                 posting_ts = pd.Timestamp(p_ts)
                 break
         for idx, pf, pt, edf_amt, _invoice in parsed_edf:
-            accounts = {
-                account_key(
-                    next(
-                        (
-                            identity(r.get(field))
-                            for field in ("Account", "Kraken ID", "SAP Account Number")
-                            if identity(r.get(field))
-                        ),
-                        "",
-                    )
-                )
-                for r in ev.rows
-            }
-            accounts.discard("")
-            account = account_key(edf_records[idx].get("Account", ""))
-            if accounts and accounts != {account}:
+            candidate_scope = scope(edf_records[idx])
+            accounts = {event_scope(row)[0] for row in ev.rows} - {""}
+            if accounts and accounts != {candidate_scope[0]}:
                 continue
-            # Gross/net amounts cannot overcome contradictory ledger facts.
-            # An event's rows must all be compatible with the candidate;
-            # missing fuel/meter/register evidence remains unknown.
-            incompatible = False
-            for field in ("Fuel", "Meter", "Register"):
-                known = {
-                    (
-                        identity(row.get(field))
-                        or (identity(row.get("Fuel Type")) if field == "Fuel" else "")
-                    ).casefold()
-                    for row in ev.rows
-                }
-                known.discard("")
-                candidate = identity(edf_records[idx].get(field)).casefold()
-                if len(known) > 1 or (known and candidate and known != {candidate}):
-                    incompatible = True
-                    break
-            if incompatible:
+            if any(
+                len(known := {event_scope(row)[part] for row in ev.rows} - {""}) > 1
+                or (known and candidate_scope[part] and known != {candidate_scope[part]})
+                for part in (1, 2, 3)
+            ):
                 continue
-            # Compute the date delta in days vs Period To (or From fallback)
-            if not pd.isna(pt):
-                date_delta_days = int(abs((ev_cd - pd.Timestamp(pt)).days))
-            elif not pd.isna(pf):
-                date_delta_days = int(abs((ev_cd - pd.Timestamp(pf)).days))
+            bounds = [pd.Timestamp(day) for day in (pf, pt) if not pd.isna(day)]
+            if not bounds or (len(bounds) == 2 and bounds[0] > bounds[1]):
+                continue
+            axes = [("Clearing date", ev_cd)]
+            if not pd.isna(posting_ts):
+                axes.insert(0, ("Posting date", posting_ts))
+            inside = [
+                (label, day)
+                for label, day in axes
+                if len(bounds) == 2 and bounds[0] <= day <= bounds[1]
+            ]
+            if inside:
+                date_basis, date_axis = inside[0]
+                date_delta_days = 0
             else:
+                date_basis, date_axis = min(
+                    axes, key=lambda item: min(abs((item[1] - bound).days) for bound in bounds)
+                )
+                date_delta_days = min(abs((date_axis - bound).days) for bound in bounds)
+            # Similar amounts cannot overcome an unsupported temporal relationship.
+            if date_delta_days > 14:
                 continue
+            date_in_span = bool(inside)
 
             # Amount score — computed before the date-score branch
             # (spec §3.1 — Option C: the in-span date bonus is now
@@ -276,36 +270,12 @@ def match_sap_events_to_edf(
             # ladder measured against the nearer boundary, so a pure
             # coincidental date-in-span can no longer reach Medium.
             date_score = 0
-            date_in_span = False
-            date_axis = ev_cd
-            date_basis = "Clearing date"
-            if (
-                not pd.isna(posting_ts)
-                and not pd.isna(pf)
-                and not pd.isna(pt)
-                and pd.Timestamp(pf) <= posting_ts <= pd.Timestamp(pt)
-            ):
-                date_axis = posting_ts
-                date_basis = "Posting date"
-            if (
-                not pd.isna(pf)
-                and not pd.isna(pt)
-                and pd.Timestamp(pf) <= date_axis <= pd.Timestamp(pt)
-            ):
-                date_in_span = True
-                if amount_score > 0:
-                    date_score = 50
-                else:
-                    delta_to_pf = abs((date_axis - pd.Timestamp(pf)).days)
-                    delta_to_pt = abs((date_axis - pd.Timestamp(pt)).days)
-                    nearest_delta = min(delta_to_pf, delta_to_pt)
-                    for band_days, band_score in _SAP_MATCH_DAY_BANDS:
-                        if nearest_delta <= band_days:
-                            date_score = band_score
-                            break
+            if date_in_span and amount_score > 0:
+                date_score = 50
             else:
+                nearest_delta = min(abs((date_axis - bound).days) for bound in bounds)
                 for band_days, band_score in _SAP_MATCH_DAY_BANDS:
-                    if date_delta_days <= band_days:
+                    if nearest_delta <= band_days:
                         date_score = band_score
                         break
 
@@ -324,14 +294,14 @@ def match_sap_events_to_edf(
                 notes = (
                     f"{date_basis} inside EDF period + amount within 5%"
                     if date_in_span
-                    else f"Within {date_delta_days}d of period-end + amount within 5%"
+                    else f"Within {date_delta_days}d of period boundary + amount within 5%"
                 )
             elif band == "Medium":
                 # amount_score > 0 is guaranteed by the Medium+ gate above.
                 if date_in_span:
                     notes = f"{date_basis} inside EDF period + amount within 25%"
                 else:
-                    notes = f"Within {date_delta_days}d of period-end + amount within 25%"
+                    notes = f"Within {date_delta_days}d of period boundary + amount within 25%"
             else:  # band == "Low"
                 if date_in_span and amount_score == 0:
                     notes = (
@@ -339,7 +309,7 @@ def match_sap_events_to_edf(
                         "correspond — likely coincidental"
                     )
                 else:
-                    notes = f"Within {date_delta_days}d of period-end; may be coincidental"
+                    notes = f"Within {date_delta_days}d of period boundary; may be coincidental"
 
             matches.append(
                 SapEdfMatch(

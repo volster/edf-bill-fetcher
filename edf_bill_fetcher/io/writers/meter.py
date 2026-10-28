@@ -102,7 +102,7 @@ def _write_meter_readings_sheet_impl(
 
     # Row 2: legend subheader
     sub = (
-        "A = Actual (supplier-confirmed reading)  |  E = Estimated  |  "
+        "A = Actual source description  |  E = Estimated  |  D = Deemed / estimated source  |  "
         "C = Customer-provided | U = Unknown | M = Meter rollover candidate (negative delta near rollover threshold)"
     )
     sub_cell = ws.cell(row=2, column=1, value=sub)
@@ -115,7 +115,7 @@ def _write_meter_readings_sheet_impl(
     headers = [
         "Date",
         "Reading (kWh)",
-        "Type (A/E/C/M)",
+        "Type (A/E/C/D/U/M)",
         "Estimated Source",
         "Invoice #",
         "Notes",
@@ -142,6 +142,8 @@ def _write_meter_readings_sheet_impl(
             identity(row.get("Reading Date")) or row.get("Date") for row in work.to_dict("records")
         ]
     if sap_readings:
+        from edf_bill_fetcher.processors.meter_reads import sap_reading_observations
+
         sap = pd.DataFrame(
             [
                 {
@@ -149,12 +151,10 @@ def _write_meter_readings_sheet_impl(
                     "Date": row.get("Meter Read Date"),
                     "Invoice #": "N/A",
                     "Register Reading (kWh)": row.get("Reading (kWh)"),
-                    "Reading": {"A": "Actual", "E": "Estimated"}.get(
-                        str(row.get("Read Type", "")), "Unknown"
-                    ),
-                    "Details": f"SAP reading: {row.get('Read Source', '')}; {row.get('Source File', '')}",
+                    "Reading": row["Reading Basis"],
+                    "Details": f"SAP reading: {row.get('Read Source', '')}; raw type {row['Raw Read Types']}; {row['Reading Occurrences']} occurrence(s); {row.get('Source File', '')}",
                 }
-                for row in sap_readings
+                for row in sap_reading_observations(sap_readings)
             ]
         )
         sap = sap[pd.to_numeric(sap["Register Reading (kWh)"], errors="coerce").notna()]
@@ -177,12 +177,14 @@ def _write_meter_readings_sheet_impl(
         type_code = (
             "M"
             if inv in rollover_invoices
+            else "D"
+            if reading == "Deemed / estimated"
             else "C"
             if reading == "Customer"
             else _reading_type_to_aem(str(reading))
         )
         est_src = ""
-        if str(reading) == "Estimated":
+        if str(reading) in {"Estimated", "Deemed / estimated"}:
             est_src = str(row.get("Details", "") or "")
         notes = (
             "Meter rollover candidate -- see rollover table." if inv in rollover_invoices else ""
@@ -204,7 +206,7 @@ def _write_meter_readings_sheet_impl(
         type_cell = ws.cell(row=r, column=3)
         if type_code == "M":
             type_cell.font = Font(name="Calibri", size=10, bold=True, color="003F87")
-        elif type_code == "E":
+        elif type_code in {"E", "D"}:
             type_cell.font = Font(name="Calibri", size=10, color="C08000")
         excerpt = ""
         match = matching_evidence_row(evidence_df, row.to_dict())

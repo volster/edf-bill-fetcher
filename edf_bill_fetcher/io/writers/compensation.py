@@ -41,6 +41,7 @@ from edf_bill_fetcher.io.writers.sheet_layout import (
     write_section_label,
     write_trailing_total,
 )
+from edf_bill_fetcher.models.compensation_labels import TOTAL_LABEL, category_label
 from edf_bill_fetcher.processors.compensation import DISCLAIMER
 
 # Column order for the data rows.  ``rate`` is rendered as a percentage
@@ -48,18 +49,12 @@ from edf_bill_fetcher.processors.compensation import DISCLAIMER
 _COLS = [
     "Invoice #",
     "Date",
-    "Base Amount (£)",
+    "Calculation base (£)",
     "Days",
     "Rate",
     "Indicative Amount (£)",
-    "Legal Basis",
+    "Calculation / evidence basis",
 ]
-
-_CATEGORY_LABELS: dict[str, str] = {
-    "back_billing_excess": "BACK-BILLING EXCESS",
-    "credit_hold_interest": "CREDIT-HOLD INTEREST",
-    "late_credit_interest": "LATE-CREDIT INTEREST",
-}
 
 # Stable category display order (matches the estimator's emission order).
 _CATEGORY_ORDER = [
@@ -93,15 +88,14 @@ def write_compensation_sheet(
         return
 
     ws.title = "Compensation"
-    write_banner(ws, "INDICATIVE COMPENSATION", len(_COLS), color=_ORANGE, row=1, height=22)
+    write_banner(ws, "POTENTIAL BILLING ADJUSTMENTS", len(_COLS), color=_ORANGE, row=1, height=22)
     write_section_label(ws, 2, "LEGAL CONTEXT", len(_COLS))
     write_merged_text(
         ws,
         3,
-        "Indicative compensation claims estimated deterministically from the "
-        "extracted evidence records. Figures are indicative only and are not "
-        "legal advice; verify against original documents before use in any "
-        "formal dispute.",
+        "Potential historic-charge adjustments and optional interest scenarios, not a reviewed "
+        "complaint reduction or compensation award. Check cancellation/credit treatment and "
+        "earlier demands, then consolidate the proposal in Reconciled claims.",
         len(_COLS),
         height=40,
     )
@@ -113,7 +107,7 @@ def write_compensation_sheet(
         group = [row for row in rows if row.get("category") == category]
         if not group:
             continue
-        label = _CATEGORY_LABELS.get(category, category.upper())
+        label = category_label(category)
         label_cell = ws.cell(row=r, column=1, value=label)
         label_cell.font = Font(bold=True, color=_NAVY)
         r += 1
@@ -138,12 +132,13 @@ def write_compensation_sheet(
                 _text(ws, r, 5, "", fill_hex=bg)
             _money(ws, r, 6, indicative, fill_hex=bg)
             _text(ws, r, 7, legal_basis, wrap=True, fill_hex=bg)
+            ws.row_dimensions[r].height = 85
             r += 1
 
     write_trailing_total(
         ws,
         r,
-        "TOTAL INDICATIVE COMPENSATION",
+        TOTAL_LABEL.upper(),
         [(6, round(total, 2))],
         5,
         len(_COLS),

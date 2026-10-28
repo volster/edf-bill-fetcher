@@ -490,6 +490,48 @@ def _validate_models(value: Any) -> None:
                 "domination",
             } <= set(restored):
                 raise ValueError("SAP payload is incomplete")
+            if "ledger_overview" in restored:
+                rows = restored["ledger_overview"]
+                if not isinstance(rows, list) or len(rows) > 100000:
+                    raise ValueError("Invalid ledger overview")
+                for row in rows:
+                    row = _object(
+                        row,
+                        {
+                            "scope",
+                            "references",
+                            "records",
+                            "charges",
+                            "net_credits",
+                            "opening_date",
+                            "opening_balance",
+                            "closing_date",
+                            "closing_balance",
+                        },
+                    )
+                    if (
+                        not isinstance(row["scope"], list)
+                        or len(row["scope"]) != 4
+                        or any(not isinstance(part, str) for part in row["scope"])
+                        or not isinstance(row["references"], list)
+                        or any(not isinstance(ref, str) or not ref for ref in row["references"])
+                        or type(row["records"]) is not int
+                        or row["records"] < 1
+                    ):
+                        raise ValueError("Invalid ledger overview identity")
+                    for key in ("charges", "net_credits"):
+                        _money(row[key])
+                    for prefix in ("opening", "closing"):
+                        _money(row[prefix + "_balance"], nullable=True)
+                        day = row[prefix + "_date"]
+                        if (day is None) != (row[prefix + "_balance"] is None):
+                            raise ValueError("Ledger balance requires a dated observation")
+                        if day is not None:
+                            if (
+                                not isinstance(day, str)
+                                or date.fromisoformat(day).isoformat() != day
+                            ):
+                                raise ValueError("Invalid ledger observation date")
             if "bill_revisions" in restored:
                 _validate_revisions(restored["bill_revisions"])
             if "rebilling_ledger" in restored:

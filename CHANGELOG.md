@@ -58,6 +58,26 @@ semver-friendly.
 
 ### Fixed
 
+- Payment reminders now extract an explicit demand before generic balance patterns;
+  fee thresholds and conditional meter-reading advice do not become balances or readings.
+- Repeated payment-history rows retain their parent-invoice identity across merged
+  and individual PDFs. Statement/history postings require a corroborated multi-date
+  sequence and per-source uniqueness; ambiguous observations remain visible for review.
+- SAP candidates require temporal support. Amount similarity cannot pair events
+  years apart, and event summaries assign only a unique High-confidence invoice.
+- Source-backed legacy/Kraken aliases and unambiguous ledger context link analyses
+  without rewriting observed identities. A stored Ledger overview exposes dated
+  balances and transactions; original SAP rows remain byte-for-byte equivalent in persistence.
+- SAP read-source descriptions take precedence over raw codes. Repeated deemed
+  opening readings are one displayed observation with an occurrence count.
+- Positive net rebills retain the gross replacement-charge calculation basis when
+  cancellation components are present. Public adjustment labels distinguish automatic
+  scenarios from reviewed claims and compensation awards.
+- PDF and Word reports link to mapped original sources/pages, alongside HTML,
+  workbook and index links; missing or changed sources are not linked.
+- Annual balance summaries use dated balance observations, so unrelated supporting
+  documents do not hide a valid single-ledger summary.
+
 - Source-preview controls remain reachable with larger Windows font metrics. The review splitter now reports a bounded height while allowing the enclosing scroll area to include all controls, including the dispute workspace.
 
 - Native readiness checks stay hidden on Windows and discard late results safely during application shutdown.

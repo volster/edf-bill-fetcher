@@ -167,3 +167,11 @@ The focused letter is generated from the accepted review. To change a figure or
 scope, correct the main workbook or app and regenerate. If you edit the letter's
 prose separately, keep track of that copy; a later regeneration will not import
 its edits back into the analytical decisions.
+
+Automatic **Potential Billing Adjustments** remains separate from this workflow.
+A cancellation/rebill's net adjustment can be much smaller than its positive
+replacement charges; the automated calculation now discloses that distinction
+for positive as well as negative net rebills. It does not cap a human proposal at
+the net change, resolve earlier demands or subtract cancellation credits twice.
+Use the main ledger, source components and received-relief allocations to make
+those decisions explicitly.

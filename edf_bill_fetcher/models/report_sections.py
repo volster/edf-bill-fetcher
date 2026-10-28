@@ -26,7 +26,7 @@ REPORT_SECTIONS: list[ReportSectionMeta] = [
     ReportSectionMeta("forecast", "Forecast & Projection"),
     ReportSectionMeta("data_quality", "Data Quality Assessment"),
     ReportSectionMeta("tariff", "Tariff Impact Analysis"),
-    ReportSectionMeta("compensation", "Compensation Analysis"),
+    ReportSectionMeta("compensation", "Potential Billing Adjustments"),
     ReportSectionMeta("appendix_methodology", "Methodology & Data Sources", is_appendix=True),
     ReportSectionMeta("appendix_glossary", "Glossary", is_appendix=True),
     ReportSectionMeta("appendix_full_evidence", "Full Evidence Table", is_appendix=True),

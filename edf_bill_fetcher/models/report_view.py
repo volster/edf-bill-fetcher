@@ -48,6 +48,11 @@ class ReportView:
     selection: RenderSelection
 
     @property
+    def ledger_overview(self) -> list[dict]:
+        """Return a stored optional overview; old results never gain recomputed figures."""
+        return list(self.model("sap").get("ledger_overview", []))
+
+    @property
     def config(self) -> dict:
         """Return a detached effective configuration with explicit presentation choices."""
         cfg = object_value(self.snapshot.prepared.effective_config)

@@ -73,7 +73,7 @@ an absent sheet does not by itself establish that no issue exists.
 
 | Task | Sheets to use |
 | --- | --- |
-| Get an overview | Start here, Annual Summary, Data Quality Report. |
+| Get an overview | Start here, Ledger overview, Annual Summary, Data Quality Report. |
 | Inspect extracted records | EDF Evidence Report; Duplicate Entries, Filtered (Below Min) and Parse Errors when present. |
 | Correct a value or exclude a record | Review & Corrections; Review history shows accepted changes. |
 | Follow bills and credits | Bill revisions, Rebilling ledger, Rebilling components, Rebilling comparisons. |
@@ -137,7 +137,7 @@ selection, so a section's number can change when you omit earlier sections.
 
 The available sections cover the executive summary, key findings, evidence index,
 detailed findings, timeline, Ofgem comparison, statistics, payments, forecast,
-data quality, tariffs and compensation. Appendices cover methodology, glossary
+data quality, tariffs and potential billing adjustments. Appendices cover methodology, glossary
 and the full evidence table. Detailed findings includes stored revision and
 claim information when available. The workbook provides the fuller tabular
 reference where report views limit automatic suggestions.
@@ -198,3 +198,39 @@ file contents rather than certify their truth.
 Keep an intact private master pack. A separately redacted sharing copy must be
 labelled as such; editing copied originals can invalidate recorded hashes. Do not
 rewrite the master manifest to make changed bytes appear to be the preserved source.
+
+## Linked accounts, readings and automatic adjustments
+
+Newly analysed packs can include **Ledger overview**, a protected table of dated
+balances and movements by analytical ledger. Explicit paired legacy/Kraken account
+references in SAP evidence can link those account renderings. Missing fuel, meter
+or register context is grouped only when unique within the supplied evidence;
+conflicting and unassigned identities remain separate. Original scalar identities
+remain in the evidence, and **Ledger Identity Basis** explains derived grouping.
+The overview does not calculate a current balance by adding incomplete transactions.
+
+A payment reminder repeats a demand; it is not another charge. General advice
+about estimated bills or smart meters does not establish the reading used for a
+specific bill. Repeated invoice payment-history rows use their parent invoice and
+line identity. Statement/history links also require a corroborated sequence over
+multiple dates and unique occurrences within each source. Ambiguities remain
+separate and appear in review priorities/run warnings rather than silently merging.
+
+The **Meter Readings** legend includes `D` for a deemed/estimated source. A bare
+SAP `A` code is not described as supplier-confirmed when its read-source description
+contradicts that interpretation. Identical SAP observations can be displayed once
+with occurrence counts; the SAP source sheet retains the original rows and codes.
+
+The report section **Potential Billing Adjustments** uses the existing
+`compensation` selection key. Its workbook tab remains **Compensation** for
+compatibility. These scenarios are separate from **Reconciled claims**. A positive
+net rebill can contain much larger replacement charges and cancellations; its
+calculation basis explicitly identifies the gross amount, net adjustment and
+available VAT/sub-period basis. No automatic entitlement or concession is implied.
+
+The legacy **SAP ↔ EDF Matched Events** sheet now labels its rows as candidates.
+Only a unique High-confidence candidate is assigned in an event summary, and even
+that remains subject to checking originals. Low/Medium and ambiguous candidates
+are not promoted into a definitive invoice relationship. Date distance measures
+proximity of the supporting posting/clearing date to the billed period: an in-span
+date has distance zero.

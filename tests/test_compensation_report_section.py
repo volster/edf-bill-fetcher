@@ -1,4 +1,4 @@
-"""TDD tests for the Compensation Analysis report section (Wave 6d, Task 8).
+"""TDD tests for the Potential Billing Adjustments report section (Wave 6d, Task 8).
 
 Pins the four wiring points for the new section:
   1. ``REPORT_SECTIONS`` (pdf_report) gains the ``compensation`` key.
@@ -7,8 +7,8 @@ Pins the four wiring points for the new section:
   4. The HTML dispatcher (``generate_html_report``) wires it.
 
 Plus behavioural coverage: a synthetic record set that yields compensation
-rows renders a "Compensation Analysis" section in a generated PDF, DOCX and
-HTML; empty rows produce the "no compensation claims identified" note without
+rows renders a "Potential Billing Adjustments" section in a generated PDF, DOCX and
+HTML; empty rows produce the "no potential adjustment scenarios identified" note without
 crashing any format.
 """
 
@@ -120,7 +120,7 @@ class TestCompensationRegistry:
 
     def test_compensation_is_main_not_appendix(self) -> None:
         meta = next(s for s in REPORT_SECTIONS if s.key == "compensation")
-        assert meta.title == "Compensation Analysis"
+        assert meta.title == "Potential Billing Adjustments"
         assert meta.is_appendix is False
 
     def test_compensation_after_tariff_before_appendices(self) -> None:
@@ -150,7 +150,7 @@ class TestCompensationDispatch:
 
 class TestCompensationRender:
     """A synthetic record set that yields compensation rows renders a
-    Compensation Analysis section in PDF, DOCX and HTML."""
+    Potential Billing Adjustments section in PDF, DOCX and HTML."""
 
     def test_pdf_renders_compensation_section(self, tmp_path: Path) -> None:
         from edf_bill_fetcher.io.reporters.pdf_report import generate_ombudsman_pdf
@@ -175,7 +175,7 @@ class TestCompensationRender:
         assert result == out
         doc = Document(out)
         texts = [p.text for p in doc.paragraphs]
-        assert any("Compensation Analysis" in t for t in texts)
+        assert any("Potential Billing Adjustments" in t for t in texts)
 
     def test_html_renders_compensation_section(self, tmp_path: Path) -> None:
         from edf_bill_fetcher.io.reporters.html_report import generate_html_report
@@ -184,7 +184,7 @@ class TestCompensationRender:
         result = generate_html_report(_compensation_records(), out, _config(), _StubEngine())
         assert result == out
         rendered = Path(out).read_text(encoding="utf-8")
-        assert "Compensation Analysis" in rendered
+        assert "Potential Billing Adjustments" in rendered
 
 
 class TestCompensationEmpty:
@@ -212,7 +212,7 @@ class TestCompensationEmpty:
         assert result == out
         doc = Document(out)
         texts = [p.text for p in doc.paragraphs]
-        assert any("no compensation claims identified" in t.lower() for t in texts)
+        assert any("no potential adjustment scenarios identified" in t.lower() for t in texts)
 
     def test_html_empty_rows_no_crash(self, tmp_path: Path) -> None:
         from edf_bill_fetcher.io.reporters.html_report import generate_html_report
@@ -221,7 +221,7 @@ class TestCompensationEmpty:
         result = generate_html_report(_no_compensation_records(), out, _config(), _StubEngine())
         assert result == out
         rendered = Path(out).read_text(encoding="utf-8")
-        assert "no compensation claims identified" in rendered.lower()
+        assert "no potential adjustment scenarios identified" in rendered.lower()
 
 
 if __name__ == "__main__":

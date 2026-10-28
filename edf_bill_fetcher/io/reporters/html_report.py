@@ -20,12 +20,9 @@ loud-failure mode the PDF dispatcher uses.
 from __future__ import annotations
 
 import html as html_lib
-import json
-from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 import pandas as pd
 
@@ -34,7 +31,12 @@ from edf_bill_fetcher.helpers.date_utils import parse_to_sort_date
 from edf_bill_fetcher.helpers.formatting import fmt_money, fmt_number
 from edf_bill_fetcher.helpers.formatting import report_date as fmt_date
 from edf_bill_fetcher.helpers.version import get_package_version as _get_package_version
+from edf_bill_fetcher.io.reporters.source_links import SourceLink as _SourceLink
+from edf_bill_fetcher.io.reporters.source_links import source_links as _source_links
+from edf_bill_fetcher.models.compensation_labels import TOTAL_LABEL, category_label
 from edf_bill_fetcher.models.config import ConfigDict
+from edf_bill_fetcher.models.ledger_tables import NOTICE as LEDGER_NOTICE
+from edf_bill_fetcher.models.ledger_tables import ledger_table
 from edf_bill_fetcher.models.output_overview import (
     OutputOverview,
     build_output_overview,
@@ -131,48 +133,6 @@ ul { padding-left:24px; }
 def _esc(value: object) -> str:
     """HTML-escape a value so user-derived text renders as visible text."""
     return html_lib.escape(str(value), quote=True)
-
-
-@dataclass(frozen=True)
-class _SourceLink:
-    """A local manifest path, never an arbitrary HTML string from evidence."""
-
-    href: str
-    label: str
-
-
-def _source_links(bundle_dir: str | None) -> dict[str, _SourceLink]:
-    """Resolve only saved, contained manifest paths beside this report."""
-    if not bundle_dir:
-        return {}
-    root = Path(bundle_dir).resolve()
-    try:
-        files = json.loads((root / "evidence_manifest.json").read_text(encoding="utf-8"))["files"]
-    except (OSError, ValueError, KeyError, TypeError):
-        return {}
-    links: dict[str, _SourceLink] = {}
-    ambiguous: set[str] = set()
-    if not isinstance(files, list):
-        return links
-    for entry in files:
-        if not isinstance(entry, dict) or entry.get("status") != "saved":
-            continue
-        path = entry.get("saved_path")
-        if not isinstance(path, str) or "\\" in path or ":" in path:
-            continue
-        relative = PurePosixPath(path)
-        if relative.is_absolute() or ".." in relative.parts:
-            continue
-        target = (root / path).resolve()
-        if root not in target.parents or not target.is_file():
-            continue
-        link = _SourceLink(quote(path, safe="/"), "Open source")
-        for key in (entry.get("source_id"), entry.get("attachment_name")):
-            if isinstance(key, str) and key:
-                if key in links and links[key] != link:
-                    ambiguous.add(key)
-                links[key] = link
-    return {key: link for key, link in links.items() if key not in ambiguous}
 
 
 def _table(rows: list[list[Any]], *, header: bool = True) -> str:
@@ -964,7 +924,9 @@ def create_compensation_section(
     rows = payload if payload is not None else estimate_compensation(df, config)
 
     if not rows:
-        parts.append("<p>No compensation claims identified in the extracted records.</p></div>")
+        parts.append(
+            "<p>No potential adjustment scenarios identified in the extracted records.</p></div>"
+        )
         return "\n".join(parts)
 
     categories: dict[str, list[dict[str, Any]]] = {}
@@ -973,23 +935,23 @@ def create_compensation_section(
         categories.setdefault(cat, []).append(row)
 
     for cat, cat_rows in categories.items():
-        parts.append(f"<h3>{_esc(cat)}</h3>")
+        parts.append(f"<h3>{_esc(category_label(cat))}</h3>")
         table_rows: list[list[Any]] = [
             [
                 "Category",
                 "Invoice #",
                 "Date",
-                "Base Amount",
+                "Calculation base",
                 "Days",
                 "Rate",
                 "Indicative Amount",
-                "Legal Basis",
+                "Calculation / evidence basis",
             ]
         ]
         for r in cat_rows:
             table_rows.append(
                 [
-                    str(r.get("category", "")),
+                    category_label(r.get("category", "")),
                     str(r.get("invoice_ref", "")),
                     str(r.get("date", "")),
                     fmt_money(r.get("base_amount")),
@@ -1002,7 +964,7 @@ def create_compensation_section(
         parts.append(_table(table_rows))
 
     total = sum(float(r.get("indicative_amount") or 0.0) for r in rows)
-    parts.append(f"<h3>Total Indicative Compensation: {_esc(fmt_money(total))}</h3>")
+    parts.append(f"<h3>{TOTAL_LABEL}: {_esc(fmt_money(total))}</h3>")
     parts.append(f'<p class="note">{_esc(DISCLAIMER)}</p>')
     parts.append("</div>")
     return "\n".join(parts)
@@ -1309,7 +1271,16 @@ def render_html(view: ReportView, output_path: str) -> str:
                 "closing_balance": closing_balance,
                 "overview": build_output_overview(view),
             },
-            lambda kwargs: create_executive_summary(**kwargs),
+            lambda kwargs: (
+                create_executive_summary(**kwargs)
+                + (
+                    "<h3>Ledger overview</h3>"
+                    + _note(LEDGER_NOTICE)
+                    + _table(ledger_table(view.ledger_overview))
+                    if view.ledger_overview
+                    else ""
+                )
+            ),
         ),
         "key_findings": (
             lambda: {"flags": flags},

@@ -20,9 +20,9 @@ from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.processors.compensation import DISCLAIMER
 
 CATEGORY_LABELS = {
-    "back_billing_excess": "BACK-BILLING EXCESS",
-    "credit_hold_interest": "CREDIT-HOLD INTEREST",
-    "late_credit_interest": "LATE-CREDIT INTEREST",
+    "back_billing_excess": "Potential back-billing adjustment",
+    "credit_hold_interest": "Credit-hold interest scenario",
+    "late_credit_interest": "Late-credit interest scenario",
 }
 
 

@@ -78,8 +78,23 @@ AMOUNT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "your_new_account_balance",
         re.compile(r"your new account balance\s+£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
     ),
+    # A reminder repeats an existing demand; fee thresholds later in the
+    # message must not replace that demand or create a new transaction.
+    (
+        "payment_reminder_demand",
+        re.compile(
+            r"(?:we\s+(?:recently\s+)?sent you (?:a|your) bill for|your outstanding bill (?:is|of))\s*£\s*([\d,]+(?:\.\d{2})?)",
+            re.IGNORECASE,
+        ),
+    ),
     # Generic anchors (in priority order — more specific first)
-    ("balance_within", re.compile(r"balance[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE)),
+    (
+        "balance_within",
+        re.compile(
+            r"\bbalance\b(?:(?!\b(?:over|under|above|below)\b)[\s\S]){0,30}?£\s?([\d,]+(?:\.\d{2})?)",
+            re.IGNORECASE,
+        ),
+    ),
     (
         "total_charges_within",
         re.compile(r"total charges[\s\S]{0,30}?£\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
@@ -120,6 +135,7 @@ _AMOUNT_PATTERN_NEW_BILL: frozenset[str] = frozenset(
 _AMOUNT_PATTERN_ONGOING_BALANCE: frozenset[str] = frozenset(
     {
         "your_new_account_balance",
+        "payment_reminder_demand",
         "balance_within",
         "current_balance_within",
     }

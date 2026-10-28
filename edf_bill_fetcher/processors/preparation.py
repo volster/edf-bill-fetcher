@@ -174,9 +174,15 @@ def normalize_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 def scope(row: dict[str, Any]) -> tuple[str, ...]:
     """Keep accounts, fuels, meters and registers in independent ledgers."""
+    from edf_bill_fetcher.processors.ledger_context import fuel_key
+
     return (
-        account_key(identity(row.get("Account"))),
-        *(identity(row.get(k)).casefold() for k in ("Fuel", "Meter", "Register")),
+        account_key(identity(row.get("Ledger Account")) or identity(row.get("Account"))),
+        fuel_key(row.get("Ledger Fuel") or row.get("Fuel")),
+        *(
+            (identity(row.get("Ledger " + key)) or identity(row.get(key))).casefold()
+            for key in ("Meter", "Register")
+        ),
     )
 
 
@@ -190,9 +196,11 @@ def _same_event(a: dict[str, Any], b: dict[str, Any]) -> bool:
     if ai and bi and ai != bi:
         return False
     # A statement number identifies several transactions, not one invoice.
-    statement = "Reconciliation Statement" in str(
-        a.get("Logic Used")
-    ) or "Reconciliation Statement" in str(b.get("Logic Used"))
+    statement = any(
+        row.get("Document Role") == "Historical account statement"
+        or "Reconciliation Statement" in str(row.get("Logic Used"))
+        for row in (a, b)
+    )
     if ai and ai == bi and not statement and a["Entry Type"] == "New Bill":
         for key in ("Period From", "Period To", "Period Charge (£)", "Balance (£)"):
             left, right = identity(a.get(key)), identity(b.get(key))
@@ -218,6 +226,16 @@ def _same_event(a: dict[str, Any], b: dict[str, Any]) -> bool:
         and identity(a.get("Page From")) == identity(b.get("Page From"))
         and bool(identity(a.get("Source ID")))
     )
+    parent_invoice = identity(a.get("Source Invoice #"))
+    same_parent_payment = (
+        a["Entry Type"] == "Payment"
+        and parent_invoice
+        and parent_invoice == identity(b.get("Source Invoice #"))
+        and identity(a.get("Source Row"))
+        and identity(a.get("Source Row")) == identity(b.get("Source Row"))
+        and identity(a.get("Document Date"))
+        and identity(a.get("Document Date")) == identity(b.get("Document Date"))
+    )
     complete_period = all(identity(a.get(k)) for k in ("Period From", "Period To"))
     cross_source_bill = (
         not statement
@@ -229,6 +247,7 @@ def _same_event(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return bool(
         cross_source_bill
         or (ai and ai == bi and not statement)
+        or same_parent_payment
         or same_transaction
         or same_occurrence
     )
@@ -260,7 +279,7 @@ def _link_statement_observations(rows: list[dict[str, Any]]) -> None:
         )
         if kind not in {"Charge", "Credit"}:
             continue
-        account = account_key(identity(row.get("Account")))
+        account = scope(row)[0]
         if not account or not all(identity(row.get(k)) for k in ("Period From", "Period To")):
             continue
         same_lines = [
@@ -295,7 +314,7 @@ def _link_statement_observations(rows: list[dict[str, Any]]) -> None:
                 continue
             if original["Entry Type"] != ("New Bill" if kind == "Charge" else "Credit"):
                 continue
-            if account_key(identity(original.get("Account"))) != account:
+            if scope(original)[0] != account:
                 continue
             if not identity(original.get("Invoice #")):
                 continue
@@ -431,6 +450,9 @@ def prepare_evidence(
     rows = [normalize_record(r) for r in records]
     _link_statement_observations(rows)
     _link_account_history_formats(rows)
+    from edf_bill_fetcher.processors.posting_identity import link_posting_sequences
+
+    link_posting_sequences(rows)
     rows.sort(
         key=lambda r: (
             r.get("Document Role") == "Historical account statement",

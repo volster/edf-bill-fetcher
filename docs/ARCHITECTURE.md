@@ -189,3 +189,28 @@ fatal to that artifact/run; successful earlier artifacts remain. Publication is
 atomic **per file**, not across the entire run. A requested focused complaint pack
 stages its directory/ZIP before publication; it does not make the already saved
 main analysis dependent on every original being available.
+
+## Derived identity and posting contracts
+
+`processors/ledger_context.py` derives **Ledger Account/Fuel/Meter/Register** from
+explicit one-to-one SAP account aliases and uniquely supported context. It does
+not overwrite observed identity fields or infer an unassigned account. Conflicting
+aliases and context remain separate. Review inputs discard stale derived fields
+before deriving the new context. `scope()` consumes those derived grouping fields.
+
+Preparation uses the context for supported duplicate decisions. Parent-invoice,
+line, date and amount identify repeated invoice-history observations. Cross-source
+statement/history links require multiple distinct dates and source uniqueness;
+conflicting balances or repeated identical postings remain review work. The
+original observations, source occurrences and dropped siblings remain preserved.
+
+Analytical SAP comparisons use a separate context map; accepted event rows remain
+exact copies of indexed preserved SAP source rows. Strict decoding still checks
+that identity. It must not be relaxed to accept augmented or substituted raw rows.
+Optional `sap.ledger_overview` stores per-ledger dated balances and movements with
+strict money/date validation. Older results do not acquire it by rerendering.
+
+The preparation/method identifiers record these algorithms independently of the
+v3 transport version. New analysis uses `source-context-v2` preparation and
+`snapshot-v3-source-context` models; loading an earlier accepted result preserves
+its methods and calculated values.
