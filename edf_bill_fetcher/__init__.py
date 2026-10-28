@@ -6,7 +6,7 @@ as part of the modularization refactor.  Each submodule owns a domain:
 - ``collectors`` — extraction orchestrators (EvidenceEngine)
 - ``helpers`` — shared utility helpers (formatting, date_utils, excel_utils, pdf_utils)
 - ``models`` — typed dataclasses (SapBackBillingEvent, SapEdfMatch)
-- ``ui`` — Tkinter application classes (App, ReportOptionsDialog)
+- ``ui`` — Qt evidence workspace (EvidenceWindow, ReportDialog)
 - ``writers`` — Excel sheet writers (write_reconciliation_sheet, export_to_excel, etc.)
 
 The top-level ``__init__.py`` does NOT eagerly import from submodules

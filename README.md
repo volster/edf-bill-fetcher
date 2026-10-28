@@ -50,7 +50,7 @@ The codebase has been split from its original monolith into the `edf_bill_fetche
 | `edf_bill_fetcher.io.writers`   | openpyxl          | Excel sheet builders — one submodule per sheet (13 writers)                    |
 | `edf_bill_fetcher.io.reporters` | format libraries | PDF, DOCX and self-contained HTML renderers                                    |
 | `edf_bill_fetcher.io.adapters`  | libpff-python      | PST/OST archive adapter                                                        |
-| `edf_bill_fetcher.ui`            | PySide6 / Qt       | Default GUI: `qt_app.EvidenceWindow`; legacy Tk classes retain their public API |
+| `edf_bill_fetcher.ui`            | PySide6 / Qt       | Qt evidence workspace: `qt_app.EvidenceWindow` |
 | `edf_bill_fetcher.models`       | dataclasses       | Event / data models                                                            |
 | `edf_bill_fetcher.writers`      | internal facade  | Re-exports `writers._helpers` analysis helpers; canonical writer entry points live in `edf_bill_fetcher.io.writers` |
 
@@ -76,7 +76,7 @@ pip install -e ".[msg]"       # optional Outlook MSG parsing
 # packaging binaries — the default extras-as-runtime policy above
 # typical installs at one command):
 #
-#   [dev]    test + lint + typecheck toolchain (pytest, pytest-xvfb,
+#   [dev]    test + lint + typecheck toolchain (pytest,
 #            pytest-cov, ruff, mypy)
 #   [build]  PyInstaller for Windows / Linux binaries and macOS app bundles
 pip install -e ".[dev,build]"   # recommended for contributors
@@ -118,7 +118,7 @@ What `pip install -e .` actually pulls in (current version):
 Adding optional toolchains later does not require re-installing everything:
 
 ```bash
-pip install -e ".[dev]"     # bring in pytest / pytest-xvfb / pytest-cov / ruff / mypy only
+pip install -e ".[dev]"     # bring in pytest / pytest-cov / ruff / mypy only
 pip install -e ".[build]"   # add PyInstaller
 ```
 
@@ -334,7 +334,7 @@ A `tests/test_dispatch_parity.py` structural test pins the invariant that the PD
 ### Adding a new section
 
 1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/models/report_sections.py` with `key`, `title`, and optionally `is_appendix`.
-2. The Qt report dialog reads the shared section registry automatically. Keep `ReportOptionsDialog.SECTIONS` in `edf_bill_fetcher/ui/app.py` in sync for legacy Tk clients.
+2. The Qt report dialog reads the shared section registry automatically. The retired Tk interface is not packaged or tested.
 3. Add a `def create_<name>(...)` builder function in `edf_bill_fetcher/io/reporters/pdf_report.py`.
 4. Wire the builder into the `section_builders` dispatch dict in `render_pdf`, `render_docx` and `render_html`. Forgetting this raises a clear `RuntimeError` at report-render time — that's the loud-failure mode that keeps the dispatch in lockstep with the registry.
 
@@ -617,7 +617,7 @@ The full design spec is preserved at
   python-docx, scipy, **libpff-python**, **statsmodels**.
 - Toolchain (only for contributors / packagers, install via
   `pip install -e ".[dev,build]"`):
-  pytest, pytest-xvfb, pytest-cov, coverage, ruff, mypy, pyinstaller.
+  pytest, pytest-cov, coverage, ruff, mypy, pyinstaller.
 
 ## Development
 
@@ -655,12 +655,12 @@ Tests are organised into three lake levels:
   missing — a fully-synthetic, deterministic dataset (FAFA policy,
   no real EDF data).
 
-Tkinter checks require a display server. Headless Linux needs the Xvfb system binary as well as the `pytest-xvfb` plugin in the dev extra. The plugin is opt-out (`--no-xvfb`); installing it does not install the system binary.
+The desktop and GUI tests use Qt. On headless Linux the test configuration selects Qt’s offscreen platform; Tcl/Tk, Xvfb and display-bootstrap plugins are not required.
 
 Qt desktop tests use the `offscreen` platform and real widgets and worker
 threads. They cover input capture, remembered settings, cancellation,
 saved-analysis reuse, workbook imports and truthful output status. Legacy
-Tk checks still run to protect the retained public API.
+The retired Tk interface is excluded from builds and no longer imports with the UI package.
 
 ### Linting / formatting / type-checking
 
@@ -675,7 +675,7 @@ ubuntu / windows / macos — see `.github/workflows/ci.yml`. Packaged runtime an
 
 ### Test coverage
 
-Coverage is measured with `coverage` (configured in `pyproject.toml [tool.coverage.run]`) over the `edf_bill_fetcher/` source tree. The CI gate is **`fail_under = 90`** in `pyproject.toml [tool.coverage.report]` — CI runs `pytest --cov=. --cov-report=xml` (Linux wraps it in `xvfb-run -a`) — see [`docs/COVERAGE.md`](docs/COVERAGE.md) for the measurement protocol, the strict `# pragma: no cover` policy, and how to extend coverage.
+Coverage is measured with `coverage` (configured in `pyproject.toml [tool.coverage.run]`) over the `edf_bill_fetcher/` source tree. The CI gate is **`fail_under = 90`** in `pyproject.toml [tool.coverage.report]` — CI runs `pytest --cov=. --cov-report=xml` (Qt uses its offscreen platform in headless CI) — see [`docs/COVERAGE.md`](docs/COVERAGE.md) for the measurement protocol, the strict `# pragma: no cover` policy, and how to extend coverage.
 
 ## Configuration
 

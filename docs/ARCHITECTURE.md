@@ -17,7 +17,7 @@ The application collects billing observations, prepares a canonical evidence dat
 | `io/writers/` | Builds Excel worksheets and copies/indexes evidence files with openpyxl and python-docx. |
 | `io/reporters/` | Renders PDF with ReportLab, DOCX with python-docx, and self-contained HTML. |
 | `helpers/` | Date, formatting, identity, Excel, artifact and resource utilities. Some helpers depend on pandas/openpyxl; this is not a stdlib-only layer. |
-| `ui/app.py`, `io/cli.py` | User entry points and run orchestration. |
+| `ui/qt_app.py`, `io/cli.py` | User entry points and run orchestration. |
 | `writers/` | Compatibility facade for historical helper imports. Some processors still import this facade; strict dependency inversion is not enforced. |
 
 ## Evidence flow

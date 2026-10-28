@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
+    QSize,
     QSortFilterProxyModel,
     Qt,
     QThread,
@@ -368,6 +369,16 @@ class PdfPreview(QThread):
             self.failed.emit(str(error))
 
 
+class ReviewSplitter(QSplitter):
+    """Expand normally without inheriting hidden editors' full form height."""
+
+    def sizeHint(self) -> QSize:
+        """Give the scroll layout a real height, bounded by the current review mode."""
+        hint = super().sizeHint()
+        hint.setHeight(self.minimumHeight())
+        return hint
+
+
 class EvidenceReviewPage(QWidget):
     """Browse records, findings and traceable sources without changing the result."""
 
@@ -457,9 +468,9 @@ class EvidenceReviewPage(QWidget):
         self.impact = label("", "hint", wrap=True)
         self.impact.hide()
         layout.addWidget(self.impact)
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter = ReviewSplitter(Qt.Orientation.Horizontal)
         self.splitter.setMinimumHeight(420)
-        self.splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         left = QWidget()
         records = QVBoxLayout(left)
         records.setContentsMargins(0, 0, 0, 0)
@@ -598,7 +609,7 @@ class EvidenceReviewPage(QWidget):
         self._focus_timer.start(0)
 
     def _focus_tools(self, index: int) -> None:
-        editing = index in {3, 4}
+        editing = self.details_tabs.widget(index) in {self.editor, self.revisions, self.rebilling}
         self.table.setMaximumHeight(110 if editing else 16777215)
         self.details_tabs.setMinimumHeight(450 if editing else 210)
         self.splitter.setMinimumHeight(600 if editing else 420)
@@ -606,7 +617,7 @@ class EvidenceReviewPage(QWidget):
             self._focus_timer.start(0)
 
     def _reveal_tools(self) -> None:
-        editing = self.details_tabs.currentIndex() in {3, 4}
+        editing = self.details_tabs.currentWidget() in {self.editor, self.revisions, self.rebilling}
         source_layout = self.preview_pane.layout()
         assert source_layout is not None
         needed = source_layout.totalHeightForWidth(max(1, self.preview_pane.width()))

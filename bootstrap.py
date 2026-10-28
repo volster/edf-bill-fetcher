@@ -63,8 +63,6 @@ def system_commands(platform: str, *, administrator: bool = False) -> list[list[
                 "tesseract-ocr-eng",
                 "python3-dev",
                 "python3-venv",
-                "python3-tk",
-                "tk-dev",
                 "build-essential",
                 "autoconf",
                 "automake",
@@ -73,7 +71,6 @@ def system_commands(platform: str, *, administrator: bool = False) -> list[list[
                 "libxcb-cursor0",
                 "libxkbcommon-x11-0",
                 "libegl1",
-                "xvfb",
             ],
         ]
     raise RuntimeError(

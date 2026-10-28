@@ -19,7 +19,7 @@ pip install -e ".[dev,msg]"  # include optional Outlook MSG parsing
 pip install -e ".[dev,build]"
 ```
 
-Reuse a working environment where available. Tkinter and the Xvfb binary on headless Linux are system prerequisites; pip extras do not install them. Native PST/OST builds may require compiler/autotools headers when no compatible wheel is available.
+Reuse a working environment where available. Qt is the supported desktop. Headless Linux tests use its offscreen platform without a virtual display. Native PST/OST builds may require compiler/autotools headers when no compatible wheel is available.
 
 ## Running tests
 
@@ -31,14 +31,12 @@ CI declares the following matrix; inspect results for the actual revision before
 
 - **Linux**: Python 3.10 / 3.11 / 3.12
 - **macOS**: same
-- **Windows**: same (tkinter ships with the standard Python installer on Windows)
-- **Headless Linux** (CI / containers): install the Xvfb system binary; `pytest-xvfb` in the dev extra can then activate a virtual display
+- **Windows**: same
+- **Headless Linux** (CI / containers): tests automatically select Qt's offscreen platform.
 
-`pytest-xvfb` is **opt-out**, not opt-in. If you want to debug a tkinter test on a real display (i.e. your laptop), pass `--no-xvfb` to disable the plugin for that run:
-
-```bash
-pytest --no-xvfb tests/test_app.py    # use your real X server
-```
+To run a native desktop test locally, select the platform supplied by the desktop
+session (for example `QT_QPA_PLATFORM=xcb` on Linux with an X server). Normal
+app startup does not force the offscreen test platform.
 
 ### Test layers
 
@@ -69,7 +67,7 @@ pytest -m "not slow"                      # by marker
 | `-q`                       | quiet — one dot per test                              |
 | `-v`                       | verbose — full test name per line                       |
 | `--lf`                     | rerun only the tests that failed last time             |
-| `--no-xvfb`                | disable `pytest-xvfb` — use the real display (laptop)   |
+| `QT_QPA_PLATFORM`          | choose Qt offscreen or the native desktop platform |
 | `-x`                      | stop on first failure                                  |
 | `-k <expr>`                | run tests matching the expression                      |
 
@@ -139,7 +137,7 @@ See [`docs/COVERAGE.md`](COVERAGE.md) for the full coverage protocol. The short 
 ### A new PDF/DOCX report section
 
 1. Add an entry to `REPORT_SECTIONS` in `edf_bill_fetcher/models/report_sections.py` with `key`, `title`, and optionally `is_appendix`.
-2. Add the matching key to `ReportOptionsDialog.SECTIONS` in `edf_bill_fetcher/ui/app.py`.
+2. The Qt `ReportDialog` reads the shared section registry; verify its selection and renderer dispatch tests.
 3. Add a `def create_<name>(...)` builder function in `edf_bill_fetcher/io/reporters/pdf_report.py`.
 4. Wire the builder into PDF, DOCX and HTML dispatchers. Missing sections fail the artifact rather than publishing a partial success.
 5. The structural parity test `tests/test_dispatch_parity.py` will catch missing dispatcher wiring in CI.
@@ -172,7 +170,7 @@ The repo uses [Conventional Commits](https://www.conventionalcommits.org/):
 - `chore:` tooling, dependency, config
 - `style:` formatting, PEP 8/257/20 conformance fixes
 
-Scopes are optional. Examples: `refactor(writers): extract export_to_excel to io/writers/export.py`, `test(processors): add comprehensive detection coverage`, `chore(deps): add pytest-xvfb to dev extras`.
+Scopes are optional. Examples: `refactor(writers): extract export_to_excel to io/writers/export.py`, `test(processors): add comprehensive detection coverage`, `chore(deps): update the Qt toolchain`.
 
 ## CI
 
@@ -181,7 +179,7 @@ CI runs on every push and every PR. The matrix is Python 3.10 / 3.11 / 3.12 × u
 1. `ruff check .`
 2. `ruff format --check .`
 3. `mypy .`
-4. `pytest --cov=. --cov-report=xml --cov-report=term-missing` (Linux uses `xvfb-run -a`)
+4. `pytest --cov=. --cov-report=xml --cov-report=term-missing` (headless GUI checks use Qt offscreen)
 
 CI is a regression gate. Functional extraction, saved-state reload, all requested exports, source links, GUI lifecycle and packaged runtime capabilities also need verification. Record focused checks separately from full matrix results.
 
@@ -195,7 +193,7 @@ The service pipeline is `capture_legacy` → `prepare_snapshot` → `analyse_pre
 
 `application/run_service.py` coordinates injected collection, source-copy, result-storage and renderer functions. It records atomic stage manifests with hashes of published result/report bytes, preserves successful artifacts after failure, checks cancellation between stages and always cleans resources. The CLI supplies explicit destinations; the GUI reserves unique folders before launching a non-daemon worker. UI widget values are captured on the main thread, and progress/messages return through the event queue.
 
-When extending this pipeline, verify an independently calculated money example, a strict persistence round trip, failure preservation and a rerender with calculation functions disabled. Exercise real Tk for worker/cancel/close changes. Keep the CI matrix, coverage threshold and lint/type checks intact; successful local examples do not establish cross-platform support.
+When extending this pipeline, verify an independently calculated money example, a strict persistence round trip, failure preservation and a rerender with calculation functions disabled. Exercise the real Qt workspace for worker/cancel/close changes. Keep the CI matrix, coverage threshold and lint/type checks intact; successful local examples do not establish cross-platform support.
 
 ## Validation and release provenance
 

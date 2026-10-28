@@ -48,6 +48,8 @@ def main() -> None:
         "--name=EDF_Evidence_Collector",
         "--additional-hooks-dir=.github/pyinstaller_hooks",
         *[f"--hidden-import={module}" for module in HIDDEN_IMPORTS],
+        "--exclude-module=tkinter",
+        "--exclude-module=_tkinter",
         "--collect-all=extract_msg",
         "--collect-data=edf_bill_fetcher",
         "--copy-metadata=edf-bill-fetcher",

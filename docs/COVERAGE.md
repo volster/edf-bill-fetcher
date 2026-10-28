@@ -105,7 +105,7 @@ The pragma is not a "this is annoying to test" escape hatch:
 
 - ❌ Pragma'ing a branch just because mocking the dependency is hard
 - ❌ Pragma'ing an `else:` clause for an error path that COULD be tested by injecting bad input
-- ❌ Pragma'ing a Tk dialog call just because it needs a mock (`unittest.mock.patch("tkinter.filedialog.askdirectory")` works fine)
+- ❌ Pragma'ing a Qt dialog call just because it needs a mock (`unittest.mock.patch("PySide6.QtWidgets.QFileDialog.getExistingDirectory")` works fine)
 - ❌ Pragma'ing a defensive `assert` you could test by passing the violating input
 
 If you find yourself wanting to pragma a line for any of these reasons, write the test instead. The pragma is for "no test could exercise this branch in this environment", not "the test would take effort".
@@ -136,13 +136,13 @@ Uncovered lines fall into three buckets:
 
 - **Easy**: a public function with no test → write a unit test calling it with synthetic input.
 - **Branchy**: a conditional branch with no test for one side → add a test that takes the uncovered branch.
-- **Boundary**: a Tk dialog / file I/O / external-API call → mock at the boundary (`unittest.mock.patch("tkinter.filedialog.askdirectory", return_value="/tmp/x")`), assert on the resulting state change (never on call counts).
+- **Boundary**: a Qt dialog / file I/O / external-API call → mock at the boundary (`unittest.mock.patch("PySide6.QtWidgets.QFileDialog.getExistingDirectory", return_value="/tmp/x")`), assert on the resulting state change (never on call counts).
 
 ### 3. Write the test
 
 Prefer real synthetic fixtures over mocked dependencies. The test suite already has synthetic frozen DataFrames in `tests/fixtures/` — extend those rather than mocking pandas.
 
-For Tk dialogs in `ui/app.py`, mock at the `tkinter.filedialog.*`/`tkinter.simpledialog.*`/`tkinter.messagebox.*` boundary — invoke the handler, assert state changes (variable values, button states). Never assert mock-call counts (brittle to refactor).
+For Qt dialogs in `ui/qt_app.py`, mock at the `QFileDialog`/`QMessageBox` boundary — invoke the handler, assert state changes (variable values, button states). Never assert mock-call counts (brittle to refactor).
 
 For CLI paths in `io/cli.py`, use `monkeypatch.setattr("sys.argv", [...])` + `capsys` for stdout. Never invoke real file paths.
 

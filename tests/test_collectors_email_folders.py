@@ -8,15 +8,13 @@ adapter's 5-key dict) → domain-filter / subject-keyword gate →
 malformed file logs to ``error_log`` and never aborts the folder.
 
 Also covers the CLI ``--eml-dir`` end-to-end run on a synthetic folder
-and the GUI "EML/MSG Folder" source selector appearing in Section 1.
+The Qt folder source picker is covered by the desktop workflow tests.
 """
 
 from __future__ import annotations
 
 import json
 import struct
-import tkinter as tk
-from collections.abc import Iterator
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
@@ -307,41 +305,4 @@ class TestCliEmlDirEndToEnd:
 
 
 # ---------------------------------------------------------------------------
-# GUI source selector
-# ---------------------------------------------------------------------------
-
-
-def _walk_children(widget: tk.Misc) -> Iterator[tk.Misc]:
-    for child in widget.winfo_children():
-        yield child
-        yield from _walk_children(child)
-
-
-def _all_widget_text(widget: tk.Misc) -> list[str]:
-    texts: list[str] = []
-    for child in _walk_children(widget):
-        try:
-            cls = child.winfo_class()
-            if cls in ("Label", "Button", "Checkbutton", "TLabel", "TButton"):
-                t = child.cget("text")
-                if t and isinstance(t, str):
-                    texts.append(t)
-        except tk.TclError:
-            pass
-    return texts
-
-
-def test_gui_eml_msg_folder_source_appears(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Section 1 exposes an "EML/MSG Folder" selector backed by a StringVar."""
-    from edf_bill_fetcher.ui.app import App
-
-    monkeypatch.setattr(App, "_load_config", lambda self: None)
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        app = App(root)
-        texts = _all_widget_text(app.root)
-        assert any("EML/MSG Folder:" in t for t in texts)
-        assert hasattr(app, "eml_msg_dir"), "App must carry an eml_msg_dir StringVar"
-    finally:
-        root.destroy()
+# The Qt source-picker contract is exercised in tests/test_qt_desktop.py.

@@ -380,31 +380,39 @@ def test_failed_load_preserves_previous_analysis(window, application, pack, tmp_
 
 
 @pytest.mark.parametrize("width", [820, 1160])
+@pytest.mark.parametrize("font_pixels", [13, 20, 24])
 def test_small_and_normal_windows_keep_preview_and_actions_accessible(
-    window, application, pack, width
+    window, application, pack, width, font_pixels
 ):
-    _, path, _, _, _ = pack
-    page = open_pack(window, application, path)
-    window.resize(width, 720 if width == 1160 else 600)
-    application.processEvents()
-    assert window.width() == width
-    assert window.height() == (720 if width == 1160 else 600)
-    assert window.rect().contains(
-        window.run_button.mapTo(window, window.run_button.rect().bottomRight())
+    stylesheet = application.styleSheet()
+    application.setStyleSheet(
+        stylesheet + f"\nQWidget {{font-size: {font_pixels}px; font-family: 'DejaVu Sans';}}"
     )
-    # The expanded correction workspace scrolls at smaller sizes. Every
-    # source action must be reachable inside that viewport without resizing.
-    for action in (page.open_button, page.open_source, page.page):
-        viewport = page.workspace_scroll.viewport()
+    try:
+        _, path, _, _, _ = pack
+        page = open_pack(window, application, path)
+        window.resize(width, 720 if width == 1160 else 600)
+        application.processEvents()
+        assert window.width() == width
+        assert window.height() == (720 if width == 1160 else 600)
+        assert window.rect().contains(
+            window.run_button.mapTo(window, window.run_button.rect().bottomRight())
+        )
+        # The expanded correction workspace scrolls at smaller sizes. Every
+        # source action must be reachable inside that viewport without resizing.
+        for action in (page.open_button, page.open_source, page.page):
+            viewport = page.workspace_scroll.viewport()
 
-        def revealed(action=action, viewport=viewport):
-            page.workspace_scroll.ensureWidgetVisible(action, 10, 10)
-            return viewport.rect().contains(
-                action.mapTo(viewport, action.rect().topLeft())
-            ) and viewport.rect().contains(action.mapTo(viewport, action.rect().bottomRight()))
+            def revealed(action=action, viewport=viewport):
+                page.workspace_scroll.ensureWidgetVisible(action, 10, 10)
+                return viewport.rect().contains(
+                    action.mapTo(viewport, action.rect().topLeft())
+                ) and viewport.rect().contains(action.mapTo(viewport, action.rect().bottomRight()))
 
-        wait_until(application, revealed)
-        assert window.rect().contains(action.mapTo(window, action.rect().bottomRight()))
+            wait_until(application, revealed)
+            assert window.rect().contains(action.mapTo(window, action.rect().bottomRight()))
+    finally:
+        application.setStyleSheet(stylesheet)
 
 
 @pytest.mark.parametrize("failure", ["changed", "invalid_pages", "corrupt_pdf"])

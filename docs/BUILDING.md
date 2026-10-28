@@ -81,6 +81,6 @@ Use `--ref <remote-branch-or-tag>`, `--repo <owner/repository>` or `--output <fo
 
 Without GitHub CLI, open **Actions → Build Executables → Run workflow**, select the branch and download the three application artifacts when the run succeeds.
 
-## Windows Tcl/Tk test failures
+## GUI test runtime
 
-Use `python -m pytest` from the intended environment so an unrelated pytest installation is not selected. The Tcl/Tk startup-recovery tests exercise the retained Tk interface and CI recovery helper; the current desktop uses Qt. Synthetic library paths used by those tests must not replace the real interpreter's configuration, including Conda's `TCL_LIBRARY` and `TK_LIBRARY` values. Missing real libraries and failed second attempts remain test failures; tests are not skipped or retried to hide them.
+Use `python -m pytest` from the intended environment so an unrelated pytest installation is not selected. The supported desktop and runtime preflight use Qt. Headless Linux tests select Qt's offscreen platform automatically; CI sets it explicitly on every platform. The retired Tk desktop, Tcl/Tk startup probes and library recovery wrapper have been removed, and frozen builds explicitly exclude Tk.

@@ -1,9 +1,8 @@
-"""Record the selected CI runtime and exercise its real Tcl/Tk and Qt libraries."""
+"""Record the selected CI runtime and exercise its real Qt workspace."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -11,8 +10,6 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-
-from ci_tk import windows_tk_startup_retry
 
 
 def runtime_info() -> dict:
@@ -26,8 +23,6 @@ def runtime_info() -> dict:
             key: os.environ[key]
             for key in (
                 "pythonLocation",
-                "TCL_LIBRARY",
-                "TK_LIBRARY",
                 "QT_QPA_PLATFORM",
                 "RUNNER_OS",
                 "RUNNER_ARCH",
@@ -37,43 +32,6 @@ def runtime_info() -> dict:
             if key in os.environ
         },
     }
-
-
-def check_tk() -> dict:
-    """Load Tcl/Tk repeatedly, including themed widgets, using the selected Python."""
-    import tkinter as tk
-    from tkinter import ttk
-
-    libraries: dict[str, str] = {}
-    for _ in range(20):
-        root = tk.Tk()
-        try:
-            root.withdraw()
-            libraries = {
-                "tcl": str(root.tk.eval("info library")),
-                "tk": str(root.tk.eval("set tk_library")),
-                "patchlevel": str(root.tk.eval("info patchlevel")),
-            }
-            style = ttk.Style(root)
-            for theme in style.theme_names():
-                style.theme_use(theme)
-                widget = ttk.Treeview(root)
-                widget.insert("", "end", text="Runtime check")
-                widget.pack()
-                root.update_idletasks()
-                widget.destroy()
-        finally:
-            root.destroy()
-    # A manifest distinguishes an absent/unreadable file from a guessed scanner
-    # race. Read actual bytes; enumerating FileInfo objects does not warm files.
-    scripts = {}
-    for name in ("tcl", "tk"):
-        base = Path(libraries[name])
-        scripts[name] = {
-            str(path.relative_to(base)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted(base.rglob("*.tcl"))
-        }
-    return {"libraries": libraries, "scripts_sha256": scripts, "startup_cycles": 20}
 
 
 def check_qt() -> dict:
@@ -120,9 +78,6 @@ def main(argv: list[str] | None = None) -> int:
     save()
     try:
         if not args.inventory:
-            with windows_tk_startup_retry():
-                report["tk"] = check_tk()
-            save()
             report["qt"] = check_qt()
         report["status"] = "success"
         return 0

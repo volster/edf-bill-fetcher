@@ -159,38 +159,6 @@ class TestCliHtmlReportSmoke:
         assert "EDF Energy Ombudsman Evidence Report" in rendered
 
 
-class TestGuiHtmlFormatPresence:
-    """The Report Options dialog's Output Format frame exposes HTML."""
-
-    def test_gui_report_options_dialog_exposes_html_format(self) -> None:
-        pytest.importorskip("tkinter")
-        import tkinter as tk
-        from tkinter import ttk
-
-        from edf_bill_fetcher.ui.app import ReportOptionsDialog
-
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            dlg = ReportOptionsDialog(root)
-            dlg.dialog = tk.Toplevel(root)
-            dlg.dialog.withdraw()
-            dlg._build_ui()
-
-            radio_values: list[str] = []
-
-            def _walk(widget: tk.Misc) -> None:
-                for child in widget.winfo_children():
-                    if isinstance(child, ttk.Radiobutton):
-                        radio_values.append(str(child.cget("value")))
-                    _walk(child)
-
-            _walk(dlg.dialog)
-            assert "html" in radio_values
-        finally:
-            root.destroy()
-
-
 class TestFmtDateParity:
     """Parity test for ``fmt_date`` between the PDF and DOCX generators.
 

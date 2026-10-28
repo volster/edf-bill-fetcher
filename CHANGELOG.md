@@ -8,6 +8,10 @@ semver-friendly.
 
 ## [Unreleased]
 
+### Removed
+
+- Retired the unused Tk desktop and its Tcl/Tk preflight, recovery wrapper and tests. Qt is the supported GUI; source setup and frozen builds no longer require Tk.
+
 ### Added
 
 - A full rebilling history, source-linked component comparisons and an editable dispute schedule shared by the desktop, Excel and regenerated HTML/PDF/DOCX packs. Positions preserve original account figures, flag changed evidence for review, and never automatically sum overlapping challenges or turn credits into a second reduction.
@@ -45,7 +49,8 @@ semver-friendly.
 
 ### Fixed
 
-- Tcl/Tk recovery tests preserve the real interpreter's library configuration, including Conda overrides, while verifying synthetic startup failures.
+- Source-preview controls remain reachable with larger Windows font metrics. The review splitter now reports a bounded height while allowing the enclosing scroll area to include all controls, including the dispute workspace.
+
 - Native readiness checks stay hidden on Windows and discard late results safely during application shutdown.
 - The compensation estimator skips NaN amounts in the refund scan and
   NaN period charges, so they can no longer phantom-match a refund or

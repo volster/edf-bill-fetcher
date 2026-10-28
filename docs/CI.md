@@ -44,40 +44,24 @@ Start with the failing job and step, rather than rerunning the whole workflow.
 Every test job uploads `ci-<os>-py<version>-<attempt>` for 14 days, including:
 
 - `python.json`: the selected interpreter, Python version and runner image.
-- `runtime.json`: a real GUI preflight, Tcl/Tk locations, SHA-256 hashes of
-  readable `.tcl` scripts, Qt version/platform, or a startup traceback.
+- `runtime.json`: the real Qt workspace startup result, Qt version/platform, or a startup traceback.
 - `dependencies.txt`: exact installed package versions.
 - `tests/attempt-*/test-results.xml` and `coverage.xml`, plus `attempts.json`:
   the full suite's original reports and exit code.
-- `tk-startup.jsonl`, when a native startup error occurs: the original Tcl error,
-  Python readability/size/hash checks for every reported script and recovery result.
 - Top-level JUnit and coverage reports for the final complete suite.
 
 Artifacts include only allowlisted environment fields, not a dump of tokens or
 other runner environment variables. Setup failures before Python is installed
 may have no diagnostic files; the setup action's log is then the primary evidence.
 
-The GUI preflight creates/destroys 20 Tk roots, loads all available ttk themes,
-and opens the actual Qt workspace with temporary preferences. Linux runs it
-under Xvfb. Do not add a global `TCL_LIBRARY`, `TK_LIBRARY`, copied library tree
-or security-service change without evidence identifying a necessary fix.
+The GUI preflight opens the actual Qt workspace with temporary preferences.
+Headless checks use Qt’s offscreen platform. The retired Tk interface, Tcl/Tk
+startup probes and native-constructor retry wrapper have been removed.
 
-`ci_pytest.py` runs the full suite **once** and preserves its original exit code.
-There is no whole-suite retry. All Windows Tk-related test skips were restored.
-
-On Windows GitHub Actions only, `ci_tk.windows_tk_startup_retry` wraps
-`_tkinter.create` during the preflight and pytest session. When native startup
-reports an unusable `tk.tcl`/`init.tcl` with a missing/denied script read, Python
-checks every reported file. Only if all are present, readable and nonempty does
-it repeat the native constructor once after 250 ms. A genuine missing file,
-unknown Tcl error or repeated startup failure stays fatal. Successful recovery
-emits a warning annotation and preserves the error and script hashes.
-
-This covers root creation in fixtures and test bodies. It does not repeat any
-application operation, test or assertion. Local runs and other operating systems
-keep the original constructor. The wrapper is restored when its context exits.
-The preserved evidence can distinguish a transient native read from actual
-missing files; a successful retry alone does not establish the underlying OS cause.
+`ci_pytest.py` runs the full supported suite **once** and preserves its original
+exit code and reports. There is no whole-suite retry or skipped GUI check to
+hide a failure. Source-control and PDF-preview actions must remain reachable
+at normal and narrow window sizes, including larger native font metrics.
 
 Build jobs upload separate `build-diagnostics-*` artifacts even on failure.
 These retain runtime/dependency reports and PyInstaller warning/import reports.
@@ -98,8 +82,8 @@ signing does not provide Gatekeeper trust or Apple notarization.
 ```bash
 python -m pip install -c .github/ci-constraints.txt -e ".[dev,msg]"
 python ci_runtime.py --inventory
-python ci_runtime.py       # Linux: xvfb-run -a python ci_runtime.py
-python ci_pytest.py        # Linux: xvfb-run -a python ci_pytest.py
+QT_QPA_PLATFORM=offscreen python ci_runtime.py
+python ci_pytest.py
 ```
 
 The preflight runs setup-python’s explicit `python-path` output directly.

@@ -57,9 +57,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-tk tk-dev python3-dev tesseract-ocr tesseract-ocr-eng
+          sudo apt-get install -y python3-dev tesseract-ocr tesseract-ocr-eng
           sudo apt-get install -y build-essential autoconf automake libtool pkg-config
-          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1 xvfb
+          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
@@ -82,7 +82,8 @@ jobs:
 
       - name: Check GUI runtimes (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run -a "${{ steps.python.outputs.python-path }}" ci_runtime.py
+        run: >-
+          "${{ steps.python.outputs.python-path }}" ci_runtime.py
 
       - name: Check GUI runtimes (Windows / macOS)
         if: runner.os != 'Linux'

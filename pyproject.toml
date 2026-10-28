@@ -67,8 +67,6 @@ build = [
 dev = [
     "pytest>=7.4,<8",
     "pytest-cov>=4.1,<5",
-    "pytest-xvfb>=3.0",  # headless X server for tkinter tests on Linux CI
-    "pyvirtualdisplay>=3.0; sys_platform == 'linux'",  # auto-bootstrap X display in conftest for headless runs (Linux only)
     "coverage>=7.0",
     "ruff>=0.4,<1",
     "mypy>=1.9",
@@ -106,11 +104,6 @@ markers = [
     "slow: marks tests as slow",
     "integration: marks tests as integration tests",
 ]
-# pytest-xvfb auto-activates on headless Linux. Larger size gives headroom
-# under parallel test runs (spec risk #3 mitigation).
-xvfb_width = 1280
-xvfb_height = 1024
-xvfb_colordepth = 24
 # Upstream library warnings that are not bugs in our code:
 # - statsmodels ValueWarning/FutureWarning: the chart + forecast tests feed
 #   DataFrames that lack a date-frequency index, which statsmodels warns

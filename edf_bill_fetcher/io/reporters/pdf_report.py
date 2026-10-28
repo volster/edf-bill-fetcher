@@ -480,7 +480,7 @@ def build_doc_template(
 #
 #   1. Add an entry to ``REPORT_SECTIONS`` below with its key, title, is_appendix.
 #   2. Add a matching key to ``ReportOptionsDialog.SECTIONS`` in
-#      ui/app.py so the user can toggle it from the GUI.
+#      the shared section registry so the Qt dialog can expose it.
 #   3. Add a ``def create_<name>(...)`` builder function in this module.
 #   4. Add the builder to the ``section_builders`` dict in BOTH
 #      ``generate_ombudsman_pdf`` (PDF) and ``generate_ombudsman_docx`` (DOCX).
