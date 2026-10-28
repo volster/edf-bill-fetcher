@@ -48,6 +48,9 @@ semver-friendly.
 
 ### Changed
 
+- Source bootstrap prefers an existing named Conda project environment, creates it with Python 3.11 when needed, and falls back to venv when Conda is absent. Explicit environment selection and read-only readiness checks are supported.
+- Expanded the README with supported sources, output contents, both review workflows and manual pip setup alongside the bootstrap route.
+
 - The main GUI window is scrollable and sized to fit 768px-tall screens.
 
 ### Fixed

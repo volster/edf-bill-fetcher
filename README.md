@@ -48,30 +48,75 @@ approval; it is not Apple-notarized. Build artifacts can expire; see
 
 ### Run from source
 
-Install Git and **64-bit Python 3.11**, then clone the working branch:
+Install Git and either Conda or **64-bit Python 3.11**, then clone the working branch:
 
 ```console
 git clone --branch how-its-going https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
 ```
 
-On Windows:
-
-```powershell
-py -3.11 bootstrap.py run --install-system
-```
-
-On macOS or Debian/Ubuntu Linux:
+**With Conda:** open a Conda-enabled terminal (such as an Anaconda or Miniforge
+prompt) and run:
 
 ```console
-python3.11 bootstrap.py run --install-system
+python bootstrap.py run --install-system
 ```
 
-Setup creates a local Python environment, installs dependencies, checks OCR and
-launches the app. Native package installation may request administrator access.
-For other Linux distributions, development setup or executable builds, use the
-[source and build guide](docs/BUILDING.md). Installing Python requirements alone
-does not install Tesseract.
+**Without Conda:** use `py -3.11 bootstrap.py run --install-system` on Windows,
+or `python3.11 bootstrap.py run --install-system` on macOS/Debian/Ubuntu.
+
+The bootstrapper first looks for Conda. If found, it reuses the named
+`edf-bill-fetcher` environment or creates it with Python 3.11. Otherwise, it
+reuses or creates `.venv` in the checkout. It then installs the app, checks native
+capabilities including OCR, and launches it. It does not install the app into
+Conda's `base` environment. Native package installation may request administrator
+access.
+
+Use `--conda-env NAME` for an existing project environment with another name, or
+`--venv .venv` to explicitly select venv. **`--check` only checks** the selected
+existing environment. See the [setup and build guide](docs/BUILDING.md) for
+platform prerequisites and troubleshooting.
+
+After setup, activate the selected environment and use `python main.py` or
+`edf-collector` normally. With the default Conda environment:
+
+```console
+conda activate edf-bill-fetcher
+python main.py
+```
+
+With venv, activation is optional: run `.\.venv\Scripts\python.exe main.py` on
+Windows or `.venv/bin/python main.py` on macOS/Linux.
+
+**Prefer a manual install?** In your chosen Python 3.10–3.12 environment:
+
+```console
+python -m pip install -c .github/ci-constraints.txt -e ".[msg]"
+python main.py --doctor
+python main.py
+```
+
+Install the [native prerequisites](docs/BUILDING.md#native-prerequisites) first.
+Pip installs the Python libraries, including Qt and PDF readers, but does not
+install Tesseract or its English data. The bootstrapper automates environment
+setup and checks; it is not required to launch the app.
+
+## Supported evidence
+
+| Source | What the app looks for |
+| --- | --- |
+| PDF bills and credit notes | Older EDF layouts, T-series and newer KI/KCR layouts; invoice dates, periods, charges, balances, readings and tariff information where present. |
+| Merged and scanned PDFs | Separate invoice records with original page references; local English OCR for pages lacking useful text. |
+| PST/OST archives | Relevant email bodies and supported PDF attachments, with archive occurrence information. |
+| EML/MSG files | Individual email messages and supported attachments; MSG support is included by the bootstrapper. |
+| MyAccount history | HTM/HTML exports and supported printed PDF histories of charges, payments and balances. |
+| EDF SAP exports | Supported contract-history, meter-reading and financial-transaction PDF dumps, with reconciliation against invoice evidence. |
+
+Sources can be combined. Duplicate handling uses account/meter identity and
+supporting document or transaction relationships; matching dates and amounts
+alone do not prove a duplicate. Source occurrences remain available for review.
+Unreadable messages, unsupported layouts and incomplete extraction are reported
+as gaps rather than assumed to contain no relevant evidence.
 
 ## Your first evidence pack
 
@@ -89,6 +134,71 @@ does not install Tesseract.
 Keep the whole output folder together, including `result.json` and
 `evidence_files/`. Each desktop run gets a new folder, so earlier packs remain
 available. The [user guide](docs/USER_GUIDE.md) walks through both review routes.
+
+## Review, correct and regenerate
+
+| In the app | In Excel |
+| --- | --- |
+| Open `result.json` in **Review evidence** and compare a record with its original page. | Open the main workbook and follow **Start here** and **Workbook guide**. |
+| Choose **Edit selected record**, correct fields or exclude the record, and record a reason. | Edit pale green inputs in **Review & Corrections**, keeping row IDs and reference fields intact. |
+| Use **Preview changes**, then **Create reviewed pack**. | Save the amended workbook, select it in **Generate reports**, and create a new pack. |
+
+Both routes retain original observations and record your changes. Editing an
+Excel summary or Word report alone does not update the saved analysis. Opening
+an old `result.json` preserves its accepted calculations; re-extract the originals
+to apply parser improvements. See the [full review workflow](docs/USER_GUIDE.md).
+
+For a disputed rebill, use **Bill revisions** to inspect replacements and credits,
+then **Dispute ledger → Reconcile claims…** to consolidate your proposed challenge.
+Individual revised invoices can repeat the same demand. The app keeps requested
+reductions separate from observed account balances and withholds a combined claim
+while overlaps or credit allocations remain unresolved. The
+[claim guide](docs/REBILLING_LEDGER.md) explains the review fields and complaint draft.
+
+## What you get
+
+Each extraction pack includes a workbook and saved analysis. Selected reports and
+source copies sit alongside them:
+
+| Output | Use it for |
+| --- | --- |
+| Main Excel workbook | Overview, review priorities, editable corrections, evidence, payment/readings analysis and dispute schedules. |
+| HTML / PDF / Word reports | Reading or sharing selected findings, timelines, methodology and evidence references. HTML works offline. |
+| `result.json` | Reopening the accepted analysis with its settings, valuation date, source identities and calculations. |
+| `run.json` | Checking completion, review requirements, failures and the artifacts produced. |
+| `evidence_files/`, manifest and Word index | Following records to saved originals, including original filenames, page ranges and hashes where available. |
+| Optional complaint folder and ZIP | A focused draft in three formats, reference claim schedule and relevant verified source files, generated during claim review. |
+
+The workbook also includes conditional SAP reconciliation and analytical views
+for billing anomalies, tariff comparisons, back-billing, data quality and
+forecasts. Some require enough compatible observations; missing evidence stays
+explicit. The [output guide](docs/OUTPUTS.md) explains the sheets and financial
+meanings in detail.
+
+Source copies are linked rather than embedded in Excel. Keep the whole pack and
+any earlier packs it references. Excluding a record is **not PDF redaction**:
+shared PDFs remain whole and saved analysis retains the original observations.
+
+## Automation and development
+
+The command line can extract evidence, render saved analyses, import corrected
+workbooks and compare record exports. For example, from your active environment:
+
+```console
+python main.py --extract --pdf-dir "bills" --output "evidence.xlsx"
+python main.py --html-report -i "path/to/run/result.json" -o "report.html"
+python main.py --review-workbook -i "amended.xlsx" -o "reviewed-packs"
+```
+
+Use the actual saved-result path printed after extraction. See the
+[CLI guide](docs/CLI.md) for source options, output locations and help commands.
+
+`python bootstrap.py develop` adds tests, lint/type checks and packaging tools to
+the selected environment. `python bootstrap.py build` creates an executable for
+the current OS; `python build_all.py` requests all three native builds through
+GitHub. See [building](docs/BUILDING.md) and [development](docs/DEVELOPMENT.md).
+CI covers Python 3.10–3.12 on Windows, macOS and Linux; build/check results belong
+to the revision shown in GitHub Actions and **About this build**.
 
 ## Where to go next
 

@@ -2,68 +2,187 @@
 
 [Documentation index](README.md) · [Download a build](../README.md#download-a-build)
 
-Use **64-bit Python 3.11** and Git. Python 3.10 and 3.12 are also tested; the current dependency set does not support Python 3.13 or newer. Ordinary CPython from python.org is recommended for release builds, matching CI. Conda is not required.
+Install Git and either Conda or **64-bit Python 3.11**. Application environments
+using Python 3.10 and 3.12 are also tested; the current dependencies do not support
+Python 3.13 or newer. The bootstrap launcher can use a newer Python when Conda
+will provide the supported project interpreter.
 
-Clone the `how-its-going` branch and open a terminal in the checkout. On Windows, use `py -3.11` below; on macOS/Linux use `python3.11`.
+Clone the working branch and open a terminal in the checkout:
 
-```powershell
+```console
 git clone --branch how-its-going https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
-py -3.11 bootstrap.py run --install-system
 ```
 
-This creates `.venv`, installs the Python dependencies including MSG support, checks native libraries and English OCR, then launches the app. No environment activation or PowerShell execution-policy change is needed. `--install-system` uses winget (or Chocolatey), Homebrew, or apt and may request administrator access. Package signatures and normal package-manager checks remain enabled. On other Linux distributions, install the equivalent packages yourself and omit this option.
+## Automatic environment setup
 
-For subsequent runs:
+In a Conda-enabled terminal, such as an Anaconda/Miniforge prompt:
+
+```console
+python bootstrap.py run --install-system
+```
+
+Without Conda, use `py -3.11 bootstrap.py run --install-system` on Windows or
+`python3.11 bootstrap.py run --install-system` on macOS/Debian/Ubuntu.
+
+The bootstrapper:
+
+1. Looks for Conda through `CONDA_EXE`, `PATH` and common installation locations.
+2. If found, looks for a registered environment named **edf-bill-fetcher**. It
+   reuses that environment, or creates it with Python 3.11 and pip if absent.
+3. If Conda is absent, reuses or creates **.venv** in the checkout using the
+   launcher's Python. Creating this venv requires Python 3.10–3.12.
+4. Installs the requested Python extras using `.github/ci-constraints.txt`, checks
+   native capabilities including English OCR, then runs the selected action.
+
+Conda commands run through `conda run --prefix …`, so environment activation and
+Windows DLL search paths apply to pip, diagnostics, the app and builds. The app
+is never installed into Conda's `base` environment. Existing project environments
+must contain a supported 64-bit Python; incompatible environments produce an
+error rather than having their Python silently replaced.
+
+### Choose an environment explicitly
+
+```console
+python bootstrap.py develop --conda-env my-edf-project
+python bootstrap.py run --venv .venv
+```
+
+`--conda-env NAME` reuses or creates that named environment and requires Conda.
+`--venv PATH` bypasses Conda detection and retains the existing venv workflow.
+The options are mutually exclusive. Neither option selects an unrelated active
+environment automatically. If you have an existing project environment with a
+custom name, supply it explicitly.
+
+If Conda is found but its inventory, solver, downloads or commands fail, setup
+stops with the error. It does not silently switch to venv. Repair Conda or
+explicitly choose `--venv .venv`. Conda uses your configured channels and normal
+package policies; the bootstrapper does not accept channel terms on your behalf.
+Duplicate registered environments with the requested name are rejected; use a
+unique name. For multiple checkouts, give each its own environment name because
+an editable pip installation points to the checkout most recently installed.
+
+### Subsequent launches
+
+With the default Conda environment:
+
+```console
+conda activate edf-bill-fetcher
+python main.py
+```
+
+Without activation:
+
+```console
+conda run --no-capture-output -n edf-bill-fetcher python main.py
+```
+
+For venv on Windows:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py
 ```
 
-On macOS/Linux, run the equivalent setup and subsequent launch commands:
+For venv on macOS/Linux:
 
 ```console
-python3.11 bootstrap.py run --install-system
 .venv/bin/python main.py
 ```
 
-Use `python3.11` in place of `py -3.11` and `.venv/bin/python` in place of
-`.\.venv\Scripts\python.exe` in the examples below.
+The remaining examples use `python` to mean the selected environment's Python.
+Activate it first, use the full venv interpreter path, or prefix the command with
+`conda run --no-capture-output -n edf-bill-fetcher` as appropriate. Running the
+bootstrapper again is also supported, but it repeats dependency installation and
+readiness checks before launching.
+
+## Native prerequisites
+
+`--install-system` uses winget (or Chocolatey), Homebrew, or apt and may request
+administrator access. Package signatures and normal package-manager checks stay
+enabled. On other Linux distributions, install the equivalent packages yourself
+and omit that flag. Conda environment selection does not remove native requirements.
+
+Tesseract is a native program, not a pip dependency. A complete source installation
+needs its executable **and English `eng.traineddata`**:
+
+- Windows: install Tesseract with English data; the default
+  `C:\Program Files\Tesseract-OCR` location is supported.
+- macOS: `brew install tesseract`.
+- Debian/Ubuntu: `sudo apt install tesseract-ocr tesseract-ocr-eng`.
+
+Linux desktop use also needs Qt libraries (`libxcb-cursor0`,
+`libxkbcommon-x11-0`, `libegl1` on Debian/Ubuntu). A libpff source build can require
+compiler/autotools development packages when a compatible wheel is unavailable;
+`--install-system` includes the relevant Linux/macOS build prerequisites.
+
+The desktop checks readiness before extraction. A selected PST/OST source without
+a working reader blocks extraction. Missing OCR or MSG support requires explicit
+acknowledgement of the limitations. Refresh checks after repairing an installation.
+Generating reports from saved analysis does not require OCR.
+
+## Manual pip setup
+
+The bootstrapper is optional. After installing native prerequisites and creating
+or activating your own supported environment, run:
+
+```console
+python -m pip install -c .github/ci-constraints.txt -e ".[msg]"
+python main.py --doctor
+python main.py
+```
+
+For a manual venv, first run `py -3.11 -m venv .venv` on Windows or
+`python3.11 -m venv .venv` on macOS/Linux, then use its Python for the commands
+above. Use `.[dev,build,msg]` in place of `.[msg]` for the development toolchain.
+Installing `requirements.txt` alone does not install the native OCR engine.
 
 ## Development and checks
 
-```powershell
-py -3.11 bootstrap.py develop --install-system
-.\.venv\Scripts\python.exe -m pytest
+```console
+python bootstrap.py develop --install-system
 ```
 
-The `develop` mode installs the `[dev,build,msg]` extras, including pytest, lint/type-check tools and PyInstaller. The regular `run` mode does not install development tools. Both use `.github/ci-constraints.txt`.
+`develop` installs `[dev,build,msg]`, including pytest, lint/type checks and
+PyInstaller. `run` installs runtime and MSG dependencies; `build` additionally
+installs PyInstaller. All use the constrained pip requirements.
 
-To inspect an existing environment without installing or launching anything:
+Inspect the automatically selected environment without installing or launching:
 
-```powershell
-py -3.11 bootstrap.py --check
-.\.venv\Scripts\python.exe main.py --doctor --output diagnostics.json
+```console
+python bootstrap.py --check
 ```
 
-Diagnostics return a nonzero exit code when a capability is missing. The JSON identifies the build and checks PDF, Excel, Qt, PST/OST, MSG and OCR support. It contains no selected evidence files or account details. Native failure messages may contain local installation paths; review them before sharing.
+Add `--conda-env NAME` or `--venv PATH` to check an explicitly chosen environment.
+`--check` fails if that environment does not exist; it does not create one or
+install system packages, even if `--install-system` is also present.
 
-Tesseract is a native program, not a pip dependency. A full source installation needs its executable **and English `eng.traineddata`**. Windows' default `C:\Program Files\Tesseract-OCR` location is supported. On macOS use `brew install tesseract`; on Debian/Ubuntu use `sudo apt install tesseract-ocr tesseract-ocr-eng`. Merely installing `requirements.txt` does not install this engine.
+From the selected environment, run:
 
-The desktop shows extraction readiness before a run. A selected PST/OST source with no working reader blocks extraction. Missing OCR or MSG support requires explicit acknowledgement of the displayed limitations. Refresh checks after repairing an installation. Generating reports from saved analysis does not require OCR.
+```console
+python -m pytest
+python main.py --doctor --output diagnostics.json
+```
+
+Diagnostics return nonzero when a capability is missing. They identify the build
+and check PDF, Excel, Qt, PST/OST, MSG and OCR support. No selected evidence files
+or account details are included. Native failure messages may contain installation
+paths; review them before sharing. See [Development](DEVELOPMENT.md) for daily checks.
 
 ## Build for this computer
 
-```powershell
-py -3.11 bootstrap.py build --install-system
+```console
+python bootstrap.py build --install-system
 ```
 
 Or, after development setup:
 
-```powershell
-.\.venv\Scripts\python.exe ci_build.py
-.\.venv\Scripts\python.exe .github/scripts/check_frozen_ocr.py
+```console
+python ci_build.py
+python .github/scripts/check_frozen_ocr.py
 ```
+
+Official CI builds use standard CPython from `actions/setup-python`. A local Conda
+build reflects its own resolved runtime; run the frozen checks before distributing it.
 
 `ci_build.py` handles all three platforms. PyInstaller builds for the operating system and architecture of the Python interpreter running it:
 
@@ -81,8 +200,8 @@ PyInstaller cannot produce Windows, macOS and Linux executables from one Windows
 
 Install GitHub CLI and authenticate with `gh auth login`, then run:
 
-```powershell
-py -3.11 build_all.py
+```console
+python build_all.py
 ```
 
 This builds the **remote `how-its-going` branch**, waits for this exact request to finish, and downloads its three platform artifacts into `dist-all/<run-id>/`. Push your changes first; the script does not upload local or uncommitted edits. A failed platform build stops the command rather than downloading an older successful run. The workflow must include the `request_id` input used by the script.

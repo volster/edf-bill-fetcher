@@ -2,7 +2,9 @@
 
 [Documentation index](README.md) · [Source setup](BUILDING.md)
 
-Run commands from the checkout using its environment's Python:
+Run commands from the checkout using the selected project environment. With
+Conda, run `conda activate edf-bill-fetcher` first, or prefix commands with
+`conda run --no-capture-output -n edf-bill-fetcher`. With venv, use
 `.venv/bin/python` on macOS/Linux or `.\.venv\Scripts\python.exe` on Windows.
 The examples use `python` for that interpreter. The installed `edf-collector`
 command accepts the same arguments as `python main.py`.

@@ -13,18 +13,33 @@ On Apple silicon, follow the [Mac first-launch instructions](MACOS.md). The
 initial Gatekeeper alert does not contain the Windows-style continue button;
 approval is in **System Settings → Privacy & Security** after a blocked launch.
 
-For a source installation, use the Python interpreter in the project's `.venv`,
-not a different system Python. Run:
+For a source installation, use the selected project environment. With Conda,
+run `conda activate edf-bill-fetcher` first (or your custom environment name).
+With venv, use its Python interpreter. Run:
 
 ```console
 python main.py --doctor --output diagnostics.json
 ```
 
-Use `.\.venv\Scripts\python.exe` on Windows or `.venv/bin/python` on macOS/Linux
-in place of `python`. The [bootstrap check](BUILDING.md#development-and-checks)
+For venv, use `.\.venv\Scripts\python.exe` on Windows or `.venv/bin/python` on
+macOS/Linux in place of `python`. The [bootstrap check](BUILDING.md#development-and-checks)
 can also identify missing prerequisites. A desktop display is required for normal
 GUI use; CLI commands work headlessly. On Debian/Ubuntu, Qt also needs
 `libxcb-cursor0`, `libxkbcommon-x11-0` and `libegl1`.
+
+## The bootstrapper selects the wrong environment or Conda fails
+
+Setup prefers the named `edf-bill-fetcher` Conda environment when Conda is found.
+Use `--conda-env NAME` for your existing project environment under another name,
+or `--venv .venv` to keep using a venv even when Conda is installed. It never
+installs the app into whichever arbitrary environment happens to be active.
+
+A Conda error does not trigger automatic venv fallback. Read the displayed error
+for unavailable channels, solver failures or malformed environment information.
+An environment missing Python or using unsupported Python must be repaired, or
+you can select a fresh project name. `--check` will not create or repair it.
+If Conda is not discovered, open a Conda-enabled terminal and retry. See
+[environment selection](BUILDING.md#choose-an-environment-explicitly).
 
 ## Scanned bills produce little or no text
 

@@ -70,7 +70,9 @@ def test_check_only_does_not_install_or_modify_environment(tmp_path, monkeypatch
     commands: list[list[str]] = []
     monkeypatch.setattr(bootstrap, "run", commands.append)
     assert bootstrap.main(["--check", "--venv", str(tmp_path)]) == 0
-    assert commands == [[str(python), "-m", "edf_bill_fetcher.helpers.capabilities"]]
+    assert len(commands) == 2
+    assert commands[0][:2] == [str(python), "-c"]
+    assert commands[-1] == [str(python), "-m", "edf_bill_fetcher.helpers.capabilities"]
     assert bootstrap.main(["--check", "--venv", str(tmp_path / "missing")]) == 1
     assert not (tmp_path / "missing").exists()
 
@@ -179,12 +181,12 @@ def test_build_main_reports_missing_cli_and_dispatch_errors(tmp_path, monkeypatc
     assert build_all.main(["--output", str(tmp_path)]) == 1
 
 
-def test_unsupported_python_fails_before_installation(monkeypatch):
+def test_unsupported_python_fails_before_installation(monkeypatch, tmp_path):
     monkeypatch.setattr(bootstrap.sys, "version_info", (3, 13))
     monkeypatch.setattr(
         bootstrap, "run", lambda command: pytest.fail("Must reject Python before running setup")
     )
-    assert bootstrap.main(["develop"]) == 1
+    assert bootstrap.main(["develop", "--venv", str(tmp_path / "new")]) == 1
 
 
 def test_build_correlation_timeout_never_falls_back_to_another_run(tmp_path, monkeypatch):

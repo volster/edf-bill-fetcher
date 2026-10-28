@@ -5,13 +5,14 @@
 ## Set up once
 
 Follow [source setup](BUILDING.md) and use `bootstrap.py develop --install-system`
-to create `.venv` with the constrained `[dev,build,msg]` dependencies and native
-prerequisites. Reuse a working environment rather than installing into a second
-Python by accident.
+to reuse or create the project Conda environment (or `.venv` if Conda is absent),
+install constrained `[dev,build,msg]` dependencies and check native prerequisites.
+Use `--conda-env NAME` for a custom project environment or `--venv .venv` to force venv.
 
-Commands below use `python` to mean that environment's interpreter. Without
-activation, use `.venv/bin/python` on macOS/Linux or
-`.\.venv\Scripts\python.exe` on Windows.
+Commands below use `python` to mean that environment's interpreter. For Conda,
+run `conda activate edf-bill-fetcher` first or prefix commands with
+`conda run --no-capture-output -n edf-bill-fetcher`. For venv without activation,
+use `.venv/bin/python` on macOS/Linux or `.\.venv\Scripts\python.exe` on Windows.
 
 ## Daily checks
 
