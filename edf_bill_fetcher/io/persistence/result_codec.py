@@ -720,9 +720,10 @@ def decode_result(payload: object) -> AnalysisSnapshot:
     for source in raw_request["sources"]:
         _object(source, {"kind", "path"})
         sources.append(SourceSelection(_string(source["kind"]), _string(source["path"])))
-    as_of = date.fromisoformat(_string(raw_request["as_of"]))
-    if as_of.isoformat() != raw_request["as_of"]:
+    as_of_text = _string(raw_request["as_of"])
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of_text):
         raise ValueError("Valuation date must use ISO calendar format")
+    as_of = date.fromisoformat(as_of_text)
     request = RunRequest(
         _string(raw_request["run_id"]),
         datetime.fromisoformat(_string(raw_request["created_at"])),

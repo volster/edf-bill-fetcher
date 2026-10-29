@@ -319,3 +319,13 @@ def test_unreadable_component_amount_stays_blank_in_the_workbook():
     write_ledger_sheets(wb, build_report_view(accepted, RenderSelection(("xlsx",))), {})
     assert wb["Rebilling components"]["J5"].value is None
     assert str(accepted.summary.charges) == "100.00"
+
+
+@pytest.mark.parametrize("day", ["20250301", "2025-W09-6", "2025-3-01"])
+def test_valuation_date_requires_the_same_calendar_format_on_every_python(accepted_models, day):
+    payload = copy.deepcopy(accepted_models)
+    payload["request"]["as_of"] = day
+    before = copy.deepcopy(payload)
+    with pytest.raises(ValueError, match="Valuation date must use ISO calendar format"):
+        decode_result(payload)
+    assert payload == before
