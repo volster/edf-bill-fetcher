@@ -101,6 +101,23 @@ def build_output_overview(view: ReportView) -> OutputOverview:
                 "detailed_findings",
             )
         )
+    unassigned = sum(
+        not scope(row)[0]
+        and (
+            number(row.get("Balance (£)")) is not None
+            or number(row.get("Transaction Amount (£)")) is not None
+        )
+        for row in records
+    )
+    if unassigned:
+        priorities.append(
+            ReviewPriority(
+                "Assign account identity to unassigned observations",
+                f"{unassigned} financial observations lack an established account reference. Check Ledger overview; unassigned observations can prevent a combined first/last balance. Record an account correction and reason in Review & Corrections only when supported by the evidence.",
+                "Review & Corrections",
+                "data_quality",
+            )
+        )
     if any(row.get("Ledger Identity Basis") for row in records):
         priorities.append(
             ReviewPriority(

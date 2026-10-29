@@ -68,6 +68,7 @@ from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.models.records import BillingRecord
 from edf_bill_fetcher.processors.bill_facts import bill_facts, payment_history
 from edf_bill_fetcher.processors.detection import detect_pdf_format
+from edf_bill_fetcher.processors.message_amounts import message_amount_context
 from edf_bill_fetcher.processors.patterns import (
     _AMOUNT_PATTERN_NEW_BILL,
     _AMOUNT_PATTERN_ONGOING_BALANCE,
@@ -569,6 +570,32 @@ class EvidenceEngine:
                     found_amt = -found_amt
                 matched_pattern_name, strategy = "your_new_account_balance", "Smart Context"
 
+        message_context = None
+        if (
+            source_type.startswith("Email Body")
+            and self.config.get("use_anchors", True)
+            and matched_pattern_name in {None, "balance_within"}
+            and not re.search(r"\bcurrent balance\s*(?:is|:)?\s*£", clean_text, re.I)
+        ):
+            message_context = message_amount_context(clean_text, detail)
+            if message_context is not None:
+                if message_context["Amount Kind"] == "Not monetary":
+                    self._add_record(
+                        {
+                            "Source": source_type,
+                            "Sender": sender,
+                            "Date": fallback_date,
+                            "Attachment Name": attachment_name or "N/A",
+                            "Details": detail[:60],
+                            "Logic Used": "Explicit supporting email amount",
+                            "Source PDF Text": clean_text[:4000],
+                            **message_context,
+                        }
+                    )
+                    return
+                found_amt = message_context["Amount (£)"]
+                matched_pattern_name, strategy = "payment_reminder_demand", "Explicit email demand"
+
         if found_amt is None and self.config.get("use_large", True):
             matches = _POUND_AMOUNT_FALLBACK_RE.findall(clean_text)
             if matches:
@@ -715,6 +742,8 @@ class EvidenceEngine:
                     "Balance Basis": "Demand repeated in a reminder; not a new charge",
                 }
             )
+            if message_context is not None:
+                facts["Demand Context"] = message_context["Demand Context"]
         if entry_type == "New Bill" and "PDF" in source_type:
             facts["Document Role"] = "Invoice"
             facts["Document Date"] = date_to_use
@@ -730,6 +759,7 @@ class EvidenceEngine:
                 amount=found_amt,
                 amount_kind="Balance"
                 if matched_pattern_name in _AMOUNT_PATTERN_ONGOING_BALANCE
+                or matched_pattern_name == "current_balance_debit"
                 else "Unknown",
                 energy_unit_rate=None if renewal else self._energy_rate(clean_text),
                 period_charge=period_charge,

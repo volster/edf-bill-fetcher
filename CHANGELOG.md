@@ -58,6 +58,10 @@ semver-friendly.
 
 ### Fixed
 
+- Email extraction distinguishes overdue/full outstanding demands from annual
+  quotes, scheduled Direct Debits and failed collections. Supporting amounts,
+  dates and sources are retained without inventing a paid transaction or debt;
+  specific balance anchors retain priority over supporting context.
 - Data-quality checks share one presentation across Excel, PDF, Word and HTML.
   Bill completeness excludes reminders, payments and supporting documents;
   missing charge/transaction values cannot be satisfied by an account balance.

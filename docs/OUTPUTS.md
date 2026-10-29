@@ -245,6 +245,15 @@ separately. A balance does not satisfy a missing bill charge or transaction valu
 Reminders and supporting documents do not require their own billing period or
 meter-reading classification.
 
+Email quotes, announced Direct Debits and failed-collection notices can retain a
+numeric **Amount (£)** as a supporting observation. Their **Document Role** and
+named amount field explain its meaning. The existing **Not monetary** category
+means that the supporting amount is not an account-balance observation or a
+completed transaction; it does not mean that no currency was mentioned. These
+records and their originals remain available for review. A scheduled or failed
+Direct Debit does not establish a payment received. Explicit overdue/full
+outstanding demands are dated balance observations, not additional charges.
+
 - **PASS** means the particular presence check is satisfied, not that the amount
   is legally due or the source is correct.
 - **REVIEW** identifies missing applicable information, uncertain monetary meaning,
