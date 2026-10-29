@@ -80,6 +80,11 @@ def to_snapshot_json(
                     getattr(value, field.name), path=f"{path}.{field.name}", diagnostics=diagnostics
                 )
                 for field in fields(value)
+                if not (
+                    type(value) is report_models.DataQualityReport
+                    and field.name == "assessment"
+                    and getattr(value, field.name) is None
+                )
             },
         }
     if isinstance(value, dict):
@@ -165,11 +170,23 @@ def from_snapshot_json(value: object) -> Any:
         if set(value) != {"type", "name", "fields"} or value.get("name") not in MODEL_TYPES:
             raise ValueError("Unsupported stored model")
         cls = MODEL_TYPES[value["name"]]
-        if not isinstance(value["fields"], dict) or set(value["fields"]) != {
-            field.name for field in fields(cls)
-        }:
+        expected = {field.name for field in fields(cls)}
+        legacy_quality = (
+            cls is report_models.DataQualityReport
+            and isinstance(value["fields"], dict)
+            and set(value["fields"]) == expected - {"assessment"}
+        )
+        if not isinstance(value["fields"], dict) or (
+            set(value["fields"]) != expected and not legacy_quality
+        ):
             raise ValueError("Stored model fields disagree with its contract")
         data = {key: from_snapshot_json(item) for key, item in value["fields"].items()}
+        if legacy_quality:
+            data["assessment"] = None
+        elif cls is report_models.DataQualityReport and data["assessment"] is None:
+            raise ValueError(
+                "A stored quality assessment must be present or omitted in the legacy shape"
+            )
         if cls is report_models.DisputeAnalysis:
             data["flags"] = [tuple(flag) for flag in data["flags"]]
         if cls is SapBackBillingEvent:
@@ -181,5 +198,15 @@ def from_snapshot_json(value: object) -> Any:
                 raise ValueError(f"Invalid stored {cls.__name__}.{field_name}")
             if annotation is int and data[field_name] < 0:
                 raise ValueError(f"Negative stored count: {field_name}")
+        if cls is report_models.DataQualityReport and data["assessment"] is not None:
+            from edf_bill_fetcher.processors.quality_assessment import validate_quality_assessment
+
+            validate_quality_assessment(
+                data["assessment"], data["total_records"], data["duplicate_count"]
+            )
+            denominator = data["total_records"] + data["assessment"]["duplicates_removed"]
+            rate = data["duplicate_count"] / denominator if denominator else 0
+            if data["duplicate_rate"] is None or abs(data["duplicate_rate"] - rate) > 1e-12:
+                raise ValueError("Quality duplicate rate disagrees with its scope")
         return cls(**data)
     return {key: from_snapshot_json(item) for key, item in value.items()}

@@ -781,84 +781,24 @@ def create_forecast_section(
 def create_data_quality_section(
     df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
 ) -> str:
-    """Create the data quality assessment section."""
+    """Present accepted quality counts with the same scope as the workbook."""
+    from edf_bill_fetcher.models.quality_tables import quality_notice, quality_table
     from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
-    if ctx is None:
-        ctx = RenderContext()
-    heading = ctx.heading("data_quality")
-    parts = [f'<div id="sec-data_quality"><h2 class="section">{_esc(heading)}</h2>']
-
+    ctx = ctx or RenderContext()
     dq = payload if payload is not None else compute_data_quality_report(df)
     total = dq.total_records
-    date_parsed = dq.date_parsed
-    amt_complete = dq.amt_complete
-    period_complete = dq.period_complete
-    reading_classified = dq.reading_classified
-    dup_count = dq.duplicate_count
-
-    quality_rows = [["Check", "Passed", "Total", "Rate", "Status"]]
-    quality_rows.append(
-        [
-            "Date Parsing",
-            str(int(date_parsed)),
-            str(total),
-            f"{date_parsed / total:.1%}",
-            "PASS"
-            if date_parsed / total > 0.9
-            else "WARN"
-            if date_parsed / total > 0.7
-            else "FAIL",
-        ]
-    )
-    quality_rows.append(
-        [
-            "Amount Complete",
-            str(int(amt_complete)),
-            str(total),
-            f"{amt_complete / total:.1%}",
-            "PASS" if amt_complete == total else "WARN",
-        ]
-    )
-    quality_rows.append(
-        [
-            "Period Info Complete",
-            str(int(period_complete)),
-            str(total),
-            f"{period_complete / total:.1%}",
-            "PASS"
-            if period_complete / total > 0.7
-            else "WARN"
-            if period_complete / total > 0.5
-            else "FAIL",
-        ]
-    )
-    quality_rows.append(
-        [
-            "Reading Classified",
-            str(int(reading_classified)),
-            str(total),
-            f"{reading_classified / total:.1%}",
-            "PASS" if reading_classified / total > 0.5 else "WARN",
-        ]
-    )
-    quality_rows.append(
-        [
-            "Duplicates (Date+Amount)",
-            str(int(dup_count)),
-            str(total),
-            f"{dup_count / total:.2%}",
-            "PASS" if dup_count / total < 0.05 else "WARN" if dup_count / total < 0.15 else "FAIL",
-        ]
-    )
-    parts.append(_table(quality_rows))
-
+    parts = [
+        f'<div id="sec-data_quality"><h2 class="section">{_esc(ctx.heading("data_quality"))}</h2>'
+    ]
+    parts.append(_note(quality_notice(dq)))
+    parts.append(_table(quality_table(dq)))
     parts.append("<h3>Source Distribution</h3>")
-    src_rows = [["Source", "Records", "Percentage"]]
-    for src, cnt in df["Source"].value_counts().items():
-        src_rows.append([src, str(cnt), f"{cnt / total:.1%}"])
-    src_rows.append(["TOTAL", str(total), "100.0%"])
-    parts.append(_table(src_rows))
+    rows = [["Source", "Records", "Percentage"]]
+    for source, count in dq.source_distribution.items():
+        rows.append([source, str(count), f"{count / total:.1%}" if total else "—"])
+    rows.append(["TOTAL", str(total), "100.0%" if total else "—"])
+    parts.append(_table(rows))
     parts.append("</div>")
     return "\n".join(parts)
 

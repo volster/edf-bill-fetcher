@@ -1051,95 +1051,34 @@ def create_data_quality_section(
     *,
     payload: Any = None,
 ) -> None:
-    """Create data quality assessment section."""
+    """Present accepted quality counts with the same scope as the workbook."""
+    from edf_bill_fetcher.models.quality_tables import quality_notice, quality_table
     from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
-    if ctx is None:
-        ctx = RenderContext()
+    ctx = ctx or RenderContext()
     doc.add_paragraph(ctx.heading("data_quality"), style=styles["SectionHeader"])
-
     dq = payload if payload is not None else compute_data_quality_report(df)
-    total = dq.total_records
-    date_parsed = dq.date_parsed
-    amt_complete = dq.amt_complete
-    period_complete = dq.period_complete
-    reading_classified = dq.reading_classified
-    dup_count = dq.duplicate_count
-
-    quality_data = [
-        [
-            "Date Parsing",
-            str(int(date_parsed)),
-            str(total),
-            f"{date_parsed / total:.1%}",
-            "PASS"
-            if date_parsed / total > 0.9
-            else "WARN"
-            if date_parsed / total > 0.7
-            else "FAIL",
-        ],
-        [
-            "Amount Complete",
-            str(int(amt_complete)),
-            str(total),
-            f"{amt_complete / total:.1%}",
-            "PASS" if amt_complete == total else "WARN",
-        ],
-        [
-            "Period Info Complete",
-            str(int(period_complete)),
-            str(total),
-            f"{period_complete / total:.1%}",
-            "PASS"
-            if period_complete / total > 0.7
-            else "WARN"
-            if period_complete / total > 0.5
-            else "FAIL",
-        ],
-        [
-            "Reading Classified",
-            str(int(reading_classified)),
-            str(total),
-            f"{reading_classified / total:.1%}",
-            "PASS" if reading_classified / total > 0.5 else "WARN",
-        ],
-        [
-            "Duplicates (Date+Amount)",
-            str(int(dup_count)),
-            str(total),
-            f"{dup_count / total:.2%}",
-            "PASS" if dup_count / total < 0.05 else "WARN" if dup_count / total < 0.15 else "FAIL",
-        ],
-    ]
-
-    table = doc.add_table(rows=len(quality_data) + 1, cols=5)
+    doc.add_paragraph(quality_notice(dq), style=styles["BodyText"])
+    rows = quality_table(dq)
+    table = doc.add_table(rows=len(rows), cols=5)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    headers = ["Check", "Passed", "Total", "Rate", "Status"]
-    for i, h in enumerate(headers):
-        table.rows[0].cells[i].text = h
-
-    for i, row in enumerate(quality_data, 1):
-        for j, val in enumerate(row):
-            table.rows[i].cells[j].text = str(val)
-
+    for row_index, row in enumerate(rows):
+        for column, value in enumerate(row):
+            table.cell(row_index, column).text = value
     _format_table(table)
 
-    src_counts = dq.source_distribution
-    src_table = doc.add_table(rows=len(src_counts) + 2, cols=3)
-    src_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    src_headers = ["Source", "Records", "Percentage"]
-    for i, h in enumerate(src_headers):
-        src_table.rows[0].cells[i].text = h
-    for i, (src, cnt) in enumerate(src_counts.items(), 1):
-        src_table.rows[i].cells[0].text = str(src)
-        src_table.rows[i].cells[1].text = str(cnt)
-        src_table.rows[i].cells[2].text = f"{cnt / total * 100:.1f}%"
-    src_table.rows[-1].cells[0].text = "TOTAL"
-    src_table.rows[-1].cells[1].text = str(total)
-    src_table.rows[-1].cells[2].text = "100.0%"
-    _format_table(src_table)
-
+    doc.add_paragraph("Source Distribution", style=styles["SubSectionHeader"])
+    sources = [["Source", "Records", "Percentage"]]
+    total = dq.total_records
+    for source, count in dq.source_distribution.items():
+        sources.append([source, str(count), f"{count / total:.1%}" if total else "—"])
+    sources.append(["TOTAL", str(total), "100.0%" if total else "—"])
+    table = doc.add_table(rows=len(sources), cols=3)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for row_index, row in enumerate(sources):
+        for column, value in enumerate(row):
+            table.cell(row_index, column).text = value
+    _format_table(table)
     doc.add_page_break()
 
 

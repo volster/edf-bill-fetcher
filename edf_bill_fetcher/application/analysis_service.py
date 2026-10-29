@@ -218,10 +218,6 @@ def _computed_models(
     quality = models.compute_data_quality_report(
         frame, duplicate_count=len(rows_value(prepared.duplicates))
     )
-    quality.duplicate_count = len(rows_value(prepared.duplicates))
-    quality.duplicate_rate = (
-        quality.duplicate_count / quality.total_records if quality.total_records else 0.0
-    )
     statistical = models.compute_statistical_analysis(frame)
     forecast = models.compute_forecast(frame)
     ofgem = models.compute_ofgem_comparison(frame, cfg)
@@ -369,9 +365,9 @@ def analyse_prepared(prepared: PreparedSnapshot) -> AnalysisSnapshot:
     reference = resources.files("edf_bill_fetcher.data").joinpath("ofgem_caps.json").read_bytes()
     methods = freeze_json(
         {
-            "preparation": "source-context-v2",
+            "preparation": "source-context-v3-amount-kind",
             "financial": "legacy-v1",
-            "models": "snapshot-v3-source-context",
+            "models": "snapshot-v4-quality-scope",
             "reference_sha256": hashlib.sha256(reference).hexdigest(),
             "reference_context": {
                 key: cfg.get(key) for key in ("fuel", "payment_method", "tariff_type", "cap_region")

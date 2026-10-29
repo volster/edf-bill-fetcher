@@ -215,7 +215,7 @@ def polish_reference_sheets(wb: Workbook) -> None:
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
-        ws.print_title_rows = "1:1"
+        ws.print_title_rows = "1:5" if ws.title == "Data Quality Report" else "1:1"
         if ws.title in {
             "Bill revisions",
             "Rebilling ledger",

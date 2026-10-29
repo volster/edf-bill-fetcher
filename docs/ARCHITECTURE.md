@@ -211,6 +211,16 @@ Optional `sap.ledger_overview` stores per-ledger dated balances and movements wi
 strict money/date validation. Older results do not acquire it by rerendering.
 
 The preparation/method identifiers record these algorithms independently of the
-v3 transport version. New analysis uses `source-context-v2` preparation and
-`snapshot-v3-source-context` models; loading an earlier accepted result preserves
+v3 transport version. New analysis uses `source-context-v3-amount-kind` preparation
+and `snapshot-v4-quality-scope` models; loading an earlier accepted result preserves
 its methods and calculated values.
+
+`DataQualityReport.assessment` stores eligible populations and observed counts
+for evidence-type checks, plus separate removed/retained duplicate counts.
+`models/quality_tables.py` formats those accepted facts for every output surface;
+rendering must not rerun preparation or infer missing scope from current frames.
+Counts, eligibility bounds, duplicate disposition and the duplicate-rate denominator
+are validated during strict loading. The one supported older shape omits this
+assessment field; it restores as unavailable and serializes back without adding it.
+No other model fields become optional. Legacy counts/rates remain accepted facts,
+and their display explicitly identifies their historical all-record scope.

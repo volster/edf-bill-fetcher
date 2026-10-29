@@ -87,7 +87,8 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
     kind = str(row["Entry Type"])
     amount = money(row.get("Amount (£)"))
     charge = money(row.get("Period Charge (£)"))
-    role = identity(row.get("Amount Kind"))
+    declared_role = str(row.get("Amount Kind", "")).strip()
+    role = "Unknown" if declared_role.casefold() == "unknown" else identity(declared_role)
     if not role:
         if str(row["Source"]).startswith("HTM") or kind == "Statement Reconciliation":
             role = "Balance"

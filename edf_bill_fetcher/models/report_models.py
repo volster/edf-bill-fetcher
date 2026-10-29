@@ -102,6 +102,7 @@ class DataQualityReport:
     duplicate_rate: float
     source_distribution: dict[str, int]
     entry_type_distribution: dict[str, int]
+    assessment: dict[str, int] | None = None
 
     def to_dict(self) -> dict:
         """Map back to the legacy flat dict consumed by the Excel writer."""
@@ -124,6 +125,7 @@ class DataQualityReport:
             "duplicate_rate": self.duplicate_rate,
             "source_distribution": self.source_distribution,
             "entry_type_distribution": self.entry_type_distribution,
+            "assessment": self.assessment,
         }
 
 
@@ -133,6 +135,10 @@ def compute_data_quality_report(
     """Compute the canonical data-quality report on a copy of ``df``."""
     df = normalize_frame(df)
     total_records = len(df)
+    from edf_bill_fetcher.processors.quality_assessment import build_quality_assessment
+
+    assessment = build_quality_assessment(df, removed=duplicate_count or 0)
+    duplicate_count = assessment["duplicates_removed"] + assessment["duplicates_retained"]
     if total_records == 0:
         return DataQualityReport(
             total_records=0,
@@ -151,6 +157,7 @@ def compute_data_quality_report(
             duplicate_rate=0.0,
             source_distribution={},
             entry_type_distribution={},
+            assessment=assessment,
         )
 
     df["_dt_parsed"] = df["Date"].apply(parse_to_sort_date)
@@ -187,13 +194,6 @@ def compute_data_quality_report(
         else 0
     )
 
-    from edf_bill_fetcher.processors.preparation import prepare_evidence
-
-    if duplicate_count is None:
-        duplicate_count = len(
-            prepare_evidence(df.to_dict("records"), {"use_dedup": True}).duplicates
-        )
-
     source_distribution = df["Source"].value_counts().to_dict()
     entry_type_distribution = (
         df["Entry Type"].value_counts().to_dict() if "Entry Type" in df.columns else {}
@@ -213,9 +213,10 @@ def compute_data_quality_report(
         ur_computable=ur_computable,
         ur_computable_rate=ur_computable / total_records,
         duplicate_count=duplicate_count,
-        duplicate_rate=duplicate_count / total_records,
+        duplicate_rate=duplicate_count / (total_records + assessment["duplicates_removed"]),
         source_distribution=source_distribution,
         entry_type_distribution=entry_type_distribution,
+        assessment=assessment,
     )
 
 

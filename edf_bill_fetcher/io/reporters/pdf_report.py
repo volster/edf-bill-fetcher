@@ -1518,102 +1518,24 @@ def create_forecast_section(
 def create_data_quality_section(
     df: pd.DataFrame, ctx: RenderContext | None = None, *, payload: Any = None
 ) -> list:
-    """Create data quality assessment section."""
+    """Present accepted quality counts with the same scope as the workbook."""
+    from edf_bill_fetcher.models.quality_tables import quality_notice, quality_table
     from edf_bill_fetcher.models.report_models import compute_data_quality_report
 
-    elements = []
-    if ctx is None:
-        ctx = RenderContext()
-    heading = ctx.heading("data_quality")
-
-    elements.append(Paragraph(heading, STYLES["SectionHeader"]))
-    elements.append(Spacer(1, 0.3 * cm))
-
+    ctx = ctx or RenderContext()
     dq = payload if payload is not None else compute_data_quality_report(df)
-    total = dq.total_records
-    date_parsed = dq.date_parsed
-    amt_complete = dq.amt_complete
-    period_complete = dq.period_complete
-    reading_classified = dq.reading_classified
-    dup_count = dq.duplicate_count
-
-    quality_data = [
-        ["Check", "Passed", "Total", "Rate", "Status"],
-        [
-            "Date Parsing",
-            str(int(date_parsed)),
-            str(total),
-            f"{date_parsed / total:.1%}",
-            "PASS"
-            if date_parsed / total > 0.9
-            else "WARN"
-            if date_parsed / total > 0.7
-            else "FAIL",
-        ],
-        [
-            "Amount Complete",
-            str(int(amt_complete)),
-            str(total),
-            f"{amt_complete / total:.1%}",
-            "PASS" if amt_complete == total else "WARN",
-        ],
-        [
-            "Period Info Complete",
-            str(int(period_complete)),
-            str(total),
-            f"{period_complete / total:.1%}",
-            "PASS"
-            if period_complete / total > 0.7
-            else "WARN"
-            if period_complete / total > 0.5
-            else "FAIL",
-        ],
-        [
-            "Reading Classified",
-            str(int(reading_classified)),
-            str(total),
-            f"{reading_classified / total:.1%}",
-            "PASS" if reading_classified / total > 0.5 else "WARN",
-        ],
-        [
-            "Duplicates (Date+Amount)",
-            str(int(dup_count)),
-            str(total),
-            f"{dup_count / total:.2%}",
-            "PASS" if dup_count / total < 0.05 else "WARN" if dup_count / total < 0.15 else "FAIL",
-        ],
-    ]
-
-    t = Table(quality_data, colWidths=[5 * cm, 2 * cm, 2 * cm, 2.5 * cm, CONTENT_WIDTH - 12 * cm])
-    style = make_table_style(num_rows=len(quality_data))
-    # Color status column
-    for i in range(1, len(quality_data)):
-        status = quality_data[i][4]
-        if status == "PASS":
-            style.add("TEXTCOLOR", (4, i), (4, i), Colors.GREEN)
-            style.add("FONTNAME", (4, i), (4, i), "Helvetica-Bold")
-        elif status == "WARN":
-            style.add("TEXTCOLOR", (4, i), (4, i), Colors.AMBER)
-            style.add("FONTNAME", (4, i), (4, i), "Helvetica-Bold")
-        elif status == "FAIL":
-            style.add("TEXTCOLOR", (4, i), (4, i), Colors.RED)
-            style.add("FONTNAME", (4, i), (4, i), "Helvetica-Bold")
-    t.setStyle(style)
-    elements.append(t)
+    elements = [Paragraph(ctx.heading("data_quality"), STYLES["SectionHeader"])]
+    elements.append(Paragraph(quality_notice(dq), STYLES["SmallText"]))
+    elements.append(Spacer(1, 0.3 * cm))
+    elements.append(_wrapped_table(quality_table(dq), [6, 2, 2, 2, 2], font_size=8))
     elements.append(Spacer(1, 0.5 * cm))
-
-    # Source distribution
-    elements.append(Paragraph("<b>Source Distribution</b>", STYLES["SubSectionHeader"]))
-    src_counts = df["Source"].value_counts()
-    src_data = [["Source", "Records", "Percentage"]]
-    for src, cnt in src_counts.items():
-        src_data.append([src, str(cnt), f"{cnt / len(df):.1%}"])
-    src_data.append(["TOTAL", str(len(df)), "100.0%"])
-
-    t = Table(src_data, colWidths=[8 * cm, 3 * cm, 3 * cm])
-    t.setStyle(make_table_style(num_rows=len(src_data)))
-    elements.append(t)
-
+    elements.append(Paragraph("Source Distribution", STYLES["SubSectionHeader"]))
+    rows = [["Source", "Records", "Percentage"]]
+    total = dq.total_records
+    for source, count in dq.source_distribution.items():
+        rows.append([source, str(count), f"{count / total:.1%}" if total else "—"])
+    rows.append(["TOTAL", str(total), "100.0%" if total else "—"])
+    elements.append(_wrapped_table(rows, [8, 3, 3], font_size=8))
     elements.append(PageBreak())
     return elements
 

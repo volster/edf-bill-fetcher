@@ -210,6 +210,11 @@ def run(
                 manifest["warnings"].append(
                     f"{uncertain} transaction observations have ambiguous or conflicting cross-source identities; review them before relying on aggregate totals."
                 )
+            assessment = view.model("data_quality").assessment
+            if assessment is not None and assessment["duplicates_retained"]:
+                manifest["warnings"].append(
+                    f"{assessment['duplicates_retained']} supported duplicate observations remain included; review the Data Quality Report and deduplication setting before relying on totals."
+                )
             claims = view.claims
             if has_active_claims(claims) and claims is not None and not claims["ready"]:
                 manifest["warnings"].append(

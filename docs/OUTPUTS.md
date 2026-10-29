@@ -234,3 +234,30 @@ that remains subject to checking originals. Low/Medium and ambiguous candidates
 are not promoted into a definitive invoice relationship. Date distance measures
 proximity of the supporting posting/clearing date to the billed period: an in-span
 date has distance zero.
+
+## Read the data-quality checks
+
+The workbook and all three document formats use the same **Count**, **Eligible**,
+**Rate** and **Status** values. Dates and numeric amounts are assessed on financial
+observations. Bill charges, periods, reading basis and energy-rate coverage use
+bill records; payment, credit, refund and other transaction values are assessed
+separately. A balance does not satisfy a missing bill charge or transaction value.
+Reminders and supporting documents do not require their own billing period or
+meter-reading classification.
+
+- **PASS** means the particular presence check is satisfied, not that the amount
+  is legally due or the source is correct.
+- **REVIEW** identifies missing applicable information, uncertain monetary meaning,
+  unresolved transaction identity or supported duplicates still included in totals.
+- **INFO** includes energy-rate coverage and duplicate observations already removed.
+- **N/A** means no included records are eligible for that check.
+
+The removed-duplicate rate uses included observations plus removed observations
+as its denominator. Retained duplicates use included observations. Source and entry
+type distributions describe the pack; they do not inflate the number of quality
+checks. A high number of removed duplicates is not itself a failed extraction.
+
+Saved results from before scoped quality checks retain their original metrics,
+displayed as legacy all-record coverage. Rerendering cannot reconstruct an accepted
+scope that was never stored. Regenerate from the review workbook or re-extract into
+a new pack to calculate the scoped assessment.

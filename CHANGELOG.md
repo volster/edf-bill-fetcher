@@ -58,6 +58,15 @@ semver-friendly.
 
 ### Fixed
 
+- Data-quality checks share one presentation across Excel, PDF, Word and HTML.
+  Bill completeness excludes reminders, payments and supporting documents;
+  missing charge/transaction values cannot be satisfied by an account balance.
+  Removed duplicates are informational history, while retained duplicates and
+  ambiguous postings require review. Duplicate rates use the observation count
+  before removal, and distribution rows no longer inflate the check total.
+- Explicitly unknown monetary meaning survives normalization instead of being
+  inferred again from a document's type. Saved results retain their original
+  accepted figures; legacy quality metrics are labelled with their saved scope.
 - Payment reminders now extract an explicit demand before generic balance patterns;
   fee thresholds and conditional meter-reading advice do not become balances or readings.
 - Repeated payment-history rows retain their parent-invoice identity across merged
