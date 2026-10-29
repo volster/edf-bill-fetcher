@@ -176,7 +176,8 @@ allowed by the current configuration; they do not fail merely for lacking types.
 If you annotate a test, include its fixture parameters and return type.
 
 Coverage is a useful gap detector, not proof of correctness. Do not lower the
-90% gate or add exclusions to make a failing change pass. See the
+95% overall gate, weaken the critical integrity checks or add exclusions to make
+a failing change pass. See the
 [coverage policy](COVERAGE.md#coverage-exclusions).
 
 ## Documentation and delivery

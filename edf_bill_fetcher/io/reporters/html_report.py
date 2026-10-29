@@ -1191,7 +1191,7 @@ def render_html(view: ReportView, output_path: str) -> str:
         try:
             navigation = create_table_of_contents(render_ctx)
         except Exception as e:
-            section_failures.append(str(e))  # pragma: no cover - defensive mirror of PDF
+            section_failures.append(str(e))
             body_parts.append(_note(f"Table of Contents failed: {_esc(e)}"))
 
     # === SECTION DISPATCH (data-driven — keys/ordering live in REPORT_SECTIONS) ===

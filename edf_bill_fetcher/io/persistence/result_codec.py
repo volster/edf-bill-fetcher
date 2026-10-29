@@ -51,14 +51,18 @@ def _string(value: Any) -> str:
     return value
 
 
-def _money(value: Any, nullable: bool = False) -> Decimal | None:
-    if nullable and value is None:
-        return None
+def _money(value: Any) -> Decimal:
+    """Require canonical money; required totals can never decode to None."""
     if not isinstance(value, str) or not re.fullmatch(r"-?(?:0|[1-9][0-9]*)\.[0-9]{2}", value):
         raise ValueError("Money must be a canonical two-decimal string")
     if value == "-0.00":
         raise ValueError("Signed zero is not canonical money")
     return Decimal(value)
+
+
+def _optional_money(value: Any) -> Decimal | None:
+    """Preserve an unavailable observation while validating any amount supplied."""
+    return None if value is None else _money(value)
 
 
 def _validate_revisions(model: Any) -> None:
@@ -206,17 +210,22 @@ def _validate_ledger(value: Any) -> None:
             component = _object(
                 component, {"kind", "period_from", "period_to", "units", "rate", "amount", "detail"}
             )
-            if component["kind"] not in {
-                "energy",
-                "standing",
-                "vat",
-                "cancellation",
-                "discount",
-            } or not isinstance(component["detail"], str):
+            if (
+                not isinstance(component["kind"], str)
+                or component["kind"]
+                not in {
+                    "energy",
+                    "standing",
+                    "vat",
+                    "cancellation",
+                    "discount",
+                }
+                or not isinstance(component["detail"], str)
+            ):
                 raise ValueError("Invalid rebilling component kind")
             optional_date(component["period_from"])
             optional_date(component["period_to"])
-            _money(component["amount"], nullable=True)
+            _optional_money(component["amount"])
             if any(
                 component[field] is not None and type(component[field]) not in (int, float)
                 for field in ("units", "rate")
@@ -230,8 +239,11 @@ def _validate_ledger(value: Any) -> None:
                 if (
                     not isinstance(link, dict)
                     or link.get(endpoint) != doc["row_id"]
+                    or not isinstance(link.get("older"), str)
+                    or not isinstance(link.get("newer"), str)
                     or link.get("older") not in indexed
                     or link.get("newer") not in indexed
+                    or not isinstance(link.get("status"), str)
                     or link.get("status") not in {"suggested", "confirmed", "rejected"}
                 ):
                     raise ValueError("Rebilling relationship references an unknown document")
@@ -247,6 +259,7 @@ def _validate_ledger(value: Any) -> None:
             or pair[0] == pair[1]
             or any(key not in indexed for key in pair)
             or type(comparison["same_period"]) is not bool
+            or not isinstance(comparison["status"], str)
             or comparison["status"] not in {"suggested", "confirmed", "rejected"}
             or not isinstance(comparison["components"], list)
         ):
@@ -256,10 +269,14 @@ def _validate_ledger(value: Any) -> None:
             raise ValueError("Invalid other component comparisons")
         for component in comparison["other_components"]:
             component = _object(component, {"kind", "earlier_amount", "later_amount", "difference"})
-            if component["kind"] not in {"standing", "vat", "discount"}:
+            if not isinstance(component["kind"], str) or component["kind"] not in {
+                "standing",
+                "vat",
+                "discount",
+            }:
                 raise ValueError("Invalid other component comparison kind")
             for field in ("earlier_amount", "later_amount", "difference"):
-                _money(component[field], nullable=True)
+                _optional_money(component[field])
         for component in comparison["components"]:
             component = _object(
                 component,
@@ -275,10 +292,14 @@ def _validate_ledger(value: Any) -> None:
             )
             optional_date(component["period_from"])
             optional_date(component["period_to"])
-            if component["status"] not in {"matched", "unallocated"}:
+            if not isinstance(component["status"], str) or component["status"] not in {
+                "matched",
+                "unallocated",
+            }:
                 raise ValueError("Invalid component comparison status")
             for field in ("charge_difference", "units_effect", "rate_effect", "residual"):
-                _money(component[field], nullable=component["status"] == "unallocated")
+                validator = _optional_money if component["status"] == "unallocated" else _money
+                validator(component[field])
 
 
 def _validate_claims(value: Any, ledger: dict) -> None:
@@ -323,7 +344,7 @@ def _validate_claims(value: Any, ledger: dict) -> None:
     if len(set(model["unresolved_positions"])) != len(model["unresolved_positions"]):
         raise ValueError("Duplicate unresolved claim position")
     _money(model["reviewed_subtotal"])
-    _money(model["proposed_reduction"], nullable=not model["ready"])
+    (_money if model["ready"] else _optional_money)(model["proposed_reduction"])
     if not model["ready"] and model["proposed_reduction"] is not None:
         raise ValueError("An unresolved reconciliation cannot publish a full proposed total")
     if not isinstance(model["groups"], list) or len(model["groups"]) != len(inputs):
@@ -378,7 +399,7 @@ def _validate_claims(value: Any, ledger: dict) -> None:
         ):
             raise ValueError("Unresolved claim group cannot be ready for totaling")
         for field in ("relief_received", "cancellation_offsets", "further_reduction"):
-            _money(group[field], nullable=field == "further_reduction")
+            (_optional_money if field == "further_reduction" else _money)(group[field])
     if (
         not isinstance(model["overlaps"], list)
         or len(model["overlaps"]) > 500000
@@ -393,6 +414,7 @@ def _validate_claims(value: Any, ledger: dict) -> None:
             or len(pair) != 2
             or any(not isinstance(key, str) or key not in inputs for key in pair)
             or pair[0] >= pair[1]
+            or not isinstance(overlap["kind"], str)
             or overlap["kind"]
             not in {
                 "shared_documents",
@@ -428,8 +450,8 @@ def _validate_claims(value: Any, ledger: dict) -> None:
         if len(set(entry["groups"])) != len(entry["groups"]):
             raise ValueError("Duplicate ledger claim group")
         _money(entry["reduction"])
-        _money(entry["observed_balance"], nullable=True)
-        _money(entry["illustrative_balance"], nullable=True)
+        _optional_money(entry["observed_balance"])
+        _optional_money(entry["illustrative_balance"])
         if entry["balance_date"] is not None:
             date.fromisoformat(_string(entry["balance_date"]))
     if model["ready"] and (
@@ -522,13 +544,14 @@ def _validate_models(value: Any) -> None:
                     for key in ("charges", "net_credits"):
                         _money(row[key])
                     for prefix in ("opening", "closing"):
-                        _money(row[prefix + "_balance"], nullable=True)
+                        _optional_money(row[prefix + "_balance"])
                         day = row[prefix + "_date"]
                         if (day is None) != (row[prefix + "_balance"] is None):
                             raise ValueError("Ledger balance requires a dated observation")
                         if day is not None:
                             if (
                                 not isinstance(day, str)
+                                or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)
                                 or date.fromisoformat(day).isoformat() != day
                             ):
                                 raise ValueError("Invalid ledger observation date")
@@ -747,13 +770,11 @@ def decode_result(payload: object) -> AnalysisSnapshot:
     if type(daily) not in (int, float):
         raise ValueError("Daily charge must be numeric")
     charges, credits = _money(summary["charges"]), _money(summary["net_credits"])
-    if charges is None or credits is None:
-        raise ValueError("Summary totals must be present")
     financial = FinancialSummary(
         charges,
         credits,
-        _money(summary["opening_balance"], True),
-        _money(summary["closing_balance"], True),
+        _optional_money(summary["opening_balance"]),
+        _optional_money(summary["closing_balance"]),
         float(daily),
     )
     _validate_models(analysis["models"])

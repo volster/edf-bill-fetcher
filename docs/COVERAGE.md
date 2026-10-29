@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Development](DEVELOPMENT.md) · [CI](CI.md)
 
-CI requires **90% combined statement and branch coverage**. The threshold is in
+CI requires **95% combined statement and branch coverage**. The threshold is in
 `pyproject.toml` under `[tool.coverage.report]`. Passing it does not establish that
 a particular change is tested well: a small untested addition can still leave the
 overall percentage above the floor.
@@ -22,9 +22,23 @@ The runner executes:
 python -m pytest --cov=. --cov-report=xml --cov-report=term-missing --junitxml=test-results.xml
 ```
 
-Pytest-cov applies the configured branch measurement, omissions and 90% threshold.
+Pytest-cov applies the configured branch measurement, omissions and 95% threshold.
 The runner retains the reports and original exit code under `.ci-diagnostics/tests/`.
 CI uploads these together with interpreter/runtime/dependency diagnostics.
+
+After the full run, every matrix job also requires **100% combined coverage** for
+the critical integrity modules: canonical money, financial totals and compensation,
+preparation and duplicate resolution, account/posting identity, rebilling and claim
+reconciliation, corrections and review sessions, result persistence, and shared
+report/workbook source links. The exact include list is in
+[the CI workflow](../.github/workflows/ci.yml), in the step named
+`Require full coverage for critical integrity contracts`. Run that step's coverage
+command locally after `python ci_pytest.py` to reproduce the critical check.
+
+These are separate gates. A high overall percentage cannot compensate for an
+untested branch in a protected module. Keep new financial or provenance behavior
+under these contracts and add independently expected results, preservation checks
+and realistic failure cases alongside each change.
 
 To inspect the resulting coverage locally:
 
@@ -125,6 +139,10 @@ behavioral regressions as described in [development](DEVELOPMENT.md#write-a-usef
 | Excel review and regeneration | `tests/test_excel_review.py`: real workbook edits rebuild the analysis, preserve source files and review history, and remain lossless when no corrections are made. |
 | Saved analysis integrity | `tests/test_saved_result_validation.py`: corrupt fields and nonexistent evidence references are rejected instead of being accepted as an earlier result. |
 | Report output contracts | `tests/test_run_output_regressions.py`: synthetic examples exercise financial identity, ledger boundaries and actual Word/PDF hyperlinks. |
+| Accepted result corruption | `tests/test_accepted_result_integrity.py`: malformed ledger components, revision links, claim states and SAP references fail explicitly; missing legacy extensions and unavailable observations remain unchanged. |
+| Claim totals and incomplete evidence | `tests/test_claim_input_boundaries.py` and `tests/test_financial_identity_boundaries.py`: independent periods, partial components, conflicting balances and stale evidence cannot cause invented allocations or duplicate deductions. |
+| User edits and publication | `tests/test_claim_editor_boundaries.py` and `tests/test_report_publication_boundaries.py`: Save/Discard/Cancel preserves pending work; failed report sections retain the previous complete output. |
+| Source availability and command failures | `tests/test_evidence_availability_boundaries.py`, `tests/test_bundle_failure_boundaries.py` and `tests/test_cli_integrity_boundaries.py`: unavailable originals stay explicit, valid sources remain usable, and outputs cannot overwrite their inputs. |
 
 Use the smaller suites to diagnose a failure, then run the full measurement above.
 Keep fixture amounts and identities synthetic. Private evidence is useful for a

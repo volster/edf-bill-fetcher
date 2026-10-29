@@ -21,14 +21,18 @@ from edf_bill_fetcher.models.report_view import ReportView
 
 def source_link(cell: Cell, row: dict, links: dict[str, str]) -> None:
     """Link to this source occurrence and the first known original PDF page."""
-    path = links.get(str(row.get("Source ID", ""))) or links.get(
-        str(row.get("Attachment Name", ""))
-    )
+    identity = row.get("Source ID")
+    if identity is not None and not isinstance(identity, str):
+        return
+    path = links.get(identity) if identity else links.get(str(row.get("Attachment Name", "")))
     if path:
         page = row.get("Page From")
         cell.hyperlink = path + (
             f"#page={int(page)}"
-            if isinstance(page, (int, float)) and not isinstance(page, bool) and page > 0
+            if isinstance(page, (int, float))
+            and not isinstance(page, bool)
+            and 0 < page < 1_000_000
+            and page == int(page)
             else ""
         )
         cell.font = Font(color="007F82", underline="single")

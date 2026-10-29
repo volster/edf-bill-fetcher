@@ -74,6 +74,8 @@ def _saved_link(root: Path, entry: dict) -> SourceLink | None:
 def record_source_link(row: dict, links: dict[str, SourceLink]) -> SourceLink | None:
     """Use a preserved source identity and original page, never a guessed filename."""
     identity = row.get("Source ID")
+    if identity is not None and not isinstance(identity, str):
+        return None
     link = links.get(str(identity)) if identity else links.get(str(row.get("Attachment Name", "")))
     if link is None:
         return None

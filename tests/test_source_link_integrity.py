@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 
 import pytest
+from openpyxl import Workbook
 
 from edf_bill_fetcher.io.reporters.source_links import (
     SourceLink,
     record_source_link,
     source_links,
 )
+from edf_bill_fetcher.io.writers.rebilling_ledger import source_link as workbook_source_link
 
 
 def entry(root, source_id, path, name="bill.pdf"):
@@ -151,3 +153,52 @@ def test_integer_page_is_preserved(page):
 
 def test_no_mapped_original_means_no_link():
     assert record_source_link({"Source ID": "unknown", "Attachment Name": "bill.pdf"}, {}) is None
+
+
+@pytest.mark.parametrize("identity", ["unknown", 0, False, []])
+def test_workbook_source_identity_never_falls_back_to_a_namesake(identity):
+    cell = Workbook().active["A1"]
+    cell.value = "Original reference"
+    workbook_source_link(
+        cell,
+        {"Source ID": identity, "Attachment Name": "bill.pdf"},
+        {"bill.pdf": "evidence_files/other.pdf"},
+    )
+    assert cell.hyperlink is None
+    assert cell.value == "Original reference"
+
+
+@pytest.mark.parametrize("identity", [0, False, []])
+def test_invalid_report_source_identity_never_falls_back(identity):
+    row = {"Source ID": identity, "Attachment Name": "bill.pdf"}
+    assert record_source_link(row, {"bill.pdf": SourceLink("other.pdf", "Open source")}) is None
+
+
+@pytest.mark.parametrize(
+    "page", [0, -1, True, False, 1.5, float("nan"), float("inf"), "2", None, 1000000]
+)
+def test_workbook_invalid_page_keeps_the_original_file_link(page):
+    cell = Workbook().active["A1"]
+    workbook_source_link(
+        cell, {"Source ID": "known", "Page From": page}, {"known": "evidence_files/bill.pdf"}
+    )
+    assert cell.hyperlink.target == "evidence_files/bill.pdf"
+
+
+@pytest.mark.parametrize("identity", [None, ""])
+@pytest.mark.parametrize("page", [2, 2.0])
+def test_workbook_legacy_filename_link_preserves_integral_page(identity, page):
+    cell = Workbook().active["A1"]
+    workbook_source_link(
+        cell,
+        {"Source ID": identity, "Attachment Name": "bill.pdf", "Page From": page},
+        {"bill.pdf": "evidence_files/bill.pdf"},
+    )
+    assert cell.hyperlink.target == "evidence_files/bill.pdf#page=2"
+
+
+def test_legacy_manifest_without_a_hash_still_requires_a_contained_existing_file(tmp_path):
+    saved = entry(tmp_path, "legacy", "evidence_files/legacy.pdf")
+    del saved["sha256"]
+    manifest(tmp_path, [saved])
+    assert source_links(str(tmp_path))["legacy"].href == "evidence_files/legacy.pdf"

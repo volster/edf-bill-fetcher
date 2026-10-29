@@ -194,10 +194,9 @@ omit = [
 ]
 
 [tool.coverage.report]
-# Coverage gate restored to 90% (Task 4.1): all Wave 2-4 targets landed,
-# global coverage measured at 92% (baseline 73.44%). The gate catches
-# future regressions against the completed coverage campaign.
-fail_under = 90
+# Full-suite floor; CI separately requires every measured line and branch
+# in the critical financial, evidence and review contracts to be covered.
+fail_under = 95
 show_missing = true
 skip_covered = true
 exclude_lines = [

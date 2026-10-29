@@ -9,7 +9,8 @@ explicit so a `*-latest` image migration does not change the operating
 system underneath a source change.
 
 All nine test jobs retain lint, format, type and full-suite coverage checks.
-The coverage requirement remains 90%. Automatic executable builds require
+Coverage requires 95% overall and 100% in the protected financial, evidence and
+review modules; see the [coverage policy](COVERAGE.md). Automatic executable builds require
 successful CI for the source revision recorded in `build-provenance.json`.
 Manual builds remain labelled `manual-unvalidated`. Tagged releases validate
 and build the tagged revision before publication.
