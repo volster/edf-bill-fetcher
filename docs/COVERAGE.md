@@ -116,6 +116,24 @@ implementation. A high percentage can still miss double counting, stale review
 bindings, wrong page links and platform-specific decoding. Those need explicit
 behavioral regressions as described in [development](DEVELOPMENT.md#write-a-useful-regression).
 
+## Find the relevant regression suite
+
+| Behavior | Tests and expected outcome |
+| --- | --- |
+| Report links to original evidence | `tests/test_source_link_integrity.py`: a recorded source identity never falls back to a namesake; missing, changed, unsafe or unreadable files stay unlinked without disabling other valid sources. Repeated invoice aliases of the same original remain linkable. |
+| Shared Excel and desktop corrections | `tests/test_record_review_validation.py`: invalid dates, precision, transaction signs, reasons and row bindings are rejected; corrections and exclusions preserve the original record and nested provenance. |
+| Excel review and regeneration | `tests/test_excel_review.py`: real workbook edits rebuild the analysis, preserve source files and review history, and remain lossless when no corrections are made. |
+| Saved analysis integrity | `tests/test_saved_result_validation.py`: corrupt fields and nonexistent evidence references are rejected instead of being accepted as an earlier result. |
+| Report output contracts | `tests/test_run_output_regressions.py`: synthetic examples exercise financial identity, ledger boundaries and actual Word/PDF hyperlinks. |
+
+Use the smaller suites to diagnose a failure, then run the full measurement above.
+Keep fixture amounts and identities synthetic. Private evidence is useful for a
+separate local reconciliation, but must not become a committed fixture. When a
+new test exposes a bug, check that it fails before the production fix and asserts
+the expected outcome afterward. Adding branches to the implementation can increase
+the measurement denominator; report the actual before/after result instead of
+assuming a fixed percentage gain from the number of new cases.
+
 ## Historical measurement
 
 The [2026-08-02 baseline](coverage/baseline-2026-08-02.txt) records an earlier
