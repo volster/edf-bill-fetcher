@@ -59,7 +59,8 @@ def test_unreadable_directory_is_reported_and_siblings_survive(
     monkeypatch.setattr(collector, "process_pdf_file", process)
     scan(collector, tmp_path, kind)
     assert len(collector.error_log) == 1
-    assert str(denied) in collector.error_log[0]
+    # OSError renders its filename with repr(), escaping Windows separators.
+    assert repr(str(denied)) in collector.error_log[0]
     assert "Access denied" in collector.error_log[0]
     if kind == "pdf":
         assert process.call_count == (0 if deny_root else 1)
@@ -159,5 +160,5 @@ def test_partial_folder_run_persists_warning_and_marks_review_required(
     assert object_value(outcome.manifest)["status"] == "review_required"
     restored = load_result(tmp_path / "result.json")
     state = object_value(restored.prepared.extraction.legacy_state)
-    assert any(str(denied) in warning for warning in state["error_log"])
+    assert any(repr(str(denied)) in warning for warning in state["error_log"])
     assert len(restored.prepared.extraction.observations) == 1
