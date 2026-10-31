@@ -71,6 +71,13 @@ Check account/sender filters, minimum amounts, **Filtered (Below Min)**,
 retained under one prepared record. The app skips recognised earlier output
 folders during recursive scans to avoid ingesting its own exports.
 
+Unreadable PDF, EML or MSG subfolders are reported in the error log while readable
+siblings continue. A PDF that disappears or becomes inaccessible before processing
+is also reported without aborting later PDFs. Such partial imports need review:
+check the named paths, restore access or copy the files to a readable local folder,
+then extract again into a fresh output folder. A usable report is not proof that
+every selected source was read.
+
 Unsupported PNG or TXT attachments can be signatures or incidental email content;
 the message alone does not mean a bill failed. If one contains relevant evidence,
 inspect it separately. For SAP short/long-row warnings, inspect the source row

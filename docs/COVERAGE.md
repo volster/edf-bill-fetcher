@@ -143,6 +143,8 @@ behavioral regressions as described in [development](DEVELOPMENT.md#write-a-usef
 | Claim totals and incomplete evidence | `tests/test_claim_input_boundaries.py` and `tests/test_financial_identity_boundaries.py`: independent periods, partial components, conflicting balances and stale evidence cannot cause invented allocations or duplicate deductions. |
 | User edits and publication | `tests/test_claim_editor_boundaries.py` and `tests/test_report_publication_boundaries.py`: Save/Discard/Cancel preserves pending work; failed report sections retain the previous complete output. |
 | Source availability and command failures | `tests/test_evidence_availability_boundaries.py`, `tests/test_bundle_failure_boundaries.py` and `tests/test_cli_integrity_boundaries.py`: unavailable originals stay explicit, valid sources remain usable, and outputs cannot overwrite their inputs. |
+| Folder discovery and recovery | `tests/test_folder_recovery_boundaries.py`: unreadable roots and subfolders produce warnings, readable siblings survive, disappearing PDFs do not abort the batch, cancellation stops discovery, and partial imports retain their warnings in saved results with review required. |
+| OCR resource recovery | `tests/test_ocr_recovery_boundaries.py`: invalid dimensions and native failures release handles, cancelled or failed pages remove temporary rasters, a later page can recover, slow children are not restarted, and invalid confidence scores are rejected. Real scanned-PDF and output integration remains in `tests/test_ocr.py`. |
 
 Use the smaller suites to diagnose a failure, then run the full measurement above.
 Keep fixture amounts and identities synthetic. Private evidence is useful for a

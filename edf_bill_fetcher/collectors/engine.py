@@ -1538,7 +1538,11 @@ class EvidenceEngine:
         # submissions where a missing bill undoes the entire
         # argument.
         pdf_files: list[tuple[str, str]] = []
-        for root, dirs, files in os.walk(path):
+        for root, dirs, files in os.walk(
+            path, onerror=lambda error: self.log_error(f"PDF folder: {path}", error)
+        ):
+            if self.is_cancelled():
+                return
             if is_run_directory(root):
                 dirs.clear()
                 self.update_ui("Skipping earlier evidence pack: " + root)
@@ -1559,9 +1563,13 @@ class EvidenceEngine:
             if self.is_cancelled():
                 return
             file_path = os.path.join(root, fname)
-            fallback_date = parse_to_display_date(
-                datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d")
-            )
+            try:
+                fallback_date = parse_to_display_date(
+                    datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d")
+                )
+            except OSError as error:
+                self.log_error(f"PDF: {file_path}", error)
+                return
             with self.lock:
                 self.pdf_count += 1
             self._source_context = {}
@@ -1603,7 +1611,11 @@ class EvidenceEngine:
             return
         try:
             files: list[str] = []
-            for base, dirs, names in os.walk(path):
+            for base, dirs, names in os.walk(
+                path, onerror=lambda error: self.log_error(f"{source_name} folder: {path}", error)
+            ):
+                if self.is_cancelled():
+                    return
                 if is_run_directory(base):
                     dirs.clear()
                     self.update_ui("Skipping earlier evidence pack: " + base)
