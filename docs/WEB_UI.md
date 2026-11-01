@@ -1,6 +1,6 @@
 # Browser workspace and network hosting
 
-[Documentation index](README.md) · [Source setup](BUILDING.md) · [Architecture](ARCHITECTURE.md)
+[Web quick start](../README.md) · [Documentation index](README.md) · [Source setup](BUILDING.md) · [Architecture](ARCHITECTURE.md)
 
 The `feature/web-ui` branch adds a browser interface to the same extraction,
 analysis, corrections and publication services used by desktop and CLI. It can

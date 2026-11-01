@@ -1,232 +1,263 @@
-# EDF Energy Billing Evidence Collector
+# EDF Evidence Collector — Web Workspace
 
-Turn a folder of EDF bills and emails into an organised evidence pack you can
-check, correct and use to prepare a billing complaint.
+Bring your EDF bills, emails and account history together, check the figures
+against the originals, and build an evidence pack for a billing complaint.
 
-The app brings together invoices, payments, meter readings and account history.
-You can compare records with their original PDFs, trace revised bills and credits,
-and review the figures either in the app or in Excel. When you make corrections,
-it creates a new pack and keeps a record of what changed.
+This is the **`feature/web-ui` branch**. It adds a browser workspace you can run
+on your own computer or host on your network for someone else to use. Docker,
+source installations, the desktop app and the command line use the same Python
+analysis and review services.
+
+Evidence is processed and stored on the machine running the app. Other computers
+connect through their browsers; they do not need Python or OCR installed. No EDF
+login or cloud service is needed.
 
 ## What you can do
 
-- **Gather the evidence:** import PDF bills, Outlook PST/OST archives, EML/MSG
-  emails and EDF account-history exports. Scanned PDF pages use local OCR.
-- **Understand the account:** follow balances, payments, readings and bill
-  revisions, with missing information and possible billing problems highlighted.
-- **Check and correct it:** inspect original pages, fix extracted values or exclude
-  records, and carry your reasons into the next version of the pack.
-- **Prepare a complaint:** record disputed charges, reconcile overlapping claims
-  and credits, and produce a focused complaint draft with supporting originals.
-- **Choose your outputs:** an Excel workbook for review, plus HTML, PDF and Word
-  reports for reading and sharing.
+- **Add a whole collection:** upload files, folders and ZIPs together. Automatic
+  inspection identifies supported evidence and shows what needs attention.
+- **Handle large uploads:** uploads use resumable chunks and verify the original
+  bytes before finalising a collection. Folder paths are preserved.
+- **Check the evidence:** search records, read extracted text, and compare fields
+  with original PDF pages. Scanned PDFs use local OCR.
+- **Correct and review:** amend values, exclude or reinstate records, record your
+  reasons, and undo or redo saved draft changes.
+- **Build your case:** inspect bill revisions, review dispute positions,
+  reconcile claims and credits, and prepare a curated complaint pack.
+- **Keep using Excel:** download the editable workbook, make corrections in its
+  review tables, and upload it to regenerate the pack.
+- **Follow the account:** explore balances, payments, readings, timelines and
+  evidence gaps, then compare saved runs.
+- **Choose your outputs:** publish Excel, HTML, PDF and Word, with verified source
+  copies and a complete pack download.
 
-Processing happens on your computer; no EDF login or cloud service is needed.
-The app was built for a personal EDF dispute and understands the EDF document
-layouts covered by its parsers. Check findings against the originals: a flagged
-charge or proposed reduction is not a confirmed entitlement to a refund.
+The app highlights possible billing problems; findings and proposed reductions
+need checking against the original evidence. They are not confirmed entitlements.
 
 ## Get the app
 
-### Download a build
+### Docker quick start
 
-Open [Build Executables on GitHub Actions](https://github.com/volster/edf-bill-fetcher/actions/workflows/matrix_build.yml),
-choose a successful run for `how-its-going`, and download the
-`EDF_Evidence_Collector-…-ci-validated` artifact for your computer from the bottom
-of the run page. GitHub may ask you to sign in to download artifacts.
+Install **Git** and **Docker with Docker Compose**. Docker Desktop includes
+Compose on Windows and macOS. Then run:
 
-| Your computer | What to open after extracting the download |
-| --- | --- |
-| Windows | `EDF_Evidence_Collector.exe` |
-| Mac with Apple silicon | `EDF_Evidence_Collector.app` — follow the [first-launch instructions](docs/MACOS.md) |
-| Linux | `EDF_Evidence_Collector` |
+```console
+git clone --branch feature/web-ui https://github.com/volster/edf-bill-fetcher.git
+cd edf-bill-fetcher
+docker compose build
+docker compose run --rm app --init-user dad
+docker compose up -d
+```
 
-These builds include the OCR engine and English language data. You do not need
-Python. The Mac build is ad-hoc signed and needs a one-time **Open Anyway**
-approval; it is not Apple-notarized. Build artifacts can expire; see
-[building from source](docs/BUILDING.md) if a download is no longer available.
+The account command prompts for a password of at least **12 characters**. Open
+**<http://127.0.0.1:8000>** and sign in with the username and password you chose.
+Create the account once; subsequent launches only need `docker compose up -d`.
+
+The image includes the compiled browser interface, Python dependencies, Outlook
+readers and Tesseract with English OCR data. The first build downloads and
+installs these dependencies; the host does not need Python or Node.
+
+Useful commands:
+
+```console
+docker compose logs -f app
+docker compose stop
+docker compose up -d
+```
+
+Your uploads, runs, accounts and saved drafts live in the **`evidence-data` named
+volume**. Replacing the container preserves that volume. Back it up before
+updates; `docker compose down --volumes` removes the workspace.
 
 ### Run from source
 
-Install Git and either Conda or **64-bit Python 3.11**, then clone the working branch:
+Use this branch's checkout from the clone command above. Install **Node 24** and
+either **Conda** or **64-bit Python 3.11**; Python 3.10–3.12 are supported.
+
+For a first setup, the existing bootstrapper prepares the Python environment and
+native prerequisites without launching the desktop:
 
 ```console
-git clone --branch how-its-going https://github.com/volster/edf-bill-fetcher.git
-cd edf-bill-fetcher
+python bootstrap.py develop --install-system
 ```
 
-**With Conda:** open a Conda-enabled terminal (such as an Anaconda or Miniforge
-prompt) and run:
+Run that in a Conda-enabled terminal if you use Conda. Otherwise use
+`py -3.11 bootstrap.py develop --install-system` on Windows, or
+`python3.11 bootstrap.py develop --install-system` on macOS/Debian/Ubuntu.
+Native package installation may request administrator access.
+
+The bootstrapper reuses or creates the named **`edf-bill-fetcher` Conda
+environment** when Conda is available, and falls back to **`.venv`** otherwise.
+Activate the environment it selected:
+
+| Environment              | Activation command                |
+| ------------------------ | --------------------------------- |
+| Conda                    | `conda activate edf-bill-fetcher` |
+| venv, Windows PowerShell | `.\.venv\Scripts\Activate.ps1`    |
+| venv, macOS/Linux        | `source .venv/bin/activate`       |
+
+From that activated environment, install the web extra and build the interface:
 
 ```console
-python bootstrap.py run --install-system
-```
-
-**Without Conda:** use `py -3.11 bootstrap.py run --install-system` on Windows,
-or `python3.11 bootstrap.py run --install-system` on macOS/Debian/Ubuntu.
-
-The bootstrapper first looks for Conda. If found, it reuses the named
-`edf-bill-fetcher` environment or creates it with Python 3.11. Otherwise, it
-reuses or creates `.venv` in the checkout. It then installs the app, checks native
-capabilities including OCR, and launches it. It does not install the app into
-Conda's `base` environment. Native package installation may request administrator
-access.
-
-Use `--conda-env NAME` for an existing project environment with another name, or
-`--venv .venv` to explicitly select venv. **`--check` only checks** the selected
-existing environment. See the [setup and build guide](docs/BUILDING.md) for
-platform prerequisites and troubleshooting.
-
-After setup, activate the selected environment and use `python main.py` or
-`edf-collector` normally. With the default Conda environment:
-
-```console
-conda activate edf-bill-fetcher
-python main.py
-```
-
-With venv, activation is optional: run `.\.venv\Scripts\python.exe main.py` on
-Windows or `.venv/bin/python main.py` on macOS/Linux.
-
-**Prefer a manual install?** In your chosen Python 3.10–3.12 environment:
-
-```console
-python -m pip install -c .github/ci-constraints.txt -e ".[msg]"
+python -m pip install -c .github/ci-constraints.txt -e ".[web,msg]"
+npm ci --prefix frontend
+npm run build --prefix frontend
 python main.py --doctor
-python main.py
+edf-web --data web-data --init-user dad
+edf-web --data web-data
 ```
 
-Install the [native prerequisites](docs/BUILDING.md#native-prerequisites) first.
-Pip installs the Python libraries, including Qt and PDF readers, but does not
-install Tesseract or its English data. The bootstrapper automates environment
-setup and checks; it is not required to launch the app.
+Open **<http://127.0.0.1:8000>**. Later launches only need
+`edf-web --data web-data` from the same environment. `python main.py --web`
+accepts the same server options.
 
-### Browser or Docker
+Node is needed to build the frontend, rather than for subsequent launches.
+Tesseract and its English data are native requirements: pip alone does not
+install them. For manual environment setup, other Linux distributions or setup
+problems, see [source prerequisites and troubleshooting](docs/BUILDING.md).
 
-The **`feature/web-ui` branch** adds a browser workspace for source installations,
-Docker and LAN hosting. It uses the same analysis/review services as desktop and
-CLI, with folder/ZIP uploads, automatic evidence classification and persistent
-review drafts. Switch to that branch for this interface and follow the
-[browser and Docker guide](docs/WEB_UI.md). Desktop downloads remain on
-`how-its-going` until this branch is merged.
+## Let someone else use it on your network
+
+Only the host machine needs the app and processing dependencies. Another person
+opens its address in a browser and signs in.
+
+**With Docker:** create a `.env` file beside `compose.yaml` containing:
+
+```dotenv
+EDF_WEB_BIND_ADDRESS=0.0.0.0
+EDF_WEB_PORT=8000
+```
+
+Run `docker compose up -d` again to apply the settings.
+
+**From source:** start the server with:
+
+```console
+edf-web --data web-data --host 0.0.0.0 --port 8000
+```
+
+On the other computer, open the host's LAN address, for example
+**`http://192.168.1.20:8000`**. Use your host's actual address and allow the chosen
+port through its firewall. `127.0.0.1` always refers to the computer you are using.
+
+Accounts share the same workspace and evidence. To add another named account,
+repeat the account-creation command with a different username and the same data
+location. The [hosting guide](docs/WEB_UI.md) covers configured server folders,
+read-only Docker mounts, HTTPS proxies and secure cookies.
+
+## Build your first evidence pack
+
+1. Sign in and open **Build a pack**. Give the pack a name.
+2. Leave **All evidence · detect automatically** selected. Choose files or ZIPs,
+   or switch **Upload selection** to a folder and its subfolders. Click
+   **Upload and add**; repeat for any other sources.
+3. Choose **Inspect everything**. Review the inventory, including unsupported
+   files and anything needing an explicit import choice. Acknowledge unprocessed
+   files before continuing with the recognised originals.
+4. Choose analysis settings and report formats as needed, then click
+   **Create evidence pack**. Progress continues on the server if you leave the
+   page; reopen the run from **Runs & evidence**.
+5. Check the run status and review notes. Open a record beside its original PDF,
+   correct or exclude it with a reason, and choose **Apply to draft**.
+6. Use **Preview changes**, then **Create reviewed pack** to publish a new
+   version. Download the complete pack from **Outputs**.
+
+Applying an edit saves a draft. The accepted totals stay pinned until you preview
+or publish your changes. Earlier runs remain available, and stale edits from
+another tab are rejected.
+
+For Excel review, download the workbook, edit the designated **Review &
+Corrections** tables, and save it. In **Build a pack**, choose **Regenerate amended
+Excel workbook** as the workflow and upload that file. Editing a summary sheet or
+Word report alone does not update the saved analysis.
+
+If an upload is interrupted, select the same originals and choose **Resume
+pending upload** in the same browser tab. Changed or incomplete selections are
+rejected. Keep the originals unchanged while uploading and processing.
+
+Current limits include **100,000 files per upload collection** and **64 GiB per
+uploaded file**. ZIP expansion has separate size and nesting limits. See the
+[upload and archive guide](docs/WEB_UI.md#add-everything-then-inspect) for details.
 
 ## Supported evidence
 
-| Source | What the app looks for |
-| --- | --- |
-| PDF bills and credit notes | Older EDF layouts, T-series and newer KI/KCR layouts; invoice dates, periods, charges, balances, readings and tariff information where present. |
-| Merged and scanned PDFs | Separate invoice records with original page references; local English OCR for pages lacking useful text. |
-| PST/OST archives | Relevant email bodies and supported PDF attachments, with archive occurrence information. |
-| EML/MSG files | Individual email messages and supported attachments; MSG support is included by the bootstrapper. |
-| MyAccount history | HTM/HTML exports and supported printed PDF histories of charges, payments and balances. |
-| EDF SAP exports | Supported contract-history, meter-reading and financial-transaction PDF dumps, with reconciliation against invoice evidence. |
+| Input                                              | What it supplies                                                                                             |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| EDF PDF bills and credit notes                     | Older layouts, T-series and KI/KCR invoices, with charges, balances, periods and other fields where present. |
+| Merged and scanned PDFs                            | Separate invoice records with original page references; English OCR for pages without useful text.           |
+| Outlook PST/OST archives                           | Relevant email bodies and supported attachments, with archive occurrence information.                        |
+| EML/MSG messages                                   | Individual emails and supported attachments.                                                                 |
+| EDF MyAccount HTM/HTML and supported PDF histories | Account transactions, payments and balance observations.                                                     |
+| Supported EDF SAP dump PDFs                        | Contract, meter-reading and financial history for reconciliation.                                            |
+| ZIPs and folder trees                              | Automatic inspection of their contents, preserving source and archive-member provenance.                     |
+| Saved analyses and review workbooks                | Explicit import or regeneration through their own workflows.                                                 |
 
-Sources can be combined. Duplicate handling uses account/meter identity and
-supporting document or transaction relationships; matching dates and amounts
-alone do not prove a duplicate. Source occurrences remain available for review.
-Unreadable messages, unsupported layouts and incomplete extraction are reported
-as gaps rather than assumed to contain no relevant evidence.
+Unknown files remain visible in the inventory. Previous output folders are
+skipped, and ZIPs containing `result.json` need an import choice so their reports
+are not counted as new bills. Sources, duplicate handling and missing information
+use the same rules as the desktop and CLI.
 
-## Your first evidence pack
+## Keep and share the whole pack
 
-1. Open **Build evidence pack** and choose your PDF folder, email sources or
-   account-history file. You can combine sources in one run.
-2. Choose where to save it. Keep **Include original source files** selected so
-   the pack can link records back to the evidence. Use **Report settings…** if
-   you also want HTML, PDF or Word reports.
-3. Click **Create evidence pack**. When it finishes, read any review notes and
-   open the workbook's **Start here** sheet for the overview and priorities.
-4. Check flagged records against their originals in **Review evidence**, or
-   edit the workbook's **Review & Corrections** sheet. Create a reviewed pack
-   to apply your changes and regenerate the outputs.
+A published pack includes an editable workbook, `result.json`, `run.json`,
+requested document reports and available verified source copies. It can also
+include a focused complaint draft and its supporting evidence.
 
-Keep the whole output folder together, including `result.json` and
-`evidence_files/`. Each desktop run gets a new folder, so earlier packs remain
-available. The [user guide](docs/USER_GUIDE.md) walks through both review routes.
+Keep the complete download together so links to originals remain usable. Opening
+an accepted analysis preserves its saved calculations; re-extract the originals
+to apply newer parsers. Excluding a record does not redact a shared PDF: included
+source files remain whole.
 
-## Review, correct and regenerate
+Stop the server before backing up the entire `web-data` directory or Docker
+volume, including the catalogue and evidence files. Queued jobs and applied
+drafts persist across restarts. A running job becomes interrupted and needs a
+fresh run; reconnecting to progress does not resume midway through a PST scan.
 
-| In the app | In Excel |
-| --- | --- |
-| Open `result.json` in **Review evidence** and compare a record with its original page. | Open the main workbook and follow **Start here** and **Workbook guide**. |
-| Choose **Edit selected record**, correct fields or exclude the record, and record a reason. | Edit pale green inputs in **Review & Corrections**, keeping row IDs and reference fields intact. |
-| Use **Preview changes**, then **Create reviewed pack**. | Save the amended workbook, select it in **Generate reports**, and create a new pack. |
+See [output meanings](docs/OUTPUTS.md), [claim review](docs/REBILLING_LEDGER.md)
+and the [hosting/backup guide](docs/WEB_UI.md) for the details.
 
-Both routes retain original observations and record your changes. Editing an
-Excel summary or Word report alone does not update the saved analysis. Opening
-an old `result.json` preserves its accepted calculations; re-extract the originals
-to apply parser improvements. See the [full review workflow](docs/USER_GUIDE.md).
+## Desktop and command line
 
-For a disputed rebill, use **Bill revisions** to inspect replacements and credits,
-then **Dispute ledger → Reconcile claims…** to consolidate your proposed challenge.
-Individual revised invoices can repeat the same demand. The app keeps requested
-reductions separate from observed account balances and withholds a combined claim
-while overlaps or credit allocations remain unresolved. The
-[claim guide](docs/REBILLING_LEDGER.md) explains the review fields and complaint draft.
-
-## What you get
-
-Each extraction pack includes a workbook and saved analysis. Selected reports and
-source copies sit alongside them:
-
-| Output | Use it for |
-| --- | --- |
-| Main Excel workbook | Overview, review priorities, editable corrections, evidence, payment/readings analysis and dispute schedules. |
-| HTML / PDF / Word reports | Reading or sharing selected findings, timelines, methodology and evidence references. HTML works offline. |
-| `result.json` | Reopening the accepted analysis with its settings, valuation date, source identities and calculations. |
-| `run.json` | Checking completion, review requirements, failures and the artifacts produced. |
-| `evidence_files/`, manifest and Word index | Following records to saved originals, including original filenames, page ranges and hashes where available. |
-| Optional complaint folder and ZIP | A focused draft in three formats, reference claim schedule and relevant verified source files, generated during claim review. |
-
-The workbook also includes conditional SAP reconciliation and analytical views
-for billing anomalies, tariff comparisons, back-billing, data quality and
-forecasts. Some require enough compatible observations; missing evidence stays
-explicit. The [output guide](docs/OUTPUTS.md) explains the sheets and financial
-meanings in detail.
-
-Source copies are linked rather than embedded in Excel. Keep the whole pack and
-any earlier packs it references. Excluding a record is **not PDF redaction**:
-shared PDFs remain whole and saved analysis retains the original observations.
-
-## Automation and development
-
-The command line can extract evidence, render saved analyses, import corrected
-workbooks and compare record exports. For example, from your active environment:
+The Qt desktop and CLI remain available from this checkout's Python environment:
 
 ```console
-python main.py --extract --pdf-dir "bills" --output "evidence.xlsx"
-python main.py --html-report -i "path/to/run/result.json" -o "report.html"
-python main.py --review-workbook -i "amended.xlsx" -o "reviewed-packs"
+python main.py
+python main.py --extract --auto "evidence" --auto "more.zip" -o "evidence.xlsx"
 ```
 
-Use the actual saved-result path printed after extraction. See the
-[CLI guide](docs/CLI.md) for source options, output locations and help commands.
+The [desktop user guide](docs/USER_GUIDE.md) and [CLI reference](docs/CLI.md)
+cover their controls and commands. Saved analyses, review workbooks and complete
+evidence packs let you carry work between interfaces.
 
-`python bootstrap.py develop` adds tests, lint/type checks and packaging tools to
-the selected environment. `python bootstrap.py build` creates an executable for
-the current OS; `python build_all.py` requests all three native builds through
-GitHub. See [building](docs/BUILDING.md) and [development](docs/DEVELOPMENT.md).
-CI covers Python 3.10–3.12 on Windows, macOS and Linux; build/check results belong
-to the revision shown in GitHub Actions and **About this build**.
+### Download a build
 
-## Where to go next
+Prebuilt desktop downloads track **`how-its-going`**. Open
+[Build Executables on GitHub Actions](https://github.com/volster/edf-bill-fetcher/actions/workflows/matrix_build.yml),
+choose a successful run for that branch, and download its
+`EDF_Evidence_Collector-…-ci-validated` artifact. GitHub may require sign-in.
+Apple silicon users should follow the [macOS first-launch guide](docs/MACOS.md).
 
-| I want to… | Guide |
-| --- | --- |
-| Correct records in the app or Excel | [Using and reviewing evidence](docs/USER_GUIDE.md) |
-| Understand the workbook, reports and saved files | [Understanding your outputs](docs/OUTPUTS.md) |
-| Review rebills, credits and a proposed complaint | [Rebilling and claim review](docs/REBILLING_LEDGER.md) |
-| Fix a startup, extraction or import problem | [Troubleshooting](docs/TROUBLESHOOTING.md) |
-| Automate extraction or report generation | [Command-line usage](docs/CLI.md) |
-| Run in a browser, Docker or on your network | [Browser workspace](docs/WEB_UI.md) |
-| Work on the code | [Development guide](docs/DEVELOPMENT.md) |
+Use this README's Docker or source instructions for the browser workspace.
 
-The [documentation index](docs/README.md) also covers architecture, testing,
-builds and historical review notes. See the [changelog](CHANGELOG.md) for changes.
+## Development and further reading
 
-Found a bug? Include your OS, **About this build** information and the exact
-error in a [GitHub issue](https://github.com/volster/edf-bill-fetcher/issues).
-Use a synthetic or redacted example; bills, workbooks and saved analyses can
-contain personal and financial information.
+The frontend uses React, TypeScript and Vite; FastAPI serves it and calls the
+shared Python application services. SQLite stores server metadata, files hold the
+evidence, and separate worker processes handle queued jobs.
 
-[MIT licence](LICENSE).
+See [web development and checks](docs/WEB_UI.md#develop-and-verify) for setup,
+generated API contracts, browser tests and the development server. CI checks
+Python 3.10–3.12 across Windows, macOS and Linux, browser workflows in Chromium,
+Firefox and WebKit, and Docker builds for amd64 and arm64. It retains the 95%
+overall and 100% protected-contract coverage gates.
+
+| Guide                                           | Use it for                                                                        |
+| ----------------------------------------------- | --------------------------------------------------------------------------------- |
+| [Browser workspace and hosting](docs/WEB_UI.md) | Deployment options, upload limits, source roots, backups and browser development. |
+| [Documentation index](docs/README.md)           | Find the remaining guides by task.                                                |
+| [Configuration](docs/CONFIGURATION.md)          | Filters, duplicates, valuation dates and report sections.                         |
+| [Understanding your outputs](docs/OUTPUTS.md)   | Workbook sheets, report contents, source links and financial meanings.            |
+| [Architecture](docs/ARCHITECTURE.md)            | Shared services, accepted results, review contracts and persistence.              |
+| [Development](docs/DEVELOPMENT.md)              | Python development practices and regression checks.                               |
+
+[Changes](CHANGELOG.md) · [Report a bug](https://github.com/volster/edf-bill-fetcher/issues) · [MIT licence](LICENSE)

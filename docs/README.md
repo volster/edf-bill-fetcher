@@ -1,8 +1,10 @@
 # Documentation
 
-Start with the [project README](../README.md) to download the app or create your
-first evidence pack. The guides below describe the current working branch;
-older downloads may have different controls or fewer review features.
+Start with the [web branch README](../README.md) to launch the browser workspace
+with Docker or from source, set up LAN access, and create your first evidence
+pack. The [browser guide](WEB_UI.md) covers hosting and web workflows in detail;
+the [desktop user guide](USER_GUIDE.md) describes the Qt controls. Desktop
+downloads track `how-its-going` and may have different controls or features.
 
 ## Using the app
 
@@ -19,8 +21,10 @@ older downloads may have different controls or fewer review features.
 
 ## Suggested reading routes
 
-- **First run:** [source setup or downloads](../README.md#get-the-app) →
-  [user guide](USER_GUIDE.md) → [output meanings](OUTPUTS.md).
+- **First browser run:** [Docker or source quick start](../README.md#get-the-app) →
+  [browser workflow](../README.md#build-your-first-evidence-pack) → [output meanings](OUTPUTS.md).
+- **Desktop:** [source setup](BUILDING.md) or [downloads](../README.md#download-a-build) →
+  [desktop user guide](USER_GUIDE.md).
 - **Correct an existing pack:** [review workflow](USER_GUIDE.md#correct-records-in-excel) →
   [claim review](REBILLING_LEDGER.md) → [sharing checks](OUTPUTS.md#before-sharing-a-pack).
 - **Maintain the code:** [development setup](BUILDING.md#development-and-checks) →
