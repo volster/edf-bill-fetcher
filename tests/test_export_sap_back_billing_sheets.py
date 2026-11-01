@@ -627,7 +627,7 @@ def test_export_tags_unmatched_event_as_cluster_internal_mechanism(
 
 
 # ---------------------------------------------------------------------------
-# Task 8 — cross-referenced 'Backbilling According to SAP' position sheet
+# cross-referenced 'Backbilling According to SAP' position sheet
 # ---------------------------------------------------------------------------
 
 

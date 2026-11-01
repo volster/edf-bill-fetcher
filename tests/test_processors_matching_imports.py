@@ -1,8 +1,4 @@
-"""Tests that matching functions are importable from the processors.matching submodule.
-
-All tests are RED at Phase 0 because ``edf_bill_fetcher.processors.matching``
-does not yet exist.
-"""
+"""Tests that matching functions are importable from the processors.matching submodule."""
 
 from __future__ import annotations
 

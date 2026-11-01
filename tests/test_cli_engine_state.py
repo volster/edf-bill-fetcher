@@ -1,6 +1,6 @@
 """Tests for versioned JSON engine-state round-tripping in ``edf_bill_fetcher.io.cli``.
 
-Wave 6b / Task 2: the CLI previously read engine state only from pickle
+The CLI previously read engine state only from pickle
 through ``_safe_pickle_load`` (restricted unpickler).  This task adds a
 versioned JSON format so engine state — ``{config, filtered_records,
 error_log}`` — round-trips without pickle, while the legacy ``.pkl``

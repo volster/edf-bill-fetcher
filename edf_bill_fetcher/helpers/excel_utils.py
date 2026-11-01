@@ -1,7 +1,6 @@
 """Excel cell primitives and helpers used across the evidence workbook.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 3).  These cover:
+Includes:
 
 - Cell primitives: ``hcell``, ``text``, ``num``, ``money``, ``section_hdr``
 - Column-width and formula-injection guards
@@ -31,9 +30,9 @@ import openpyxl.worksheet.worksheet
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 
-# CELL_BORDER moved to edf_bill_fetcher.helpers.theme (Task 2).  Re-export
+# CELL_BORDER moved to edf_bill_fetcher.helpers.theme.  Re-export
 # here so existing call sites that import it from excel_utils keep working
-# until Phase 7 deletes the compat shim.
+# for compatibility with existing imports.
 from edf_bill_fetcher.helpers.theme import CELL_BORDER  # noqa: E402,F401
 
 _TEXT_SUPPRESSION_QUEUE: dict[str, list[tuple[str, int, int]]] = {}
@@ -62,7 +61,7 @@ def text(
 ) -> Any:
     """Text cell with formula-injection guard.
 
-    Phase 2.x — formula-injection guard. External text (PDF/PST/email)
+    External text (PDF/PST/email)
     can start with ``=``, ``+``, ``-`` or ``@`` and Excel will silently
     evaluate the cell as a formula. We coerce non-strings via ``str()``
     and prefix a leading ``=``, ``+``, ``-`` or ``@`` with an apostrophe.

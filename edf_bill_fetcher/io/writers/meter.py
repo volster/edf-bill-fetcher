@@ -1,14 +1,8 @@
-"""Meter readings and contract history sheet writers — extracted from writers/__init__.py.
+"""Write meter-reading and contract-history workbook sheets.
 
-Phase 5C of the modularization refactor. Contains the meter-rollover
-detector, the contract-inference detector, and the sheet writers for
-the meter readings and contract history tabs.
-
-The public API exposed here matches the test contract at
-``tests/test_io_writers_extraction.py``: ``write_meter_readings_sheet``
-takes ``(ws, df)`` only. The underlying implementation accepts additional
-optional arguments; sensible defaults (empty rollovers DataFrame) are
-supplied by the adapter wrapper below.
+Includes meter-rollover and contract-inference analysis. The public
+``write_meter_readings_sheet(ws, df)`` wrapper supplies default arguments
+to the underlying implementation.
 """
 
 from __future__ import annotations

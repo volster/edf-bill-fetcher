@@ -1,9 +1,4 @@
-"""Phase-2 analysis orchestrator.
-
-Extracted from ``edf_bill_fetcher/writers/__init__.py`` during Phase 5G
-of the modularization refactor (Task 6).  Hosts ``run_analysers`` —
-the canonical location is now this module, not ``edf_bill_fetcher.writers``.
-"""
+"""Orchestrate workbook detection analyses and collect their output tables."""
 
 from __future__ import annotations
 
@@ -15,9 +10,7 @@ import pandas as pd
 def run_analysers(
     df: pd.DataFrame, evidence_index_df: pd.DataFrame | None = None
 ) -> dict[str, Any]:
-    """Run all Phase-2 detection analyses on the deduplicated.
-
-    DataFrame and return their outputs in a dict.
+    """Run all detection analyses on the deduplicated DataFrame and return their outputs in a dict.
 
     The orchestrator is a thin wrapper so :func:`export_to_excel` can
     call four detectors with one line and downstream tests can

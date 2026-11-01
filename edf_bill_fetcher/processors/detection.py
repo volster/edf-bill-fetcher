@@ -1,12 +1,6 @@
-"""Pure-pandas detectors for back-billing, rebilling, meter rollovers, PDF format, and reconciliation statements.
+"""Detectors for back-billing, rebilling, meter rollovers and document formats.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 5 - Phase 4).  Each detector returns a derived DataFrame; no LLM,
-no external service.
-
-Compat re-exports live in ``edf_collector.py`` so callers using
-``from edf_collector import detect_back_billing`` continue to work;
-stripped by Task 7.
+Analysis uses local rules and recorded evidence; no external service is required.
 """
 
 from __future__ import annotations
@@ -94,8 +88,7 @@ def _assess_reason(
 ) -> str:
     """Return a short, deterministic narrative for the Reason Assessment column of the Back-billing sheet.
 
-    Template-driven (no LLM).  The narrative is keyed to the legally
-    correct back-billing rule (SLC 7A / Electricity Act 1989 s.84B):
+    Template-driven.  The narrative is keyed to the back-billing assessment window (SLC 7A / Electricity Act 1989 s.84B):
     a bill is back-billing when it charges for consumption supplied
     more than 12 months before the bill Date.  ``excess`` is the count
     of consumption days in the period that fall more than 365 days
@@ -137,23 +130,11 @@ def detect_pdf_format(text):
     return "old"
 
 
-# extract_new_invoice_fields moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); see re-export block at top of file.
-
-# extract_new_credit_fields moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); see re-export block at top of file.
-
-# _SAP_HEADER_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _SAP_CONTRACT_COLS helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _SAP_METER_COLS helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _SAP_FINANCIAL_COLS helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
 _SAP_DDMMYYYY_RE = re.compile(r"\b(\d{2})-(\d{2})-(\d{4})\b")
 
 
 # ---------------------------------------------------------------------------
-# Multi-regex fallback chain (Stream P3 / Task 5)
+# Multi-regex fallback chain
 # ---------------------------------------------------------------------------
 # Each fallback chain scans the input text in a fixed precedence order and
 # returns ``(value, regex_name)`` so the Source Excerpt column can show the

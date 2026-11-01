@@ -1,7 +1,6 @@
 """SAP-CSV-in-PDF dump parsers and reconciliation statement extractors.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 4 — Phase 3).  This module is the single source of truth for:
+Provides:
 
 - ``detect_sap_dump`` — header-row detection of which SAP dump type
   (``contract`` / ``meter_read`` / ``financial``) a PDF contains.
@@ -364,13 +363,12 @@ def parse_sap_financial_transactions(
 # SAP Back-billing analysis (spec: 2026-07-21-sap-back-billing-analysis-design.md)
 # ---------------------------------------------------------------------------
 #
-# EDF's SAP financial ledger is the *behind-the-scenes* truth of every
-# billing event; the EDF-branded invoice PDFs only show what EDF chose to
-# send the customer.  Two SAP-native signals reveal back-billing activity
-# without any cross-system join:
+# SAP financial-ledger exports provide transaction details to compare with
+# customer invoices. Two SAP-native signals identify candidate billing
+# adjustments for review without a cross-system join:
 #
 # 1. ``Cr- Credit for Consum Billing`` rows — a credit posted against a
-#    previously-raised consumption billing (18 instances in this account).
+#    previously-raised consumption billing.
 # 2. ``Clearing Document`` clusters — a SAP bookkeeping event that
 #    simultaneously clears multiple prior document numbers; the canonical
 #    back-billing signature is a cluster whose rows net to exactly £0.00
@@ -541,7 +539,7 @@ _SAP_DDMMYYYY_RE = re.compile(r"\b(\d{2})-(\d{2})-(\d{4})\b")
 
 
 # ---------------------------------------------------------------------------
-# Multi-regex fallback chain (Stream P3 / Task 5)
+# Multi-regex fallback chain
 # ---------------------------------------------------------------------------
 # Each fallback chain scans the input text in a fixed precedence order and
 # returns ``(value, regex_name)`` so the Source Excerpt column can show the
@@ -878,14 +876,14 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
 
 
 # ---------------------------------------------------------------------------
-# PST attachment filename recovery (Stream P6 / Task 9)
+# PST attachment filename recovery
 # ---------------------------------------------------------------------------
 # The legacy code tried ``att.name``, ``att.get_name()``,
 # ``att.get_long_filename()`` and ``att.get_short_filename()`` -- none of
 # these exist on ``pypff.attachment``, so the lookup always raised
 # ``AttributeError`` and every PST PDF row was emitted as ``Attachment_N.pdf``.
 #
-# Verified against ``scratch/input/edf.pst``: a real attachment exposes
+# Pypff attachment properties are exposed through
 # ``record_sets[i].get_entry(j)`` carrying:
 #   * ``.entry_type``  -- the MAPI tag (e.g. ``0x3707`` for ``PR_ATTACH_LONG_FILENAME``).
 #   * ``.value_type``  -- the MAPI data type (e.g. ``0x001F`` for ``PT_UNICODE``).

@@ -1,4 +1,4 @@
-"""Tests for the bidirectional hotlink feature (Stream P4 / Task 7)."""
+"""Tests for the bidirectional hotlink feature."""
 
 from __future__ import annotations
 

@@ -1,9 +1,4 @@
-"""Tests that color constants are importable from the helpers.theme submodule.
-
-All tests are RED at Phase 0 because ``edf_bill_fetcher.helpers.theme``
-does not yet exist.  They will turn GREEN once the submodule is created
-during modularization.
-"""
+"""Tests that color constants are importable from the helpers.theme submodule."""
 
 from __future__ import annotations
 

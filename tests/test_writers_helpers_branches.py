@@ -657,7 +657,7 @@ def test_match_sap_events_low_in_span_coincidental_note() -> None:
 
 
 # ---------------------------------------------------------------------------
-# handle_cluster_unmatched (Task 8 — Decision 4)
+# handle_cluster_unmatched (Decision 4)
 # Spec §3.3: a SAP event whose Posting Date falls inside a back-billing
 # cluster window but achieves no amount-band agreement with any in-cluster
 # invoice is tagged as an internal mechanism of that cluster.

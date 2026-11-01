@@ -1,8 +1,4 @@
-"""Tests that forecasting helper functions are importable from the processors.forecasting submodule.
-
-All tests are RED at Phase 0 because ``edf_bill_fetcher.processors.forecasting``
-does not yet exist.
-"""
+"""Tests that forecasting helper functions are importable from the processors.forecasting submodule."""
 
 from __future__ import annotations
 

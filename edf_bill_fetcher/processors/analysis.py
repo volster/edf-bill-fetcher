@@ -1,12 +1,6 @@
-"""Pure-pandas analysis helpers for dispute flags, payment patterns, tariff impact, data quality.
+"""Analysis helpers for dispute flags, payments, tariffs and data quality.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 5 - Phase 4).  ``run_analysers`` (the workbook orchestrator) stays in
-``edf_collector.py`` for now; it moves to ``io/writers/analysis.py`` in Task 6.
-
-Compat re-exports live in ``edf_collector.py`` so callers using
-``from edf_collector import compute_dispute_flags`` continue to work;
-stripped by Task 7.
+Workbook orchestration lives in ``edf_bill_fetcher.io.writers.analysis``.
 """
 
 from __future__ import annotations

@@ -569,7 +569,7 @@ def test_matcher_demotes_in_span_no_amount_to_low() -> None:
     purely from the in-span 50-point bonus with zero amount correspondence;
     the new gate caps it at Low.  The row's Posting Date equals the
     Clearing Date and both fall inside the EDF period, so the date axis is
-    the Posting Date (Task 6).
+    the Posting Date.
     """
     ev = _mk_ev(clearing_date="2019-09-03", net_amount=-831.45)
     edf = [
@@ -659,7 +659,7 @@ def test_matcher_notes_string_says_coincidental_when_no_amount() -> None:
 
 
 # ---------------------------------------------------------------------------
-# handle_cluster_unmatched (Task 8 — Decision 4)
+# handle_cluster_unmatched (Decision 4)
 # Spec §3.3: a SAP event whose Posting Date falls inside a back-billing
 # cluster window but achieves no amount-band agreement with any in-cluster
 # invoice is tagged as an internal mechanism of that cluster.

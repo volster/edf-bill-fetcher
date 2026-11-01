@@ -1,9 +1,4 @@
-"""Writer functions for the EDF evidence workbook.
-
-Extracted from ``edf_collector.py`` as part of the modularization
-refactor (Task 5).  Each function writes one or more Excel sheets
-using openpyxl.
-"""
+"""Write EDF evidence workbooks and their supporting analysis sheets."""
 
 from __future__ import annotations
 
@@ -333,7 +328,7 @@ def export_to_excel(
     the layout documented in the README.
 
     ``invoice_pdf_paths`` is the ``{attachment_name: destination_path}``
-    mapping returned by :func:`save_evidence_files` (Task 2). It lets the
+    mapping returned by :func:`save_evidence_files`. It lets the
     Superseded Reconciliation sheet link to the *actual* saved PDFs; when
     omitted, file links remain unavailable.
     """
@@ -1162,7 +1157,7 @@ def render_xlsx(
     )
 
     # ------------------------------------------------------------------
-    # Phase-2 analysis tabs (back-billing, rebilling, meter rollover,
+    # Analysis tabs (back-billing, rebilling, meter rollover,
     # contract history). run_analysers runs the four detectors on the
     # same `dfc` (post-dedup, post-filter) the rest of the workbook
     # uses, then each writer paints the result onto its own tab.
@@ -1276,13 +1271,13 @@ def render_xlsx(
         evidence_index=analyses["evidence_index"],
     )
 
-    # Indicative compensation claims (Wave 6d): emit a Compensation tab
+    # Indicative compensation claims: emit a Compensation tab
     # only when the estimator yields at least one row.
     comp_rows = view.model("compensation")
     if comp_rows:
         write_compensation_sheet(wb.create_sheet(title="Compensation"), comp_rows)
 
-    # Stream P1 + P2: SAP CSV-in-PDF data dumps and the cross-source
+    # SAP CSV-in-PDF data dumps and the cross-source
     # Reconciliation sheet. When ``sap_rows`` is supplied (from the
     # engine's three SAP-row accumulators) and the user hasn't opted
     # out via ``config["scan_sap_dumps"] = False``, emit the three SAP

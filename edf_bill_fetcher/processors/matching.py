@@ -1,12 +1,6 @@
-"""Cross-source matching helpers: evidence index, contract inference, SAP<->EDF event match.
+"""Cross-source matching, contract inference and SAP-to-invoice event matching.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 5 - Phase 4).  Pure-pandas helpers keyed off the deduplicated evidence
-DataFrame.
-
-Compat re-exports live in ``edf_collector.py`` so callers using
-``from edf_collector import infer_contracts`` continue to work;
-stripped by Task 7.
+Helpers operate on the deduplicated evidence DataFrame.
 """
 
 from __future__ import annotations
@@ -369,21 +363,6 @@ def match_sap_events_to_edf(
 # rows.  Each emitted row is written through ``_add_record`` so it takes part
 # in the same downstream dedup/analyser pipeline as a standalone PDF.
 
-# _RECON_STATEMENT_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _RECON_CHARGE_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _RECON_REVERSAL_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _RECON_REVERSAL_PERIOD_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _RECON_LATE_PAYMENT_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _RECON_PAYMENT_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _RECON_BALANCE_LAST_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _RECON_NEW_BALANCE_RE helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
 
 _RECON_MONTH_MAP = {
     "jan": 1,
@@ -412,14 +391,6 @@ _RECON_MONTH_MAP = {
     "december": 12,
 }
 
-
-# _recon_to_iso helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _recon_money helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# detect_reconciliation_statement moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); see re-export block at top of file.
-
-# extract_reconciliation_statement_rows moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); see re-export block at top of file.
 
 _PST_PR_ATTACH_LONG_FILENAME = 0x3707
 _PST_PR_ATTACH_FILENAME = 0x3704

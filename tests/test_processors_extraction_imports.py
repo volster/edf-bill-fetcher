@@ -1,8 +1,4 @@
-"""Tests that fallback extractor functions are importable from the processors.extraction submodule.
-
-All tests are RED at Phase 0 because ``edf_bill_fetcher.processors.extraction``
-does not yet exist.
-"""
+"""Tests that fallback extractor functions are importable from the processors.extraction submodule."""
 
 from __future__ import annotations
 

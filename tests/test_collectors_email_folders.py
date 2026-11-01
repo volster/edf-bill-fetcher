@@ -177,7 +177,7 @@ class TestProcessEmlFolder:
         assert engine.error_log == []
 
     def test_malformed_eml_logs_error_and_continues(self, tmp_path: Path) -> None:
-        """A garbage .eml logs to error_log without aborting the folder."""
+        """A malformed .eml logs to error_log without aborting the folder."""
         folder = tmp_path / "emails"
         folder.mkdir()
         _write_eml(

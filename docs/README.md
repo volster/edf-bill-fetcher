@@ -58,3 +58,7 @@ configuration reference; output file/status meanings live in the output guide;
 financial and persistence contracts live in architecture. Historical review
 counts stay in historical records. The current docs describe implemented behavior,
 not proposed features.
+
+Use neutral example names and synthetic inputs. Public guides should explain
+product behavior without personal references, private local paths or quotations
+from development conversations.

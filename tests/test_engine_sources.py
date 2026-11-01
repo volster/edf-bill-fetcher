@@ -228,7 +228,7 @@ class TestEvidenceEngineLocalPDFs:
         mock_pdf.__exit__.return_value = None
         mock_pdf_open.return_value = mock_pdf
 
-        # Phase 2.2 — crawl_local_pdfs now uses os.walk (recursive
+        # crawl_local_pdfs now uses os.walk (recursive
         # walk) instead of os.listdir.  The legacy test stubbed
         # listdir; we now stub walk to return the same two bills.
         with (
@@ -249,7 +249,7 @@ class TestEvidenceEngineLocalPDFs:
 
     @patch("edf_bill_fetcher.collectors.engine.pdfplumber.open")
     def test_crawl_local_pdfs_recurses_into_subfolders(self, mock_pdf_open: MagicMock) -> None:
-        """Phase 2.2 — recursive walk yields bills in nested
+        """Recursive walk yields bills in nested
         folders.  Real EDF customers commonly organise their
         local PDF tree by year (``pdfs/2023/2023-01.pdf``) and
         the legacy top-level-only scan silently dropped every
@@ -294,7 +294,7 @@ class TestEvidenceEngineLocalPDFs:
 
 
 # ---------------------------------------------------------------------------
-# Stream P5 — engine.source_paths population (spec §3.9, issue 8b root cause)
+# engine.source_paths population
 # ---------------------------------------------------------------------------
 
 # Minimal valid 1-page PDF (built via reportlab; reproduces the live
@@ -347,7 +347,7 @@ def test_evidence_engine_init_has_source_paths_dict() -> None:
 
 
 def test_process_pdf_file_populates_source_paths(tmp_path: Path) -> None:
-    """process_pdf_file must record the path under
+    """Process_pdf_file must record the path under
     self.source_paths[attachment_name] so save_evidence_files can find it.
     Spec §3.9 (issue 8b root cause)."""
     pdf = _write_minimal_pdf(tmp_path, "test-invoice.pdf")

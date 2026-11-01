@@ -142,7 +142,7 @@ a queued job or a local Linux check as a completed three-platform build.
 - The previous workflow mixed an incompletely activated Conda environment,
   inherited runner DLL paths and a manually copied Tcl/Tk tree. Several native
   command failures could be overwritten by subsequent commands' exit codes.
-  Its supposed file warmup enumerated paths without reading file contents.
+  Its file warmup enumerated paths without reading file contents.
   Defender changes and repeated mirror checks did not eliminate the failures.
 - Available failure annotations establish the missing/unreadable runtime path.
   They do **not** prove that Defender deleted files or that the official Python

@@ -1,10 +1,6 @@
-"""Collectors submodule — extraction orchestrators and source parsers.
+"""Source collection and extraction orchestration.
 
-Exposes the EvidenceEngine orchestrator plus per-source collector modules
-for PDF, PST, and text inputs.  During the modularization refactor window
-(Tasks 4-7), the parsing helpers called by these collectors continue to
-live in ``edf_collector.py`` and are imported via the compat re-export
-block.  Task 7 strips the re-exports.
+Exports ``EvidenceEngine``, which coordinates the source adapters and parsers.
 """
 
 from edf_bill_fetcher.collectors.engine import EvidenceEngine

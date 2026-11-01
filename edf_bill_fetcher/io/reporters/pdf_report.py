@@ -1191,7 +1191,7 @@ def create_ofgem_comparison(
         ]
     )
 
-    # Phase 1.1 + portability: the Difference and Status columns need
+    # Portability: the Difference and Status columns need
     # to comfortably fit the longest status string this table can
     # ever render, namely ``"1 period(s) not benchmarked"`` wired
     # into the OVERALL summary row in the unbenchmarked-quarter
