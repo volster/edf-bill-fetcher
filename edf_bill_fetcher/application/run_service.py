@@ -114,6 +114,7 @@ def run(
     accepted_result: AnalysisSnapshot | None = None,
     selection: RenderSelection | None = None,
     warnings: tuple[str, ...] = (),
+    allowed_source: Callable[[str], bool] = lambda path: True,
 ) -> RunOutcome:
     """Collect once, preserve one analysis and render requested artifacts independently."""
     snapshot = accepted_result
@@ -238,6 +239,7 @@ def run(
                         if source.kind == "records_json"
                     ),
                     cancelled=cancelled,
+                    allowed_source=allowed_source,
                 )
                 manifest["warnings"].extend(pack_notes)
                 for key, path in pack_paths.items():
@@ -283,9 +285,21 @@ def collect_engine(
     """Adapt existing source collectors, closing PST resources on every outcome."""
     for source in request.sources:
         cancel_event = getattr(engine, "cancel_event", None)
+        if not getattr(engine, "_can_read_source", lambda path: True)(source.path):
+            raise PermissionError("Source is outside the configured evidence folders")
         if cancel_event is not None and cancel_event.is_set():
             raise RunCancelled("Run cancelled during collection")
-        if source.kind in {"pst", "ost"}:
+        if source.kind in {"auto", "intake"}:
+            from edf_bill_fetcher.application.source_intake import collect_mixed
+
+            if source.kind == "intake":
+                import json
+
+                plan = json.loads(Path(source.path).read_text(encoding="utf-8"))
+                collect_mixed(engine, source.path, pff_module=pff_module, plan=plan)
+            else:
+                collect_mixed(engine, source.path, pff_module=pff_module)
+        elif source.kind in {"pst", "ost"}:
             if pff_module is None:
                 import pypff
 
@@ -298,7 +312,11 @@ def collect_engine(
             previous_origin = getattr(engine, "_archive_origin", "")
             try:
                 archive.open(str(Path(source.path).absolute()))
-                engine._archive_origin = str(Path(source.path).absolute())
+                engine._archive_origin = (
+                    getattr(engine, "_intake_origins", {})
+                    .get(str(Path(source.path).absolute()), {})
+                    .get("Intake Origin", str(Path(source.path).absolute()))
+                )
                 engine.crawl_pst(archive.get_root_folder())
             finally:
                 engine._archive_origin = previous_origin
@@ -392,4 +410,6 @@ def bundle_engine_sources(
     }
     for path in legacy_paths:
         write_json(compatibility, path)
+    if getattr(engine, "intake_inventory", None):
+        write_json(engine.intake_inventory, str(Path(bundle_dir) / "intake_inventory.json"))
     return state

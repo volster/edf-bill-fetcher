@@ -45,6 +45,8 @@ class ConfigDict(TypedDict, total=False):
     payment_method: str
     tariff_type: str
     cap_region: str
+    ofgem_caps_path: str
+    ofgem_auto_carry: bool
 
     # --- Amount thresholds --------------------------------------------------
     min_amount: float

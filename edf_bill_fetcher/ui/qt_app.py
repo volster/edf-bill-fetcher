@@ -40,6 +40,7 @@ from edf_bill_fetcher.application.run_service import RunOutcome
 from edf_bill_fetcher.domain.json_values import freeze_json, object_value
 from edf_bill_fetcher.domain.requests import RunRequest, SourceSelection
 from edf_bill_fetcher.helpers.artifacts import write_json
+from edf_bill_fetcher.models.defaults import EXTRACTION_DEFAULTS
 from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS
 from edf_bill_fetcher.ui.qt_jobs import DesktopJob, RunWorker
 from edf_bill_fetcher.ui.qt_readiness import ReadinessCard
@@ -53,22 +54,7 @@ SECTIONS = [
     *[(section.key, section.title) for section in REPORT_SECTIONS],
 ]
 FORMATS = {"both": ("pdf", "docx", "html"), "pdf": ("pdf",), "docx": ("docx",), "html": ("html",)}
-DEFAULTS = {
-    "use_anchors": True,
-    "use_large": True,
-    "use_reading_classification": True,
-    "use_pdf_fields": True,
-    "use_acc_filter": False,
-    "filter_below": False,
-    "save_filtered": True,
-    "use_dedup": True,
-    "save_dups": True,
-    "amalgamate_duplicates": False,
-    "use_domain_filter": True,
-    "save_evidence_files": True,
-    "scan_sap_dumps": True,
-    "generate_reconciliation_sheet": True,
-}
+DEFAULTS = {key: value for key, value in EXTRACTION_DEFAULTS.items() if type(value) is bool}
 
 
 def scroll_page(title: str, description: str) -> tuple[QScrollArea, QVBoxLayout]:
@@ -238,6 +224,7 @@ class EvidenceWindow(QMainWindow):
         self._pending_outcome: RunOutcome | None = None
         self._review_pending: tuple | None = None
         self.report_options: dict = {"format": "both", "sections": [key for key, _ in SECTIONS]}
+        self._extra_config: dict = {}
         self.checks: dict[str, QCheckBox] = {}
         self.fields: dict[str, QLineEdit | QDoubleSpinBox] = {}
         self._save_timer = QTimer(self)
@@ -274,6 +261,8 @@ class EvidenceWindow(QMainWindow):
             self.nav_buttons.append(action)
         for index in (0, 3, 1, 2):
             navigation.addWidget(self.nav_buttons[index])
+        self.compare_button = button("Compare runs", self._compare_runs, "nav")
+        navigation.addWidget(self.compare_button)
         navigation.addStretch()
         navigation.addWidget(label("LOCAL WORKSPACE", "eyebrow"))
         navigation.addWidget(
@@ -320,6 +309,8 @@ class EvidenceWindow(QMainWindow):
         )
         self.sources: dict[str, PathField] = {}
         for key, title, hint in [
+            ("auto_dir", "Mixed evidence", "Folder · detect PDFs, email, archives and ZIPs"),
+            ("intake_plan", "Inspected intake plan", "Optional · reuse an intake.json inventory"),
             ("pdf_dir", "PDF bills", "Folder · PDF"),
             ("htm_path", "Account history", "File · HTM / HTML"),
             ("pst_path", "Outlook archive", "File · PST / OST"),
@@ -329,6 +320,8 @@ class EvidenceWindow(QMainWindow):
             self.sources[key] = field
             self.source_card.body.addWidget(field)
         self.source_card.body.addStretch()
+        self.inspect_button = button("Inspect selected evidence first", self._inspect_sources)
+        self.source_card.body.addWidget(self.inspect_button)
         self.output_card = Card(
             "02  Save & export", "An Excel workbook is included in every evidence pack."
         )
@@ -493,8 +486,37 @@ class EvidenceWindow(QMainWindow):
             self._check("generate_reconciliation_sheet", "Compare SAP records with bill evidence")
         )
         layout.addWidget(sap)
+        layout.addWidget(button("All analysis settings…", self._advanced_settings))
         layout.addStretch()
         return page
+
+    def _advanced_settings(self) -> None:
+        """Expose the complete shared configuration surface without changing accepted analyses."""
+        from edf_bill_fetcher.ui.qt_configuration import ConfigurationDialog
+
+        values = self._configuration()
+        if "as_of" not in self._extra_config:
+            values.pop("as_of", None)
+        dialog = ConfigurationDialog(values, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        config = dialog.result_config
+        self._extra_config = {
+            key: value
+            for key, value in config.items()
+            if key not in self.fields and key not in self.checks and key != "report_sections"
+        }
+        for key, control in self.checks.items():
+            control.setChecked(config.get(key, DEFAULTS[key]))
+        for key, field_control in self.fields.items():
+            if key in {"output_folder", "output_name"}:
+                continue
+            value = config.get(key, EXTRACTION_DEFAULTS.get(key, ""))
+            if isinstance(field_control, QDoubleSpinBox):
+                field_control.setValue(float(value))
+            else:
+                field_control.setText(str(value))
+        self._preferences_changed()
 
     def _build_footer(self) -> QFrame:
         footer = QFrame()
@@ -568,14 +590,22 @@ class EvidenceWindow(QMainWindow):
             self._adapt_layout()
 
     def _pick_source(self, key: str) -> None:
-        if key in {"pdf_dir", "eml_msg_dir"}:
+        if key in {"auto_dir", "pdf_dir", "eml_msg_dir"}:
             path = QFileDialog.getExistingDirectory(
-                self, "Choose " + ("PDF bills" if key == "pdf_dir" else "email files")
+                self,
+                "Choose "
+                + {
+                    "auto_dir": "mixed evidence",
+                    "pdf_dir": "PDF bills",
+                    "eml_msg_dir": "email files",
+                }[key],
             )
         else:
             filters = (
                 "Outlook archives (*.pst *.ost)"
                 if key == "pst_path"
+                else "Intake plan (*.json)"
+                if key == "intake_plan"
                 else "Account history (*.htm *.html)"
             )
             path, _ = QFileDialog.getOpenFileName(self, "Choose source file", "", filters)
@@ -620,6 +650,7 @@ class EvidenceWindow(QMainWindow):
     def _refresh_state(self) -> None:
         if self._loading:
             return
+        self.compare_button.setEnabled(not self._busy)
         self.fields["acc_num"].setEnabled(self.checks["use_acc_filter"].isChecked())
         self.fields["domain_filter"].setEnabled(self.checks["use_domain_filter"].isChecked())
         self.fields["min_amount"].setEnabled(self.checks["filter_below"].isChecked())
@@ -686,6 +717,20 @@ class EvidenceWindow(QMainWindow):
             return
         if not isinstance(payload, dict) or not isinstance(payload.get("gui_state", {}), dict):
             return
+        from edf_bill_fetcher.application.configuration import validate_settings
+
+        advanced = payload.get("advanced_config", {})
+        try:
+            if not isinstance(advanced, dict):
+                raise ValueError("Invalid advanced settings")
+            validate_settings(advanced)
+            self._extra_config = {
+                key: value
+                for key, value in advanced.items()
+                if key not in self.fields and key not in self.checks and key != "report_sections"
+            }
+        except ValueError:
+            self._extra_config = {}
         values = dict(payload.get("gui_state", {}))
         for alias, key in {
             "use_reading_class": "use_reading_classification",
@@ -739,6 +784,7 @@ class EvidenceWindow(QMainWindow):
         )
         config["as_of"] = date.today().isoformat()
         config["report_sections"] = list(self.report_options["sections"])
+        config.update(self._extra_config)
         return config
 
     def save_settings(self) -> None:
@@ -756,6 +802,7 @@ class EvidenceWindow(QMainWindow):
             write_json(
                 {
                     "gui_state": values,
+                    **({"advanced_config": self._extra_config} if self._extra_config else {}),
                     "output_folder": values["output_folder"],
                     "report_options": self.report_options,
                 },
@@ -789,7 +836,7 @@ class EvidenceWindow(QMainWindow):
                 if not value:
                     continue
                 path = Path(value)
-                folder = key in {"pdf_dir", "eml_msg_dir"}
+                folder = key in {"auto_dir", "pdf_dir", "eml_msg_dir"}
                 if not (path.is_dir() if folder else path.is_file()):
                     raise ValueError(
                         "Source not found. Choose an existing "
@@ -800,6 +847,8 @@ class EvidenceWindow(QMainWindow):
                     inputs.extend(SourceSelection(kind, value) for kind in ("eml_dir", "msg_dir"))
                 else:
                     kind = {
+                        "auto_dir": "auto",
+                        "intake_plan": "intake",
                         "pdf_dir": "pdf_dir",
                         "htm_path": "htm",
                         "pst_path": "ost" if path.suffix.lower() == ".ost" else "pst",
@@ -901,6 +950,58 @@ class EvidenceWindow(QMainWindow):
         self.save_settings()
         self._begin_job(job)
 
+    def _compare_runs(self) -> None:
+        """Capture comparison inputs, then use the ordinary managed desktop worker."""
+        if self._busy or not self.review_page.allow_leave():
+            return
+        old, _ = QFileDialog.getOpenFileName(
+            self, "Earlier saved result or records export", "", "JSON (*.json)"
+        )
+        if not old:
+            return
+        new, _ = QFileDialog.getOpenFileName(
+            self, "Later saved result or records export", "", "JSON (*.json)"
+        )
+        if not new:
+            return
+        try:
+            config = self._configuration()
+            destination = str(self._field_value("output_folder")) or str(Path(old).parent)
+            Path(destination).mkdir(parents=True, exist_ok=True)
+            directory = tempfile.mkdtemp(prefix="comparison_", dir=destination)
+            request = RunRequest(
+                uuid4().hex,
+                datetime.now(timezone.utc),
+                date.fromisoformat(config["as_of"]),
+                (SourceSelection("records_json", old), SourceSelection("records_json", new)),
+                freeze_json(config),
+            )
+            self._begin_job(
+                DesktopJob(
+                    request, directory, "Comparison", ("xlsx",), (), "diff", old, other_path=new
+                )
+            )
+        except (ValueError, OSError) as error:
+            self._feedback(str(error), "error")
+
+    def _inspect_sources(self) -> None:
+        """Publish an inventory and retain expanded members for a later extraction."""
+        if self._busy:
+            return
+        try:
+            from dataclasses import replace
+
+            job = self.capture_job()
+            if not job.request.sources or any(
+                source.kind == "intake" for source in job.request.sources
+            ):
+                raise ValueError(
+                    "Select original evidence to inspect; an existing intake plan is already inspected"
+                )
+            self._begin_job(replace(job, mode="intake", formats=()))
+        except (ValueError, OSError) as error:
+            self._feedback(str(error), "error")
+
     @Slot(object)
     def _start_review_export(self, draft: dict) -> None:
         if self._busy or self.review_page.review is None:
@@ -940,6 +1041,7 @@ class EvidenceWindow(QMainWindow):
     def _begin_job(self, job: DesktopJob) -> None:
         """Run every desktop workflow with the same cancellation and publication lifecycle."""
         self.current_job = job
+        self.compare_button.setEnabled(False)
         self.last_outcome = None
         self._pending_outcome = None
         self._busy = True
@@ -1038,7 +1140,14 @@ class EvidenceWindow(QMainWindow):
         )
         if outcome.status == "complete":
             self._feedback(
-                "Your files and saved analysis are ready in the output folder.", "success"
+                (
+                    "Your comparison files are ready in the output folder."
+                    if self.current_job and self.current_job.mode == "diff"
+                    else "Your intake inventory is ready. Select its intake.json to reuse the inspected files."
+                    if self.current_job and self.current_job.mode == "intake"
+                    else "Your files and saved analysis are ready in the output folder."
+                ),
+                "success",
             )
         elif outcome.status == "review_required":
             self._feedback(

@@ -59,6 +59,7 @@ from edf_bill_fetcher.domain.json_values import (
     rows_value,
 )
 from edf_bill_fetcher.helpers.pdf_utils import PDF_LOCK
+from edf_bill_fetcher.io.adapters.intake import is_pdf_candidate
 from edf_bill_fetcher.io.persistence.result_store import load_result
 from edf_bill_fetcher.ui.qt_rebilling import RebillingPanel
 from edf_bill_fetcher.ui.qt_review_tools import RecordEditor, RevisionPanel
@@ -925,7 +926,7 @@ class EvidenceReviewPage(QWidget):
             self.canvas.setText(
                 "The recorded page range is invalid.\nUse Open original file to inspect the document manually."
             )
-        elif Path(source.path).suffix.lower() != ".pdf":
+        elif not is_pdf_candidate(source.path):
             self.canvas.setText(
                 "Preview is available for PDF originals.\nUse Open original file to inspect this source."
             )
@@ -938,12 +939,7 @@ class EvidenceReviewPage(QWidget):
 
     def _queue_preview(self) -> None:
         source = self._selected_source
-        if (
-            source is None
-            or not source.path
-            or Path(source.path).suffix.lower() != ".pdf"
-            or self._shutdown
-        ):
+        if source is None or not source.path or not is_pdf_candidate(source.path) or self._shutdown:
             return
         self._image = None
         self.canvas.setPixmap(QPixmap())

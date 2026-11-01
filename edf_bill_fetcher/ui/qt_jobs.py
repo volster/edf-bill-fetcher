@@ -38,6 +38,7 @@ class DesktopJob:
     mode: str = "extract"
     input_path: str = ""
     review_draft: FrozenJSON | None = None
+    other_path: str = ""
 
     @property
     def outputs(self) -> dict[str, str]:
@@ -81,6 +82,62 @@ class RunWorker(QThread):
         manifest_path = str(Path(job.directory) / "run.json")
         try:
             check_cancelled(self.cancel_event.is_set)
+            if job.mode == "intake":
+                from edf_bill_fetcher.application.intake_execution import inspect_sources
+                from edf_bill_fetcher.io.persistence.run_manifest import artifact_record
+
+                inspect_sources(
+                    [source.path for source in request.sources],
+                    job.directory,
+                    cancelled=self.cancel_event.is_set,
+                    progress=self.progress.emit,
+                )
+                intake_manifest: dict = {
+                    "manifest_version": 1,
+                    "run_id": request.run_id,
+                    "status": "complete",
+                    "stage": "inspected",
+                    "requested": {},
+                    "artifacts": {
+                        "xlsx": artifact_record(str(Path(job.directory) / "Intake.xlsx")),
+                        "json": artifact_record(str(Path(job.directory) / "intake.json")),
+                    },
+                    "result": None,
+                    "error": None,
+                }
+                save_manifest(intake_manifest, manifest_path)
+                self.outcome_ready.emit(RunOutcome("complete", None, freeze_json(intake_manifest)))
+                return
+            if job.mode == "diff":
+                from edf_bill_fetcher.application.comparison import compare_files
+                from edf_bill_fetcher.helpers.artifacts import write_json
+                from edf_bill_fetcher.io.persistence.run_manifest import artifact_record
+                from edf_bill_fetcher.io.writers.diff import write_diff_workbook
+
+                self.progress.emit("Comparing saved records…")
+                comparison = compare_files(job.input_path, job.other_path)
+                check_cancelled(self.cancel_event.is_set)
+                write_diff_workbook(comparison, job.outputs["xlsx"])
+                comparison_path = str(Path(job.directory) / "comparison.json")
+                write_json(comparison, comparison_path)
+                comparison_manifest: dict = {
+                    "manifest_version": 1,
+                    "run_id": request.run_id,
+                    "status": "complete",
+                    "stage": "compared",
+                    "requested": job.outputs,
+                    "artifacts": {
+                        "xlsx": artifact_record(job.outputs["xlsx"]),
+                        "json": artifact_record(comparison_path),
+                    },
+                    "result": None,
+                    "error": None,
+                }
+                save_manifest(comparison_manifest, manifest_path)
+                self.outcome_ready.emit(
+                    RunOutcome("complete", None, freeze_json(comparison_manifest))
+                )
+                return
             accepted = None
             imported = None
             renderers = None

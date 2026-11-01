@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [How-it-started, things-got-out-of-hand, how-its-going]
+    branches: [How-it-started, things-got-out-of-hand, how-its-going, feature/web-ui]
   workflow_call:
     outputs:
       validated_sha:
@@ -85,7 +85,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -c .github/ci-constraints.txt -e ".[dev,msg]"
+          python -m pip install -c .github/ci-constraints.txt -e ".[dev,msg,web]"
           python -m pip freeze --all > .ci-diagnostics/dependencies.txt
 
       - name: Run linting (ruff)
@@ -182,9 +182,90 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
 
+  web:
+    name: Browser (${{ matrix.browser }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v5.0.1
+      - uses: actions/setup-python@v6.1.0
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install native processing prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng build-essential autoconf automake libtool pkg-config
+      - name: Install application and browser dependencies
+        run: |
+          python -m pip install -c .github/ci-constraints.txt -e ".[dev,msg,web]"
+          npm ci --prefix frontend
+      - name: Verify generated API contracts and frontend
+        working-directory: frontend
+        run: |
+          npm run generate
+          git diff --exit-code -- src/generated.ts openapi.json
+          npm run format:check
+          npm run build
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Exercise complete browser workflows
+        working-directory: frontend
+        env:
+          EDF_BROWSER: ${{ matrix.browser }}
+        run: npm test
+      - name: Retain browser failure traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: browser-${{ matrix.browser }}
+          path: frontend/test-results/
+          retention-days: 7
+
+  container:
+    name: Container (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v5.0.1
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build installable web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: edf-web:test
+          cache-from: type=gha,scope=web-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=web-${{ matrix.arch }}
+      - name: Check native capabilities and bundled frontend
+        run: >-
+          docker run --rm --entrypoint python edf-web:test -c
+          "from pathlib import Path; import edf_bill_fetcher.web.api as api; from edf_bill_fetcher.helpers.capabilities import diagnostic_report; report=diagnostic_report(); assert (Path(api.__file__).parent/'static/index.html').is_file(); assert all(c['available'] for c in report['capabilities'] if c['key'] != 'qt'), report"
+
+      - name: Exercise installed HTTP, OCR and reviewed evidence publication
+        run: >-
+          docker run --rm --entrypoint python
+          -v "$PWD/.github/scripts/check_web_container.py:/checks/check_web_container.py:ro"
+          -v "$PWD/tests/fixtures/scanned_bill.pdf:/checks/scanned_bill.pdf:ro"
+          edf-web:test /checks/check_web_container.py
+
   validation:
     name: Required validation
-    needs: test
+    needs: [test, web, container]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -194,7 +275,9 @@ jobs:
       - name: Require every matrix leg to succeed
         env:
           MATRIX_RESULT: ${{ needs.test.result }}
-        run: test "$MATRIX_RESULT" = success
+          WEB_RESULT: ${{ needs.web.result }}
+          CONTAINER_RESULT: ${{ needs.container.result }}
+        run: test "$MATRIX_RESULT" = success && test "$WEB_RESULT" = success && test "$CONTAINER_RESULT" = success
       - name: Record validated revision
         id: revision
         env:

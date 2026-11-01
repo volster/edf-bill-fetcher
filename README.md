@@ -101,6 +101,15 @@ Pip installs the Python libraries, including Qt and PDF readers, but does not
 install Tesseract or its English data. The bootstrapper automates environment
 setup and checks; it is not required to launch the app.
 
+### Browser or Docker
+
+The **`feature/web-ui` branch** adds a browser workspace for source installations,
+Docker and LAN hosting. It uses the same analysis/review services as desktop and
+CLI, with folder/ZIP uploads, automatic evidence classification and persistent
+review drafts. Switch to that branch for this interface and follow the
+[browser and Docker guide](docs/WEB_UI.md). Desktop downloads remain on
+`how-its-going` until this branch is merged.
+
 ## Supported evidence
 
 | Source | What the app looks for |
@@ -209,6 +218,7 @@ to the revision shown in GitHub Actions and **About this build**.
 | Review rebills, credits and a proposed complaint | [Rebilling and claim review](docs/REBILLING_LEDGER.md) |
 | Fix a startup, extraction or import problem | [Troubleshooting](docs/TROUBLESHOOTING.md) |
 | Automate extraction or report generation | [Command-line usage](docs/CLI.md) |
+| Run in a browser, Docker or on your network | [Browser workspace](docs/WEB_UI.md) |
 | Work on the code | [Development guide](docs/DEVELOPMENT.md) |
 
 The [documentation index](docs/README.md) also covers architecture, testing,

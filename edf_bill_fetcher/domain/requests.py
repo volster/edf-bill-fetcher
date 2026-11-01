@@ -7,7 +7,9 @@ from datetime import date, datetime, timedelta
 
 from edf_bill_fetcher.domain.json_values import FrozenJSON, object_value
 
-SOURCE_KINDS = frozenset({"pdf_dir", "htm", "pst", "ost", "eml_dir", "msg_dir", "records_json"})
+SOURCE_KINDS = frozenset(
+    {"auto", "intake", "pdf_dir", "htm", "pst", "ost", "eml_dir", "msg_dir", "records_json"}
+)
 
 
 @dataclass(frozen=True)

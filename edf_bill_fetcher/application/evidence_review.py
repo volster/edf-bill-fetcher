@@ -48,6 +48,40 @@ class EvidenceReview:
     notes: tuple[str, ...]
 
 
+def resolve_review_source(
+    snapshot: AnalysisSnapshot,
+    directory: str,
+    source_id: str,
+    allowed_source: Callable[[str], bool] = lambda path: True,
+) -> str | None:
+    """Verify only the requested original; opening one PDF must not rehash a whole case."""
+    state = object_value(snapshot.prepared.extraction.legacy_state)
+    active = state.get("source_manifest", {})
+    excluded = state.get("review_excluded_source_manifest", {})
+    metadata = active.get(source_id) or excluded.get(source_id)
+    if not isinstance(metadata, dict):
+        return None
+    paths, _ = resolve_bundle_paths({"source_manifest": {source_id: metadata}}, directory)
+    path = paths.get(source_id)
+    if path and allowed_source(path):
+        return path
+    candidate = (
+        state.get("review_source_paths", {}).get(source_id)
+        if source_id in excluded and source_id not in active
+        else metadata.get("Original Path")
+        if not metadata.get("Saved Path")
+        else None
+    )
+    expected = metadata.get("Content Hash")
+    if isinstance(candidate, str) and expected and allowed_source(candidate):
+        try:
+            if artifact_record(candidate)["sha256"] == expected:
+                return candidate
+        except (OSError, ValueError, RuntimeError):
+            return None
+    return None
+
+
 def text(value: object) -> str:
     """Display unavailable fields without inventing a zero or date."""
     if value is None:
@@ -81,6 +115,7 @@ def build_evidence_review(
     snapshot: AnalysisSnapshot,
     directory: str,
     cancelled: Callable[[], bool] = lambda: False,
+    allowed_source: Callable[[str], bool] = lambda path: True,
 ) -> EvidenceReview:
     """Resolve evidence and expose accepted models without preparing or analysing again."""
     check_cancelled(cancelled)
@@ -109,7 +144,7 @@ def build_evidence_review(
             statuses[source_id] = "Saved source unavailable or changed"
         else:
             original, expected = metadata.get("Original Path"), metadata.get("Content Hash")
-            if not isinstance(original, str) or not expected:
+            if not isinstance(original, str) or not expected or not allowed_source(original):
                 statuses[source_id] = "Original source unavailable"
                 continue
             try:
@@ -138,6 +173,7 @@ def build_evidence_review(
         try:
             if (
                 isinstance(original, str)
+                and allowed_source(original)
                 and expected
                 and artifact_record(original)["sha256"] == expected
             ):

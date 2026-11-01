@@ -14,6 +14,10 @@ semver-friendly.
 
 ### Added
 
+- On `feature/web-ui`: authenticated React browser workspace, source/LAN/Docker hosting, persistent jobs and review drafts, source PDFs, Excel regeneration, claim/complaint review, comparisons and diagnostics using the shared application services.
+- Resumable folder/file uploads with per-file hash verification; mixed evidence inspection, safe bounded ZIP expansion, explicit unsupported-file inventory and reusable intake plans across web, desktop and CLI.
+- Shared complete configuration controls and scriptable review commands with persistent undo/redo.
+
 - Consolidated claim groups and credit allocations shared by the app and Excel, with overlap review, evidence bindings, audited changes and a proposal that remains separate from recorded balances.
 - A focused complaint draft in HTML, Word and PDF, with a reference schedule, verified relevant originals, original page references, evidence manifest and portable ZIP. Unresolved claims and missing sources stay visible as review gaps.
 

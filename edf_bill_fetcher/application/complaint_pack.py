@@ -150,7 +150,11 @@ def _selection(view: ReportView) -> tuple[dict, dict, list[str]]:
 
 
 def _evidence(
-    view: ReportView, ledger: dict, root: Path, roots: list[Path]
+    view: ReportView,
+    ledger: dict,
+    root: Path,
+    roots: list[Path],
+    allowed_source: Callable[[str], bool] = lambda path: True,
 ) -> tuple[dict, list[str]]:
     """Copy identities only when their recorded hash verifies; never substitute by filename."""
     state = object_value(view.snapshot.prepared.extraction.legacy_state)
@@ -161,6 +165,8 @@ def _evidence(
     filtered = {key: data for key, data in manifest.items() if key in source_ids}
     paths = {}
     for directory in roots:
+        if not allowed_source(str(directory)):
+            continue
         found, _ = resolve_bundle_paths({"source_manifest": filtered}, str(directory))
         paths.update({key: path for key, path in found.items() if key not in paths})
     for key, metadata in filtered.items():
@@ -171,6 +177,7 @@ def _evidence(
             try:
                 if (
                     metadata.get("Content Hash")
+                    and allowed_source(str(original))
                     and artifact_record(str(original))["sha256"] == metadata["Content Hash"]
                 ):
                     paths[key] = str(original)
@@ -398,6 +405,7 @@ def publish(
     *,
     source_roots: tuple[str, ...] = (),
     cancelled: Callable[[], bool] = lambda: False,
+    allowed_source: Callable[[str], bool] = lambda path: True,
 ) -> tuple[dict[str, str], tuple[str, ...]]:
     """Stage the complete pack and archive, publishing neither after failure/cancellation."""
     from edf_bill_fetcher.application.run_service import check_cancelled
@@ -418,7 +426,7 @@ def publish(
         stage.mkdir()
         check_cancelled(cancelled)
         model, ledger, notes = _selection(view)
-        bundle, source_notes = _evidence(view, ledger, stage, roots)
+        bundle, source_notes = _evidence(view, ledger, stage, roots, allowed_source)
         notes.extend(source_notes)
         if not model["ready"]:
             notes.append(

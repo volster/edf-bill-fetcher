@@ -1,0 +1,258 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { test, expect, type Page } from "@playwright/test";
+
+async function signIn(page: Page) {
+  await page.goto("/");
+  await page.getByLabel("Username", { exact: true }).fill("reviewer");
+  await page
+    .getByLabel("Password", { exact: true })
+    .fill("synthetic-browser-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Runs & evidence" }),
+  ).toBeVisible();
+}
+
+test("review a saved analysis, reject stale edits, undo and preserve pending forms", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await signIn(page);
+  await page
+    .getByRole("heading", { name: "Synthetic baseline", exact: true })
+    .click();
+  await page.getByRole("button", { name: "BROWSER-001", exact: true }).click();
+  await page.getByLabel("Period Charge (£)", { exact: true }).fill("80.00");
+  await page
+    .getByLabel("Reason for change", { exact: true })
+    .fill("Verified against synthetic original");
+  await page
+    .getByRole("button", { name: "Apply to draft", exact: true })
+    .click();
+  await expect(
+    page.getByText("Draft revision 1", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Period Charge (£)", { exact: true }),
+  ).toHaveValue("80");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(
+    page.getByLabel("Period Charge (£)", { exact: true }),
+  ).toHaveValue("100");
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(
+    page.getByLabel("Period Charge (£)", { exact: true }),
+  ).toHaveValue("80");
+  await page.getByLabel("Period Charge (£)", { exact: true }).fill("70");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page
+    .getByRole("tab", { name: "Claims & complaint", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Period Charge (£)", { exact: true }),
+  ).toHaveValue("70");
+  await page.getByRole("button", { name: "Discard form edits" }).click();
+  await page
+    .getByRole("tab", { name: "Claims & complaint", exact: true })
+    .click();
+  await page
+    .getByLabel("Complaint summary", { exact: true })
+    .fill("Synthetic disputed rebill");
+  await page
+    .getByLabel("Requested outcome", { exact: true })
+    .fill("Review the unbilled increase");
+  await page.getByRole("button", { name: "Save complaint wording" }).click();
+  await expect(
+    page.getByText("Draft revision 4", { exact: false }),
+  ).toBeVisible();
+  await page.reload();
+  await page
+    .getByRole("tab", { name: "Claims & complaint", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Complaint summary", { exact: true }),
+  ).toHaveValue("Synthetic disputed rebill");
+  expect(errors).toEqual([]);
+});
+
+test("extract from a configured server folder, inspect original PDF and download a portable pack", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await signIn(page);
+  await page.getByRole("link", { name: "Build a pack", exact: true }).click();
+  await page
+    .getByLabel("Pack name", { exact: true })
+    .fill("Browser extraction");
+  await page.getByLabel("Location", { exact: true }).selectOption("server");
+  await page
+    .getByLabel("Server source folder", { exact: true })
+    .selectOption("Synthetic bills");
+  // Folders select paths below a configured root; a single PDF can be selected
+  // by its containing folder on upload. Use an explicit HTM-free nested folder.
+  await page
+    .getByLabel("Relative folder or filename", { exact: true })
+    .fill("./");
+  await page
+    .getByRole("button", { name: "Add selected path", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Inspect everything", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Intake inventory", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Create evidence pack", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Browser extraction", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "KI-12345", exact: true }),
+  ).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("button", { name: "KI-12345", exact: true }).click();
+  await expect(page.getByLabel("PDF page", { exact: true })).toBeVisible();
+  await expect(page.locator(".pdfViewer .page canvas").first()).toBeVisible();
+  await page.getByRole("tab", { name: "Outputs", exact: true }).click();
+  const download = page.waitForEvent("download");
+  await page
+    .getByRole("link", { name: "Download complete evidence pack", exact: true })
+    .click();
+  expect((await download).suggestedFilename()).toBe("Evidence_pack.zip");
+  expect(errors).toEqual([]);
+});
+
+test("small screens retain navigation and inline sign-in errors", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByLabel("Username", { exact: true }).fill("reviewer");
+  await page.getByLabel("Password", { exact: true }).fill("wrong");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Invalid username or password",
+  );
+  await page
+    .getByLabel("Password", { exact: true })
+    .fill("synthetic-browser-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("navigation", { name: "Main navigation" }),
+  ).toBeVisible();
+});
+
+test("mixed folder uploads include ZIP members and retain unsupported-file decisions", async ({
+  page,
+}) => {
+  const temporary = mkdtempSync(join(tmpdir(), "edf-upload-browser-"));
+  try {
+    execFileSync(
+      process.env.EDF_TEST_PYTHON || "python",
+      [
+        "-c",
+        "import sys; from pathlib import Path; from tests.test_mixed_intake import mixed_folder; mixed_folder(Path(sys.argv[1]))",
+        join(temporary, "mixed"),
+      ],
+      { cwd: resolve("..") },
+    );
+    await signIn(page);
+    await page.getByRole("link", { name: "Build a pack", exact: true }).click();
+    await page
+      .getByLabel("Pack name", { exact: true })
+      .fill("Mixed browser upload");
+    await page
+      .getByLabel("Upload selection", { exact: true })
+      .selectOption("folder");
+    await page
+      .getByLabel("Choose a folder", { exact: true })
+      .setInputFiles(join(temporary, "mixed"));
+    await page
+      .getByRole("button", { name: "Upload and add", exact: true })
+      .click();
+    await expect(page.getByText("Source ready", { exact: true })).toBeVisible();
+    await page
+      .getByRole("button", { name: "Inspect everything", exact: true })
+      .click();
+    const inventory = page.getByRole("table", {
+      name: "Intake files",
+      exact: true,
+    });
+    await expect(inventory).toContainText("more.zip!/2024/second.pdf");
+    await expect(inventory).toContainText("photo.png");
+    await expect(
+      page.getByRole("button", { name: "Create evidence pack", exact: true }),
+    ).toBeDisabled();
+    await page
+      .getByLabel("I have checked the unprocessed files", { exact: false })
+      .check();
+    // Select only Excel for this test; the other browser scenario exercises all formats.
+    await page.getByText("Report formats & sections", { exact: true }).click();
+    for (const format of ["PDF", "DOCX", "HTML"])
+      await page.getByLabel(format, { exact: true }).uncheck();
+    await page
+      .getByRole("button", { name: "Create evidence pack", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Mixed browser upload", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "KI-10001", exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(
+      page.getByRole("button", { name: "KI-10002", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("tab", { name: "Outputs", exact: true }).click();
+    await expect(
+      page.getByRole("link", { name: "intake_inventory.json", exact: true }),
+    ).toBeVisible();
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("expired sessions keep unapplied record edits until reauthentication", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page
+    .getByRole("heading", { name: "Synthetic baseline", exact: true })
+    .click();
+  await page.getByRole("button", { name: "BROWSER-001", exact: true }).click();
+  await page.getByLabel("Period Charge (£)", { exact: true }).fill("66.25");
+  await page
+    .getByLabel("Reason for change", { exact: true })
+    .fill("Preserved during expiry");
+  await page.context().clearCookies();
+  await page
+    .getByRole("button", { name: "Apply to draft", exact: true })
+    .click();
+  const overlay = page.getByRole("dialog", {
+    name: "Session expired",
+    exact: true,
+  });
+  await expect(overlay).toBeVisible();
+  await overlay.getByLabel("Username", { exact: true }).fill("reviewer");
+  await overlay
+    .getByLabel("Password", { exact: true })
+    .fill("synthetic-browser-password");
+  await overlay.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(overlay).not.toBeVisible();
+  await expect(
+    page.getByLabel("Period Charge (£)", { exact: true }),
+  ).toHaveValue("66.25");
+  await page
+    .getByRole("button", { name: "Apply to draft", exact: true })
+    .click();
+  await page.reload();
+  await page.getByRole("button", { name: "BROWSER-001", exact: true }).click();
+  await expect(
+    page.getByLabel("Period Charge (£)", { exact: true }),
+  ).toHaveValue("66.25");
+});

@@ -1,0 +1,189 @@
+import { createSHA256 } from "hash-wasm";
+import type { components } from "./generated";
+export type Json =
+  null | boolean | number | string | Json[] | { [key: string]: Json };
+export type Entry<T> = { id: string; revision: number; kind: string; data: T };
+export type Source = components["schemas"]["Source"];
+export type JobData = {
+  request: { name: string; mode: string; formats: string[] };
+  status: string;
+  created: number;
+  error: string | null;
+};
+export type Row = {
+  id: string;
+  included: boolean;
+  record: Record<string, Json>;
+  decision: { changes: Record<string, Json>; reason: string; include: boolean };
+  status: string;
+};
+export type Review = {
+  revision: number;
+  draft: { claims: { groups: Claim[]; context: Context } } & Record<
+    string,
+    Json
+  >;
+  rows: Row[];
+  ledger: Record<string, Json>;
+  claims: Record<string, Json>;
+  revisions: Record<string, Json>;
+  summary: Record<string, string | null>;
+  models: Record<string, Json>;
+  can_undo: boolean;
+  can_redo: boolean;
+};
+export type Context = {
+  complaint_summary: string;
+  requested_outcome: string;
+  include_pack: boolean;
+};
+export type Credit = {
+  row_id: string;
+  amount: string;
+  treatment: string;
+  reason: string;
+};
+export type Claim = {
+  id: string;
+  title: string;
+  status: string;
+  members: string[];
+  challenged: string | null;
+  reduction: string | null;
+  credits: Credit[];
+  reason: string;
+  account_link_reason: string;
+};
+export type Schema = {
+  review_fields: Record<string, string>;
+  settings: Record<string, string>;
+  sections: { key: string; title: string }[];
+};
+let csrf = "";
+export function setCsrf(value: string) {
+  csrf = value;
+}
+export async function api<T>(
+  path: string,
+  body?: unknown,
+  method?: string,
+): Promise<T> {
+  const response = await fetch("/api" + path, {
+    method: method || (body === undefined ? "GET" : "POST"),
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const value = await response.json();
+  if (response.status === 401 && path !== "/login" && path !== "/session")
+    window.dispatchEvent(new Event("edf-session-expired"));
+  if (!response.ok)
+    throw new Error(
+      typeof value.detail === "string"
+        ? value.detail
+        : JSON.stringify(value.detail),
+    );
+  return value as T;
+}
+export async function uploadAsset(
+  kind: Source["kind"],
+  files: File[],
+  name: string,
+  progress: (done: number, total: number, stage?: string) => void,
+  resumeId?: string,
+): Promise<string> {
+  const asset = resumeId
+    ? { id: resumeId }
+    : await api<Entry<unknown>>("/assets", { kind, name });
+  const previous = JSON.parse(sessionStorage.getItem("edf-upload") || "null");
+  const batch =
+    resumeId && previous?.batch
+      ? previous.batch
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
+          value.toString(16).padStart(2, "0"),
+        ).join("");
+  sessionStorage.setItem(
+    "edf-upload",
+    JSON.stringify({ id: asset.id, kind, name, batch }),
+  );
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+  let done = 0;
+  let order = 0;
+  for (const file of files) {
+    const path = file.webkitRelativePath || file.name;
+    const query = new URLSearchParams({ path });
+    const pending = await api<{ offset: number; sha256: string | null }>(
+      `/assets/${asset.id}/offset?${query}`,
+    );
+    let offset = pending.offset;
+    const digest = await createSHA256();
+    digest.init();
+    for (let position = 0; position < offset; position += 4 * 1024 * 1024) {
+      digest.update(
+        new Uint8Array(
+          await file
+            .slice(position, Math.min(offset, position + 4 * 1024 * 1024))
+            .arrayBuffer(),
+        ),
+      );
+    }
+    if (offset && digest.digest("hex") !== pending.sha256)
+      throw new Error(
+        "The selected file does not match the pending upload. Choose the original file or create a fresh source.",
+      );
+    if (offset) {
+      digest.init();
+      for (let position = 0; position < offset; position += 4 * 1024 * 1024)
+        digest.update(
+          new Uint8Array(
+            await file
+              .slice(position, Math.min(offset, position + 4 * 1024 * 1024))
+              .arrayBuffer(),
+          ),
+        );
+    }
+    if (offset > file.size)
+      throw new Error(
+        "The selected file is smaller than the pending upload. Create a new source.",
+      );
+    done += offset;
+    do {
+      const chunk = file.slice(offset, offset + 4 * 1024 * 1024);
+      const response = await fetch(
+        `/api/assets/${asset.id}/content?${query}&offset=${offset}`,
+        { method: "PUT", headers: { "X-CSRF-Token": csrf }, body: chunk },
+      );
+      const result = await response.json();
+      if (response.status === 401)
+        window.dispatchEvent(new Event("edf-session-expired"));
+      if (!response.ok) throw new Error(result.detail);
+      digest.update(new Uint8Array(await chunk.arrayBuffer()));
+      offset = result.offset;
+      done += chunk.size;
+      progress(done, total);
+    } while (offset < file.size);
+    progress(done, total, `Verifying ${file.name}…`);
+    await api(`/assets/${asset.id}/file-complete?${query}`, {
+      size: file.size,
+      sha256: digest.digest("hex"),
+      batch_id: batch,
+      order: order++,
+    });
+  }
+  await api(`/assets/${asset.id}/seal`, {
+    batch_id: batch,
+    files_count: files.length,
+  });
+  sessionStorage.removeItem("edf-upload");
+  return asset.id;
+}
+export const terminal = new Set([
+  "complete",
+  "review_required",
+  "empty",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+export const label = (key: string) =>
+  key.replaceAll("_", " ").replace(/\b\w/g, (value) => value.toUpperCase());

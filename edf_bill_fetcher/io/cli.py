@@ -203,6 +203,15 @@ def run_cli_extract(args: list[str]) -> None:
     parser.add_argument("--htm", help="Path to HTM account history export")
     parser.add_argument("--eml-dir", help="Path to directory containing .eml message files")
     parser.add_argument("--msg-dir", help="Path to directory containing .msg message files")
+    parser.add_argument(
+        "--auto",
+        action="append",
+        default=[],
+        help="Mixed evidence folder, file or ZIP; detect supported originals automatically (repeatable)",
+    )
+    parser.add_argument(
+        "--intake-plan", help="Reuse an inspected intake.json without expanding its ZIPs again"
+    )
     parser.add_argument("--output", "-o", required=True, help="Output Excel file path")
     parser.add_argument(
         "--records-json", help="Also save extracted records as v2 compatibility JSON"
@@ -240,7 +249,17 @@ def run_cli_extract(args: list[str]) -> None:
     parsed = parser.parse_args(args)
 
     # Check at least one source
-    if not any([parsed.pst, parsed.pdf_dir, parsed.htm, parsed.eml_dir, parsed.msg_dir]):
+    if not any(
+        [
+            parsed.intake_plan,
+            parsed.auto,
+            parsed.pst,
+            parsed.pdf_dir,
+            parsed.htm,
+            parsed.eml_dir,
+            parsed.msg_dir,
+        ]
+    ):
         sys.stderr.write(
             "ERROR: At least one source required "
             "(--pst, --pdf-dir, --htm, --eml-dir, or --msg-dir)\n"
@@ -260,25 +279,9 @@ def run_cli_extract(args: list[str]) -> None:
             sys.stderr.write(f"ERROR: Failed to load config: {e}\n")
             sys.exit(1)
 
-    config = cast(
-        ConfigDict,
-        {
-            "use_acc_filter": False,
-            "acc_num": "",
-            "use_domain_filter": True,
-            "domain_filter": "edfenergy.com",
-            "min_amount": 50.0,
-            "filter_below": False,
-            "use_dedup": True,
-            "use_anchors": True,
-            "use_large": True,
-            "use_reading_classification": True,
-            "use_pdf_fields": True,
-            "save_filtered": True,
-            "save_dups": True,
-            **config,
-        },
-    )
+    from edf_bill_fetcher.models.defaults import EXTRACTION_DEFAULTS
+
+    config = cast(ConfigDict, {**EXTRACTION_DEFAULTS, **config})
     if parsed.acc_filter is not None:
         config.update({"use_acc_filter": bool(parsed.acc_filter), "acc_num": parsed.acc_filter})
     if parsed.domain_filter is not None:
@@ -300,7 +303,15 @@ def run_cli_extract(args: list[str]) -> None:
     except ValueError as error:
         parser.error(str(error))
 
-    for source in (parsed.pst, parsed.htm, parsed.pdf_dir, parsed.eml_dir, parsed.msg_dir):
+    for source in (
+        parsed.pst,
+        parsed.htm,
+        parsed.pdf_dir,
+        parsed.eml_dir,
+        parsed.msg_dir,
+        *parsed.auto,
+        parsed.intake_plan,
+    ):
         if source and not os.path.exists(source):
             parser.error(f"Source does not exist: {source}")
 
@@ -334,6 +345,9 @@ def run_cli_extract(args: list[str]) -> None:
         )
         if path
     )
+    sources += tuple(SourceSelection("auto", path) for path in parsed.auto)
+    if parsed.intake_plan:
+        sources += (SourceSelection("intake", parsed.intake_plan),)
     request = RunRequest(
         uuid4().hex,
         datetime.now(timezone.utc),
@@ -449,21 +463,17 @@ def run_cli_diff(args: list[str]) -> None:
         sys.stderr.write(f"ERROR: {e}\n")
         sys.exit(1)
 
-    old_records = (
-        old_loaded["records"]
-        if isinstance(old_loaded, dict) and "records" in old_loaded
-        else old_loaded
-    )
-    new_records = (
-        new_loaded["records"]
-        if isinstance(new_loaded, dict) and "records" in new_loaded
-        else new_loaded
-    )
-    if not isinstance(old_records, list) or not isinstance(new_records, list):
-        sys.stderr.write("ERROR: both diff inputs must be records.json lists\n")
-        sys.exit(1)
-
+    from edf_bill_fetcher.application.comparison import comparison_records
     from edf_bill_fetcher.processors.run_diff import diff_records
+
+    try:
+        old_records = comparison_records(old_loaded)
+        new_records = comparison_records(new_loaded)
+    except ValueError as error:
+        sys.stderr.write(
+            f"ERROR: both diff inputs must be records.json lists or accepted results: {error}\n"
+        )
+        sys.exit(1)
 
     diff = diff_records(old_records, new_records)
 
@@ -494,6 +504,11 @@ def run_cli_diff(args: list[str]) -> None:
         )
 
     if parsed.diff_output:
+        if Path(parsed.diff_output).resolve() in {
+            Path(parsed.old).resolve(),
+            Path(parsed.new).resolve(),
+        }:
+            raise ValueError("Comparison output would overwrite an input")
         from edf_bill_fetcher.io.writers.diff import write_diff_workbook
 
         write_diff_workbook(diff, parsed.diff_output)
@@ -732,6 +747,21 @@ def run_cli_review(args: list[str]) -> None:
 
 def main() -> None:
     """Entry point for the EDF Evidence Collector CLI."""
+    if len(sys.argv) > 1 and sys.argv[1] == "--inspect":
+        from edf_bill_fetcher.application.intake_execution import main as inspect_inputs
+
+        inspect_inputs(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--web":
+        from edf_bill_fetcher.web.launch import main as web
+
+        web(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--review-command":
+        from edf_bill_fetcher.application.review_cli import main as review_command
+
+        review_command(sys.argv[2:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--doctor":
         from edf_bill_fetcher.helpers.capabilities import main as doctor
 

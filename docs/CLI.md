@@ -142,3 +142,38 @@ Legacy JSON can have migration limits; prefer `result.json` for a complete
 saved analysis. `--diff` accepts record lists or compatibility
 objects containing `records`, not a complete v3 result. Use the compatibility
 `records.json` files for comparisons.
+
+
+## Mixed intake and persistent review commands (`feature/web-ui`)
+
+```console
+python main.py --inspect "evidence" --output-dir "inspection"
+python main.py --extract --intake-plan "inspection/intake.json" -o "pack.xlsx"
+python main.py --extract --auto "evidence" --auto "more.zip" -o "pack.xlsx"
+```
+
+Inspection produces `Intake.xlsx`, `intake.json` and retained expanded archive
+members. Keep them together until extraction finishes. Unknown or unsupported
+files are recorded explicitly; existing results and workbooks require their
+normal import workflow. Mixed intake does not silently merge old analyses.
+
+For scripted corrections, create a command file such as:
+
+```json
+{"operation": "set_complaint_context", "arguments": {"complaint_summary": "Disputed rebill", "requested_outcome": "Review the unbilled increase", "include_pack": false}}
+```
+
+```console
+python main.py --review-command --result "run/result.json" --draft "draft.json" --command "command.json" --preview "preview.json"
+python main.py --review-command --result "run/result.json" --draft "draft.json" --command "command.json" --publish "reviewed-packs" --formats html pdf docx xlsx
+```
+
+Commands include `update`, revision/position/claim decisions, complaint context,
+`undo` and `redo`; argument validation belongs to `ReviewSession`. The adjacent
+`.history.json` file is a bounded journal checked against the current draft.
+A command is applied before the requested preview or publication. Use an `undo`
+or `redo` command only when intending to change that saved draft. Original result
+and evidence inputs cannot be overwritten by command outputs.
+
+`python main.py --web --help` launches the optional browser server entry point.
+See [web setup](WEB_UI.md) for its dependencies and account creation.

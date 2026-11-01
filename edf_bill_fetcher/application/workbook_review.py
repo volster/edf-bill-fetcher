@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -37,7 +38,12 @@ def _identities(records: list[dict]) -> set[str]:
     return result
 
 
-def bundle_review_sources(prepared: PreparedSnapshot, directory: str, workbook: str) -> dict:
+def bundle_review_sources(
+    prepared: PreparedSnapshot,
+    directory: str,
+    workbook: str,
+    allowed_source: Callable[[str], bool] = lambda path: True,
+) -> dict:
     """Copy verified retained sources; exclude files used only by excluded records."""
     state = object_value(prepared.extraction.legacy_state)
     manifest = {
@@ -72,12 +78,18 @@ def bundle_review_sources(prepared: PreparedSnapshot, directory: str, workbook: 
         if candidate.is_relative_to(Path(workbook).resolve().parent):
             roots.insert(0, str(candidate))
     old_root = state.get("source_bundle_path")
-    if isinstance(old_root, str) and old_root and old_root not in roots:
+    if (
+        isinstance(old_root, str)
+        and old_root
+        and old_root not in roots
+        and allowed_source(old_root)
+    ):
         roots.append(old_root)
     for root in roots:
         resolved, _ = resolve_bundle_paths({**state, "source_manifest": manifest}, root)
         for identity, path in resolved.items():
-            paths.setdefault(identity, path)
+            if allowed_source(path):
+                paths.setdefault(identity, path)
     for identity, metadata in selected.items():
         # A source deliberately not bundled may still be available at its
         # recorded original location. Never use this for a missing saved copy.
@@ -87,6 +99,7 @@ def bundle_review_sources(prepared: PreparedSnapshot, directory: str, workbook: 
             or metadata.get("Saved Path")
             or not isinstance(original, str)
             or not expected
+            or not allowed_source(original)
         ):
             continue
         try:
@@ -99,7 +112,12 @@ def bundle_review_sources(prepared: PreparedSnapshot, directory: str, workbook: 
     for identity, path in state.get("review_source_paths", {}).items():
         expected = manifest.get(identity, {}).get("Content Hash")
         try:
-            if identity not in paths and expected and artifact_record(path)["sha256"] == expected:
+            if (
+                identity not in paths
+                and expected
+                and allowed_source(path)
+                and artifact_record(path)["sha256"] == expected
+            ):
                 paths[identity] = path
         except (OSError, ValueError, TypeError):
             continue

@@ -9,6 +9,7 @@ older downloads may have different controls or fewer review features.
 | Guide | What it covers |
 | --- | --- |
 | [User guide](USER_GUIDE.md) | Build a pack, inspect evidence, correct records in the app or Excel, and regenerate outputs. |
+| [Browser / Docker workspace](WEB_UI.md) | Source and container hosting, LAN access, resumable folder/ZIP intake and browser review on `feature/web-ui`. |
 | [Configuration](CONFIGURATION.md) | Preferences, CLI JSON, filters, duplicate handling, valuation dates and report sections. |
 | [Understanding your outputs](OUTPUTS.md) | Which files to keep, where to find information, what figures mean and how source links work. |
 | [Rebilling and claim review](REBILLING_LEDGER.md) | Bill relationships, dispute positions, consolidated claims, credit allocations and complaint packs. |

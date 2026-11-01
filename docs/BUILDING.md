@@ -14,6 +14,15 @@ git clone --branch how-its-going https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
 ```
 
+## Browser and Docker distribution
+
+The separate `feature/web-ui` branch supports a React browser workspace served by
+Python, either directly or in a Docker container. This also supports LAN hosting;
+Docker is optional. Switch to that branch before following the
+[web setup and build commands](WEB_UI.md). Building frontend assets requires
+Node 24; runtime processing still needs the native prerequisites below.
+Desktop executable builds retain their existing workflow.
+
 ## Automatic environment setup
 
 In a Conda-enabled terminal, such as an Anaconda/Miniforge prompt:

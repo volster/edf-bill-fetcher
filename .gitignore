@@ -66,6 +66,12 @@ coverage.xml
 # Root-level data/ holds local exports; edf_bill_fetcher/data/ is a
 # packaged resource and must stay tracked.
 /data/
+/web-data/
+node_modules/
+frontend/dist/
+playwright-report/
+test-results/
+edf_bill_fetcher/web/static/
 
 # Scratch / debug scripts moved out of the source tree during
 # cleanup.  These are one-off investigation scripts that the
@@ -88,3 +94,5 @@ docs/superpowers/
 .ci-diagnostics/
 test-results.xml
 /diagnostics.json
+
+frontend/*.tsbuildinfo

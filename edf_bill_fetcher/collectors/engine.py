@@ -164,6 +164,7 @@ class EvidenceEngine:
         update_ui_cb: Callable[[str], None],
         progress_cb: Callable[[int, int, str], None] | None = None,
         cancel_event: threading.Event | None = None,
+        allowed_source: Callable[[str], bool] = lambda path: True,
     ):
         """Initialize the engine with config, a UI callback, and cancellation hooks."""
         self.config = config
@@ -172,6 +173,7 @@ class EvidenceEngine:
         self.update_ui = update_ui_cb
         self.update_progress = progress_cb
         self.cancel_event = cancel_event or threading.Event()
+        self._allowed_source = allowed_source
         self.pdf_count = 0
         self.email_count = 0
         self.error_log: list[str] = []
@@ -198,6 +200,9 @@ class EvidenceEngine:
         self._attachment_dir: tempfile.TemporaryDirectory[str] | None = None
         self._ocr_reader: PdfOcrReader | None = None
         self._archive_origin = ""
+        self.intake_inventory: list[dict] = []
+        self._intake_origins: dict[str, dict] = {}
+        self._intake_current: dict = {}
 
     # ------------------------------------------------------------------
     # Pickle support — Phase 1.4
@@ -242,6 +247,7 @@ class EvidenceEngine:
             "source_manifest": self.source_manifest,
             "attachment_count": self.attachment_count,
             "skipped_attachment_count": self.skipped_attachment_count,
+            "intake_inventory": self.intake_inventory,
         }
 
     def __setstate__(self, state: dict) -> None:
@@ -268,6 +274,10 @@ class EvidenceEngine:
         self.skipped_attachment_count = state.get("skipped_attachment_count", 0)
         self._source_context = {}
         self._attachment_dir = None
+        self.intake_inventory = state.get("intake_inventory", [])
+        self._intake_origins = {}
+        self._intake_current = {}
+        self._allowed_source = lambda path: True
         self._ocr_reader = None
         # Rebuild runtime primitives fresh — the persisted snapshot
         # does not carry cancel state forward.
@@ -285,6 +295,14 @@ class EvidenceEngine:
             self._attachment_dir.cleanup()
             self._attachment_dir = None
         self._ocr_reader = None
+
+    def _can_read_source(self, path: str) -> bool:
+        """Allow configured originals and this engine's own extracted attachments."""
+        if self._allowed_source(path):
+            return True
+        return self._attachment_dir is not None and Path(path).resolve().is_relative_to(
+            Path(self._attachment_dir.name).resolve()
+        )
 
     def is_cancelled(self):
         """Return True if the cancel event has been set by the GUI."""
@@ -888,9 +906,14 @@ class EvidenceEngine:
     def _register_source(self, path: str, name: str, content: bytes) -> dict[str, Any]:
         """Record a source occurrence using content and origin identity."""
         digest = hashlib.sha256(content).hexdigest()
-        origin = self._source_context.get("Parent Message") or os.path.abspath(path)
+        intake = {**self._intake_current, **self._intake_origins.get(os.path.abspath(path), {})}
+        origin = (
+            self._source_context.get("Parent Message")
+            or intake.get("Intake Origin")
+            or os.path.abspath(path)
+        )
         source_id = hashlib.sha256((origin + "\0" + name + "\0" + digest).encode()).hexdigest()
-        original_name = name or os.path.basename(path)
+        original_name = intake.get("Intake Original Filename") or name or os.path.basename(path)
         unique_name = original_name
         if unique_name in self.source_paths and self.source_paths[unique_name] != path:
             stem, ext = os.path.splitext(original_name)
@@ -898,6 +921,7 @@ class EvidenceEngine:
         self.source_paths[unique_name] = path
         self.source_paths[source_id] = path
         metadata = {
+            **intake,
             "Source ID": source_id,
             "Content Hash": digest,
             "Original Path": os.path.abspath(path),
@@ -928,7 +952,13 @@ class EvidenceEngine:
         ) as handle:
             handle.write(data)
             path = handle.name
-        self._source_context = {"Parent Message": parent}
+        inherited = self._intake_origins.get(os.path.abspath(parent), {})
+        if inherited:
+            self._intake_origins[os.path.abspath(path)] = {
+                **inherited,
+                "Intake Original Filename": name,
+            }
+        self._source_context = {"Parent Message": inherited.get("Intake Origin", parent)}
         self.pdf_count += 1
         self.process_pdf_file(path, source, name, date_str, sender=sender, attachment_name=name)
 
@@ -939,6 +969,8 @@ class EvidenceEngine:
         if self.is_cancelled():
             return
         try:
+            if not self._can_read_source(path):
+                raise PermissionError("Source is outside the configured evidence folders")
             import io
 
             with open(path, "rb") as fh:
@@ -1254,6 +1286,8 @@ class EvidenceEngine:
     def process_htm_file(self, path):
         """Read an HTM account-history export and extract every record it contains."""
         try:
+            if not self._can_read_source(path):
+                raise PermissionError("Source is outside the configured evidence folders")
             self._source_context = {}
             raw = Path(path).read_bytes()
             self._source_context = self._register_source(path, os.path.basename(path), raw)
@@ -1638,6 +1672,8 @@ class EvidenceEngine:
                 return
             file_path = os.path.join(path, fname)
             try:
+                if not self._can_read_source(file_path):
+                    raise PermissionError("Source is outside the configured evidence folders")
                 data = parser(file_path)
                 self._source_context = {}
                 with open(file_path, "rb") as message_file:

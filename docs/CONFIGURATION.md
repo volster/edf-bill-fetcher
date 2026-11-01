@@ -70,9 +70,10 @@ patterns and regular expressions are not supported.
 
 ## Analysis and report options
 
-Some analytical settings below are supplied through CLI JSON rather than a
-desktop control. A setting stored in a result is part of that result's history,
-not a promise of a matching Preferences checkbox.
+On `feature/web-ui`, **All analysis settings…** in desktop and the browser
+settings panel expose the complete typed configuration; desktop keeps these
+additional values in `advanced_config`. CLI accepts the same flat keys. A saved
+result retains the settings used for its accepted analysis.
 
 | Key | Meaning |
 | --- | --- |
@@ -81,6 +82,7 @@ not a promise of a matching Preferences checkbox.
 | `report_sections` | Array of section keys below. Omitted means all registered sections. The GUI requires a usable selection; do not use an empty list to mean “all”. |
 | `credit_interest_rate` | Optional annual simple-interest fraction; `0.08` means 8%, **not** `8`. Default `0.0` produces no interest scenario. |
 | `credit_hold_days` | Days before the configured credit-interest scenario starts; default `90`. Must be finite and non-negative. |
+| `ofgem_caps_path`, `ofgem_auto_carry` | Optional custom benchmark CSV path and carry behavior. Browser-hosted paths must be inside configured roots; see [web hosting](WEB_UI.md). |
 | `fuel`, `payment_method`, `tariff_type`, `cap_region` | Optional reference-comparison context retained with the analysis. These do not rewrite evidence identity or turn a GB-average reference into a regional entitlement calculation. |
 
 Thresholds and interest rates must be finite and non-negative. JSON does not use

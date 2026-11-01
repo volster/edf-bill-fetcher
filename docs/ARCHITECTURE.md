@@ -224,3 +224,38 @@ are validated during strict loading. The one supported older shape omits this
 assessment field; it restores as unavailable and serializes back without adding it.
 No other model fields become optional. Legacy counts/rates remain accepted facts,
 and their display explicitly identifies their historical all-record scope.
+
+
+## Browser workspace and shared intake
+
+On `feature/web-ui`, `web/api.py` owns authenticated HTTP/CSRF boundaries,
+`web/contracts.py` validates captured requests, and `web/storage.py` stores
+metadata in SQLite through SQLAlchemy/Alembic. Evidence and artifacts remain
+files. A workspace lock permits one dispatcher; independent Python processes
+handle queued jobs so a browser disconnect cannot terminate extraction. Durable
+SSE cursors resume progress viewing. Cancellation has a grace period before a
+stuck native process is stopped; restart marks unfinished work interrupted.
+
+`frontend/` contains the React/TypeScript interface, generated OpenAPI input
+types and Playwright workflows. It calls shared Python services for calculations,
+review commands, workbook regeneration, comparison and complaint publication.
+It must not reproduce financial rules in JavaScript. Accepted summaries remain
+pinned until preview/publication; a draft edit is not an accepted calculation.
+
+`application/review_commands.py`, `review_journal.py` and `review_execution.py`
+provide whitelisted operations, bounded persistent undo/redo and source-verified
+preview/publication. CLI review uses the same contracts. The complete configuration
+validator and extraction defaults are shared across all three entry points.
+
+`io/adapters/intake.py` classifies content and safely expands bounded archives.
+`application/intake_execution.py` writes reusable inspection plans; `source_intake.py`
+routes recognised originals to the existing collectors. Saved results/workbooks
+require explicit import, and unsupported files remain inventory items. Container
+hash/member provenance is preserved. Inspection records file size/mtime; source
+publication records/verifies hashes. These checks serve different purposes.
+
+Upload metadata is per file, so chunk writes do not rewrite a growing folder
+manifest. Finalisation verifies a complete ordered batch before extraction can
+read it. Configured roots and managed directories constrain server-side reads,
+including imported source references and custom benchmark paths. See the
+[web guide](WEB_UI.md) for current limits, deployment and backup instructions.
