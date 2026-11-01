@@ -197,7 +197,7 @@ function App() {
   return (
     <>
       <div className="app" inert={expired}>
-        <aside className="sidebar">
+        <aside className="app-sidebar">
           <Link to="/" className="brand">
             <FileSearch /> EDF Evidence<span>Collector</span>
           </Link>

@@ -124,6 +124,20 @@ test("extract from a configured server folder, inspect original PDF and download
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await signIn(page);
+  const navigationAppearance = () =>
+    page
+      .getByRole("navigation", { name: "Main navigation" })
+      .evaluate((node) => {
+        const appearance = getComputedStyle(node.closest("aside")!);
+        return {
+          background: appearance.backgroundColor,
+          color: appearance.color,
+          padding: appearance.padding,
+          borderRadius: appearance.borderRadius,
+        };
+      });
+  const appearanceBeforePdf = await navigationAppearance();
+
   await page.getByRole("link", { name: "Build a pack", exact: true }).click();
   await page
     .getByLabel("Pack name", { exact: true })
@@ -196,6 +210,8 @@ test("extract from a configured server folder, inspect original PDF and download
     unblockArtifacts();
   }
   await expect(page.locator(".pdfViewer .page canvas").first()).toBeVisible();
+  await expect.poll(navigationAppearance).toEqual(appearanceBeforePdf);
+
   await page.getByRole("tab", { name: "Outputs", exact: true }).click();
   const download = page.waitForEvent("download");
   await page

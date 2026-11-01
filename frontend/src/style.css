@@ -133,7 +133,7 @@ h3 {
   grid-template-columns: 235px minmax(0, 1fr);
   min-height: 100vh;
 }
-.sidebar {
+.app-sidebar {
   background: #18354a;
   color: #edf5fa;
   padding: 2rem 1rem;
@@ -591,7 +591,7 @@ form > button + button {
   .app {
     display: block;
   }
-  .sidebar {
+  .app-sidebar {
     position: static;
     height: auto;
     padding: 1rem;
