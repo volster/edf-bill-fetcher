@@ -185,7 +185,9 @@ Run frontend commands from an activated Python environment. `npm run generate`
 regenerates committed OpenAPI/input types and requires that Python environment.
 Playwright needs `npx playwright install chromium` from `frontend/`; choose
 `EDF_BROWSER=firefox` or `webkit` and install that engine for the corresponding run.
-Tests use an isolated synthetic server and never personal evidence.
+Tests use an isolated synthetic server and never personal evidence. Container CI
+also exercises an uploaded scanned bill through real OCR, HTTP corrections, all
+report formats and byte-for-byte original preservation.
 
 For live development, start `edf-web` and `npm run dev --prefix frontend`.
 Vite proxies `/api` to port 8000; the production frontend is served by Python.

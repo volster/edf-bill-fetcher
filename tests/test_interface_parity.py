@@ -2,6 +2,7 @@
 
 import json
 from datetime import date, datetime, timezone
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -167,7 +168,10 @@ def test_desktop_worker_can_inspect_and_compare_without_web_dependencies(tmp_pat
     worker.run()
     assert outcomes[0].status == "complete"
     assert (directory / "Intake.xlsx").is_file()
-    assert any(row["kind"] == "pdf" for row in json.loads((directory / "intake.json").read_text()))
+    assert any(
+        row["kind"] == "pdf"
+        for row in json.loads((directory / "intake.json").read_text(encoding="utf-8"))
+    )
     first, result = baseline(tmp_path)
     second = tmp_path / "second.json"
     save_result(result, second, result_id="other")
@@ -189,7 +193,7 @@ def test_desktop_worker_can_inspect_and_compare_without_web_dependencies(tmp_pat
     worker.outcome_ready.connect(outcomes.append)
     worker.run()
     assert outcomes[0].status == "complete"
-    assert json.loads((output / "comparison.json").read_text()) == {
+    assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == {
         "added": [],
         "removed": [],
         "changed": [],
@@ -250,3 +254,123 @@ def test_cli_dispatches_optional_web_and_inspection_without_starting_qt(monkeypa
         monkeypatch.setattr(sys, "argv", ["main.py", option, "--help"])
         main()
         callback.assert_called_once_with(["--help"])
+
+
+@pytest.fixture
+def desktop(application, tmp_path):
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    from edf_bill_fetcher.ui.qt_app import EvidenceWindow
+    from tests.test_qt_desktop import wait_until
+
+    widget = EvidenceWindow(tmp_path / "preferences.json")
+    wait_until(application, lambda: not widget.extraction_readiness.checking)
+    yield widget
+    widget.close()
+    widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    application.processEvents()
+
+
+def test_desktop_complete_settings_round_trip_without_losing_overrides(desktop, monkeypatch):
+    import edf_bill_fetcher.ui.qt_configuration as configuration_module
+
+    values = {
+        "as_of": "2025-02-28",
+        "credit_interest_rate": 0.08,
+        "credit_hold_days": 30,
+        "fuel": "Electricity",
+        "ofgem_auto_carry": True,
+        "min_amount": 25,
+        "use_dedup": False,
+    }
+    dialog = Mock(result_config=values)
+    dialog.exec.return_value = QDialog.DialogCode.Accepted
+    factory = Mock(return_value=dialog)
+    monkeypatch.setattr(configuration_module, "ConfigurationDialog", factory)
+    desktop._advanced_settings()
+    config = desktop._configuration()
+    assert all(config[key] == value for key, value in values.items())
+    assert "as_of" not in factory.call_args.args[0]
+    desktop.save_settings()
+    desktop._extra_config = {}
+    desktop.load_settings()
+    assert desktop._configuration()["as_of"] == "2025-02-28"
+    assert desktop._configuration()["credit_interest_rate"] == 0.08
+    dialog.exec.return_value = QDialog.DialogCode.Rejected
+    before = desktop._configuration()
+    desktop._advanced_settings()
+    assert "as_of" in factory.call_args.args[0]
+    assert desktop._configuration() == before
+
+
+def test_desktop_comparison_requires_two_inputs_and_captures_an_isolated_job(
+    desktop, tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QFileDialog
+
+    old, result = baseline(tmp_path)
+    new = tmp_path / "later.json"
+    save_result(result, new, result_id="later")
+    jobs: list = []
+    monkeypatch.setattr(desktop, "_begin_job", jobs.append)
+    monkeypatch.setattr(desktop.review_page, "allow_leave", lambda: True)
+    chooser = Mock(side_effect=[("", ""), (str(old), ""), ("", ""), (str(old), ""), (str(new), "")])
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", chooser)
+    desktop._busy = True
+    desktop._compare_runs()
+    chooser.assert_not_called()
+    desktop._busy = False
+    desktop._compare_runs()
+    desktop._compare_runs()
+    assert not jobs
+    desktop._compare_runs()
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job.mode == "diff"
+    assert job.input_path == str(old)
+    assert job.other_path == str(new)
+    assert Path(job.directory).is_dir()
+    assert Path(job.directory) != old.parent
+    worker = RunWorker(job)
+    outcomes: list = []
+    worker.outcome_ready.connect(outcomes.append)
+    worker.run()
+    assert outcomes[0].status == "complete"
+    assert (Path(job.directory) / "comparison.json").is_file()
+
+
+def test_desktop_inspection_rejects_plans_and_uses_the_shared_inventory_worker(
+    desktop, tmp_path, monkeypatch
+):
+    jobs: list = []
+    feedback = Mock()
+    monkeypatch.setattr(desktop, "_begin_job", jobs.append)
+    monkeypatch.setattr(desktop, "_feedback", feedback)
+    desktop._inspect_sources()
+    assert not jobs
+    assert "at least one source" in feedback.call_args.args[0]
+    plan = tmp_path / "intake.json"
+    plan.write_text("[]", encoding="utf-8")
+    desktop.sources["intake_plan"].entry.setText(str(plan))
+    desktop._inspect_sources()
+    assert not jobs
+    assert "already inspected" in feedback.call_args.args[0]
+    desktop.sources["intake_plan"].entry.clear()
+    folder = mixed_folder(tmp_path / "mixed")
+    desktop.sources["auto_dir"].entry.setText(str(folder))
+    desktop._busy = True
+    desktop._inspect_sources()
+    assert not jobs
+    desktop._busy = False
+    desktop.inspect_button.click()
+    assert len(jobs) == 1
+    assert jobs[0].mode == "intake"
+    assert not jobs[0].formats
+    worker = RunWorker(jobs[0])
+    outcomes: list = []
+    worker.outcome_ready.connect(outcomes.append)
+    worker.run()
+    assert outcomes[0].status == "complete"
+    inventory = json.loads((Path(jobs[0].directory) / "intake.json").read_text(encoding="utf-8"))
+    assert sum(row["status"] == "ready" for row in inventory) == 3

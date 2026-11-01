@@ -399,7 +399,9 @@ def test_worker_cancel_failure_diff_and_saved_rerender(web):
     ).json()
     execute(store, queued["id"], {})
     assert store.get(queued["id"])["data"]["status"] == "complete"
-    assert json.loads((store.directory(queued) / "comparison.json").read_text()) == {
+    assert json.loads(
+        (store.directory(queued) / "comparison.json").read_text(encoding="utf-8")
+    ) == {
         "added": [],
         "removed": [],
         "changed": [],
@@ -538,15 +540,15 @@ def test_expired_sessions_and_limits_are_not_bypassed(web):
     )
 
 
-@pytest.mark.parametrize("mode", ["crash", "launch_failure", "shutdown"])
+@pytest.mark.parametrize("mode", ["crash", "launch_failure", "shutdown", "cancel"])
 def test_dispatcher_native_crashes_and_shutdown_never_report_success(tmp_path, monkeypatch, mode):
     import edf_bill_fetcher.web.api as api_module
 
     store = Store(tmp_path)
     job = store.create("job", {"status": "queued", "cancel": False})
     process = Mock(returncode=9)
-    process.poll.side_effect = [None, 9] if mode == "shutdown" else [9]
-    if mode == "shutdown":
+    process.poll.side_effect = [None, 9] if mode in {"shutdown", "cancel"} else [9]
+    if mode in {"shutdown", "cancel"}:
         process.wait.side_effect = [subprocess.TimeoutExpired("worker", 10), None]
     launch = Mock(
         side_effect=OSError("cannot start worker") if mode == "launch_failure" else None,
@@ -560,15 +562,17 @@ def test_dispatcher_native_crashes_and_shutdown_never_report_success(tmp_path, m
         status = store.get(job["id"])["data"]["status"]
         if mode == "shutdown" and status == "running":
             dispatcher.stop.set()
-        if status in {"interrupted", "failed"}:
+        if mode == "cancel" and status == "running":
+            store.patch(job["id"], cancel=True)
+        if status in {"interrupted", "failed", "cancelled"}:
             break
         time.sleep(0.02)
     dispatcher.stop.set()
     dispatcher.thread.join(3)
     assert store.get(job["id"])["data"]["status"] == (
-        "failed" if mode == "launch_failure" else "interrupted"
+        "failed" if mode == "launch_failure" else "cancelled" if mode == "cancel" else "interrupted"
     )
-    if mode == "shutdown":
+    if mode in {"shutdown", "cancel"}:
         process.kill.assert_called_once()
     assert not dispatcher.thread.is_alive()
     store.engine.dispose()
@@ -581,7 +585,7 @@ def test_server_startup_marks_old_running_jobs_interrupted_and_locks_workspace(t
     job = app.state.store.create("job", {"status": "running", "cancel": False})
     with TestClient(app):
         assert app.state.store.get(job["id"])["data"]["status"] == "interrupted"
-        assert json.loads((tmp_path / "roots.json").read_text()) == {}
+        assert json.loads((tmp_path / "roots.json").read_text(encoding="utf-8")) == {}
         second = create_app(tmp_path)
         with pytest.raises(Timeout), TestClient(second):
             pass
@@ -732,7 +736,7 @@ def test_shared_review_execution_matches_cli_and_web_and_preserves_inputs(web, t
     )
     cli_preview = load_result(tmp_path / "preview.json")
     assert str(cli_preview.summary.charges) == "230.00"
-    draft = json.loads(draft_file.read_text())
+    draft = json.loads(draft_file.read_text(encoding="utf-8"))
     assert preview_review(str(result_path), draft).summary == cli_preview.summary
     published = list((tmp_path / "outputs").glob("reviewed_*/result.json"))
     assert len(published) == 1
@@ -981,3 +985,229 @@ def test_unsafe_custom_analysis_resource_is_rejected_without_mutating_accepted_r
     assert failed["status"] == "failed"
     assert "inside a configured source folder" in failed["error"]
     assert load_result(store.directory(parent) / "result.json").summary == result.summary
+
+
+def test_busy_upload_returns_a_resumable_conflict_instead_of_an_internal_error(web, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from filelock import Timeout
+
+    import edf_bill_fetcher.web.api as api_module
+
+    client, _ = web
+    lock = MagicMock()
+    lock.__enter__.side_effect = Timeout("synthetic upload lock")
+    monkeypatch.setattr(api_module, "FileLock", lambda *args, **kwargs: lock)
+    response = client.get("/api/assets/synthetic/offset", params={"path": "bill.pdf"})
+    assert response.status_code == 409
+    assert response.headers["retry-after"] == "1"
+    assert "resume the same selection" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["saved", "unbundled", "changed", "missing", "forbidden", "collision", "existing_conflict"],
+)
+def test_rerender_preserves_relative_original_paths_and_never_substitutes_changed_copies(
+    tmp_path, case
+):
+    from edf_bill_fetcher.web.worker import copy_accepted_sources
+
+    source_root = tmp_path / "baseline"
+    source_root.mkdir()
+    original = tmp_path / "original.pdf"
+    contents = b"%PDF-1.7 synthetic source bytes"
+    original.write_bytes(contents)
+    relative = "Evidence.xlsx" if case == "collision" else "evidence_files/A - original.pdf"
+    metadata = {
+        "Source ID": "source-one",
+        "Attachment Name": "original.pdf",
+        "Original Filename": "original.pdf",
+        "Original Path": str(original),
+        "Content Hash": hashlib.sha256(contents).hexdigest(),
+    }
+    if case not in {"unbundled", "forbidden"}:
+        metadata["Saved Path"] = relative
+        if case != "missing":
+            saved = source_root / relative
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            saved.write_bytes(b"modified" if case == "changed" else contents)
+    result = snapshot(
+        [
+            {
+                "Date": "01/02/2024",
+                "Entry Type": "New Bill",
+                "Period Charge (£)": 100,
+                "Attachment Name": "original.pdf",
+                "Source ID": "source-one",
+            }
+        ],
+        {"source_manifest": {"source-one": metadata}},
+    )
+    output = tmp_path / "published"
+    output.mkdir()
+    if case == "existing_conflict":
+        conflict = output / relative
+        conflict.parent.mkdir(parents=True)
+        conflict.write_bytes(b"different source")
+    if case in {"collision", "existing_conflict"}:
+        with pytest.raises(ValueError, match="collid|Conflicting"):
+            copy_accepted_sources(result, source_root, output, lambda path: True)
+        return
+    paths, notes = copy_accepted_sources(
+        result, source_root, output, lambda path: case != "forbidden"
+    )
+    if case in {"changed", "missing", "forbidden"}:
+        assert not paths
+        assert notes
+        assert not list(output.rglob("*.pdf"))
+    else:
+        assert Path(paths["source-one"]).read_bytes() == contents
+        if case == "saved":
+            assert Path(paths["source-one"]).relative_to(output).as_posix() == relative
+        assert not notes
+    assert original.read_bytes() == contents
+    assert result.summary.charges == 100
+
+
+def test_intake_original_downloads_are_scoped_and_reject_changes_after_inspection(web, tmp_path):
+    client, store = web
+    job = store.create("job", {"status": "complete", "request": {"mode": "intake"}})
+    original = tmp_path / "bills" / "original.pdf"
+    original.write_bytes(b"%PDF-1.7 synthetic intake original")
+    outside = tmp_path / "unapproved.pdf"
+    outside.write_bytes(b"private bytes")
+    directory = store.directory(job)
+    (directory / "intake.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "original",
+                    "path": str(original),
+                    "size": original.stat().st_size,
+                    "mtime_ns": original.stat().st_mtime_ns,
+                },
+                {"id": "forbidden", "path": str(outside)},
+                {"id": "folder", "path": str(original.parent)},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    url = f"/api/jobs/{job['id']}/intake-source"
+    response = client.get(url, params={"item_id": "original"})
+    assert response.content == original.read_bytes()
+    assert response.headers["content-disposition"].startswith("attachment;")
+    for identity in ["forbidden", "folder", "missing"]:
+        assert client.get(url, params={"item_id": identity}).status_code == 404
+    original.write_bytes(b"Changed original")
+    assert client.get(url, params={"item_id": "original"}).status_code == 409
+
+
+@pytest.mark.parametrize(
+    "case", ["original", "saved", "excluded", "changed_saved", "missing", "forbidden", "no_hash"]
+)
+def test_single_original_lookup_checks_only_the_requested_identity(tmp_path, monkeypatch, case):
+    import edf_bill_fetcher.application.evidence_review as review_module
+
+    original = tmp_path / "original.pdf"
+    original.write_bytes(b"%PDF-1.7 source one")
+    saved = tmp_path / "evidence_files" / "original.pdf"
+    saved.parent.mkdir()
+    saved.write_bytes(b"changed" if case == "changed_saved" else original.read_bytes())
+    metadata = {
+        "Source ID": "one",
+        "Attachment Name": "original.pdf",
+        "Original Path": str(original),
+        "Content Hash": hashlib.sha256(original.read_bytes()).hexdigest(),
+    }
+    if case in {"saved", "changed_saved"}:
+        metadata["Saved Path"] = "evidence_files/original.pdf"
+    if case == "no_hash":
+        metadata.pop("Content Hash")
+    state: dict = {
+        "source_manifest": {
+            "one": metadata,
+            "unrelated": {"Original Path": str(tmp_path / "unrelated-private.pdf")},
+        }
+    }
+    if case == "excluded":
+        state = {
+            "review_excluded_source_manifest": {"one": metadata},
+            "review_source_paths": {"one": str(original)},
+        }
+    result = snapshot(
+        [{"Date": "01/02/2024", "Entry Type": "New Bill", "Period Charge (£)": 100}], state
+    )
+    if case == "missing":
+        original.unlink()
+    actual_hash = review_module.artifact_record
+    reads: list = []
+
+    def checked(path):
+        assert "unrelated-private" not in str(path)
+        reads.append(str(path))
+        return actual_hash(path)
+
+    monkeypatch.setattr(review_module, "artifact_record", checked)
+    value = review_module.resolve_review_source(
+        result, str(tmp_path), "one", allowed_source=lambda path: case != "forbidden"
+    )
+    if case in {"changed_saved", "missing", "forbidden", "no_hash"}:
+        assert value is None
+    else:
+        assert value is not None
+        assert Path(value).read_bytes() == original.read_bytes()
+    if case in {"forbidden", "no_hash"}:
+        assert not reads
+    assert review_module.resolve_review_source(result, str(tmp_path), "unknown") is None
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_existing_prototype_catalogue_is_adopted_only_when_compatible(tmp_path, valid):
+    import sqlite3
+
+    database = sqlite3.connect(tmp_path / "catalogue.sqlite")
+    columns = (
+        "id TEXT PRIMARY KEY, kind TEXT NOT NULL, revision INTEGER NOT NULL, data JSON NOT NULL"
+        if valid
+        else "unexpected TEXT"
+    )
+    database.execute("CREATE TABLE entries (" + columns + ")")
+    if valid:
+        database.execute(
+            "INSERT INTO entries VALUES (?,?,?,?)",
+            ("old-job", "job", 3, json.dumps({"status": "complete"})),
+        )
+    database.commit()
+    database.close()
+    if valid:
+        store = Store(tmp_path)
+        assert store.get("old-job")["revision"] == 3
+        assert store.get("old-job")["data"]["status"] == "complete"
+        store.engine.dispose()
+    else:
+        with pytest.raises(ValueError, match="Unrecognised catalogue schema"):
+            Store(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "auto"},
+        {"kind": "auto", "root_id": "root"},
+        {"kind": "auto", "root_id": "root", "relative": "x", "asset_id": "asset"},
+    ],
+)
+def test_ambiguous_source_locations_are_rejected(payload):
+    with pytest.raises(ValueError):
+        Source.model_validate(payload)
+
+
+def test_captured_report_sections_use_shared_keys_and_review_requires_imported_parent():
+    job = Job(mode="render", parent_id="parent", config={"report_sections": ["cover", "payment"]})
+    assert job.sections == ["cover", "payment"]
+    for sections in ["payment", [True]]:
+        with pytest.raises(ValueError, match="list of section keys"):
+            Job(mode="render", parent_id="parent", config={"report_sections": sections})
+    with pytest.raises(ValueError, match="Import the analysis"):
+        Job(mode="preview", input=Source(kind="result", asset_id="asset"), draft={})

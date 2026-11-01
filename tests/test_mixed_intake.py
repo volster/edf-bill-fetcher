@@ -217,3 +217,51 @@ def test_inspected_message_cannot_bypass_the_source_read_policy(tmp_path):
         assert not list(Path(engine._attachment_dir.name).rglob("*.eml"))
     finally:
         engine.cleanup()
+
+
+def test_intake_reports_missing_folders_and_renamed_pdf_previews(tmp_path):
+    from edf_bill_fetcher.io.adapters.intake import is_pdf_candidate
+
+    rows = list(discover(tmp_path / "missing", tmp_path / "staging"))
+    assert len(rows) == 1
+    assert rows[0]["status"] == "failed"
+    renamed = tmp_path / "renamed.dat"
+    renamed.write_bytes(bill("KI-10003", 100))
+    assert is_pdf_candidate(str(renamed))
+    assert not is_pdf_candidate(str(tmp_path / "missing.dat"))
+    renamed.write_bytes(b"unsupported content")
+    assert not is_pdf_candidate(str(renamed))
+
+
+def test_archive_expansion_handles_explicit_folders_and_cancellation(tmp_path):
+    from threading import Event
+
+    path = tmp_path / "input.zip"
+    with ZipFile(path, "w") as archive:
+        archive.writestr("folder/", b"")
+        archive.writestr("folder/bill.pdf", bill("KI-10003", 100))
+    rows = list(discover(path, tmp_path / "expanded"))
+    assert [row["status"] for row in rows] == ["container", "ready"]
+    cancel = Event()
+    pending = discover(path, tmp_path / "cancelled", cancelled=cancel.is_set)
+    assert next(pending)["status"] == "container"
+    cancel.set()
+    assert list(pending) == []
+    assert not list((tmp_path / "cancelled").rglob("*.pdf"))
+
+
+def test_archive_expansion_reports_insufficient_storage_without_publishing_members(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    import edf_bill_fetcher.io.adapters.intake as intake_module
+
+    path = tmp_path / "input.zip"
+    with ZipFile(path, "w") as archive:
+        archive.writestr("bill.pdf", bill("KI-10003", 100))
+    monkeypatch.setattr(intake_module.shutil, "disk_usage", lambda path: SimpleNamespace(free=0))
+    rows = list(discover(path, tmp_path / "expanded"))
+    assert rows[0]["status"] == "failed"
+    assert "Not enough free space" in rows[0]["detail"]
+    assert not list((tmp_path / "expanded").rglob("*.pdf"))

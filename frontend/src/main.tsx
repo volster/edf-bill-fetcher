@@ -2415,7 +2415,22 @@ function Diagnostics() {
   );
 }
 
-const router = createHashRouter([{ path: "*", element: <App /> }]);
+function WorkspaceError() {
+  return (
+    <main className="signin">
+      <h1>We couldn’t open this screen</h1>
+      <p>
+        Reload the workspace to try again. Saved runs and applied changes are
+        kept.
+      </p>
+      <button onClick={() => window.location.reload()}>Reload workspace</button>
+    </main>
+  );
+}
+
+const router = createHashRouter([
+  { path: "*", element: <App />, errorElement: <WorkspaceError /> },
+]);
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

@@ -127,20 +127,13 @@ export async function uploadAsset(
         ),
       );
     }
-    if (offset && digest.digest("hex") !== pending.sha256)
-      throw new Error(
-        "The selected file does not match the pending upload. Choose the original file or create a fresh source.",
-      );
     if (offset) {
-      digest.init();
-      for (let position = 0; position < offset; position += 4 * 1024 * 1024)
-        digest.update(
-          new Uint8Array(
-            await file
-              .slice(position, Math.min(offset, position + 4 * 1024 * 1024))
-              .arrayBuffer(),
-          ),
+      const prefixState = digest.save();
+      if (digest.digest("hex") !== pending.sha256)
+        throw new Error(
+          "The selected file does not match the pending upload. Choose the original file or create a fresh source.",
         );
+      digest.load(prefixState);
     }
     if (offset > file.size)
       throw new Error(

@@ -256,3 +256,52 @@ test("expired sessions keep unapplied record edits until reauthentication", asyn
     page.getByLabel("Period Charge (£)", { exact: true }),
   ).toHaveValue("66.25");
 });
+
+test("interrupted uploads reject a changed original and resume from the verified chunk", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.getByRole("link", { name: "Build a pack", exact: true }).click();
+  const buffer = Buffer.alloc(4 * 1024 * 1024 + 512, 120);
+  const file = {
+    name: "large-original.bin",
+    mimeType: "application/octet-stream",
+    buffer,
+  };
+  const selection = page.getByLabel("Choose files or ZIPs", { exact: true });
+  await selection.setInputFiles(file);
+  const offsets: number[] = [];
+  let interrupted = false;
+  await page.route("**/api/assets/*/content?*", async (route) => {
+    const offset = Number(
+      new URL(route.request().url()).searchParams.get("offset"),
+    );
+    offsets.push(offset);
+    if (offset > 0 && !interrupted) {
+      interrupted = true;
+      await route.abort("failed");
+    } else await route.continue();
+  });
+  await page
+    .getByRole("button", { name: "Upload and add", exact: true })
+    .click();
+  const resume = page.getByRole("button", {
+    name: "Resume pending upload",
+    exact: true,
+  });
+  await expect(resume).toBeEnabled();
+  const changed = Buffer.from(buffer);
+  changed[0] = 121;
+  await selection.setInputFiles({ ...file, buffer: changed });
+  await resume.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "does not match the pending upload",
+  );
+  await selection.setInputFiles(file);
+  await resume.click();
+  await expect(page.getByText("Source ready", { exact: true })).toBeVisible();
+  expect(offsets).toEqual([0, 4 * 1024 * 1024, 4 * 1024 * 1024]);
+  expect(
+    await page.evaluate(() => sessionStorage.getItem("edf-upload")),
+  ).toBeNull();
+});

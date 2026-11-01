@@ -23,7 +23,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from filelock import FileLock
+from filelock import FileLock, Timeout
 from sqlalchemy.exc import IntegrityError
 
 from edf_bill_fetcher.application.evidence_review import (
@@ -233,6 +233,16 @@ def create_app(
     @app.exception_handler(KeyError)
     async def missing(request, error):
         return JSONResponse({"detail": "Item not found"}, status_code=404)
+
+    @app.exception_handler(Timeout)
+    async def busy_upload(request, error):
+        return JSONResponse(
+            {
+                "detail": "This upload is busy verifying or saving another request; wait and resume the same selection"
+            },
+            status_code=409,
+            headers={"Retry-After": "1"},
+        )
 
     @app.exception_handler(FileNotFoundError)
     async def unavailable(request, error):
