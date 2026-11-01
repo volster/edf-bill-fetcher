@@ -1321,7 +1321,7 @@ def create_appendix_full_evidence(
 ) -> dict[str, int]:
     """Create Full Evidence Table appendix, plus an optional Filtered Records sub-table.
 
-    Phase 2.3 — DOCX full-evidence appendix cap: ``table_row_cap`` controls
+    DOCX full-evidence appendix cap: ``table_row_cap`` controls
     how many rows render to the DOCX table.  When the dataset has more
     rows, the table only renders the *first* ``table_row_cap`` records
     (sorted chronologically by date) and emits a "see Excel workbook"
@@ -1358,7 +1358,7 @@ def create_appendix_full_evidence(
     total_rows = int(len(df_sorted))
     truncated = bool(total_rows > table_row_cap)
     if truncated:
-        # Phase 2.3 — DOCX row cap.  Render only the first N rows
+        # DOCX row cap.  Render only the first N rows
         # chronologically, and add a note above the table directing
         # the ombudsman to the Excel workbook for the complete
         # dataset.  The note is plain prose so it's tool-agnostic
@@ -1463,7 +1463,7 @@ def create_appendix_full_evidence(
 
         doc.add_page_break()
 
-    # Phase 2.3 — caller-facing render metadata.  Tests pin this
+    # Caller-facing render metadata.  Tests pin this
     # dict to confirm the cap path fires on large fixtures and
     # stays silent on smaller ones.
     rendered_rows = int(len(rows_to_render))

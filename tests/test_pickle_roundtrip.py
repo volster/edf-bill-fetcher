@@ -1,6 +1,6 @@
-"""Phase 1.4 — round-trip the restricted-pickle loader with real engine data.
+"""Round-trip the restricted-pickle loader with real engine data.
 
-Phase 1.4 acceptance criteria: pickling a real ``EvidenceEngine``
+Pickling a real ``EvidenceEngine``
 populated with a list-of-dicts ``records`` reconstruction succeeds
 through ``_safe_pickle_load``. If a pickle stream requires a class
 that isn't on ``_RestrictedUnpickler._SAFE_CLASSES``, the loader
@@ -180,7 +180,7 @@ def _build_engine() -> EvidenceEngine:
 
 
 class TestPickleRoundTrip:
-    """Phase 1.4 — the restricted pickle loader is fit for purpose."""
+    """The restricted pickle loader is fit for purpose."""
 
     def test_records_roundtrip(self, tmp_dir: Path) -> None:
         """An engine object pickles to disk and round-trips intact through

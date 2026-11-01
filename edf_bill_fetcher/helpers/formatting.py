@@ -1,7 +1,6 @@
 """Cell-formatting helpers shared across the evidence workbook.
 
-These helpers were extracted from ``edf_collector.py`` as part of the
-modularization refactor (Task 3).  They cover:
+Includes:
 
 - ``apply_currency_format`` / ``apply_int_format`` — coerce a cell's
   value to a numeric type and pin its ``number_format`` so Excel
@@ -9,8 +8,7 @@ modularization refactor (Task 3).  They cover:
 - ``parse_amount`` — tolerant monetary-value parser (None/empty/unparseable
   values coerce to 0.0).
 - ``account_number_matches`` — token-aware account-number filter
-  predicate (Phase 1.3) that replaces the naive "digits substring"
-  check.
+  predicate that requires a complete matching digit token.
 """
 
 from __future__ import annotations
@@ -61,7 +59,7 @@ def parse_amount(v: object) -> float:
 def account_number_matches(acc_filter: str, text: str) -> bool:
     r"""Return True when ``acc_filter`` appears as a standalone digit run in ``text``.
 
-    Phase 1.3: replaces the old "is the digits substring contained anywhere"
+    Replaces the old "is the digits substring contained anywhere"
     check, which false-matched an unrelated longer string (invoice number,
     meter serial, phone number) when the configured account number happened
     to be a subset of those digits.

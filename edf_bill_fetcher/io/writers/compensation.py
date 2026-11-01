@@ -1,4 +1,4 @@
-"""Indicative Compensation evidence sheet writer (Wave 6d, Task 7).
+"""Indicative Compensation evidence sheet writer.
 
 Renders the claims produced by
 :func:`edf_bill_fetcher.processors.compensation.estimate_compensation`

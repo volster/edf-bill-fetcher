@@ -15,20 +15,15 @@ from edf_bill_fetcher.models.config import ConfigDict
 
 @pytest.fixture
 def workdir() -> Path:
-    # Skirt pytest's ``tmp_path`` fixture on this Windows host —
-    # the sandboxed TEMP directory is read-only on this developer's
-    # machine, so any fixture that depends on pytest's tmp-path
-    # machinery error-cascades at setup.  Derive our own scratch
-    # dir from ``USERPROFILE`` (or ``/tmp`` as a Linux fallback)
-    # plus an explicit pid-locked name, so cross-test isolation is
-    # still preserved.
+    # Use a writable directory under USERPROFILE, or /tmp on Linux,
+    # with a process-specific name for isolation.
     scratch = Path(os.environ.get("USERPROFILE", "/tmp")) / f".edf_dedup_scratch_{os.getpid()}"
     scratch.mkdir(parents=True, exist_ok=True)
     return scratch
 
 
 def _price_records() -> list[dict]:
-    """Records spanning all the user-stated source precedences
+    """Records spanning all the configured source precedences
     sharing a single billing period (Period To=01/04/2024).
     One row (the Email Body) is given a different amount so we
     can verify Pass 1's *exact* (`_dedup_date`, Amount) tuple
@@ -186,7 +181,7 @@ class TestCrossSourceDedup:
         ]
         # The four £100 collisions collapse to ONE kept row;
         # the £99.99 row survives as a separate kept row.
-        # Per the user-stated precedence HTM > Local PDF >
+        # With the configured precedence HTM > Local PDF >
         # PST, the kept survivor for £100 must be HTM.
         kept_100 = [
             s

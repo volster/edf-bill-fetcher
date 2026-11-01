@@ -1,8 +1,4 @@
-"""Tests that detector functions are importable from the processors.detection submodule.
-
-All tests are RED at Phase 0 because ``edf_bill_fetcher.processors.detection``
-does not yet exist.
-"""
+"""Tests that detector functions are importable from the processors.detection submodule."""
 
 from __future__ import annotations
 

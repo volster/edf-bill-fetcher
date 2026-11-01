@@ -1,9 +1,6 @@
-"""EvidenceEngine — orchestrator for PDF/PST/text extraction.
+"""EvidenceEngine: orchestration for PDF, email and text extraction.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 7 — Phase 6). The class plus its 7 tightly-coupled helper functions
-live here; backward-compat re-exports remain in ``edf_collector.py`` until
-Task 8 strips them.
+Coordinates source adapters, parsing, evidence provenance and extraction warnings.
 """
 
 from __future__ import annotations
@@ -32,7 +29,7 @@ from bs4 import BeautifulSoup
 from bs4.dammit import EncodingDetector, UnicodeDammit
 from openpyxl.styles import Side as _Side
 
-# Canonical homes (per Tasks 1-6 organization)
+# Shared helpers and parsers
 from edf_bill_fetcher.helpers.date_utils import (
     parse_to_display_date,
 )
@@ -101,18 +98,6 @@ _fallback_period_to = fallback_period_to
 _fallback_amount = fallback_amount
 
 
-# detect_sap_dump moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); see re-export block at top of file.
-
-# _sap_to_iso_date helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# _parse_sap_csv helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
-
-# parse_sap_contract_history moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); see re-export block at top of file.
-
-# parse_sap_meter_read_history moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); see re-export block at top of file.
-
-# parse_sap_financial_transactions moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); see re-export block at top of file.
-
 _SAP_DEBT_MGMT_FLAG_VALUE = "Installment Plan Item"
 _SAP_MIN_CLUSTER_SIZE = 4
 _SAP_MATCH_DAY_BANDS = ((0, 50), (3, 25), (14, 5))
@@ -138,9 +123,6 @@ _ACCOUNT_BALANCE_LANG_RE = re.compile(
     r"(?:account balance|running balance|balance brought forward)"
 )
 _BILL_INDICATORS_RE = re.compile(r"(?:kwh|standing charge|tariff)")
-
-
-# _parse_amount_for_event helper moved to ``edf_bill_fetcher.processors.sap_parsers`` during the modularization refactor (Task 4 — Phase 3); private helper.
 
 
 # --- PST/OST helpers ---
@@ -179,7 +161,7 @@ class EvidenceEngine:
         self.error_log: list[str] = []
         self.seen_pdf_hashes: set[str] = set()
         self.lock = threading.Lock()
-        # Stream P1: SAP CSV-in-PDF data dumps are detected in
+        # SAP CSV-in-PDF data dumps are detected in
         # ``process_pdf_file`` and routed to three row accumulators
         # (contract / meter_read / financial). ``export_to_excel``
         # reads these through ``sap_rows={...}`` to render the
@@ -187,7 +169,7 @@ class EvidenceEngine:
         self.sap_contract_rows: list[dict] = []
         self.sap_meter_rows: list[dict] = []
         self.sap_financial_rows: list[dict] = []
-        # Stream P5: reverse-lookup from attachment name to absolute source
+        # Reverse lookup from attachment name to absolute source
         # path, populated by process_pdf_file so save_evidence_files can copy
         # the originals into evidence_files/. Pre-fix this attribute was never
         # set — getattr(engine, "source_paths", {}) always returned {} and
@@ -205,7 +187,7 @@ class EvidenceEngine:
         self._intake_current: dict = {}
 
     # ------------------------------------------------------------------
-    # Pickle support — Phase 1.4
+    # Pickle support
     # ------------------------------------------------------------------
     def __getstate__(self) -> dict:
         """Return a picklable snapshot of the engine data.
@@ -378,11 +360,11 @@ class EvidenceEngine:
                 r_type = label
                 break
 
-        # Multi-regex fallback chain (Stream P3): when the canonical
+        # Multi-regex fallback chain: when the canonical
         # extractors miss, try the cover-block / loose-token fallbacks so
         # the analyser tabs see fewer N/A entries. Each fallback records
         # the regex that produced the value into ``_regex_trace`` so the
-        # Source Excerpt column (Stream P3 / Task 6) can show a parse trace.
+        # Source Excerpt column can show a parse trace.
         regex_trace: list[str] = []
         inv_num = fields.get("inv_num")
         if not inv_num or inv_num == "N/A":
@@ -466,7 +448,7 @@ class EvidenceEngine:
             if acc and not account_number_matches(acc, text):
                 return False
 
-        # Multi-regex fallback chain (Stream P3): borrow the same patterns
+        # Multi-regex fallback chain: borrow the same patterns
         # used in ``_process_new_invoice`` to recover fields the canonical
         # extractor missed.
         regex_trace: list[str] = []
@@ -1075,7 +1057,7 @@ class EvidenceEngine:
             if not attachment_name:
                 attachment_name = detail_label or ""
 
-            # Stream P5: record the absolute source path so save_evidence_files
+            # Record the absolute source path so save_evidence_files
             # can copy the original into evidence_files/. Multi-slice merged
             # PDFs all point at the same path under per-slice attachment names
             # — the contract is "open the parent PDF", true regardless of
@@ -1175,7 +1157,7 @@ class EvidenceEngine:
                                 }
                             )
                         continue
-                    # Stream P1: SAP CSV-in-PDF data dumps (Contract /
+                    # SAP CSV-in-PDF data dumps (Contract /
                     # Meter-Read / Financial-Transactions). Detected
                     # via the header-row marker; routed to dedicated
                     # parsers and stored on the engine's SAP-row

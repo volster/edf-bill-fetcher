@@ -599,7 +599,7 @@ def test_server_cli_creates_accounts_and_captures_explicit_roots(tmp_path, monke
     from edf_bill_fetcher.web.launch import main
 
     monkeypatch.setenv("EDF_WEB_PASSWORD", PASSWORD)
-    main(["--data", str(tmp_path / "data"), "--init-user", "dad"])
+    main(["--data", str(tmp_path / "data"), "--init-user", "reviewer"])
     server = Mock()
     monkeypatch.setattr(uvicorn, "run", server)
     main(

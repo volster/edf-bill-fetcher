@@ -1,4 +1,4 @@
-"""Phase 2.2 — O(N) dedup-fall-back regression.
+"""O(N) dedup-fall-back regression.
 
 The legacy implementation in ``edf_collector.export_to_excel``
 walked the no-period rows and re-scanned the entire kept-frame
@@ -122,7 +122,7 @@ def _legacy_run_dedup_pass2(df: pd.DataFrame) -> pd.Series:
 
 
 class TestDedupPass2:
-    """Phase 2.2 — O(N) bucket-based dedup correctness + speed."""
+    """O(N) bucket-based dedup correctness + speed."""
 
     def test_dedup_fallback_correctness(self) -> None:
         """Pin the user-facing contract:

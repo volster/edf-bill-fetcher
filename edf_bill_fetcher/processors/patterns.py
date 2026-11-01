@@ -1,7 +1,6 @@
 """Pre-compiled regex patterns used by the amount/reading/period extractors and the multi-regex fallback chain.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 3).  This module is the single source of truth for:
+Includes:
 
 - ``AMOUNT_PATTERNS`` — ordered list of (name, regex) tuples for amount
   extraction; the classifier drives off the *name*, not the list index.
@@ -199,11 +198,11 @@ _CREDIT_NUMBER_RE = re.compile(r"Credit note number:\s*(KCR-[\w-]+)", re.IGNOREC
 # Credit-note accounts can use the same rendering as KI invoices.
 _CREDIT_TOTAL_RE = re.compile(r"Total credits for this bill\s+£([\d,]+\.\d{2})", re.IGNORECASE)
 
-# Multi-regex fallback chain (Task 5) -- used when `_INV_NUMBER_RE` /
+# Multi-regex fallback chain -- used when `_INV_NUMBER_RE` /
 # `_BILLING_PERIOD_RE` / `_PERIOD_CHARGE_RE` miss. Each fallback returns a
 # (value, regex_name) tuple so the Source Excerpt column can show a
 # regex-trace ("inv_num via _COVER_BLOCK_INV_RE; period via ...") per spec
-# Stream P3.
+#
 _COVER_BLOCK_INV_RE = re.compile(r"Invoice\s+number:?\s*([A-Z0-9-]+)", re.IGNORECASE)
 _COVER_BLOCK_PERIOD_RE = re.compile(
     r"(?:for\s+the\s+period|covering|bill\s+period)\s*[:]?\s*"

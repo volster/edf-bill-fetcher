@@ -1,9 +1,4 @@
-"""Tests for the planned io/writers submodule extraction.
-
-Each test targets a planned writer submodule under
-``edf_bill_fetcher.io.writers``.  All tests are RED at Phase 0
-because those submodules do not yet exist.
-"""
+"""Tests for the public workbook writer modules and their input contracts."""
 
 from __future__ import annotations
 

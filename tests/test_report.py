@@ -264,7 +264,7 @@ class TestFormatters:
         assert fmt_money(45.67) == docx_fmt_money(45.67) == "£45.67"
 
     def test_fmt_helpers_single_source_of_truth(self):
-        """fmt_money/fmt_number live once in helpers.formatting (C-1/C-4).
+        """Fmt_money/fmt_number live once in helpers.formatting (C-1/C-4).
 
         The PDF surface imports the shared implementation directly; the
         DOCX surface keeps a thin adapter that only overrides the
@@ -548,7 +548,7 @@ class TestOFGEMComparison:
         surface as an explicit ``CAP DATA UNAVAILABLE`` row rather than
         being silently dropped from the comparison table.
 
-        This is the Phase 1.1 invariant — a reviewer must be able to see
+        The invariant is: a reviewer must be able to see
         *which* quarters in the data the project couldn't benchmark, not
         just the ones it could.
         """

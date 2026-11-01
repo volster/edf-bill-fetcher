@@ -137,7 +137,7 @@ def write_payment_analysis_sheet(ws, dfc, *, payload=None):
         _text(ws, r, 5, str(row.get("Details", ""))[:60], fill_hex=bg, wrap=True)
 
     # Chart - Payment amounts over time.
-    # Phase-2 portability fix: the previous layout anchored the
+    # Portability: the previous layout anchored the
     # chart at ``cell(row+2, column H)`` (column 8) which sat past
     # the visible data table (columns A-E) **and** the user's
     # roughly-default Excel viewport (about seven column-units

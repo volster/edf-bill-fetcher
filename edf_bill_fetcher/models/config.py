@@ -77,7 +77,7 @@ class ConfigDict(TypedDict, total=False):
     # --- Report section selection (PDF/DOCX) --------------------------------
     report_sections: list[str]
 
-    # --- Compensation estimator (Wave 6d) -----------------------------------
+    # --- Compensation estimator -----------------------------------
     as_of: str
     credit_hold_days: int
     credit_interest_rate: float

@@ -1,4 +1,4 @@
-"""Tests for the multi-regex fallback chain (Task 5)."""
+"""Tests for the multi-regex fallback chain."""
 
 from edf_bill_fetcher.collectors.engine import (
     _fallback_amount,
@@ -13,7 +13,7 @@ from edf_bill_fetcher.processors.patterns import (
     _FALLBACK_INV_RE,
 )
 
-_TEXT_NEW_INVOICE = """Solland Farm
+_TEXT_NEW_INVOICE = """Example Premises
 Invoice number: KI-31105244-0001-3
 Account number: A-31105244
 Date issued: 14 May 2024

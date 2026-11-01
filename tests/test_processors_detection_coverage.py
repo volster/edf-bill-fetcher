@@ -141,8 +141,8 @@ def test_detect_back_billing_returns_empty_for_short_period_invoices() -> None:
 def test_detect_back_billing_flags_late_billed_invoice() -> None:
     """A bill issued >365 days after its Period From triggers the back-billing branch.
 
-    Under the legally correct SLC 7A / Electricity Act 1989 s.84B rule
-    (post Task 3), back-billing is gated on ``Date - Period From > 365 days`` —
+    In this detector's nominal 365-day assessment window
+    back-billing is gated on ``Date - Period From > 365 days`` —
     i.e. the bill charges for consumption supplied more than 12 months before
     the bill Date. A long period span alone is NOT back-billing.
     """
@@ -208,7 +208,7 @@ def test_reversal_match_returns_false_for_empty_evidence_df() -> None:
 
 
 def test_reversal_match_returns_false_when_no_entry_type_column() -> None:
-    """evidence_df without 'Entry Type' column returns False."""
+    """Evidence_df without 'Entry Type' column returns False."""
     df = pd.DataFrame(
         [{"Amount (£)": 100.0, "Period From": "2024-01-01", "Period To": "2024-12-31"}]
     )

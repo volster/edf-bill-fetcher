@@ -1,9 +1,4 @@
-"""Evidence sheet + summary sheet writers for the EDF workbook.
-
-Extracted from ``edf_bill_fetcher/writers/__init__.py`` (Phase 5A) during the
-modularization refactor.  These two functions are the heart of the Evidence tab
-and Summary tab.
-"""
+"""Write the evidence and summary sheets of the EDF workbook."""
 
 from __future__ import annotations
 

@@ -1,8 +1,4 @@
-"""Tests that SAP parser functions are importable from the processors.sap_parsers submodule.
-
-All tests are RED at Phase 0 because ``edf_bill_fetcher.processors.sap_parsers``
-does not yet exist.
-"""
+"""Tests that SAP parser functions are importable from the processors.sap_parsers submodule."""
 
 from __future__ import annotations
 

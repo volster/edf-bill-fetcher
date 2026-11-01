@@ -1,4 +1,4 @@
-"""TDD tests for the Potential Billing Adjustments report section (Wave 6d, Task 8).
+"""TDD tests for the Potential Billing Adjustments report section.
 
 Pins the four wiring points for the new section:
   1. ``REPORT_SECTIONS`` (pdf_report) gains the ``compensation`` key.

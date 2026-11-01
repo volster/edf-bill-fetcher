@@ -1,4 +1,4 @@
-"""Unit tests for ``handle_cluster_unmatched`` (Task 8 — Decision 4).
+"""Unit tests for ``handle_cluster_unmatched`` (Decision 4).
 
 When a SAP back-billing event's Posting Date falls inside a known
 back-billing cluster's posting-date window but no invoice in that

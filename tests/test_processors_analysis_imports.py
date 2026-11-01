@@ -1,8 +1,4 @@
-"""Tests that analysis helper functions are importable from the processors.analysis submodule.
-
-All tests are RED at Phase 0 because ``edf_bill_fetcher.processors.analysis``
-does not yet exist.
-"""
+"""Tests that analysis helper functions are importable from the processors.analysis submodule."""
 
 from __future__ import annotations
 

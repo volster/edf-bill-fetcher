@@ -1,7 +1,6 @@
 """Branch/error-path coverage for ``EvidenceEngine`` and its module helpers.
 
-Targets the lines missed by the existing engine test suite (Wave 2 —
-``collectors/engine.py`` was at 54% before this file). Coverage focuses on:
+Targets the lines missed by the existing engine test suite (``collectors/engine.py`` was at 54% before this file). Coverage focuses on:
 
 * module-level guards: the ``pypff`` ImportError fallback
 * the PST attachment filename walker's malformed-record-set tolerance

@@ -1,8 +1,6 @@
-"""SAP sheet writers — extracted from writers/__init__.py (Phase 5D).
+"""Write SAP contract, meter-reading, transaction and back-billing sheets.
 
-Contains the writers for SAP contract history / meter readings / financial
-transactions / back-billing sheets, plus the helpers (_write_sap_header_row,
-_bb_invoice_value) and SAP color constants they depend on.
+Includes shared SAP sheet-layout helpers and colour constants.
 """
 
 from __future__ import annotations
@@ -728,7 +726,7 @@ def write_sap_contract_history_sheet(
     return _write_sap_contract_history_sheet_impl(ws, rows, account)
 
 
-# ---- write_sap_back_billing_position_sheet (Task 8) ----
+# ---- write_sap_back_billing_position_sheet ----
 def write_sap_back_billing_position_sheet(
     wb: openpyxl.Workbook,
     result: dict,

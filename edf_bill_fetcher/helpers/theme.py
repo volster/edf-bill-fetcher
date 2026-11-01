@@ -1,7 +1,6 @@
 """Theme constants — colours, fills, and borders used across the evidence workbook.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 2).  This module is the single source of truth for:
+Includes:
 
 - EDF brand colours (``EDF_NAVY``, ``EDF_ORANGE``, ``EDF_OFFWHITE``)
 - Greyscale helpers (``MEDIUM_GREY``, ``DUP_GREY``)

@@ -1,22 +1,8 @@
-"""Phase-2 follow-on — explicit precedence test for the dedup sort.
+"""Tests for the configured source-precedence order used in duplicate selection.
 
-The user-stated precedence order is:
-    ``html summary > pdf's from folder > pdf from pst > email body``.
-
-Translated to the project's source labels this is::
-
-    "HTM Account History"      (precedence 0)
-    "Local PDF Folder"          (precedence 1)
-    "PST PDF Attachment"         (precedence 2)
-    "Email Body" / "Email Body (RTF)"  (precedence 3)
-
-``edf_collector.export_to_excel`` uses the precedence map so the
-*richer* source wins when two records collide on the same
-amount/date.  This test pins the order at the unit level without
-booting the full Excel export pipeline — it imports the
-``_SOURCE_PRECEDENCE`` mapping (extracted into module-level
-constant in this commit) and asserts the explicit integer values
-match the user-stated order.
+HTM account history has priority 0, local PDFs priority 1, email PDF attachments
+priority 2, and email bodies priority 3. Explicit tie buckets cover equivalent
+source types. These tests check the mapping independently of workbook export.
 """
 
 from __future__ import annotations
@@ -35,18 +21,14 @@ class TestSourcePrecedence:
         assert _SOURCE_PRECEDENCE["HTM Account History"] == 0
 
     def test_local_pdf_folder_beats_pst_attachment(self) -> None:
-        # Per the user's standing instruction: the original
-        # local PDF is the source-of-truth invoice, so a collision
-        # between the local PDF and a PST attachment should keep
-        # the local PDF and drop the PST attachment.
+        # Local PDFs have higher priority than email attachments when
+        # selecting between otherwise equivalent source observations.
         local_pri = _SOURCE_PRECEDENCE["Local PDF Folder"]
         pst_pri = _SOURCE_PRECEDENCE["PST PDF Attachment"]
         assert local_pri < pst_pri, (
             f"Local PDF Folder precedence {local_pri} must be "
             f"lower (higher priority) than PST PDF Attachment "
-            f"precedence {pst_pri} per the user's "
-            f"'html summary > pdf's from folder > pdf from pst' "
-            f"order."
+            f"precedence {pst_pri} under the configured source order."
         )
         # And the specific values are stable at 1 and 2.
         assert local_pri == 1
@@ -65,12 +47,12 @@ class TestSourcePrecedence:
             )
 
     def test_precedence_is_strictly_descending(self) -> None:
-        # The user-stated order is total, so no two distinct
+        # The configured order is total, so no two distinct
         # sources should share a precedence number -- that would
         # silently undefined which one wins a tie.  Email Body
         # and Email Body (RTF) are the explicit exception: both
         # are alternative representations of the same
-        # mail.body pipeline and the user has accepted that
+        # mail.body pipeline and
         # they'll be tie-broken by the secondary sort key
         # (date, then invoice number).  Local PDF Folder and
         # Statement Reconciliation also share precedence 1:

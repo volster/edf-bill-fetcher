@@ -1,8 +1,6 @@
-"""Forecast / anomaly detection helpers for the evidence workbook.
+"""Forecast and anomaly detection helpers for the evidence workbook.
 
-Extracted from ``edf_collector.py`` as part of the modularization refactor
-(Task 5 — Phase 4).  Pure-pandas helpers with optional ``statsmodels``
-fallback for Holt-Winters exponential smoothing.
+Uses pandas with optional statsmodels support for Holt-Winters smoothing.
 """
 
 from __future__ import annotations

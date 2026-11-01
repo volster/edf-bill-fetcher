@@ -1,10 +1,6 @@
 """Save referenced evidence files and build a themed DOCX bundle index.
 
-Canonical home: ``edf_bill_fetcher.io.writers.evidence_bundle`` (absorbed
-from the top-level ``evidence_bundle.py`` during the shim-removal wave).
-
-This module implements Stream P5 of the SAP/Evidence Bundle design
-(``scratch/superpowers/specs/2026-07-16-sap-dumps-and-evidence-bundle-design.md``):
+Provides evidence copying and index generation:
 
 - ``save_evidence_files(expr_df, source_paths, dest_dir)`` copies into a flat
   ``dest_dir`` every file the Evidence Report references via its
@@ -34,7 +30,7 @@ from edf_bill_fetcher.helpers.artifacts import atomic_output, write_json
 from edf_bill_fetcher.io.persistence.run_manifest import artifact_record
 
 # ---------------------------------------------------------------------------
-# Section inference (Stream P5, spec §7.3)
+# Section inference
 # ---------------------------------------------------------------------------
 
 # Section labels -- order matters when we render the bundle.
@@ -52,7 +48,7 @@ SECTION_LABELS: dict[str, str] = {
 # group is the upper-case letter identifying the section.
 _PREFIX_RE = re.compile(r"^([A-G])\d*\s*-\s*", re.IGNORECASE)
 
-# Content-fingerprint regexes (Stream P5, spec §7.3 layer 2): recognisable
+# Content-fingerprint regexes: recognisable
 # EDF dump filenames without prefix.
 _METER_HISTORY_RE = re.compile(r"Meter-?Read-?History", re.IGNORECASE)
 _FINANCIAL_TX_RE = re.compile(r"Financial-?Transactions", re.IGNORECASE)
