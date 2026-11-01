@@ -160,11 +160,14 @@ def test_action_stays_visible_and_source_steps_adapt(window, application, width,
         assert window.pages.currentIndex() == index
         assert window.run_button.isVisible()
         page = window.pages.currentWidget()
-        wait_until(application, lambda page=page: page.horizontalScrollBar().maximum() == 0)
-        assert page.horizontalScrollBar().maximum() == 0, (
-            f"Page {index} at window width {width}: viewport={page.viewport().width()}, "
-            f"minimum content width={page.widget().minimumSizeHint().width()}"
-        )
+        try:
+            wait_until(application, lambda page=page: page.horizontalScrollBar().maximum() == 0)
+        except AssertionError:
+            pytest.fail(
+                f"Page {index} at window width {width}: viewport={page.viewport().width()}, "
+                f"minimum content width={page.widget().minimumSizeHint().width()}"
+            )
+        assert page.horizontalScrollBar().maximum() == 0
     window._navigate(2)
     window.run_button.click()
     assert window.pages.currentIndex() == 0

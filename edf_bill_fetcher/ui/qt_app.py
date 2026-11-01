@@ -320,7 +320,7 @@ class EvidenceWindow(QMainWindow):
             self.sources[key] = field
             self.source_card.body.addWidget(field)
         self.source_card.body.addStretch()
-        self.inspect_button = button("Inspect selected evidence first", self._inspect_sources)
+        self.inspect_button = button("Inspect evidence…", self._inspect_sources)
         self.source_card.body.addWidget(self.inspect_button)
         self.output_card = Card(
             "02  Save & export", "An Excel workbook is included in every evidence pack."

@@ -110,6 +110,11 @@ jobs:
         run: >-
           "${{ steps.python.outputs.python-path }}" ci_runtime.py
 
+      - name: Check desktop layout under native font metrics
+        run: >-
+          python -m pytest tests/test_qt_desktop.py::test_action_stays_visible_and_source_steps_adapt
+          --no-cov -q --junitxml=.ci-diagnostics/layout.xml
+
       - name: Run tests with coverage (Linux)
         if: runner.os == 'Linux'
         run: python ci_pytest.py

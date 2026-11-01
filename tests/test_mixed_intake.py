@@ -129,7 +129,10 @@ def test_archive_traversal_is_rejected_before_any_member_is_written(tmp_path, na
     path = tmp_path / "bad.zip"
     with ZipFile(path, "w") as archive:
         archive.writestr("good.pdf", bill("KI-10003", 20))
-        archive.writestr(name, b"outside")
+        info = ZipInfo(name)
+        # Preserve wire spelling even where ZipInfo normalises local separators.
+        info.filename = name
+        archive.writestr(info, b"outside")
     rows = list(discover(path, tmp_path / "expanded"))
     assert rows[0]["status"] == "failed"
     assert not (tmp_path / "expanded").exists()
@@ -265,3 +268,15 @@ def test_archive_expansion_reports_insufficient_storage_without_publishing_membe
     assert rows[0]["status"] == "failed"
     assert "Not enough free space" in rows[0]["detail"]
     assert not list((tmp_path / "expanded").rglob("*.pdf"))
+
+
+def test_raw_zip_name_is_validated_before_windows_normalisation():
+    from edf_bill_fetcher.io.adapters.intake import validate_zip_members
+
+    info = ZipInfo("folder/secret.pdf")
+    info.orig_filename = "folder\\secret.pdf"
+    with pytest.raises(ValueError, match="Unsafe ZIP"):
+        validate_zip_members([info])
+    info.orig_filename = "secret\x00.pdf"
+    with pytest.raises(ValueError, match="Unsafe ZIP"):
+        validate_zip_members([info])

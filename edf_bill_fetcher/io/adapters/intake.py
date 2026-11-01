@@ -45,7 +45,14 @@ def detect(name: str, header: bytes) -> str:
 
 def _member(name: str) -> PurePosixPath:
     path = PurePosixPath(name)
-    if not name or path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name:
+    if (
+        not name
+        or path.is_absolute()
+        or ".." in path.parts
+        or "\\" in name
+        or ":" in name
+        or any(ord(char) < 32 for char in name)
+    ):
         raise ValueError("Unsafe ZIP member path")
     return path
 
@@ -55,7 +62,7 @@ def validate_zip_members(members: list[ZipInfo]) -> set[str]:
     files: set[str] = set()
     directories: set[str] = set()
     for info in members:
-        member = _member(info.filename)
+        member = _member(info.orig_filename)
         portable = member.as_posix().casefold()
         if (info.external_attr >> 16) & 0o170000 == 0o120000 or info.flag_bits & 1:
             raise ValueError("Encrypted or symbolic-link ZIP members require manual handling")
