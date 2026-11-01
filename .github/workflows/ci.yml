@@ -261,7 +261,7 @@ jobs:
       - name: Install native and Python dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng build-essential autoconf automake libtool pkg-config
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng build-essential autoconf automake libtool pkg-config libgl1 libegl1 libopengl0 libxkbcommon0 libdbus-1-3 libfontconfig1 fonts-dejavu-core
           python -m pip install -c .github/ci-constraints.txt -e ".[dev,msg,web]"
       - name: Exercise both database backends and catalogue upgrades
         run: python -m pytest tests/test_web_accounts.py --no-cov --junitxml=postgres-results.xml
