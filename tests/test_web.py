@@ -146,12 +146,12 @@ def test_authentication_csrf_origin_logout_and_expiry(web):
         == 401
     )
     with pytest.raises(ValueError):
-        store.user("weak", "short")
+        store.user("empty", "")
 
 
 def test_signin_rate_is_bounded(web):
     client, _ = web
-    for _ in range(9):
+    for _ in range(10):
         assert (
             client.post(
                 "/api/login", json={"username": "reviewer", "password": "wrong"}
@@ -529,7 +529,12 @@ def test_expired_sessions_and_limits_are_not_bypassed(web):
         == 413
     )
     session = store.session(client.cookies["edf_session"])
-    store.replace(session, {**session["data"], "expires": 0})
+    from sqlalchemy import update
+
+    from edf_bill_fetcher.web.schema import sessions
+
+    with store.engine.begin() as connection:
+        connection.execute(update(sessions).where(sessions.c.id == session["id"]).values(expires=0))
     assert client.get("/api/jobs").status_code == 401
     assert not allowed_path(store, {}, str(store.root.parent / "private.pdf"))
     assert allowed_path(store, {}, str(store.root / "job"))
@@ -600,6 +605,8 @@ def test_server_cli_creates_accounts_and_captures_explicit_roots(tmp_path, monke
 
     monkeypatch.setenv("EDF_WEB_PASSWORD", PASSWORD)
     main(["--data", str(tmp_path / "data"), "--init-user", "reviewer"])
+    evidence = tmp_path / "bills"
+    evidence.mkdir()
     server = Mock()
     monkeypatch.setattr(uvicorn, "run", server)
     main(
@@ -611,7 +618,7 @@ def test_server_cli_creates_accounts_and_captures_explicit_roots(tmp_path, monke
             "--port",
             "8765",
             "--source-root",
-            "bills=" + str(tmp_path),
+            "bills=" + str(evidence),
         ]
     )
     assert server.call_args.kwargs["host"] == "0.0.0.0"
@@ -620,8 +627,8 @@ def test_server_cli_creates_accounts_and_captures_explicit_roots(tmp_path, monke
     for spec in ["missing-equals", "same=" + str(tmp_path / "missing")]:
         with pytest.raises(SystemExit):
             main(["--data", str(tmp_path / "data"), "--source-root", spec])
-    with pytest.raises(SystemExit):
-        main(["--data", str(tmp_path / "empty")])
+    main(["--data", str(tmp_path / "empty")])
+    assert server.call_args.args[0].state.store.root == (tmp_path / "empty").resolve()
 
 
 def test_worker_module_launch_executes_durable_queued_request(tmp_path):
@@ -995,10 +1002,11 @@ def test_busy_upload_returns_a_resumable_conflict_instead_of_an_internal_error(w
     import edf_bill_fetcher.web.api as api_module
 
     client, _ = web
+    asset = client.post("/api/assets", json={"kind": "pdf_dir", "name": "Input"}).json()
     lock = MagicMock()
     lock.__enter__.side_effect = Timeout("synthetic upload lock")
     monkeypatch.setattr(api_module, "FileLock", lambda *args, **kwargs: lock)
-    response = client.get("/api/assets/synthetic/offset", params={"path": "bill.pdf"})
+    response = client.get(f"/api/assets/{asset['id']}/offset", params={"path": "bill.pdf"})
     assert response.status_code == 409
     assert response.headers["retry-after"] == "1"
     assert "resume the same selection" in response.json()["detail"]

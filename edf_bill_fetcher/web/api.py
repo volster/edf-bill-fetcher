@@ -1,10 +1,12 @@
-"""Authenticated household web transport over the existing evidence application."""
+"""Workspace-authorized web transport over the shared evidence application."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import json
+import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -24,6 +26,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from filelock import FileLock, Timeout
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from edf_bill_fetcher.application.evidence_review import (
@@ -44,7 +47,23 @@ from edf_bill_fetcher.models.config import ConfigDict
 from edf_bill_fetcher.models.defaults import EXTRACTION_DEFAULTS
 from edf_bill_fetcher.models.report_sections import REPORT_SECTIONS
 from edf_bill_fetcher.models.snapshot_adapter import to_snapshot_json
-from edf_bill_fetcher.web.contracts import Asset, CompleteFile, Credentials, Edit, Job, Seal
+from edf_bill_fetcher.web.accounts import Forbidden
+from edf_bill_fetcher.web.contracts import (
+    AccountSetup,
+    Asset,
+    CompleteFile,
+    Credentials,
+    Edit,
+    Job,
+    Membership,
+    NewUser,
+    PasswordReset,
+    RenameWorkspace,
+    RootGrant,
+    Seal,
+    UserPermissions,
+    Workspace,
+)
 from edf_bill_fetcher.web.storage import Conflict, Store, contained
 from edf_bill_fetcher.web.worker import source_path
 
@@ -60,13 +79,11 @@ def public_artifact(path: Path, directory: Path) -> bool:
     )
 
 
-def allowed_path(store: Store, roots: dict[str, str], path: str) -> bool:
+def allowed_path(
+    store: Store, roots: dict[str, str], path: str, workspace_id: str | None = None
+) -> bool:
     """Authorize resolved paths, including symlink targets, before reading originals."""
-    resolved = Path(path).resolve()
-    return any(
-        resolved == root or resolved.is_relative_to(root)
-        for root in (store.root, *(Path(value).resolve() for value in roots.values()))
-    )
+    return store.path_allowed(workspace_id, path, roots)
 
 
 def review_state(store: Store, identity: str) -> tuple[dict, ReviewSession]:
@@ -82,6 +99,7 @@ def review_state(store: Store, identity: str) -> tuple[dict, ReviewSession]:
                 "draft",
                 {"history": [session.payload()], "position": 0, "actor": ""},
                 "draft-" + identity,
+                workspace_id=job.get("workspace_id"),
             )
         except IntegrityError:
             draft = store.get("draft-" + identity, "draft")
@@ -150,6 +168,7 @@ class Dispatcher:
                                 "--job",
                                 job["id"],
                             ],
+                            env={**os.environ, "EDF_DATABASE_URL": self.store.database_url},
                             stdout=output,
                             stderr=subprocess.STDOUT,
                         )
@@ -189,20 +208,43 @@ def create_app(
     roots: dict[str, str] | None = None,
     start_worker: bool = True,
     secure_cookie: bool = False,
+    database_url: str | None = None,
 ) -> FastAPI:
-    """Create an independently installable source/Docker server with one shared workspace."""
-    store = Store(directory)
+    """Serve isolated workspaces with explicit membership on every evidence endpoint."""
+    store = Store(directory, database_url)
+    store.import_sqlite()
     roots = {key: str(Path(value).resolve()) for key, value in (roots or {}).items()}
-    attempts: dict[str, deque] = defaultdict(deque)
+    if any(
+        Path(value).is_relative_to(store.root) or store.root.is_relative_to(Path(value))
+        for value in roots.values()
+    ):
+        store.engine.dispose()
+        raise ValueError(
+            "Server source folders must be separate from the app data directory; choose an evidence subfolder outside it"
+        )
+    attempts: dict[tuple[str, str], deque] = defaultdict(deque)
     login_lock = threading.Lock()
     dispatcher = Dispatcher(store)
     server_lock = FileLock(str(store.root / "server.lock"), timeout=0)
 
     @asynccontextmanager
     async def lifespan(app):
+        store.accounts.ensure_bootstrap(roots)
         if start_worker:
             server_lock.acquire()
+            database_lease = None
+            lease_held = False
             try:
+                if store.engine.dialect.name == "postgresql":
+                    database_lease = store.engine.connect()
+                    lease_held = bool(
+                        database_lease.execute(
+                            text("SELECT pg_try_advisory_lock(713754823)")
+                        ).scalar()
+                    )
+                    database_lease.commit()
+                    if not lease_held:
+                        raise Conflict("Another app server is already using this database")
                 (store.root / "roots.json").write_text(json.dumps(roots), encoding="utf-8")
                 for job in store.list("job"):
                     if job["data"]["status"] == "running":
@@ -215,10 +257,20 @@ def create_app(
                 yield
             finally:
                 dispatcher.stop.set()
-                await asyncio.to_thread(dispatcher.thread.join, 15)
+                if dispatcher.thread.ident is not None:
+                    await asyncio.to_thread(dispatcher.thread.join, 15)
+                if database_lease is not None:
+                    if lease_held:
+                        database_lease.execute(text("SELECT pg_advisory_unlock(713754823)"))
+                        database_lease.commit()
+                    database_lease.close()
                 server_lock.release()
+                store.engine.dispose()
         else:
-            yield
+            try:
+                yield
+            finally:
+                store.engine.dispose()
 
     app = FastAPI(
         title="EDF Evidence Collector",
@@ -254,11 +306,17 @@ def create_app(
     @app.exception_handler(ValueError)
     async def invalid(request, error):
         return JSONResponse(
-            {"detail": str(error)}, status_code=409 if isinstance(error, Conflict) else 400
+            {"detail": str(error)},
+            status_code=403
+            if isinstance(error, Forbidden)
+            else 409
+            if isinstance(error, Conflict)
+            else 400,
         )
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: Any) -> Any:
+        path = request.scope["path"]
         received = 0
         original_receive = request.receive
 
@@ -278,7 +336,7 @@ def create_app(
             return JSONResponse(
                 {"detail": "Send uploads in chunks of at most 8 MiB"}, status_code=413
             )
-        if request.url.path.startswith("/api/"):
+        if path.startswith("/api/"):
             origin = request.headers.get("origin")
             if (
                 request.method not in {"GET", "HEAD"}
@@ -286,7 +344,7 @@ def create_app(
                 and urlparse(origin).netloc != request.headers.get("host")
             ):
                 return JSONResponse({"detail": "Cross-origin write denied"}, status_code=403)
-            if request.url.path != "/api/login":
+            if path != "/api/login":
                 try:
                     session = store.session(request.cookies.get("edf_session", ""))
                 except KeyError:
@@ -301,6 +359,46 @@ def create_app(
                         {"detail": "Session verification failed; reload before saving"},
                         status_code=403,
                     )
+                if session["user"]["setup_required"] and path not in {
+                    "/api/session",
+                    "/api/logout",
+                    "/api/account/setup",
+                }:
+                    return JSONResponse(
+                        {"detail": "Complete account setup before opening a workspace"},
+                        status_code=428,
+                    )
+                if path.startswith(("/api/jobs", "/api/assets", "/api/roots")):
+                    try:
+                        match = re.fullmatch(r"/api/(jobs|assets)/([^/]+)(?:/.*)?", path)
+                        selected = request.headers.get("x-workspace-id")
+                        if match:
+                            try:
+                                contained(store.root, match[2] + ".access")
+                            except ValueError as error:
+                                return JSONResponse({"detail": str(error)}, status_code=400)
+                            entry = store.get(match[2], "job" if match[1] == "jobs" else "asset")
+                            workspace_id = entry["workspace_id"]
+                            if selected and selected != workspace_id:
+                                raise KeyError("Object not found in this workspace")
+                        else:
+                            available = store.accounts.workspaces(session["user"]["id"])
+                            workspace_id = selected or (available[0]["id"] if available else None)
+                        if workspace_id is None:
+                            return JSONResponse(
+                                {"detail": "Create a workspace to get started"}, status_code=403
+                            )
+                        role = store.accounts.require(
+                            session["user"]["id"],
+                            workspace_id,
+                            "viewer" if request.method in {"GET", "HEAD"} else "editor",
+                        )
+                        request.state.workspace_id = workspace_id
+                        request.state.role = role
+                    except KeyError:
+                        return JSONResponse({"detail": "Object not found"}, status_code=404)
+                    except Forbidden as error:
+                        return JSONResponse({"detail": str(error)}, status_code=403)
         response = await call_next(request)
         if received > MAX_CHUNK:
             return JSONResponse(
@@ -315,7 +413,7 @@ def create_app(
     def login(credentials: Credentials, request: Request) -> Any:
         client = request.client.host if request.client else "local"
         with login_lock:
-            recent = attempts[client]
+            recent = attempts[(client, credentials.username.strip().casefold())]
             while recent and recent[0] < time.monotonic() - 60:
                 recent.popleft()
             if len(recent) >= 10:
@@ -325,7 +423,9 @@ def create_app(
             token, csrf = store.login(credentials.username, credentials.password)
         except ValueError as error:
             raise HTTPException(401, str(error)) from error
-        response = JSONResponse({"username": credentials.username, "csrf": csrf})
+        with login_lock:
+            recent.clear()
+        response = JSONResponse(profile(store.session(token)))
         response.set_cookie(
             "edf_session",
             token,
@@ -338,18 +438,130 @@ def create_app(
 
     @app.get("/api/session")
     def session(request: Request) -> Any:
-        return {
-            "username": request.state.session["data"]["name"],
-            "csrf": request.state.session["data"]["csrf"],
-        }
+        return profile(request.state.session)
 
     @app.post("/api/logout")
     def logout(request: Request) -> Any:
         entry = request.state.session
-        store.replace(entry, {**entry["data"], "expires": 0})
+        store.accounts.logout(entry["id"])
         response = JSONResponse({"signed_out": True})
         response.delete_cookie("edf_session")
         return response
+
+    def profile(session):
+        return {**session["user"], "csrf": session["data"]["csrf"]}
+
+    def administrator(request: Request) -> Any:
+        if not request.state.session["user"]["is_admin"]:
+            raise Forbidden("Server administrator access is required")
+        return request.state.session["user"]["id"]
+
+    def workspace_roots(request: Request) -> Any:
+        return store.accounts.roots(request.state.workspace_id, roots)
+
+    @app.post("/api/account/setup")
+    def setup_account(values: AccountSetup, request: Request) -> Any:
+        user = request.state.session["user"]
+        store.accounts.credentials(
+            user["id"], values.username, values.password, current_password=values.current_password
+        )
+        token, _ = store.login(values.username, values.password)
+        response = JSONResponse(profile(store.session(token)))
+        response.set_cookie(
+            "edf_session",
+            token,
+            httponly=True,
+            samesite="strict",
+            secure=secure_cookie,
+            max_age=43200,
+        )
+        return response
+
+    @app.get("/api/users")
+    def users(request: Request) -> Any:
+        administrator(request)
+        return store.accounts.users()
+
+    @app.post("/api/users", status_code=201)
+    def create_user(values: NewUser, request: Request) -> Any:
+        actor = administrator(request)
+        return store.user(
+            values.username,
+            values.password,
+            is_admin=values.is_admin,
+            setup_required=True,
+            actor=actor,
+        )
+
+    @app.put("/api/users/{identity}")
+    def update_user(identity: str, values: UserPermissions, request: Request) -> dict:
+        return store.accounts.update_user(administrator(request), identity, **values.model_dump())
+
+    @app.post("/api/users/{identity}/password")
+    def reset_password(identity: str, values: PasswordReset, request: Request) -> Any:
+        actor = administrator(request)
+        user = store.accounts.user(identity)
+        store.accounts.credentials(
+            identity, user["username"], values.password, reset=True, actor=actor
+        )
+        return {"reset": True}
+
+    @app.get("/api/workspaces")
+    def workspaces(request: Request) -> Any:
+        return store.accounts.workspaces(request.state.session["user"]["id"])
+
+    @app.post("/api/workspaces", status_code=201)
+    def create_workspace(values: Workspace, request: Request) -> Any:
+        return store.accounts.create_workspace(request.state.session["user"]["id"], values.name)
+
+    @app.get("/api/workspaces/{identity}")
+    def workspace_details(identity: str, request: Request) -> Any:
+        return store.accounts.workspace_details(
+            request.state.session["user"]["id"], identity, roots
+        )
+
+    @app.put("/api/workspaces/{identity}")
+    def rename_workspace(identity: str, values: RenameWorkspace, request: Request) -> Any:
+        store.accounts.rename_workspace(
+            request.state.session["user"]["id"], identity, values.name, values.revision
+        )
+        return {"saved": True}
+
+    @app.get("/api/workspaces/{identity}/members")
+    def members(identity: str, request: Request) -> Any:
+        return store.accounts.members(request.state.session["user"]["id"], identity)
+
+    @app.put("/api/workspaces/{identity}/members")
+    def member(identity: str, values: Membership, request: Request) -> Any:
+        store.accounts.member(
+            request.state.session["user"]["id"],
+            identity,
+            values.username,
+            values.role,
+            values.revision,
+        )
+        return {"saved": True}
+
+    @app.get("/api/workspaces/{identity}/audit")
+    def audit(identity: str, request: Request, after: int = 0) -> Any:
+        return store.accounts.history(request.state.session["user"]["id"], identity, after)
+
+    @app.get("/api/server-roots")
+    def server_roots(request: Request) -> Any:
+        administrator(request)
+        return list(roots)
+
+    @app.get("/api/workspaces/{identity}/roots")
+    def assigned_roots(identity: str, request: Request) -> Any:
+        store.accounts.require(request.state.session["user"]["id"], identity)
+        return list(store.accounts.roots(identity, roots))
+
+    @app.put("/api/workspaces/{identity}/roots")
+    def assign_roots(identity: str, values: RootGrant, request: Request) -> Any:
+        store.accounts.grant_roots(
+            administrator(request), identity, values.labels, roots, values.revision
+        )
+        return {"saved": True}
 
     @app.get("/api/schema")
     def schema():
@@ -371,18 +583,20 @@ def create_app(
         return app.openapi()
 
     @app.get("/api/diagnostics")
-    def diagnostics():
+    def diagnostics(request: Request) -> Any:
+        administrator(request)
         return diagnostic_report()
 
     @app.get("/api/roots")
-    def root_list():
-        return [{"id": key, "name": key} for key in roots]
+    def root_list(request: Request) -> Any:
+        return [{"id": key, "name": key} for key in workspace_roots(request)]
 
     @app.get("/api/roots/{identity}/browse")
-    def browse(identity: str, relative: str = "") -> Any:
-        if identity not in roots:
+    def browse(identity: str, request: Request, relative: str = "") -> Any:
+        permitted = workspace_roots(request)
+        if identity not in permitted:
             raise KeyError(identity)
-        root = Path(roots[identity])
+        root = Path(permitted[identity])
         path = contained(root, relative) if relative not in {"", ".", "./"} else root
         return [
             {
@@ -397,19 +611,22 @@ def create_app(
         ]
 
     @app.get("/api/assets")
-    def assets():
+    def assets(request: Request) -> Any:
         return [
             {
                 **entry,
                 "data": {key: value for key, value in entry["data"].items() if key != "files"},
             }
-            for entry in store.list("asset")
+            for entry in store.list("asset", request.state.workspace_id)
         ]
 
     @app.post("/api/assets", status_code=201)
-    def create_asset(asset: Asset) -> Any:
+    def create_asset(asset: Asset, request: Request) -> Any:
         return store.create(
-            "asset", {**asset.model_dump(), "sealed": False, "files": [], "file_count": 0}
+            "asset",
+            {**asset.model_dump(), "sealed": False, "files": [], "file_count": 0},
+            workspace_id=request.state.workspace_id,
+            actor_id=request.state.session["user"]["id"],
         )
 
     def upload_record(asset: dict, path: str) -> dict:
@@ -422,7 +639,12 @@ def create_app(
             count = asset["data"].get("file_count", 0)
             if count >= 100_000:
                 raise HTTPException(413, "Folder exceeds the 100,000-file limit") from None
-            entry = store.create("upload_file", {"path": canonical, "complete": False}, identity)
+            entry = store.create(
+                "upload_file",
+                {"path": canonical, "complete": False},
+                identity,
+                workspace_id=asset["workspace_id"],
+            )
             store.replace(asset, {**asset["data"], "file_count": count + 1})
             return entry
 
@@ -527,17 +749,30 @@ def create_app(
             return store.replace(asset, {**asset["data"], "files": files, "sealed": True})
 
     @app.get("/api/jobs")
-    def jobs():
-        return store.list("job")
+    def jobs(request: Request) -> Any:
+        return store.list("job", request.state.workspace_id)
 
     @app.post("/api/jobs", status_code=202)
     def submit(job: Job, request: Request) -> Any:
+        workspace_id = request.state.workspace_id
+        permitted = workspace_roots(request)
+
+        def same_workspace(identity, kind):
+            entry = store.get(identity, kind)
+            if entry["workspace_id"] != workspace_id:
+                raise KeyError("Input not found in this workspace")
+            return entry
+
         for source in [*job.sources, *([job.input] if job.input else [])]:
-            source_path(store, source, roots)
+            if source.asset_id:
+                same_workspace(source.asset_id, "asset")
+            if source.intake_id:
+                same_workspace(source.intake_id, "job")
+            source_path(store, source, permitted)
         if job.parent_id:
-            store.get(job.parent_id, "job")
+            same_workspace(job.parent_id, "job")
         if job.other_id:
-            store.get(job.other_id, "job")
+            same_workspace(job.other_id, "job")
         return store.create(
             "job",
             {
@@ -545,9 +780,12 @@ def create_app(
                 "status": "queued",
                 "cancel": False,
                 "actor": request.state.session["data"]["name"],
+                "actor_id": request.state.session["user"]["id"],
                 "created": time.time(),
                 "error": None,
             },
+            workspace_id=workspace_id,
+            actor_id=request.state.session["user"]["id"],
         )
 
     @app.get("/api/jobs/{identity}")
@@ -555,7 +793,7 @@ def create_app(
         return store.get(identity, "job")
 
     @app.post("/api/jobs/{identity}/cancel")
-    def cancel(identity: str) -> Any:
+    def cancel(identity: str, request: Request) -> Any:
         job = store.get(identity, "job")
         status = job["data"]["status"]
         return store.replace(
@@ -565,6 +803,8 @@ def create_app(
                 "cancel": True,
                 "status": "cancelled" if status == "queued" else status,
             },
+            actor_id=request.state.session["user"]["id"],
+            action="job.cancel_requested",
         )
 
     @app.get("/api/jobs/{identity}/events")
@@ -578,6 +818,11 @@ def create_app(
         async def stream():
             nonlocal cursor
             while not await request.is_disconnected():
+                try:
+                    active = store.session(request.cookies.get("edf_session", ""))
+                    store.accounts.require(active["user"]["id"], request.state.workspace_id)
+                except (KeyError, Forbidden):
+                    break
                 batch = store.events(identity, cursor)
                 for value in batch:
                     cursor = value["sequence"]
@@ -631,13 +876,15 @@ def create_app(
         }
 
     @app.get("/api/jobs/{identity}/intake-source")
-    def intake_source(identity: str, item_id: str) -> Any:
+    def intake_source(identity: str, item_id: str, request: Request) -> Any:
         directory = store.directory(store.get(identity, "job"))
         rows = json.loads((directory / "intake.json").read_text(encoding="utf-8"))
         item = next((row for row in rows if row["id"] == item_id), None)
         if (
             item is None
-            or not allowed_path(store, roots, item["path"])
+            or not allowed_path(
+                store, workspace_roots(request), item["path"], request.state.workspace_id
+            )
             or not Path(item["path"]).is_file()
         ):
             raise KeyError(item_id)
@@ -704,17 +951,20 @@ def create_app(
                 "position": journal.position,
                 "actor": request.state.session["data"]["name"],
             },
+            actor_id=request.state.session["user"]["id"],
         )
         return present_review(saved, session)
 
     @app.get("/api/jobs/{identity}/sources")
-    def sources(identity: str) -> Any:
+    def sources(identity: str, request: Request) -> Any:
         job = store.get(identity, "job")
         result = load_result(store.directory(job) / "result.json")
         view = build_evidence_review(
             result,
             str(store.directory(job)),
-            allowed_source=lambda path: allowed_path(store, roots, path),
+            allowed_source=lambda path: allowed_path(
+                store, workspace_roots(request), path, request.state.workspace_id
+            ),
         )
         return [
             {
@@ -737,13 +987,15 @@ def create_app(
         ]
 
     @app.get("/api/jobs/{identity}/source")
-    def source(identity: str, source_id: str) -> Any:
+    def source(identity: str, source_id: str, request: Request) -> Any:
         directory = store.directory(store.get(identity, "job"))
         resolved = resolve_review_source(
             load_result(directory / "result.json"),
             str(directory),
             source_id,
-            allowed_source=lambda path: allowed_path(store, roots, path),
+            allowed_source=lambda path: allowed_path(
+                store, workspace_roots(request), path, request.state.workspace_id
+            ),
         )
         if resolved is None:
             raise KeyError(source_id)

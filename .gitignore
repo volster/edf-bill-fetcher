@@ -67,6 +67,7 @@ coverage.xml
 # packaged resource and must stay tracked.
 /data/
 /web-data/
+/backups/
 node_modules/
 frontend/dist/
 playwright-report/

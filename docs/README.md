@@ -8,6 +8,9 @@ downloads track `how-its-going` and may have different controls or features.
 
 ## Using the app
 
+[Web accounts, sharing and database administration](WEB_ADMINISTRATION.md) covers
+first login, workspace roles, account recovery, PostgreSQL upgrades and backups.
+
 | Guide | What it covers |
 | --- | --- |
 | [User guide](USER_GUIDE.md) | Build a pack, inspect evidence, correct records in the app or Excel, and regenerate outputs. |

@@ -21,6 +21,68 @@
 body {
   margin: 0;
 }
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.setup {
+  max-width: 640px;
+  padding: 2rem;
+  margin: 3rem auto;
+}
+.workspace-picker {
+  color: #edf5fa;
+  font-size: 0.85rem;
+}
+.workspace-picker select {
+  font-size: 0.85rem;
+}
+.access-notice {
+  padding: 0.8rem 1rem;
+  background: #e3f1f3;
+  border-radius: 7px;
+}
+.member-row {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.member-row strong {
+  flex: 1;
+}
+.role-guide {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.5rem 1rem;
+}
+.role-guide dt {
+  font-weight: 700;
+}
+.role-guide dd {
+  margin: 0;
+}
+.account-form form,
+.panel > form {
+  max-width: 600px;
+}
+.audit-list {
+  list-style: none;
+  padding: 0;
+}
+.audit-list li {
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.audit-list pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+}
 button,
 input,
 select,
@@ -142,6 +204,7 @@ h3 {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow-y: auto;
 }
 .brand {
   font-weight: 750;

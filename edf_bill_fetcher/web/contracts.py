@@ -94,6 +94,59 @@ class Credentials(Contract):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class AccountSetup(Credentials):
+    """Choose credentials during setup, or verify the current password for later changes."""
+
+    current_password: str | None = Field(default=None, max_length=1024)
+
+
+class NewUser(Credentials):
+    """Administrator-created accounts complete setup after their first sign-in."""
+
+    is_admin: bool = False
+
+
+class UserPermissions(Contract):
+    """Account activation and server privileges use optimistic revisions."""
+
+    revision: int = Field(ge=0)
+    active: bool
+    is_admin: bool
+
+
+class PasswordReset(Contract):
+    """Temporary credentials chosen by an administrator."""
+
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class Workspace(Contract):
+    """A named workspace, created privately by its owner."""
+
+    name: str = Field(min_length=1, max_length=120)
+
+
+class RenameWorkspace(Workspace):
+    """A name change tied to the latest workspace revision."""
+
+    revision: int = Field(ge=0)
+
+
+class Membership(Contract):
+    """An explicit account grant, role change or removal."""
+
+    username: str = Field(min_length=1, max_length=100)
+    role: Literal["owner", "editor", "viewer"] | None
+    revision: int = Field(ge=0)
+
+
+class RootGrant(Contract):
+    """Configured server-folder labels granted to one workspace."""
+
+    labels: list[str] = Field(max_length=1000)
+    revision: int = Field(ge=0)
+
+
 class Asset(Contract):
     """Named upload collection, finalized before extraction may read it."""
 

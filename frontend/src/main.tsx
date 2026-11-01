@@ -1,5 +1,14 @@
-import { StrictMode, Suspense, lazy, useEffect, useRef, useState } from "react";
+import {
+  StrictMode,
+  Suspense,
+  lazy,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import {
   createHashRouter,
   RouterProvider,
@@ -35,6 +44,8 @@ import {
   setCsrf,
   terminal,
   uploadAsset,
+  uploadStorageKey,
+  setWorkspace,
   type Claim,
   type Context,
   type Credit,
@@ -49,6 +60,15 @@ import {
 import { EvidenceTable, Value } from "./values";
 import "./style.css";
 import { IntakePanel, type IntakeSummary } from "./intake";
+import {
+  Access,
+  AccountForm,
+  WorkspaceSettings,
+  Users,
+  useCanEdit,
+  type Account,
+  type WorkspaceInfo,
+} from "./accounts";
 
 const Pdf = lazy(() => import("./pdf"));
 const queryClient = new QueryClient({
@@ -102,11 +122,7 @@ const loginSchema = z.object({
   username: z.string().min(1, "Enter your username"),
   password: z.string().min(1, "Enter your password"),
 });
-function SignIn({
-  onSuccess,
-}: {
-  onSuccess: (value: { username: string; csrf: string }) => void;
-}) {
+function SignIn({ onSuccess }: { onSuccess: (value: Account) => void }) {
   const [error, setError] = useState<unknown>();
   const {
     register,
@@ -125,10 +141,21 @@ function SignIn({
         Sign in to collect bills, review original documents and build your
         complaint pack.
       </p>
+      <p className="muted">
+        New installation? Sign in with <strong>admin / admin</strong>, then
+        choose your own account credentials.
+      </p>
       <form
         onSubmit={handleSubmit(async (values) => {
           try {
-            onSuccess(await api("/login", values));
+            await api<Account>("/login", values);
+            try {
+              onSuccess(await api<Account>("/session"));
+            } catch {
+              throw new Error(
+                "The browser did not keep the sign-in cookie. If secure cookies are enabled, open the server over HTTPS.",
+              );
+            }
           } catch (error) {
             setError(error);
           }
@@ -158,19 +185,98 @@ function SignIn({
 }
 
 function App() {
-  const [account, setAccount] = useState<{
-      username: string;
-      csrf: string;
-    } | null>(null),
+  const [account, setAccount] = useState<Account | null>(null),
     [loaded, setLoaded] = useState(false),
     [expired, setExpired] = useState(false);
+  const [workspaceId, setWorkspaceId] = useState("");
+  const navigate = useNavigate();
+  const workspaces = useQuery({
+    queryKey: ["workspaces", account?.id],
+    queryFn: () => api<WorkspaceInfo[]>("/workspaces"),
+    enabled: !!account && !account.setup_required,
+    refetchInterval: 5000,
+  });
+  const currentWorkspace =
+    workspaces.data?.find((value) => value.id === workspaceId) ||
+    workspaces.data?.find(
+      (value) =>
+        value.id === sessionStorage.getItem(`edf-workspace:${account?.id}`),
+    ) ||
+    workspaces.data?.[0] ||
+    null;
+  const previousAccess = useRef("");
+  useLayoutEffect(() => {
+    if (!account || workspaces.isPending) return;
+    const identity = `${account?.id || ""}/${currentWorkspace?.id || ""}`;
+    if (previousAccess.current && previousAccess.current !== identity) {
+      void queryClient.cancelQueries({
+        predicate: (query) => query.queryKey[0] !== "workspaces",
+      });
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] !== "workspaces",
+      });
+      navigate("/", { replace: true });
+    }
+    previousAccess.current = identity;
+  }, [account?.id, currentWorkspace?.id, workspaces.isPending, navigate]);
+  setWorkspace(currentWorkspace?.id || "", account?.id || "");
+  function signedIn(value: Account) {
+    setCsrf(value.csrf);
+    setAccount(value);
+    setExpired(false);
+  }
+  async function signOut() {
+    try {
+      await api("/logout", {});
+    } catch {
+      /* Expired sessions can still be cleared locally. */
+    }
+    setCsrf("");
+    queryClient.clear();
+    setAccount(null);
+    setWorkspaceId("");
+  }
+  function chooseWorkspace(value: string) {
+    if (value === currentWorkspace?.id) return;
+    if (
+      !window.confirm(
+        "Switch workspace? Unapplied form edits will be discarded.",
+      )
+    )
+      return;
+    sessionStorage.setItem(`edf-workspace:${account?.id}`, value);
+    queryClient.cancelQueries();
+    queryClient.clear();
+    flushSync(() => setWorkspaceId(value));
+    navigate("/");
+  }
   useEffect(() => {
     const expire = () => setExpired(true);
     window.addEventListener("edf-session-expired", expire);
     return () => window.removeEventListener("edf-session-expired", expire);
   }, []);
   useEffect(() => {
-    void api<{ username: string; csrf: string }>("/session")
+    if (!account || expired) return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void api<Account>("/session")
+        .then((value) => {
+          if (active) {
+            setCsrf(value.csrf);
+            setAccount(value);
+          }
+        })
+        .catch(() => {
+          if (active) setExpired(true);
+        });
+    }, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [account?.id, expired]);
+  useEffect(() => {
+    void api<Account>("/session")
       .then((value) => {
         setCsrf(value.csrf);
         setAccount(value);
@@ -184,36 +290,74 @@ function App() {
         Opening workspace…
       </p>
     );
-  if (!account)
+  if (!account) return <SignIn onSuccess={signedIn} />;
+  if (account.setup_required)
     return (
-      <SignIn
-        onSuccess={(value) => {
-          setCsrf(value.csrf);
-          setAccount(value);
-          setExpired(false);
-        }}
-      />
+      <main className="setup">
+        <AccountForm account={account} setup onSaved={signedIn} />
+        <button onClick={() => void signOut()}>Sign out</button>
+      </main>
+    );
+  if (workspaces.isPending)
+    return (
+      <p className="loading" role="status">
+        Opening your workspaces…
+      </p>
     );
   return (
-    <>
+    <Access.Provider value={{ account, workspace: currentWorkspace }}>
       <div className="app" inert={expired}>
         <aside className="app-sidebar">
           <Link to="/" className="brand">
             <FileSearch /> EDF Evidence<span>Collector</span>
           </Link>
+          <label className="workspace-picker">
+            Workspace
+            <select
+              aria-label="Active workspace"
+              value={currentWorkspace?.id || ""}
+              onChange={(event) => chooseWorkspace(event.target.value)}
+            >
+              {!currentWorkspace && (
+                <option value="">No workspace selected</option>
+              )}
+              {workspaces.data?.map((value) => (
+                <option key={value.id} value={value.id}>
+                  {value.name} · {label(value.role)}
+                </option>
+              ))}
+            </select>
+          </label>
           <nav aria-label="Main navigation">
             <NavLink to="/" end>
               <History /> Runs & evidence
             </NavLink>
-            <NavLink to="/new">
-              <FolderPlus /> Build a pack
+            {currentWorkspace && currentWorkspace.role !== "viewer" && (
+              <NavLink to="/new">
+                <FolderPlus /> Build a pack
+              </NavLink>
+            )}
+            {currentWorkspace && currentWorkspace.role !== "viewer" && (
+              <NavLink to="/compare">
+                <FileSearch /> Compare runs
+              </NavLink>
+            )}
+            <NavLink to="/sharing">
+              <ShieldCheck /> Workspaces & sharing
             </NavLink>
-            <NavLink to="/compare">
-              <FileSearch /> Compare runs
+            <NavLink to="/account">
+              <Settings2 /> Your account
             </NavLink>
-            <NavLink to="/diagnostics">
-              <ShieldCheck /> Readiness & build
-            </NavLink>
+            {account.is_admin && (
+              <NavLink to="/users">
+                <ShieldCheck /> User administration
+              </NavLink>
+            )}
+            {account.is_admin && (
+              <NavLink to="/diagnostics">
+                <ShieldCheck /> Readiness & build
+              </NavLink>
+            )}
           </nav>
           <div className="account">
             <span>{account.username}</span>
@@ -225,14 +369,7 @@ function App() {
                   )
                 )
                   return;
-                try {
-                  await api("/logout", {});
-                } catch {
-                  /* Local sign-out also works after session expiry. */
-                }
-                setCsrf("");
-                queryClient.clear();
-                setAccount(null);
+                await signOut();
               }}
             >
               <LogOut size={16} /> Sign out
@@ -240,12 +377,87 @@ function App() {
           </div>
         </aside>
         <main className="content">
-          <Routes>
-            <Route path="/" element={<Runs />} />
-            <Route path="/new" element={<Build />} />
+          <ErrorMessage error={workspaces.error} />
+          {currentWorkspace?.role === "viewer" && (
+            <p className="access-notice" role="status">
+              Viewer access · You can read evidence and download outputs. Ask a
+              workspace owner for editing access.
+            </p>
+          )}
+          <Routes key={currentWorkspace?.id || "none"}>
+            <Route
+              path="/"
+              element={
+                currentWorkspace ? (
+                  <Runs />
+                ) : (
+                  <WorkspaceSettings
+                    onChanged={() => workspaces.refetch()}
+                    onCreated={(value) => setWorkspaceId(value.id)}
+                  />
+                )
+              }
+            />
+            <Route
+              path="/new"
+              element={
+                currentWorkspace && currentWorkspace.role !== "viewer" ? (
+                  <Build />
+                ) : (
+                  <p>Editor access is required to build a pack.</p>
+                )
+              }
+            />
             <Route path="/runs/:id" element={<Run />} />
-            <Route path="/compare" element={<Compare />} />
-            <Route path="/diagnostics" element={<Diagnostics />} />
+            <Route
+              path="/compare"
+              element={
+                currentWorkspace && currentWorkspace.role !== "viewer" ? (
+                  <Compare />
+                ) : (
+                  <p>Editor access is required to compare runs.</p>
+                )
+              }
+            />
+            <Route
+              path="/diagnostics"
+              element={
+                account.is_admin ? (
+                  <Diagnostics />
+                ) : (
+                  <p>Server administrator access is required.</p>
+                )
+              }
+            />
+            <Route
+              path="/account"
+              element={<AccountForm account={account} onSaved={signedIn} />}
+            />
+            <Route
+              path="/users"
+              element={
+                account.is_admin ? (
+                  <Users />
+                ) : (
+                  <p>Server administrator access is required.</p>
+                )
+              }
+            />
+            <Route
+              path="/sharing"
+              element={
+                <WorkspaceSettings
+                  onChanged={() => workspaces.refetch()}
+                  onCreated={(value) => {
+                    setWorkspaceId(value.id);
+                    sessionStorage.setItem(
+                      `edf-workspace:${account.id}`,
+                      value.id,
+                    );
+                  }}
+                />
+              }
+            />
           </Routes>
         </main>
       </div>
@@ -263,15 +475,18 @@ function App() {
             </p>
             <SignIn
               onSuccess={(value) => {
-                setCsrf(value.csrf);
-                setAccount(value);
-                setExpired(false);
+                if (value.id !== account.id) {
+                  queryClient.clear();
+                  setWorkspaceId("");
+                  navigate("/");
+                }
+                signedIn(value);
               }}
             />
           </div>
         </div>
       )}
-    </>
+    </Access.Provider>
   );
 }
 
@@ -284,18 +499,21 @@ function useJobs() {
 }
 function Runs() {
   const query = useJobs();
+  const canEdit = useCanEdit();
   return (
     <>
       <header className="page-heading">
-        <div className="eyebrow">Shared workspace</div>
+        <div className="eyebrow">Evidence workspace</div>
         <h1>Runs & evidence</h1>
         <p>
           Each run keeps its original documents, accepted analysis and reviewed
           outputs together.
         </p>
-        <Link className="button primary" to="/new">
-          Build evidence pack
-        </Link>
+        {canEdit && (
+          <Link className="button primary" to="/new">
+            Build evidence pack
+          </Link>
+        )}
       </header>
       <ErrorMessage error={query.error} />
       {query.isPending && <p role="status">Loading runs…</p>}
@@ -374,7 +592,7 @@ function Sources({
     setError(undefined);
     try {
       const saved = resume
-        ? JSON.parse(sessionStorage.getItem("edf-upload") || "null")
+        ? JSON.parse(sessionStorage.getItem(uploadStorageKey()) || "null")
         : null;
       if (resume && (!saved || saved.kind !== kind))
         throw new Error(
@@ -495,7 +713,7 @@ function Sources({
             >
               Upload and add
             </button>
-            {sessionStorage.getItem("edf-upload") && (
+            {sessionStorage.getItem(uploadStorageKey()) && (
               <button
                 disabled={busy || !files.length}
                 onClick={() => void send(true)}
@@ -948,6 +1166,7 @@ type SourceEntry = {
   }[];
 };
 function Run() {
+  const canEdit = useCanEdit();
   const id = useParams().id!;
   const [error, setError] = useState<unknown>(),
     [messages, setMessages] = useState<string[]>([]),
@@ -997,6 +1216,7 @@ function Run() {
       <ErrorMessage error={job.error || error || job.data?.data.error} />
       {job.data && !terminal.has(job.data.data.status) && (
         <button
+          disabled={!canEdit}
           onClick={async () => {
             try {
               await api(`/jobs/${id}/cancel`, {});
@@ -1090,6 +1310,7 @@ function Workspace({
   id: string;
   onPending: (value: boolean) => void;
 }) {
+  const canEdit = useCanEdit();
   const client = useQueryClient(),
     navigate = useNavigate();
   const review = useQuery({
@@ -1207,28 +1428,34 @@ function Workspace({
       </div>
       <div className="toolbar">
         <button
-          disabled={!data.can_undo || busy || dirty}
+          disabled={!canEdit || !data.can_undo || busy || dirty}
           onClick={() => void command("undo", {}).catch(() => {})}
         >
           Undo
         </button>
         <button
-          disabled={!data.can_redo || busy || dirty}
+          disabled={!canEdit || !data.can_redo || busy || dirty}
           onClick={() => void command("redo", {}).catch(() => {})}
         >
           Redo
         </button>
-        <button disabled={busy} onClick={() => void publish("preview")}>
+        <button
+          disabled={!canEdit || busy}
+          onClick={() => void publish("preview")}
+        >
           Preview changes
         </button>
         <button
           className="primary"
-          disabled={busy}
+          disabled={!canEdit || busy}
           onClick={() => void publish("review")}
         >
           Create reviewed pack
         </button>
-        <button disabled={busy} onClick={() => void publish("render")}>
+        <button
+          disabled={!canEdit || busy}
+          onClick={() => void publish("render")}
+        >
           Render accepted analysis
         </button>
         <button disabled={dirty || busy} onClick={() => void review.refetch()}>
@@ -1301,15 +1528,17 @@ function Workspace({
             <div className="review-split">
               <section className="panel">
                 <h2>{String(row.record["Invoice #"] || "Selected record")}</h2>
-                <RecordEditor
-                  key={selected + ":" + data.revision}
-                  row={row}
-                  busy={busy}
-                  onDirty={setDirty}
-                  onSave={(values) =>
-                    command("update", { row_id: selected, ...values })
-                  }
-                />
+                <fieldset disabled={!canEdit}>
+                  <RecordEditor
+                    key={selected + ":" + data.revision}
+                    row={row}
+                    busy={busy}
+                    onDirty={setDirty}
+                    onSave={(values) =>
+                      command("update", { row_id: selected, ...values })
+                    }
+                  />
+                </fieldset>
                 <details>
                   <summary>All record fields & extracted text</summary>
                   <Value value={row.record} />
@@ -1370,21 +1599,27 @@ function Workspace({
           )}
         </Tabs.Content>
         <Tabs.Content value="revisions">
-          <RevisionEditor data={data} command={command} onDirty={setDirty} />
+          <fieldset disabled={!canEdit}>
+            <RevisionEditor data={data} command={command} onDirty={setDirty} />
+          </fieldset>
           <section className="panel">
             <h2>Revision assessment</h2>
             <Value value={data.revisions} />
           </section>
         </Tabs.Content>
         <Tabs.Content value="ledger">
-          <PositionEditor data={data} command={command} onDirty={setDirty} />
+          <fieldset disabled={!canEdit}>
+            <PositionEditor data={data} command={command} onDirty={setDirty} />
+          </fieldset>
           <section className="panel">
             <h2>Billing histories & comparisons</h2>
             <Value value={data.ledger} />
           </section>
         </Tabs.Content>
         <Tabs.Content value="claims">
-          <ClaimEditor data={data} command={command} onDirty={setDirty} />
+          <fieldset disabled={!canEdit}>
+            <ClaimEditor data={data} command={command} onDirty={setDirty} />
+          </fieldset>
           <section className="panel">
             <h2>Reconciled proposals</h2>
             <Value value={data.claims} />

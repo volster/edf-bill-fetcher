@@ -33,6 +33,8 @@ def main():
         app = create_app(root / "server", roots={"Synthetic bills": str(originals)})
         store = app.state.store
         store.user("reviewer", "synthetic-browser-password")
+        store.user("admin", "admin", is_admin=True, setup_required=True)
+        store.user("viewer", "v")
         entry = store.create(
             "job",
             {

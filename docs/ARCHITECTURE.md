@@ -230,8 +230,11 @@ and their display explicitly identifies their historical all-record scope.
 
 On `feature/web-ui`, `web/api.py` owns authenticated HTTP/CSRF boundaries,
 `web/contracts.py` validates captured requests, and `web/storage.py` stores
-metadata in SQLite through SQLAlchemy/Alembic. Evidence and artifacts remain
-files. A workspace lock permits one dispatcher; independent Python processes
+metadata in PostgreSQL (Compose default) or local SQLite through SQLAlchemy/Alembic.
+Relational accounts, sessions, workspaces and memberships are separate from
+JSON run metadata; catalogue entries have indexed workspace ownership. Original
+evidence and artifacts remain files. A process lock and PostgreSQL database lease
+permit one dispatcher; independent Python processes
 handle queued jobs so a browser disconnect cannot terminate extraction. Durable
 SSE cursors resume progress viewing. Cancellation has a grace period before a
 stuck native process is stopped; restart marks unfinished work interrupted.
@@ -259,3 +262,17 @@ manifest. Finalisation verifies a complete ordered batch before extraction can
 read it. Configured roots and managed directories constrain server-side reads,
 including imported source references and custom benchmark paths. See the
 [web guide](WEB_UI.md) for current limits, deployment and backup instructions.
+
+`web/accounts.py` owns credential hashing, session revocation, transactional
+membership changes and last-owner/administrator invariants. HTTP authorization
+uses decoded route paths and current database membership, including download,
+original-source and event endpoints. Server folders require per-workspace grants;
+workers recheck captured references, creator access and folder grants. New
+managed files live under workspace directories, while legacy directories retain
+their accepted links and are authorized through catalogue ownership.
+
+Workspace drafts remain shared with optimistic revisions. Audit events record
+actors, access changes and draft revisions without credential material. Migration
+0002 adopts the original catalogue into an imported workspace and invalidates old
+sessions; SQLite-to-PostgreSQL import only copies into an empty destination.
+See [database administration](WEB_ADMINISTRATION.md) for operational procedures.

@@ -126,10 +126,7 @@ def source_path(store: Store, source: Source, roots: dict[str, str]) -> Path:
         if row is None or row["status"] != "needs_choice":
             raise ValueError("Choose a saved analysis or workbook from the completed intake")
         target = Path(row["path"]).resolve()
-        if not any(
-            target.is_relative_to(root)
-            for root in (store.root, *(Path(value).resolve() for value in roots.values()))
-        ):
+        if not store.path_allowed(entry.get("workspace_id"), str(target), roots):
             raise ValueError("Intake source is outside the configured folders")
         return target
     if source.asset_id:
@@ -221,6 +218,9 @@ def input_path(
 def execute(store: Store, identity: str, roots: dict[str, str]) -> None:
     """Publish truthful status and preserve valid artifacts on every failure."""
     entry = store.get(identity, "job")
+    workspace_id = entry.get("workspace_id")
+    if workspace_id is not None:
+        roots = store.accounts.roots(workspace_id, roots)
     directory = store.directory(entry)
     token = Cancellation(store, identity)
     engine = None
@@ -228,10 +228,7 @@ def execute(store: Store, identity: str, roots: dict[str, str]) -> None:
     renderers = None
 
     def allowed(path):
-        return any(
-            Path(path).resolve().is_relative_to(root)
-            for root in (store.root, *(Path(value).resolve() for value in roots.values()))
-        )
+        return store.path_allowed(workspace_id, path, roots)
 
     def resource_config(config: dict, *, resolve: bool) -> dict:
         value = config.get("ofgem_caps_path")
@@ -251,6 +248,22 @@ def execute(store: Store, identity: str, roots: dict[str, str]) -> None:
         job = Job.model_validate(entry["data"]["request"])
         if token.is_set():
             raise RunCancelled("Run cancelled before starting")
+        for source in [*job.sources, *([job.input] if job.input else [])]:
+            source_identity = source.asset_id or source.intake_id
+            if source_identity and store.get(source_identity)["workspace_id"] != workspace_id:
+                raise ValueError("Input belongs to another workspace")
+        for related_identity in (job.parent_id, job.other_id):
+            if (
+                related_identity
+                and store.get(related_identity, "job")["workspace_id"] != workspace_id
+            ):
+                raise ValueError("Run belongs to another workspace")
+        if actor_id := entry["data"].get("actor_id"):
+            if workspace_id is None:
+                raise ValueError("Queued run has no workspace")
+            if not store.accounts.user(actor_id)["active"]:
+                raise ValueError("The account that queued this run was disabled")
+            store.accounts.require(actor_id, workspace_id, "editor")
         config = (
             {**EXTRACTION_DEFAULTS, **job.config}
             if job.mode in {"extract", "intake"}

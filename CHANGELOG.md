@@ -8,6 +8,18 @@ semver-friendly.
 
 ## [Unreleased]
 
+- New web installations start with `admin` / `admin` and require account setup
+  before accessing evidence. Passwords no longer have a 12-character minimum;
+  existing accounts retain their credentials and have a terminal recovery command.
+- Added private workspaces, owner/editor/viewer sharing, account administration,
+  session revocation and audited access/review changes. Permissions apply to
+  uploads, original documents, reports, events, drafts and queued jobs.
+- Docker Compose now runs PostgreSQL 17 with durable metadata and evidence
+  volumes. Existing catalogues migrate with their account IDs, saved drafts and
+  original links; source installations retain a compatible local SQLite option.
+- Added PostgreSQL isolation, concurrency and migration checks to required CI,
+  plus browser coverage for first-login setup and live workspace sharing.
+
 ### Removed
 
 - Retired the unused Tk desktop and its Tcl/Tk preflight, recovery wrapper and tests. Qt is the supported GUI; source setup and frozen builds no longer require Tk.

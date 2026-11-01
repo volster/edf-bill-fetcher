@@ -1,27 +1,18 @@
-"""Transactional server catalogue and containment boundaries for managed evidence."""
+"""Transactional metadata, scoped evidence storage and portable database migrations."""
 
 from __future__ import annotations
 
 import builtins
-import hashlib
-import json
-import secrets
+import os
 import time
 from pathlib import Path, PurePosixPath
+from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import (
-    JSON,
-    Column,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    create_engine,
-    event,
-    select,
-    update,
-)
+from filelock import FileLock
+from sqlalchemy import create_engine, event, select, update
+
+from edf_bill_fetcher.web import schema
 
 
 class Conflict(ValueError):
@@ -46,39 +37,49 @@ def contained(root: Path, relative: str) -> Path:
 
 
 class Store:
-    """Small shared-workspace catalogue; evidence/results remain ordinary portable files."""
+    """PostgreSQL catalogue with a compatible local SQLite option; originals stay in files."""
 
-    def __init__(self, directory: str | Path):
-        """Open a local SQLite catalogue with bounded writer contention."""
+    def __init__(self, directory: str | Path, database_url: str | None = None) -> None:
+        """Upgrade metadata transactionally before exposing accounts or evidence."""
         self.root = Path(directory).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self.database_url = (
+            database_url
+            or os.environ.get("EDF_DATABASE_URL")
+            or "sqlite:///" + str(self.root / "catalogue.sqlite")
+        )
+        if self.database_url.startswith("postgres://"):
+            self.database_url = "postgresql+psycopg://" + self.database_url[len("postgres://") :]
+        elif self.database_url.startswith("postgresql://"):
+            self.database_url = "postgresql+psycopg://" + self.database_url[len("postgresql://") :]
+        sqlite = self.database_url.startswith("sqlite:")
         self.engine = create_engine(
-            "sqlite:///" + str(self.root / "catalogue.sqlite"), connect_args={"timeout": 20}
+            self.database_url,
+            pool_pre_ping=True,
+            **({"connect_args": {"timeout": 20}} if sqlite else {}),
         )
+        if sqlite:
 
-        @event.listens_for(self.engine, "connect")
-        def configure(connection, record):
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA foreign_keys=ON")
+            @event.listens_for(self.engine, "connect")
+            def configure(connection, record):
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("PRAGMA foreign_keys=ON")
 
-        metadata = MetaData()
-        self.entries = Table(
-            "entries",
-            metadata,
-            Column("id", String, primary_key=True),
-            Column("kind", String, nullable=False, index=True),
-            Column("revision", Integer, nullable=False),
-            Column("data", JSON, nullable=False),
-        )
-        # Prototype catalogues already created with this identical schema can
-        # be adopted once, without dropping their users or accepted runs.
+        self.entries = schema.entries
         from alembic import command
         from alembic.config import Config
-        from sqlalchemy import inspect
+        from sqlalchemy import inspect, text
 
         configuration = Config()
         configuration.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
-        with self.engine.begin() as connection:
+        with (
+            FileLock(str(self.root / "migration.lock"), timeout=60),
+            self.engine.begin() as connection,
+        ):
+            if sqlite:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            else:
+                connection.execute(text("SELECT pg_advisory_xact_lock(713754821)"))
             configuration.attributes["connection"] = connection
             tables = inspect(connection).get_table_names()
             if "entries" in tables and "alembic_version" not in tables:
@@ -87,16 +88,40 @@ class Store:
                     raise ValueError("Unrecognised catalogue schema; restore a compatible backup")
                 command.stamp(configuration, "0001_catalogue")
             command.upgrade(configuration, "head")
+        from edf_bill_fetcher.web.accounts import Accounts
 
-    def create(self, kind: str, data: dict, identity: str | None = None) -> dict:
-        """Create a detached object under an opaque identifier."""
-        value = {"id": identity or uuid4().hex, "kind": kind, "revision": 0, "data": data}
+        self.accounts = Accounts(self)
+
+    def create(
+        self,
+        kind: str,
+        data: dict,
+        identity: str | None = None,
+        *,
+        workspace_id: str | None = None,
+        actor_id: str | None = None,
+    ) -> dict:
+        """Persist metadata with workspace ownership independent of browser payloads."""
+        if workspace_id is None and kind in {"job", "asset", "draft", "upload_file"}:
+            workspace_id = self.accounts.default_workspace()
+        value: dict[str, Any] = {
+            "id": identity or uuid4().hex,
+            "kind": kind,
+            "revision": 0,
+            "data": data,
+            "workspace_id": workspace_id,
+            "created": time.time(),
+        }
         with self.engine.begin() as connection:
             connection.execute(self.entries.insert().values(**value))
+            if actor_id:
+                self.accounts.audit(
+                    connection, actor_id, kind + ".created", value["id"], workspace_id
+                )
         return self.get(str(value["id"]), kind)
 
     def get(self, identity: str, kind: str | None = None) -> dict:
-        """Read one catalogue object without accepting filesystem paths as identifiers."""
+        """Look up an opaque identifier; HTTP callers additionally authorize its workspace."""
         with self.engine.connect() as connection:
             row = (
                 connection.execute(select(self.entries).where(self.entries.c.id == identity))
@@ -107,18 +132,21 @@ class Store:
             raise KeyError("Object not found")
         return dict(row)
 
-    def list(self, kind: str) -> list[dict]:
-        """Return stable creation order for a small household catalogue."""
+    def list(self, kind: str, workspace_id: str | None = None) -> list[dict]:
+        """Return creation order; transports supply a workspace to enforce isolation."""
+        query = select(self.entries).where(self.entries.c.kind == kind)
+        if workspace_id is not None:
+            query = query.where(self.entries.c.workspace_id == workspace_id)
         with self.engine.connect() as connection:
             return [
                 dict(row)
                 for row in connection.execute(
-                    select(self.entries).where(self.entries.c.kind == kind)
+                    query.order_by(self.entries.c.created, self.entries.c.id)
                 ).mappings()
             ]
 
     def upload_files(self, asset: str) -> builtins.list[dict]:
-        """Fetch one folder manifest only when needed, rather than on every chunk."""
+        """Fetch a folder manifest without loading it for every uploaded chunk."""
         prefix = "file-" + asset + "-"
         with self.engine.connect() as connection:
             return [
@@ -130,8 +158,15 @@ class Store:
                 ).mappings()
             ]
 
-    def replace(self, entry: dict, data: dict) -> dict:
-        """Commit a conditional replacement; concurrent callers cannot silently overwrite."""
+    def replace(
+        self,
+        entry: dict,
+        data: dict,
+        *,
+        actor_id: str | None = None,
+        action: str = "review.updated",
+    ) -> dict:
+        """Reject stale writes rather than losing another user's changes."""
         with self.engine.begin() as connection:
             result = connection.execute(
                 update(self.entries)
@@ -144,80 +179,145 @@ class Store:
                 raise Conflict(
                     "This item changed in another tab. Reload before saving; your pending edits have not been applied."
                 )
+            if actor_id:
+                self.accounts.audit(
+                    connection,
+                    actor_id,
+                    action,
+                    entry["id"],
+                    entry.get("workspace_id"),
+                    revision=entry["revision"] + 1,
+                )
         return self.get(entry["id"])
 
     def patch(self, identity: str, **fields: object) -> dict:
-        """Update worker-owned status without sharing a live database connection."""
-        attempt = 0
-        while True:
+        """Retry conditional worker status updates after bounded contention."""
+        for attempt in range(8):
             current = self.get(identity)
             try:
                 return self.replace(current, {**current["data"], **fields})
             except Conflict:
-                attempt += 1
-                if attempt == 8:
+                if attempt == 7:
                     raise
+        raise AssertionError("Unreachable retry state")
 
     def directory(self, entry: dict) -> Path:
-        """Locate a managed object directory using its server-generated identity."""
-        path = contained(self.root, entry["kind"] + "/" + entry["id"])
+        """Keep new files under their workspace while retaining existing relative links."""
+        relative = entry["kind"] + "/" + entry["id"]
+        legacy = contained(self.root, relative)
+        workspace = entry.get("workspace_id")
+        path = (
+            legacy
+            if legacy.exists() or not workspace
+            else contained(self.root, f"workspaces/{workspace}/{relative}")
+        )
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def user(self, name: str, password: str) -> None:
-        """Create a named account with a salted password hash, never a default password."""
-        if len(password) < 12 or not name.strip():
-            raise ValueError("Choose a username and a password of at least 12 characters")
-        salt = secrets.token_hex(16)
-        digest = hashlib.pbkdf2_hmac(
-            "sha256", password.encode(), bytes.fromhex(salt), 600_000
-        ).hex()
-        self.create(
-            "user",
-            {"name": name, "salt": salt, "digest": digest},
-            "user-" + hashlib.sha256(name.encode()).hexdigest(),
+    def path_allowed(self, workspace_id: str | None, path: str, roots: dict[str, str]) -> bool:
+        """Never resolve an imported manifest through another workspace's managed files."""
+        resolved = Path(path).resolve()
+        if workspace_id is None:
+            managed = [self.root]
+        else:
+            managed = [contained(self.root, "workspaces/" + workspace_id)]
+            if resolved.is_relative_to(self.root):
+                parts = resolved.relative_to(self.root).parts
+                if len(parts) >= 2 and parts[0] in {"job", "asset"}:
+                    try:
+                        legacy = self.get(parts[1], parts[0])
+                        if legacy["workspace_id"] == workspace_id:
+                            managed.append(contained(self.root, parts[0] + "/" + parts[1]))
+                    except KeyError:
+                        pass
+        return any(
+            resolved == root or resolved.is_relative_to(root)
+            for root in [*managed, *(Path(value).resolve() for value in roots.values())]
         )
+
+    def user(self, name: str, password: str, **options: Any) -> dict:
+        """Create an account without an arbitrary minimum password length."""
+        return self.accounts.create_user(name, password, **options)
 
     def login(self, name: str, password: str) -> tuple[str, str]:
-        """Issue a short-lived opaque session after constant-time password comparison."""
-        try:
-            user = self.get("user-" + hashlib.sha256(name.encode()).hexdigest(), "user")["data"]
-        except KeyError:
-            user = {"salt": "00" * 16, "digest": "00" * 32}
-        digest = hashlib.pbkdf2_hmac(
-            "sha256", password.encode(), bytes.fromhex(user["salt"]), 600_000
-        ).hex()
-        if not secrets.compare_digest(user["digest"], digest):
-            raise ValueError("Invalid username or password")
-        token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        self.create(
-            "session",
-            {"name": name, "csrf": csrf, "expires": time.time() + 43200},
-            hashlib.sha256(token.encode()).hexdigest(),
-        )
-        return token, csrf
+        """Verify credentials and issue a relational session."""
+        return self.accounts.login(name, password)
 
     def session(self, token: str) -> dict:
-        """Validate session expiry; raw bearer tokens are never stored."""
-        entry = self.get(hashlib.sha256(token.encode()).hexdigest(), "session")
-        if entry["data"]["expires"] <= time.time():
-            raise KeyError("Session expired")
-        return entry
+        """Recheck account activation on every request."""
+        return self.accounts.session(token)
 
     def log(self, identity: str, message: str) -> None:
-        """Append bounded persistent progress without changing the job's edit revision."""
-        self.create("event", {"job": identity, "message": str(message)[-4000:], "at": time.time()})
+        """Append progress using a real sequence on either database backend."""
+        with self.engine.begin() as connection:
+            connection.execute(
+                schema.events.insert().values(
+                    job_id=identity, message=str(message)[-4000:], at=time.time()
+                )
+            )
 
     def events(self, identity: str, after: int = 0) -> builtins.list[dict]:
-        """Replay durable events after a client's last sequence number."""
-        # Rowids provide insertion ordering even when event timestamps are equal.
-        from sqlalchemy import text
-
+        """Replay progress without SQLite-specific rowid or JSON functions."""
         with self.engine.connect() as connection:
             rows = connection.execute(
-                text(
-                    "SELECT rowid, data FROM entries WHERE kind='event' AND json_extract(data, '$.job') = :job AND rowid > :after ORDER BY rowid LIMIT 1000"
-                ),
-                {"after": after, "job": identity},
-            )
-            return [{"sequence": row[0], **json.loads(row[1])} for row in rows]
+                select(schema.events)
+                .where(schema.events.c.job_id == identity, schema.events.c.sequence > after)
+                .order_by(schema.events.c.sequence)
+                .limit(1000)
+            ).mappings()
+            return [
+                {
+                    "sequence": row["sequence"],
+                    "job": row["job_id"],
+                    "message": row["message"],
+                    "at": row["at"],
+                }
+                for row in rows
+            ]
+
+    def import_sqlite(self) -> bool:
+        """Copy an existing local catalogue into an empty PostgreSQL database atomically."""
+        if (
+            self.engine.dialect.name != "postgresql"
+            or not (self.root / "catalogue.sqlite").is_file()
+        ):
+            return False
+        with self.engine.connect() as connection:
+            if (
+                connection.execute(select(schema.users.c.id).limit(1)).first()
+                or connection.execute(select(schema.entries.c.id).limit(1)).first()
+            ):
+                return False
+        source = Store(self.root, "sqlite:///" + str(self.root / "catalogue.sqlite"))
+        try:
+            with (
+                FileLock(str(self.root / "database-import.lock"), timeout=60),
+                self.engine.begin() as destination,
+                source.engine.connect() as original,
+            ):
+                from sqlalchemy import text
+
+                destination.execute(text("SELECT pg_advisory_xact_lock(713754821)"))
+                if (
+                    destination.execute(select(schema.users.c.id).limit(1)).first()
+                    or destination.execute(select(schema.entries.c.id).limit(1)).first()
+                ):
+                    return False
+                for table in [
+                    schema.users,
+                    schema.workspaces,
+                    schema.memberships,
+                    schema.workspace_roots,
+                    schema.entries,
+                    schema.events,
+                    schema.audit,
+                ]:
+                    rows = [dict(row) for row in original.execute(select(table)).mappings()]
+                    for row in rows:
+                        if table in (schema.events, schema.audit):
+                            row.pop("sequence")
+                    if rows:
+                        destination.execute(table.insert(), rows)
+            return True
+        finally:
+            source.engine.dispose()

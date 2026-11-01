@@ -235,10 +235,59 @@ jobs:
           path: frontend/test-results/
           retention-days: 7
 
+  postgres:
+    name: PostgreSQL accounts, permissions and upgrades
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      database:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: edf
+          POSTGRES_DB: edf
+          POSTGRES_PASSWORD: synthetic-ci-database
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U edf -d edf"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      EDF_TEST_DATABASE_URL: postgresql+psycopg://edf:synthetic-ci-database@127.0.0.1:5432/edf
+    steps:
+      - uses: actions/checkout@v5.0.1
+      - uses: actions/setup-python@v6.1.0
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install native and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng build-essential autoconf automake libtool pkg-config
+          python -m pip install -c .github/ci-constraints.txt -e ".[dev,msg,web]"
+      - name: Exercise both database backends and catalogue upgrades
+        run: python -m pytest tests/test_web_accounts.py --no-cov --junitxml=postgres-results.xml
+      - name: Retain database contract results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: postgres-contracts
+          path: postgres-results.xml
+          retention-days: 14
+
   container:
     name: Container (${{ matrix.arch }})
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    services:
+      database:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: edf
+          POSTGRES_DB: edf
+          POSTGRES_PASSWORD: synthetic-ci-database
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U edf -d edf"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     strategy:
       fail-fast: false
       matrix:
@@ -264,13 +313,15 @@ jobs:
       - name: Exercise installed HTTP, OCR and reviewed evidence publication
         run: >-
           docker run --rm --entrypoint python
+          --network host
+          -e EDF_DATABASE_URL=postgresql+psycopg://edf:synthetic-ci-database@127.0.0.1:5432/edf
           -v "$PWD/.github/scripts/check_web_container.py:/checks/check_web_container.py:ro"
           -v "$PWD/tests/fixtures/scanned_bill.pdf:/checks/scanned_bill.pdf:ro"
           edf-web:test /checks/check_web_container.py
 
   validation:
     name: Required validation
-    needs: [test, web, container]
+    needs: [test, web, container, postgres]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -282,7 +333,8 @@ jobs:
           MATRIX_RESULT: ${{ needs.test.result }}
           WEB_RESULT: ${{ needs.web.result }}
           CONTAINER_RESULT: ${{ needs.container.result }}
-        run: test "$MATRIX_RESULT" = success && test "$WEB_RESULT" = success && test "$CONTAINER_RESULT" = success
+          POSTGRES_RESULT: ${{ needs.postgres.result }}
+        run: test "$MATRIX_RESULT" = success && test "$WEB_RESULT" = success && test "$CONTAINER_RESULT" = success && test "$POSTGRES_RESULT" = success
       - name: Record validated revision
         id: revision
         env:

@@ -15,6 +15,11 @@ successful CI for the source revision recorded in `build-provenance.json`.
 Manual builds remain labelled `manual-unvalidated`. Tagged releases validate
 and build the tagged revision before publication.
 
+The web branch also requires three browser engines, a real PostgreSQL account/
+permission/upgrade contract job, and amd64/arm64 container checks. Installed
+container OCR, review publication and original preservation run against
+PostgreSQL. The aggregate validation job requires all of these jobs to succeed.
+
 ## Workflow and artifact map
 
 | Workflow | Trigger and revision | Result |

@@ -15,10 +15,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument(
+        "--database-url", help="PostgreSQL/SQLite URL; defaults to EDF_DATABASE_URL or local SQLite"
+    )
+    parser.add_argument(
         "--init-user",
         help="Create a named account and exit; password is prompted or read from EDF_WEB_PASSWORD",
     )
     parser.add_argument("--source-root", action="append", default=[], metavar="NAME=PATH")
+    parser.add_argument(
+        "--reset-password",
+        metavar="NAME",
+        help="Reset an existing account's password and revoke its sessions",
+    )
     parser.add_argument(
         "--secure-cookie",
         action="store_true",
@@ -32,24 +40,54 @@ def main(argv: list[str] | None = None) -> None:
         from edf_bill_fetcher.web.storage import Store
     except ImportError as error:
         parser.error(f"Install the web extra first: pip install '.[web,msg]' ({error})")
-    store = Store(options.data)
+    store = Store(options.data, options.database_url)
+    store.import_sqlite()
+    if options.reset_password:
+        from edf_bill_fetcher.web.accounts import username
+
+        user = next(
+            (
+                user
+                for user in store.accounts.users()
+                if user["username"] == username(options.reset_password)
+            ),
+            None,
+        )
+        if user is None:
+            parser.error("Account not found")
+        store.accounts.credentials(
+            user["id"],
+            user["username"],
+            os.environ.get("EDF_WEB_PASSWORD") or getpass.getpass("New password: "),
+            reset=True,
+        )
+        store.engine.dispose()
+        return
     if options.init_user:
         store.user(
             options.init_user,
-            os.environ.get("EDF_WEB_PASSWORD")
-            or getpass.getpass("New password (12+ characters): "),
+            os.environ.get("EDF_WEB_PASSWORD") or getpass.getpass("New password: "),
         )
+        store.engine.dispose()
         return
-    if not store.list("user"):
-        parser.error("Create an account first with edf-web --data PATH --init-user NAME")
+    store.engine.dispose()
     roots = {}
     for specification in options.source_root:
         name, separator, path = specification.partition("=")
         if not separator or not name or name in roots or not Path(path).is_dir():
             parser.error("Source roots must be unique NAME=PATH pairs pointing to existing folders")
         roots[name] = str(Path(path).resolve())
+    try:
+        application = create_app(
+            options.data,
+            roots=roots,
+            secure_cookie=options.secure_cookie,
+            database_url=options.database_url,
+        )
+    except ValueError as error:
+        parser.error(str(error))
     uvicorn.run(
-        create_app(options.data, roots=roots, secure_cookie=options.secure_cookie),
+        application,
         host=options.host,
         port=options.port,
         workers=1,

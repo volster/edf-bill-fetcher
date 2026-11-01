@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api, label, terminal, type Entry, type JobData } from "./api";
+import { useCanEdit } from "./accounts";
 
 export type IntakeSummary = {
   total: number;
@@ -24,6 +25,7 @@ export function IntakePanel({
   onSummary?: (value: IntakeSummary) => void;
 }) {
   const navigate = useNavigate();
+  const canEdit = useCanEdit();
   const [offset, setOffset] = useState(0),
     [status, setStatus] = useState(""),
     [error, setError] = useState<unknown>();
@@ -71,6 +73,7 @@ export function IntakePanel({
             Runs & evidence.
           </p>
           <button
+            disabled={!canEdit}
             onClick={() =>
               void api(`/jobs/${id}/cancel`, {}).then(() => job.refetch())
             }
@@ -141,6 +144,7 @@ export function IntakePanel({
                           item.kind,
                         ) && (
                           <button
+                            disabled={!canEdit}
                             onClick={() =>
                               void importResult(item.id, item.name, item.kind)
                             }

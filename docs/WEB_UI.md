@@ -7,9 +7,10 @@ analysis, corrections and publication services used by desktop and CLI. It can
 run from a Python installation or Docker. The web server processes evidence;
 visiting computers need only a browser. No VNC is involved.
 
-This is a shared workspace. Named accounts can access the same
-runs and evidence; there are no separate private workspaces or per-case roles.
-Authentication is required even when the server listens only on localhost.
+Accounts have private workspaces and explicit owner/editor/viewer memberships.
+Choose an active workspace in the sidebar; uploads, runs, drafts and downloads
+are scoped to it. Administrators manage accounts, but need membership to access
+evidence. See [accounts, permissions and databases](WEB_ADMINISTRATION.md).
 
 ## Run from source
 
@@ -21,13 +22,12 @@ With the environment activated, install the optional web dependencies:
 python -m pip install -c .github/ci-constraints.txt -e ".[web,msg]"
 npm ci --prefix frontend
 npm run build --prefix frontend
-edf-web --data web-data --init-user reviewer
 edf-web --data web-data
 ```
 
-Replace `reviewer` with your chosen username. The account command prompts for a
-password of at least 12 characters. Open
-`http://127.0.0.1:8000`. `python main.py --web` accepts the same server options.
+Open `http://127.0.0.1:8000`. A new installation accepts `admin` / `admin`, then
+requires account setup before accessing evidence. Passwords have no minimum
+length. Existing installations retain their accounts. `python main.py --web` accepts the same server options.
 Node 24 is needed to build/develop the frontend, not to run an already built
 Python wheel or the container. Browser assets, PDF.js workers/fonts/CMaps and
 catalogue migrations are included in the web package's built distribution.
@@ -43,8 +43,11 @@ On another computer, open the server's LAN address in a browser, for example
 address. Allow the chosen port through the server's firewall if necessary.
 On Windows, a source root can be
 `--source-root "bills=C:\Evidence"`. Roots are optional: browser uploads work
-without them. Only configured roots are browsable, and uploads/runs have managed
-directories. Root labels must be unique. Passwords can be supplied through
+without them. Configured roots must also be granted to the selected workspace.
+A server administrator who owns the workspace can grant them in **Workspaces &
+sharing**. Initially configured folders are assigned once to the initial or
+imported workspace; later revocations persist across restarts. Uploads/runs have
+managed directories. Root labels must be unique. Passwords can be supplied through
 `EDF_WEB_PASSWORD` during account creation for automation; do not keep that
 variable in a running server's environment unnecessarily.
 
@@ -56,15 +59,15 @@ prevents two dispatchers from managing the same jobs.
 ## Run with Docker Compose
 
 ```console
-docker compose build
-docker compose run --rm app --init-user reviewer
-docker compose up -d
+docker compose up --build -d
 ```
 
-The password is prompted. Open `http://127.0.0.1:8000`. The image includes the
+Open `http://127.0.0.1:8000` and complete first-login account setup. The image includes the
 Python/native dependencies, Tesseract English OCR and compiled browser interface.
-It runs as an unprivileged user and keeps evidence/settings/catalogue in the
-`evidence-data` volume. A container replacement does not discard the workspace.
+The app runs as an unprivileged user and keeps evidence in `evidence-data`.
+PostgreSQL 17 stores accounts, memberships, run metadata and review drafts in
+`database-data`. Container replacement preserves both volumes. Back up both as
+described in [database administration](WEB_ADMINISTRATION.md#backup-and-restore).
 
 Compose publishes only on localhost by default. Set `EDF_WEB_BIND_ADDRESS=0.0.0.0`
 before starting Compose to permit LAN connections. `EDF_WEB_PORT` changes the
@@ -170,7 +173,7 @@ current saved draft. GUI and web use equivalent bounded draft histories.
 
 The frontend is React/TypeScript/Vite, TanStack Query/Table/Virtual, Radix controls,
 PDF.js, ECharts, React Hook Form/Zod and Playwright. Python uses FastAPI/Pydantic,
-SQLAlchemy/Alembic/SQLite and independent worker processes. Financial calculations
+SQLAlchemy/Alembic, PostgreSQL/Psycopg or local SQLite, and independent worker processes. Financial calculations
 remain in the existing domain/application modules. Decimal summary/claim values
 are transported as strings; original record observations retain their saved form.
 
@@ -196,9 +199,13 @@ For live development, start `edf-web` and `npm run dev --prefix frontend`.
 Vite proxies `/api` to port 8000; the production frontend is served by Python.
 CI retains the 95% overall/100% protected-contract gates, checks every native
 Python matrix leg, verifies browser workflows and builds amd64/arm64 images.
+A required PostgreSQL job exercises account isolation, live permission changes,
+concurrent ownership changes and SQLite upgrades. Container OCR/review checks
+also use PostgreSQL.
 
-Back up the whole data directory/volume while the server is stopped, including
-the SQLite catalogue and evidence directories. On restart, running jobs become
+Back up the database and evidence directory together while the app is stopped.
+The [administration guide](WEB_ADMINISTRATION.md#backup-and-restore) covers
+PostgreSQL and local SQLite. On restart, running jobs become
 interrupted rather than successful. Queued jobs remain queued. Retry creates a
 fresh run; browser reconnection resumes progress viewing, not an unimplemented
 mid-PST processing checkpoint. Catalogue upgrades use Alembic; result.json's

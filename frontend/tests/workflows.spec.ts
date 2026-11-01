@@ -395,6 +395,10 @@ test("interrupted uploads reject a changed original and resume from the verified
   await expect(page.getByText("Source ready", { exact: true })).toBeVisible();
   expect(offsets).toEqual([0, 4 * 1024 * 1024, 4 * 1024 * 1024]);
   expect(
-    await page.evaluate(() => sessionStorage.getItem("edf-upload")),
-  ).toBeNull();
+    await page.evaluate(() =>
+      Object.keys(sessionStorage).filter((key) =>
+        key.startsWith("edf-upload:"),
+      ),
+    ),
+  ).toEqual([]);
 });

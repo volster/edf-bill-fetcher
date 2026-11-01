@@ -60,6 +60,13 @@ export type Schema = {
   sections: { key: string; title: string }[];
 };
 let csrf = "";
+let workspace = "";
+let account = "";
+export function setWorkspace(value: string, accountId: string) {
+  workspace = value;
+  account = accountId;
+}
+export const uploadStorageKey = () => `edf-upload:${account}:${workspace}`;
 export function setCsrf(value: string) {
   csrf = value;
 }
@@ -71,7 +78,11 @@ export async function api<T>(
   const response = await fetch("/api" + path, {
     method: method || (body === undefined ? "GET" : "POST"),
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrf,
+      "X-Workspace-ID": workspace,
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const value = await response.json();
@@ -95,7 +106,9 @@ export async function uploadAsset(
   const asset = resumeId
     ? { id: resumeId }
     : await api<Entry<unknown>>("/assets", { kind, name });
-  const previous = JSON.parse(sessionStorage.getItem("edf-upload") || "null");
+  const previous = JSON.parse(
+    sessionStorage.getItem(uploadStorageKey()) || "null",
+  );
   const batch =
     resumeId && previous?.batch
       ? previous.batch
@@ -103,7 +116,7 @@ export async function uploadAsset(
           value.toString(16).padStart(2, "0"),
         ).join("");
   sessionStorage.setItem(
-    "edf-upload",
+    uploadStorageKey(),
     JSON.stringify({ id: asset.id, kind, name, batch }),
   );
   const total = files.reduce((sum, file) => sum + file.size, 0);
@@ -144,7 +157,11 @@ export async function uploadAsset(
       const chunk = file.slice(offset, offset + 4 * 1024 * 1024);
       const response = await fetch(
         `/api/assets/${asset.id}/content?${query}&offset=${offset}`,
-        { method: "PUT", headers: { "X-CSRF-Token": csrf }, body: chunk },
+        {
+          method: "PUT",
+          headers: { "X-CSRF-Token": csrf, "X-Workspace-ID": workspace },
+          body: chunk,
+        },
       );
       const result = await response.json();
       if (response.status === 401)
@@ -167,7 +184,7 @@ export async function uploadAsset(
     batch_id: batch,
     files_count: files.length,
   });
-  sessionStorage.removeItem("edf-upload");
+  sessionStorage.removeItem(uploadStorageKey());
   return asset.id;
 }
 export const terminal = new Set([

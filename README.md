@@ -44,15 +44,17 @@ Compose on Windows and macOS. Then run:
 ```console
 git clone --branch feature/web-ui https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
-docker compose build
-docker compose run --rm app --init-user reviewer
-docker compose up -d
+docker compose up --build -d
 ```
 
-Replace `reviewer` with your chosen username. The account command prompts for a
-password of at least **12 characters**. Open
-**<http://127.0.0.1:8000>** and sign in with the username and password you chose.
-Create the account once; subsequent launches only need `docker compose up -d`.
+Open **<http://127.0.0.1:8000>** and sign in with **`admin` / `admin`**.
+The first screen asks you to choose your own account credentials before opening
+any evidence. There is no minimum password length. Complete setup locally before
+enabling network access. Existing installations keep their existing accounts.
+
+Docker starts **PostgreSQL 17** automatically alongside the app. Account setup,
+sharing and daily use happen in the browser; no account-creation command is
+required. Later launches only need `docker compose up -d`.
 
 The image includes the compiled browser interface, Python dependencies, Outlook
 readers and Tesseract with English OCR data. The first build downloads and
@@ -66,9 +68,11 @@ docker compose stop
 docker compose up -d
 ```
 
-Your uploads, runs, accounts and saved drafts live in the **`evidence-data` named
-volume**. Replacing the container preserves that volume. Back it up before
-updates; `docker compose down --volumes` removes the workspace.
+Evidence files live in the **`evidence-data` volume**; accounts, memberships,
+run metadata and saved drafts live in PostgreSQL's **`database-data` volume**.
+Replacing containers preserves these volumes. Back up both before updates;
+`docker compose down --volumes` removes both. See the
+[database and backup guide](docs/WEB_ADMINISTRATION.md#backup-and-restore).
 
 ### Run from source
 
@@ -104,13 +108,18 @@ python -m pip install -c .github/ci-constraints.txt -e ".[web,msg]"
 npm ci --prefix frontend
 npm run build --prefix frontend
 python main.py --doctor
-edf-web --data web-data --init-user reviewer
 edf-web --data web-data
 ```
 
-Open **<http://127.0.0.1:8000>**. Later launches only need
+Open **<http://127.0.0.1:8000>**, sign in with `admin` / `admin` on a new installation,
+and complete account setup. Later launches only need
 `edf-web --data web-data` from the same environment. `python main.py --web`
 accepts the same server options.
+
+Set `EDF_DATABASE_URL` to connect a source installation to PostgreSQL. Without
+it, the app keeps a local SQLite database with the same account, workspace and
+review features. Existing SQLite catalogues upgrade automatically. See
+[database configuration and upgrades](docs/WEB_ADMINISTRATION.md#database-configuration).
 
 Node is needed to build the frontend, rather than for subsequent launches.
 Tesseract and its English data are native requirements: pip alone does not
@@ -141,14 +150,17 @@ On the other computer, open the host's LAN address, for example
 **`http://192.168.1.20:8000`**. Use your host's actual address and allow the chosen
 port through its firewall. `127.0.0.1` always refers to the computer you are using.
 
-Accounts share the same workspace and evidence. To add another named account,
-repeat the account-creation command with a different username and the same data
-location. The [hosting guide](docs/WEB_UI.md) covers configured server folders,
+Accounts have private workspaces. A server administrator creates accounts in
+**User administration**; owners share workspaces with existing accounts from
+**Workspaces & sharing**, choosing **Owner**, **Editor** or **Viewer** access.
+Users switch between their own and shared workspaces in the sidebar. Server
+administrator status does not grant access to other users' evidence. See
+[accounts and permissions](docs/WEB_ADMINISTRATION.md#accounts-and-workspace-permissions). The [hosting guide](docs/WEB_UI.md) covers configured server folders,
 read-only Docker mounts, HTTPS proxies and secure cookies.
 
 ## Build your first evidence pack
 
-1. Sign in and open **Build a pack**. Give the pack a name.
+1. Sign in, select the workspace you want to use, and open **Build a pack**. Give the pack a name. Owners and editors can create packs; viewers can read and download them.
 2. Leave **All evidence · detect automatically** selected. Choose files or ZIPs,
    or switch **Upload selection** to a folder and its subfolders. Click
    **Upload and add**; repeat for any other sources.
@@ -209,8 +221,9 @@ an accepted analysis preserves its saved calculations; re-extract the originals
 to apply newer parsers. Excluding a record does not redact a shared PDF: included
 source files remain whole.
 
-Stop the server before backing up the entire `web-data` directory or Docker
-volume, including the catalogue and evidence files. Queued jobs and applied
+For SQLite, stop the server and back up the entire `web-data` directory. For
+PostgreSQL, back up the database and the evidence directory together; see the
+[backup procedure](docs/WEB_ADMINISTRATION.md#backup-and-restore). Queued jobs and applied
 drafts persist across restarts. A running job becomes interrupted and needs a
 fresh run; reconnecting to progress does not resume midway through a PST scan.
 
@@ -243,8 +256,9 @@ Use this README's Docker or source instructions for the browser workspace.
 ## Development and further reading
 
 The frontend uses React, TypeScript and Vite; FastAPI serves it and calls the
-shared Python application services. SQLite stores server metadata, files hold the
-evidence, and separate worker processes handle queued jobs.
+shared Python application services. PostgreSQL stores server metadata in Docker;
+source installations can also use local SQLite. Files hold the evidence, and
+separate worker processes handle queued jobs.
 
 See [web development and checks](docs/WEB_UI.md#develop-and-verify) for setup,
 generated API contracts, browser tests and the development server. CI checks
@@ -252,13 +266,14 @@ Python 3.10–3.12 across Windows, macOS and Linux, browser workflows in Chromiu
 Firefox and WebKit, and Docker builds for amd64 and arm64. It retains the 95%
 overall and 100% protected-contract coverage gates.
 
-| Guide                                           | Use it for                                                                        |
-| ----------------------------------------------- | --------------------------------------------------------------------------------- |
-| [Browser workspace and hosting](docs/WEB_UI.md) | Deployment options, upload limits, source roots, backups and browser development. |
-| [Documentation index](docs/README.md)           | Find the remaining guides by task.                                                |
-| [Configuration](docs/CONFIGURATION.md)          | Filters, duplicates, valuation dates and report sections.                         |
-| [Understanding your outputs](docs/OUTPUTS.md)   | Workbook sheets, report contents, source links and financial meanings.            |
-| [Architecture](docs/ARCHITECTURE.md)            | Shared services, accepted results, review contracts and persistence.              |
-| [Development](docs/DEVELOPMENT.md)              | Python development practices and regression checks.                               |
+| Guide                                                            | Use it for                                                                        |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| [Browser workspace and hosting](docs/WEB_UI.md)                  | Deployment options, upload limits, source roots, backups and browser development. |
+| [Accounts, workspaces and databases](docs/WEB_ADMINISTRATION.md) | First login, permissions, account recovery, upgrades and backups.                 |
+| [Documentation index](docs/README.md)                            | Find the remaining guides by task.                                                |
+| [Configuration](docs/CONFIGURATION.md)                           | Filters, duplicates, valuation dates and report sections.                         |
+| [Understanding your outputs](docs/OUTPUTS.md)                    | Workbook sheets, report contents, source links and financial meanings.            |
+| [Architecture](docs/ARCHITECTURE.md)                             | Shared services, accepted results, review contracts and persistence.              |
+| [Development](docs/DEVELOPMENT.md)                               | Python development practices and regression checks.                               |
 
 [Changes](CHANGELOG.md) · [Report a bug](https://github.com/volster/edf-bill-fetcher/issues) · [MIT licence](LICENSE)

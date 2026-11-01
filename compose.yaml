@@ -5,7 +5,27 @@ services:
       - "${EDF_WEB_BIND_ADDRESS:-127.0.0.1}:${EDF_WEB_PORT:-8000}:8000"
     volumes:
       - evidence-data:/data
+    environment:
+      EDF_DATABASE_URL: postgresql+psycopg://edf:${EDF_POSTGRES_PASSWORD:-edf-local-database}@database:5432/edf
+    depends_on:
+      database:
+        condition: service_healthy
     restart: unless-stopped
     init: true
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: edf
+      POSTGRES_DB: edf
+      POSTGRES_PASSWORD: ${EDF_POSTGRES_PASSWORD:-edf-local-database}
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edf -d edf"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
 volumes:
   evidence-data:
+  database-data:
