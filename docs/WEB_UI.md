@@ -7,7 +7,7 @@ analysis, corrections and publication services used by desktop and CLI. It can
 run from a Python installation or Docker. The web server processes evidence;
 visiting computers need only a browser. No VNC is involved.
 
-This is a shared household/team workspace. Named accounts can access the same
+This is a shared workspace. Named accounts can access the same
 runs and evidence; there are no separate private workspaces or per-case roles.
 Authentication is required even when the server listens only on localhost.
 
@@ -21,11 +21,12 @@ With the environment activated, install the optional web dependencies:
 python -m pip install -c .github/ci-constraints.txt -e ".[web,msg]"
 npm ci --prefix frontend
 npm run build --prefix frontend
-edf-web --data web-data --init-user dad
+edf-web --data web-data --init-user reviewer
 edf-web --data web-data
 ```
 
-The account command prompts for a password of at least 12 characters. Open
+Replace `reviewer` with your chosen username. The account command prompts for a
+password of at least 12 characters. Open
 `http://127.0.0.1:8000`. `python main.py --web` accepts the same server options.
 Node 24 is needed to build/develop the frontend, not to run an already built
 Python wheel or the container. Browser assets, PDF.js workers/fonts/CMaps and
@@ -37,8 +38,10 @@ To allow another computer on your network to connect:
 edf-web --data web-data --host 0.0.0.0 --port 8000 --source-root "bills=/path/to/evidence"
 ```
 
-Dad opens `http://YOUR-COMPUTER:8000`. Allow the chosen port through your local
-firewall if necessary. On Windows, a source root can be
+On another computer, open the server's LAN address in a browser, for example
+`http://192.168.1.20:8000`, replacing the example IP with the server's actual
+address. Allow the chosen port through the server's firewall if necessary.
+On Windows, a source root can be
 `--source-root "bills=C:\Evidence"`. Roots are optional: browser uploads work
 without them. Only configured roots are browsable, and uploads/runs have managed
 directories. Root labels must be unique. Passwords can be supplied through
@@ -54,7 +57,7 @@ prevents two dispatchers from managing the same jobs.
 
 ```console
 docker compose build
-docker compose run --rm app --init-user dad
+docker compose run --rm app --init-user reviewer
 docker compose up -d
 ```
 

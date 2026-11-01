@@ -45,11 +45,12 @@ Compose on Windows and macOS. Then run:
 git clone --branch feature/web-ui https://github.com/volster/edf-bill-fetcher.git
 cd edf-bill-fetcher
 docker compose build
-docker compose run --rm app --init-user dad
+docker compose run --rm app --init-user reviewer
 docker compose up -d
 ```
 
-The account command prompts for a password of at least **12 characters**. Open
+Replace `reviewer` with your chosen username. The account command prompts for a
+password of at least **12 characters**. Open
 **<http://127.0.0.1:8000>** and sign in with the username and password you chose.
 Create the account once; subsequent launches only need `docker compose up -d`.
 
@@ -103,7 +104,7 @@ python -m pip install -c .github/ci-constraints.txt -e ".[web,msg]"
 npm ci --prefix frontend
 npm run build --prefix frontend
 python main.py --doctor
-edf-web --data web-data --init-user dad
+edf-web --data web-data --init-user reviewer
 edf-web --data web-data
 ```
 
