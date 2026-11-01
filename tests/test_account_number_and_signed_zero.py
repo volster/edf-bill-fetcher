@@ -125,7 +125,7 @@ class TestAccountNumberSpacedForm:
 
 
 class TestAccountNumberFilter:
-    """Phase 1.3 — ``--acc-filter`` must reject substring-of-longer-string.
+    """``--acc-filter`` must reject substring-of-longer-string.
 
     Pre-fix the engine's account-filter was a plain
     ``acc_numeric in text_stripped`` substring check on digits-only

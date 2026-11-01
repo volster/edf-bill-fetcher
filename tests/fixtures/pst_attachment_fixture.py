@@ -1,20 +1,9 @@
-"""Synthetic ``pypff`` attachment subtree for tests.
+"""Synthetic pypff attachment records for filename extraction tests.
 
-The four ``pypff.attachment`` getters currently invoked in the live code path
-(``att.name``, ``att.get_name``, ``att.get_long_filename``, ``att.get_short_filename``)
-do not exist on the real ``pypff`` C extension, so the production code always
-raises ``AttributeError`` and silently falls back to ``Attachment_N.pdf``.
-
-The real fix (verified against ``scratch/input/edf.pst``) walks MAPI record-set
-entries looking for ``PR_ATTACH_LONG_FILENAME`` (0x3707).  Each ``record_entry``
-exposes:
-    * ``.entry_type``  -- the MAPI tag (e.g. 0x3707 for the long filename).
-    * ``.value_type``  -- the MAPI property data type (e.g. 0x001F for PT_UNICODE).
-    * ``.get_data_as_string()`` -- returning an already-decoded Python str.
-
-This fixture provides a synthetic ``pypff`` attach object with the same
-``record_sets`` shape, so ``_pst_attachment_filename`` can be exercised without
-a real PST file.
+MAPI record-set entries expose attachment names through
+``PR_ATTACH_LONG_FILENAME`` (0x3707) and related properties. Entries provide
+``entry_type``, ``value_type`` and ``get_data_as_string()``. The fixture models
+that interface without requiring a private PST file.
 """
 
 from __future__ import annotations

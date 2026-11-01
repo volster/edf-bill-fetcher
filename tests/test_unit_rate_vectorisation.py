@@ -1,8 +1,8 @@
-"""Phase 2.1 — unit-rate vectorisation parity test.
+"""Unit-rate vectorisation parity test.
 
 The historic ``_compute_unit_rate`` row-wise helper produced
 ``round((pc / units) * 100, 2)`` with comma-stripped units and
-``np.nan`` for every other failure outcome.  Phase 2.1 replaced
+``np.nan`` for every other failure outcome.  The refactor replaced
 the main ``df.apply(_compute_unit_rate, axis=1)`` call with a
 vectorised pandas/numpy implementation:
 
@@ -72,7 +72,7 @@ def legacy_unit_rate(row: pd.Series) -> float:
 
 
 def vectorised_unit_rate(df: pd.DataFrame) -> pd.Series:
-    """The Phase 2.1 vectorised path, copy-pasted for parity.
+    """The vectorised path, copy-pasted for parity.
 
     We re-implement the vectorisation here so the test does not
     depend on any in-scope variable inside ``export_to_excel``.
@@ -93,7 +93,7 @@ def vectorised_unit_rate(df: pd.DataFrame) -> pd.Series:
 
 
 class TestUnitRateParity:
-    """Phase 2.1 — vectorised unit-rate matches the row-wise reference."""
+    """Vectorised unit-rate matches the row-wise reference."""
 
     def _records(self) -> list[dict]:
         """A small but diverse fixture covering most realistic
@@ -109,7 +109,7 @@ class TestUnitRateParity:
                 "Period Charge (£)": 80.0,
                 "Units (kWh)": 100,
             },
-            # Comma-formatted units (1,234) — Phase 2.1's
+            # Comma-formatted units (1,234) — the vectorised implementation's
             # ``str.replace(",", "")`` normalises this exactly the
             # same way Python's ``str(1000).replace(",","")`` did.
             {

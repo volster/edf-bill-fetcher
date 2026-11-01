@@ -78,8 +78,7 @@ class TestAppendixCap:
         df = pd.DataFrame(records)
         create_appendix_full_evidence(doc, styles, df)
         body = "\n".join(p.text for p in doc.paragraphs)
-        # The truncation explanation's wording matches the user-
-        # approved text in the Phase 2.3 spec.
+        # The truncation explanation points to the complete workbook.
         assert "Please refer to the accompanying" in body
         assert "Excel workbook" in body
 

@@ -1,4 +1,4 @@
-"""Tests for the evidence-bundle save + index feature (Stream P5 / Task 8)."""
+"""Tests for the evidence-bundle save + index feature."""
 
 from __future__ import annotations
 
@@ -228,8 +228,7 @@ def test_save_evidence_files_copies_when_engine_populated_source_paths(
 ) -> None:
     """End-to-end: drive EvidenceEngine through one PDF, then call
     save_evidence_files(engine-records_df, engine.source_paths, dest) and
-    confirm the file lands in dest. Spec §3.9 — this is the before-the-fix
-    failure mode the user reported (evidence_files/ stayed empty)."""
+    confirm the file lands in dest. The saved file must be present in the evidence directory."""
     import base64
 
     from edf_collector import EvidenceEngine

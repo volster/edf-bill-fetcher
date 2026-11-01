@@ -1,4 +1,4 @@
-"""Tests for the multi-regex fallback chain (Task 5)."""
+"""Tests for the multi-regex fallback chain."""
 
 from edf_collector import (
     _COVER_BLOCK_INV_RE,
@@ -11,7 +11,7 @@ from edf_collector import (
     _fallback_period_to,
 )
 
-_TEXT_NEW_INVOICE = """Solland Farm
+_TEXT_NEW_INVOICE = """Example Premises
 Invoice number: KI-31105244-0001-3
 Account number: A-31105244
 Date issued: 14 May 2024

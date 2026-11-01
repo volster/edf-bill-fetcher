@@ -139,7 +139,7 @@ class TestDispatcherBuildersAllCallable:
 class TestFmtDateParity:
     """Parity test for ``fmt_date`` between the PDF and DOCX generators.
 
-    Phase 1.2: ``edf_report_docx.fmt_date`` is an alias of
+    ``edf_report_docx.fmt_date`` is an alias of
     ``edf_report.fmt_date`` so a user's bill is rendered
     identically in both formats.  This test pins that invariant at
     the unit level — any code path that re-introduces a
@@ -179,7 +179,7 @@ class TestFmtDateParity:
         )
 
     def test_fmt_date_returns_blank_for_missing(self):
-        """The blank-for-missing contract is new in Phase 1.2 — explicitly
+        """Explicitly verify the blank-for-missing contract:
         tested so ``"Unknown"`` (the old DOCX-only string) cannot sneak
         back in.
         """

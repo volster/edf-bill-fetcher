@@ -494,7 +494,7 @@ class TestOFGEMComparison:
         surface as an explicit ``CAP DATA UNAVAILABLE`` row rather than
         being silently dropped from the comparison table.
 
-        This is the Phase 1.1 invariant — a reviewer must be able to see
+        The invariant is: a reviewer must be able to see
         *which* quarters in the data the project couldn't benchmark, not
         just the ones it could.
         """

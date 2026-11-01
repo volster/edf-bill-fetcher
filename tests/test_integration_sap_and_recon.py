@@ -1,6 +1,5 @@
 """Integration tests for the wiring of SAP dumps + reconciliation sheet
-+ evidence bundle + hotlinks into ``export_to_excel`` (Stream P1,
-P2, P4, P5).
++ evidence bundle + hotlinks into ``export_to_excel`` .
 
 These tests verify that:
 
@@ -324,7 +323,7 @@ def test_export_to_excel_skips_sap_sheets_when_scan_sap_dumps_disabled(
 
 
 def test_run_analysers_passes_evidence_df_to_detect_rebilling() -> None:
-    """The reversal-credit signal added in Task 10 is only reachable
+    """The reversal-credit signal is only reachable
     when ``run_analysers`` passes ``evidence_df=df`` to
     ``detect_rebilling``. Verify the wire-up with a patch."""
     df = pd.DataFrame(_sample_invoice_data())

@@ -1,4 +1,4 @@
-"""Phase 2 — payment-analysis chart layout regression.
+"""Payment-analysis chart layout regression.
 
 The ``write_payment_analysis_sheet`` function in ``edf_collector``
 historically anchored the in-sheet chart at column H, row

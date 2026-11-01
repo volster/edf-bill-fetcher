@@ -1,8 +1,7 @@
-"""Tests for the PST attachment filename extraction helper (Stream P6 / Task 9).
+"""Tests for PST attachment filename extraction using synthetic MAPI records.
 
-The fixture module synthesises a ``pypff`` attachment object (the four
-fictional getter methods used by the legacy code do NOT exist, which is the
-root cause of every PDF row showing ``Attachment_N.pdf``).
+The fixtures exercise record-set properties rather than relying on unsupported
+attachment getter methods.
 """
 
 from __future__ import annotations

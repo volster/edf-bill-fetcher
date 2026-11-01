@@ -1,12 +1,8 @@
-"""Tests for the SAP dump detector and CSV-in-PDF parsers.
+"""Tests for SAP PDF detection and CSV-in-PDF parsing.
 
-Verifies the three SAP-data-dump parsers (contract history, meter-read
-history, financial transactions) plus the header-row detector. Real-world
-data lives in
-``scratch/input/pdfs/June 2026 download from ombudsman/``; tests use
-synthetic CSV text shaped like the real dumps and one happy-path
-``detect_sap_dump`` call against the actual PDFs (when available on
-this environment).
+Synthetic CSV text exercises contract history, meter readings and financial
+transactions. Where supported, optional local-PDF checks use ``EDF_SAP_TEST_DIR``
+and are skipped when their input files are unavailable.
 """
 
 import os
@@ -290,9 +286,7 @@ class TestParseSapFinancialTransactions:
 # This test is skipped automatically if the PDF files are missing.
 # ---------------------------------------------------------------------------
 
-OMBUDSMAN_DIR = (
-    "/mnt/c/users/matthew/wsl/edf-bill-fetcher/scratch/input/pdfs/June 2026 download from ombudsman"
-)
+OMBUDSMAN_DIR = os.environ.get("EDF_SAP_TEST_DIR", "")
 
 
 def _load_pdf_text(path: str) -> str:
@@ -307,7 +301,7 @@ def _load_pdf_text(path: str) -> str:
 
 @pytest.mark.skipif(
     not os.path.isdir(OMBUDSMAN_DIR),
-    reason="Ombudsman PDFs not present in scratch/input/pdfs/",
+    reason="Optional SAP PDF samples are not configured; set EDF_SAP_TEST_DIR",
 )
 class TestRealOmbudsmanPdfs:
     def test_detect_contract_pdf(self) -> None:

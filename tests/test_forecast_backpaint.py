@@ -1,20 +1,8 @@
-"""Phase 2 follow-through: forecast tab back-paints historical predictions.
+"""Regression tests for historical forecast values and divergence columns.
 
-The ``write_forecast_sheet`` function in ``edf_collector.py`` was
-historically rendering every historical row with ``—`` placeholders
-in the Linear / Holt-Winters / EMA / Confidence columns, which
-forced the ombudsman to read only the 6-step forward window to
-make sense of the forecasts.  The user's note for Phase 2 was
-explicit: *"the forcasting should cover the data range to show how
-the bills diverge from what you would have otherwise reasonably
-expected for that time of year"*.  The refactor back-paints the
-fitted values onto every historical row and adds a ``Forecast Δ``
-divergence column.
-
-These tests pin that contract at the unit level — they bypass
-``openpyxl.write_ready_sheet`` to drive the sheet renderer on a
-synthetic dataset, then read back the workbook with openpyxl to
-confirm the cell values are populated as designed.
+Historical rows expose fitted values alongside the forward forecast, allowing
+reviewers to compare observations with the model across the available period.
+Tests use synthetic records and read back the generated workbook.
 """
 
 from __future__ import annotations
@@ -32,10 +20,7 @@ from edf_collector import write_forecast_sheet
 def tmp_dir() -> Iterator[Path]:
     """A writable temp directory.
 
-    We use ``tempfile.mkdtemp`` instead of pytest's ``tmp_path``
-    because the latter's default Windows location (under %TEMP%)
-    hits a stale ACL on the developer's host that causes ``iterdir``
-    to raise ``PermissionError`` during teardown.
+    Uses an independently managed temporary directory and best-effort cleanup.
     """
     import tempfile
 
@@ -133,7 +118,7 @@ class TestWriteForecastSheet:
 
         df = _read_forecast_table(xlsx_path)
         # Locate the historical block: the rows above the
-        # separator (``"— " * 20``).  For Phase 2 we just check
+        # separator (``"— " * 20``).  Check
         # *every* row except the separator has populated
         # forecast cells; the separator itself is a single
         # row whose cells we drop from the dataframe as a

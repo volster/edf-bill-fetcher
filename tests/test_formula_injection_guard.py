@@ -1,4 +1,4 @@
-"""Phase 2.x — formula-injection guard on Excel text cells.
+"""Formula-injection guard on Excel text cells.
 
 External text sources (PDF/PST/email bodies) are attacker-
 controllable in principle: a user could receive a bill whose
@@ -40,20 +40,15 @@ from edf_collector import _text, export_to_excel
 
 @pytest.fixture
 def workdir() -> Path:
-    # Skirt pytest's ``tmp_path`` fixture on this Windows host —
-    # the sandboxed TEMP directory is read-only on this developer's
-    # machine, so any fixture that depends on pytest's tmp-path
-    # machinery error-cascades at setup.  Derive our own scratch
-    # dir from ``USERPROFILE`` (or ``/tmp`` as a Linux fallback)
-    # plus an explicit pid-locked name, so cross-test isolation is
-    # still preserved.
+    # Use a writable directory under USERPROFILE, or /tmp on Linux,
+    # with a process-specific name for isolation.
     scratch = Path(os.environ.get("USERPROFILE", "/tmp")) / f".edf_formula_scratch_{os.getpid()}"
     scratch.mkdir(parents=True, exist_ok=True)
     return scratch
 
 
 class TestFormulaInjectionGuard:
-    """Phase 2.x — formula-injection guard.
+    """Formula-injection guard.
 
     Excel auto-evaluation of a cell whose textual value starts
     with ``=``, ``+``, ``-`` or ``@`` is the standard
@@ -172,7 +167,7 @@ class TestFormulaInjectionGuard:
 
 
 class TestFormulaInjectionGuardEvidenceSheet:
-    """Phase 2.x — formula-injection guard extended to the
+    """Formula-injection guard extended to the
     ``write_evidence_sheet`` row-iteration pathway.
 
     The headline ``_text`` fix only covered helper calls.  The

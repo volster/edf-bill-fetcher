@@ -1,6 +1,6 @@
 # EDF Energy Billing Evidence Collector
 
-A personal desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, local PDF bills, and HTM account history exports. Produces a multi-sheet Excel evidence workbook and a PDF **or** DOCX report suitable for Energy Ombudsman submission.
+A desktop application that collects and analyses EDF Energy billing data from PST/OST email archives, local PDF bills, and HTM account history exports. Produces a multi-sheet Excel evidence workbook and PDF or DOCX reports for review when preparing an Energy Ombudsman submission.
 
 ## Features
 
@@ -10,12 +10,12 @@ A personal desktop application that collects and analyses EDF Energy billing dat
 - **Cross-source deduplication**: Two-pass dedup — Period To + Amount (primary), Amount within a 60-day window (secondary). Within a duplicate cluster the *most complete* row wins (substantive field fill-rate), with source precedence as the tie-breaker. Set `amalgamate_duplicates=True` to merge columns across all duplicate siblings into a single hybrid kept row (each sibling still surfaces on the Duplicate Entries sheet for audit).
 - **Comprehensive Excel output**: Multi-sheet evidence workbook with annual summary, dispute flags, statistical analysis, payment analysis, and forecast sheets — see the *Output Sheets* section for the full conditional-emission list.
 - **SAP financial-ledger integration**: when `scan_sap_dumps` is on (default), the engine also digests EDF's three SAP-CSV-in-PDF dumps (`*_Contract-History.pdf`, `*_Meter-Readings.pdf`, `*_Financial-Transactions.pdf`) and renders three source sheets + two analyser sheets (`SAP Back-billing Events` and `SAP ↔ EDF Matched Events`) + a cross-source `Reconciliation` sheet. See the *SAP ledger integration* section below for the full design.
-- **Professional PDF + DOCX output**: 14 dynamically-numbered sections. Numbering is **derived from `REPORT_SECTIONS` so the Table of Contents and body always agree**, regardless of which sections a user selects in the report options dialog.
+- **PDF + DOCX output**: 14 dynamically-numbered sections. Numbering is derived from `REPORT_SECTIONS` so the Table of Contents and body agree with the sections selected in the report options dialog.
 - **GUI interface**: tkinter-based desktop application with progress tracking.
   - **Output Folder picker** (Section 1): choose where xlsx + report outputs land; empty falls back to the source-file directory.
   - **Sequential file naming**: `<stem>_<YYYY-MM-DD>_<N>.xlsx` (and `_Report.pdf` / `_Report.docx` variants). Counter is per-day per-folder and shared across all outputs in one batch.
   - **Auto-generate report**: a checkbox in Section 2 to produce xlsx + PDF + DOCX from a single EXTRACT run, sharing the same batch counter.
-  - **Three-state EXTRACT button**: `EXTRACT TO EXCEL → Cancel → Cancelling... → EXTRACT TO EXCEL` — theEXTRACT and Cancel buttons are now collapsed into one.
+  - **Three-state EXTRACT button**: `EXTRACT TO EXCEL → Cancel → Cancelling... → EXTRACT TO EXCEL` — extraction and cancellation share one button.
   - **Config persistence**: GUI state and report options stored at `~/.edf_collector/config.json` (atomic write, `0o600`); deleting the file resets state cleanly.
   - **Amalgamate toggle**: the `amalgamate_duplicates` checkbox surfaces as a nested child under Deduplication (enabled only when both *Drop duplicates* and *Record dropped duplicates* are on; default OFF).
 - **CLI mode**: Headless batch/report generation for automation.
@@ -31,9 +31,7 @@ cd edf-bill-fetcher
 # Excel + PDF + DOCX report generation.
 pip install -e .
 
-# Optional toolchains (only needed if you are contributing or
-# packaging binaries — the default extras-as-runtime policy above
-# typical installs at one command):
+# Optional toolchains for development or packaging:
 #
 #   [dev]    test + lint + typecheck toolchain (pytest, ruff, mypy)
 #   [build]  PyInstaller for one-file Windows / macOS / Linux executables
@@ -198,7 +196,7 @@ A `tests/test_dispatch_parity.py` structural test pins the invariant that the PD
 1. Add an entry to `REPORT_SECTIONS` in `edf_report.py` with `key`, `title`, and optionally `is_appendix`.
 2. Add the matching key to `ReportOptionsDialog.SECTIONS` in `edf_collector.py` so it shows up in the GUI options dialog.
 3. Add a `def create_<name>(...)` builder function in `edf_report.py`.
-4. Wire the builder into the `section_builders` dispatch dict in **both** `generate_ombudsman_pdf` and `generate_ombudsman_docx`. Forgetting this raises a clear `RuntimeError` at report-render time — that's the loud-failure mode that keeps the dispatch in lockstep with the registry.
+4. Wire the builder into the `section_builders` dispatch dict in **both** `generate_ombudsman_pdf` and `generate_ombudsman_docx`. A missing builder raises `RuntimeError` during report generation so an incomplete report is not silently published.
 
 Removing a section: same steps in reverse.
 
@@ -231,8 +229,8 @@ Sheets are written in roughly this order; conditional sheets only appear when th
 | **SAP Contract History** | `scan_sap_dumps` (default on) and a SAP Contract History PDF is supplied | Contract periods extracted from the SAP Contract History PDF dump |
 | **SAP Meter Readings** | `scan_sap_dumps` and a SAP Meter Readings PDF is supplied | Meter readings from the SAP Meter Readings PDF dump, parsed by a multi-regex fallback chain |
 | **SAP Financial Transactions** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | Per-row extract of every financial transaction from the SAP Financial Transactions PDF. The widened parser surfaces **26 columns** per row (the 16 historically-surfaced columns plus 10 analyser-relevant extensions: Contract, Sub Item, Clearing Posting Date, Clearing Amount, Statistical Key Flag, Tax Code / Tax Code Description, G/L Account / G/L Description, Deferral Date). |
-| **SAP Back-billing Events** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | One summary row per **Clearing Document cluster** of ≥4 underlying SAP rows, sorted by Clearing Date ascending. Each summary row carries # rows, net amount, has-credit-for-consum-billing flag, largest single posting, posting-date range, an evidence trail narrative, and a hyperlink to its first underlying row on `SAP Financial Transactions`. Underlying rows are written as collapsible outline-group sub-rows beneath each summary (default collapsed); click `+` in the left margin to expand. Debt-management rows (`Statistical Key Flag == 'Installment Plan Item'`) are filtered out of clustering. See the design spec at `scratch/Docs/Superpowers/Specs/2026-07-21-sap-back-billing-analysis-design.md`. |
-| **SAP ↔ EDF Matched Events** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | One row per SAP back-billing event × EDF invoice candidate pair whose fuzzy match confidence is Low or better. Confidence is computed by the §3.3 algorithm in the spec: date score (in-span = 50, within 3 days = 25, within 14 days = 5) + amount score (within 5% = 40, within 25% = 20, within 50% = 5); net-zero clusters match any EDF invoice whose gross equals some cluster row's gross within the same bands → bands High (≥75) / Medium (≥40) / Low (≥10) / unmatched (omitted). Bidirectional hyperlinks: SAP Clearing Doc cell links to the event on the previous sheet, EDF Invoice # cell links to the row on `EDF Evidence Report`. |
+| **SAP Back-billing Events** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | One summary row per **Clearing Document cluster** of ≥4 underlying SAP rows, sorted by Clearing Date ascending. Each summary row carries # rows, net amount, has-credit-for-consum-billing flag, largest single posting, posting-date range, an evidence trail narrative, and a hyperlink to its first underlying row on `SAP Financial Transactions`. Underlying rows are written as collapsible outline-group sub-rows beneath each summary (default collapsed); click `+` in the left margin to expand. Debt-management rows (`Statistical Key Flag == 'Installment Plan Item'`) are filtered out of clustering. |
+| **SAP ↔ EDF Matched Events** | `scan_sap_dumps` and a SAP Financial Transactions PDF is supplied | One row per SAP back-billing event × EDF invoice candidate pair whose fuzzy match confidence is Low or better. Confidence uses the following scoring rules: date score (in-span = 50, within 3 days = 25, within 14 days = 5) + amount score (within 5% = 40, within 25% = 20, within 50% = 5); net-zero clusters match any EDF invoice whose gross equals some cluster row's gross within the same bands → bands High (≥75) / Medium (≥40) / Low (≥10) / unmatched (omitted). Bidirectional hyperlinks: SAP Clearing Doc cell links to the event on the previous sheet, EDF Invoice # cell links to the row on `EDF Evidence Report`. |
 | **Reconciliation** | `scan_sap_dumps` and `generate_reconciliation_sheet` (independent toggle, default on) | Cross-source reconciliation between SAP-ledger signals (clearing clusters, credit-for-consum-billing postings) and EDF-invoice signals (back-billing / rebilling / meter-rollover detections). Toggled separately so a reviewer can keep just the SAP-ledger sheets without the cross-source view. |
 
 ## Back-billing & rebilling detection
@@ -273,7 +271,7 @@ Multi-invoice (merged) PDF inputs — e.g. a bundle of 30+ pages containing 8 T-
 
 ## SAP ledger integration
 
-EDF's SAP ledger PDFs are the *behind-the-scenes* truth of every billing event; the EDF-branded invoice PDFs only show what EDF chose to send the customer. The three SAP source PDFs the engine looks for (under the `Scan SAP dumps` GUI toggle, default on, or `config["scan_sap_dumps"]` programmatic key) are:
+EDF's SAP ledger PDFs provide transaction details that can be compared with customer invoices. They may contain billing adjustments not shown separately on an invoice; their meaning and completeness still require review. The three SAP source PDFs the engine looks for (under the `Scan SAP dumps` GUI toggle, default on, or `config["scan_sap_dumps"]` programmatic key) are:
 
 - **SAP Contract History** (`*_Contract-History.pdf`) → `SAP Contract History` sheet
 - **SAP Meter Readings** (`*_Meter-Readings.pdf`) → `SAP Meter Readings` sheet
@@ -283,17 +281,14 @@ The Financial-Transactions parser surfaces **26 columns** per row (16 historical
 
 Two analyser sheets sit adjacent to `SAP Financial Transactions`, deriving their data from it:
 
-- **SAP Back-billing Events** — one summary row per Clearing Document cluster of ≥4 underlying rows. Each cluster's net amount, evidence trail narrative, and link back to its underlying rows on `SAP Financial Transactions`. Sub-rows are hidden under collapsible outline groups (default collapsed) so the sheet opens at a readable ~62 rows. Debt-management rows whose `Statistical Key Flag == 'Installment Plan Item'` are excluded from clustering up-front.
-- **SAP ↔ EDF Matched Events** — fuzzy-join Sheet 1 events to EDF invoice records. Each matched pair lists the date delta vs EDF `Period To`, the SAP event's net amount and the EDF invoice's amount, a confidence band, and bidirectional hyperlinks to Sheet 1 and `EDF Evidence Report` rows. Per spec §3.3 the algorithm scores on two axes:
+- **SAP Back-billing Events** — one summary row per Clearing Document cluster of ≥4 underlying rows. Each cluster includes its net amount, evidence trail narrative, and link back to its underlying rows on `SAP Financial Transactions`. Sub-rows use collapsible outline groups, initially collapsed. Debt-management rows whose `Statistical Key Flag == 'Installment Plan Item'` are excluded from clustering.
+- **SAP ↔ EDF Matched Events** — fuzzy-join Sheet 1 events to EDF invoice records. Each matched pair lists the date delta vs EDF `Period To`, the SAP event's net amount and the EDF invoice's amount, a confidence band, and bidirectional hyperlinks to Sheet 1 and `EDF Evidence Report` rows. The algorithm scores on two axes:
   - **date** — Clearing Date inside EDF `[Period From, Period To]` = 50, within 3 days = 25, within 14 days = 5
   - **amount** — for net-£0 clusters, the closest cluster row's gross within 5% of EDF amount = 40 / within 25% = 20 / within 50% = 5; for non-zero net clusters, the same bands applied to `event.net / edf.amount`
 
   Bands: **High** ≥ 75, **Medium** ≥ 40, **Low** ≥ 10. SAP events that produce no candidate at Low-or-above are omitted from Sheet 2 (but remain on Sheet 1).
 
-Both new sheets honour the same `scan_sap_dumps` toggle as the existing three SAP sheets — there is no separate "Show SAP back-billing" checkbox (YAGNI).
-
-The full design spec is preserved at
-`scratch/Docs/Superpowers/Specs/2026-07-21-sap-back-billing-analysis-design.md`.
+Both analysis sheets use the same `scan_sap_dumps` toggle as the three SAP source sheets.
 
 ## Supported EDF Formats
 

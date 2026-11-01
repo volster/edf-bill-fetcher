@@ -5,7 +5,7 @@ from edf_collector import (
     extract_reconciliation_statement_rows,
 )
 
-_PLAIN_INVOICE = """Solland Farm
+_PLAIN_INVOICE = """Example Premises
 EDF_0010
 Bill reference: 28261421 (7 April 2026)
 Account number: A-31105244
@@ -14,7 +14,7 @@ Balance on your last bill £37,301.48 debit
 """
 
 _RECON_DOC = """Smell Gas - Immediately call 0800 111 999 (24hrs)
-Solland Farm
+Example Premises
 Bill reference: 28261421 (7 April 2026)
 Account number: A-31105244
 EDF_0010
@@ -68,7 +68,7 @@ def test_detector_still_true_without_payments_section() -> None:
 def test_detector_false_on_plain_invoice_without_bill_ref_match() -> None:
     """Plain local-PDF invoice lacks the Bill reference + Account number proximity marker."""
     txt = (
-        "Solland Farm\n"
+        "Example Premises\n"
         "Invoice number: T12345\n"
         "Balance on your last bill £100.00 debit\n"
         "Account number: A-31105244"

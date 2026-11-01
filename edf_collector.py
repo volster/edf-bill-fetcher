@@ -45,9 +45,7 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
-# Re-export the evidence-bundle helpers so callers who already import
-# everything from ``edf_collector`` transparently gain access to the new
-# module (per the spec / plan: Stream P5).
+# Re-export evidence-bundle helpers for callers importing from this module.
 from evidence_bundle import build_bundle_index, save_evidence_files  # noqa: E402,F401
 
 # Optional imports — gracefully degrade if missing
@@ -97,9 +95,8 @@ MEDIUM_GREY = "#666666"
 # ---------------------------------------------------------------------------
 # Dedup source precedence
 # ---------------------------------------------------------------------------
-# Per the user's standing instruction ("html summary > pdf's from
-# folder > pdf from pst > email body"), this is the canonical
-# precedence order for the dedup pass inside ``export_to_excel``.
+# Source precedence for duplicate selection inside ``export_to_excel``:
+# HTM account history, local PDFs, PST attachments, then email bodies.
 # Lower number = higher precedence (i.e. wins when two records
 # collide on the same `_dedup_date` and `Amount (£)`).
 #
@@ -443,11 +440,11 @@ _CREDIT_NUMBER_RE = re.compile(r"Credit note number:\s*(KCR-[\w-]+)", re.IGNOREC
 # Credit-note accounts can use the same rendering as KI invoices.
 _CREDIT_TOTAL_RE = re.compile(r"Total credits for this bill\s+£([\d,]+\.\d{2})", re.IGNORECASE)
 
-# Multi-regex fallback chain (Task 5) -- used when `_INV_NUMBER_RE` /
+# Multi-regex fallback chain -- used when `_INV_NUMBER_RE` /
 # `_BILLING_PERIOD_RE` / `_PERIOD_CHARGE_RE` miss. Each fallback returns a
 # (value, regex_name) tuple so the Source Excerpt column can show a
 # regex-trace ("inv_num via _COVER_BLOCK_INV_RE; period via ...") per spec
-# Stream P3.
+#
 _COVER_BLOCK_INV_RE = re.compile(r"Invoice\s+number:?\s*([A-Z0-9-]+)", re.IGNORECASE)
 _COVER_BLOCK_PERIOD_RE = re.compile(
     r"(?:for\s+the\s+period|covering|bill\s+period)\s*[:]?\s*"
@@ -581,7 +578,7 @@ def to_excel_date(date_input):
 def _account_number_matches(acc_filter: str, text: str) -> bool:
     """Return True when ``acc_filter`` appears as a standalone digit run in ``text``.
 
-    Phase 1.3: replaces the old "is the digits substring contained anywhere"
+    Replaces the old "is the digits substring contained anywhere"
     check, which false-matched an unrelated longer string (invoice number,
     meter serial, phone number) when the configured account number happened
     to be a subset of those digits.
@@ -786,7 +783,7 @@ _SAP_DDMMYYYY_RE = re.compile(r"\b(\d{2})-(\d{2})-(\d{4})\b")
 
 
 # ---------------------------------------------------------------------------
-# Multi-regex fallback chain (Stream P3 / Task 5)
+# Multi-regex fallback chain
 # ---------------------------------------------------------------------------
 # Each fallback chain scans the input text in a fixed precedence order and
 # returns ``(value, regex_name)`` so the Source Excerpt column can show the
@@ -1036,13 +1033,12 @@ def parse_sap_financial_transactions(text: str, source_file: str = "") -> list[d
 # SAP Back-billing analysis (spec: 2026-07-21-sap-back-billing-analysis-design.md)
 # ---------------------------------------------------------------------------
 #
-# EDF's SAP financial ledger is the *behind-the-scenes* truth of every
-# billing event; the EDF-branded invoice PDFs only show what EDF chose to
-# send the customer.  Two SAP-native signals reveal back-billing activity
-# without any cross-system join:
+# SAP financial-ledger exports provide transaction details to compare with
+# customer invoices. Two SAP-native signals identify candidate billing
+# adjustments for review without a cross-system join:
 #
 # 1. ``Cr- Credit for Consum Billing`` rows — a credit posted against a
-#    previously-raised consumption billing (18 instances in this account).
+#    previously-raised consumption billing.
 # 2. ``Clearing Document`` clusters — a SAP bookkeeping event that
 #    simultaneously clears multiple prior document numbers; the canonical
 #    back-billing signature is a cluster whose rows net to exactly £0.00
@@ -1829,14 +1825,14 @@ def extract_reconciliation_statement_rows(text: str, attachment_name: str) -> li
 
 
 # ---------------------------------------------------------------------------
-# PST attachment filename recovery (Stream P6 / Task 9)
+# PST attachment filename recovery
 # ---------------------------------------------------------------------------
 # The legacy code tried ``att.name``, ``att.get_name()``,
 # ``att.get_long_filename()`` and ``att.get_short_filename()`` -- none of
 # these exist on ``pypff.attachment``, so the lookup always raised
 # ``AttributeError`` and every PST PDF row was emitted as ``Attachment_N.pdf``.
 #
-# Verified against ``scratch/input/edf.pst``: a real attachment exposes
+# Pypff attachment properties are exposed through
 # ``record_sets[i].get_entry(j)`` carrying:
 #   * ``.entry_type``  -- the MAPI tag (e.g. ``0x3707`` for ``PR_ATTACH_LONG_FILENAME``).
 #   * ``.value_type``  -- the MAPI data type (e.g. ``0x001F`` for ``PT_UNICODE``).
@@ -2284,7 +2280,7 @@ class EvidenceEngine:
         self.error_log = []
         self.seen_pdf_hashes = set()
         self.lock = threading.Lock()
-        # Stream P1: SAP CSV-in-PDF data dumps are detected in
+        # SAP CSV-in-PDF data dumps are detected in
         # ``process_pdf_file`` and routed to three row accumulators
         # (contract / meter_read / financial). ``export_to_excel``
         # reads these through ``sap_rows={...}`` to render the
@@ -2292,7 +2288,7 @@ class EvidenceEngine:
         self.sap_contract_rows: list[dict] = []
         self.sap_meter_rows: list[dict] = []
         self.sap_financial_rows: list[dict] = []
-        # Stream P5: reverse-lookup from attachment name to absolute source
+        # Reverse lookup from attachment name to absolute source
         # path, populated by process_pdf_file so save_evidence_files can copy
         # the originals into evidence_files/. Pre-fix this attribute was never
         # set — getattr(engine, "source_paths", {}) always returned {} and
@@ -2300,7 +2296,7 @@ class EvidenceEngine:
         self.source_paths: dict[str, str] = {}
 
     # ------------------------------------------------------------------
-    # Pickle support — Phase 1.4
+    # Pickle support
     # ------------------------------------------------------------------
     def __getstate__(self) -> dict:
         """Return a picklable snapshot of the engine data.
@@ -2416,11 +2412,11 @@ class EvidenceEngine:
                 r_type = label
                 break
 
-        # Multi-regex fallback chain (Stream P3): when the canonical
+        # Multi-regex fallback chain: when the canonical
         # extractors miss, try the cover-block / loose-token fallbacks so
         # the analyser tabs see fewer N/A entries. Each fallback records
         # the regex that produced the value into ``_regex_trace`` so the
-        # Source Excerpt column (Stream P3 / Task 6) can show a parse trace.
+        # Source Excerpt column can show a parse trace.
         regex_trace: list[str] = []
         inv_num = fields.get("inv_num")
         if not inv_num or inv_num == "N/A":
@@ -2517,7 +2513,7 @@ class EvidenceEngine:
             if acc and not _account_number_matches(acc, text):
                 return False
 
-        # Multi-regex fallback chain (Stream P3): borrow the same patterns
+        # Multi-regex fallback chain: borrow the same patterns
         # used in ``_process_new_invoice`` to recover fields the canonical
         # extractor missed.
         regex_trace: list[str] = []
@@ -2811,7 +2807,7 @@ class EvidenceEngine:
             if not attachment_name:
                 attachment_name = detail_label or ""
 
-            # Stream P5: record the absolute source path so save_evidence_files
+            # Record the absolute source path so save_evidence_files
             # can copy the original into evidence_files/. Multi-slice merged
             # PDFs all point at the same path under per-slice attachment names
             # — the contract is "open the parent PDF", true regardless of
@@ -2838,7 +2834,7 @@ class EvidenceEngine:
                     slice_attachment = attachment_name
 
                 try:
-                    # Stream P1: SAP CSV-in-PDF data dumps (Contract /
+                    # SAP CSV-in-PDF data dumps (Contract /
                     # Meter-Read / Financial-Transactions). Detected
                     # via the header-row marker; routed to dedicated
                     # parsers and stored on the engine's SAP-row
@@ -3254,7 +3250,7 @@ def _money(ws, r, c, val, bold=False, fill_hex=None):
 
 
 def _text(ws, r, c, val, bold=False, fill_hex=None, wrap=False, align="left", color="000000"):
-    # Phase 2.x — formula-injection guard.  External text
+    # formula-injection guard.  External text
     # (PDF/PST/email) can start with ``=``, ``+``, ``-`` or
     # ``@`` and Excel will silently evaluate the cell as a
     # formula when the workbook is opened.  The classic
@@ -3542,7 +3538,7 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
     COL_PCT_CHANGE = headers.index("% Change") + 1
     COL_READING_IDX = headers.index("Reading") + 1
     COL_ANOMALY = headers.index("Anomaly Flag") + 1
-    # Phase 2 follow-on: dup sheets carry a "Duplicate Of"
+    # dup sheets carry a "Duplicate Of"
     # printable summary cell per row plus a clickable hyperlink
     # back to the matched kept record in ``EDF Evidence Report``.
     # The matched-against position lands in a parallel
@@ -3594,7 +3590,7 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
                     if dt is not None:
                         excel_val = dt
                 c = ws.cell(row=r_idx, column=c_idx, value=excel_val)
-                # Phase 2.x — formula-injection guard on the
+                # formula-injection guard on the
                 # generic evidence-sheet row path.  openpyxl
                 # auto-promotes any cell whose text value starts
                 # with ``=``/``+``/``-``/``@`` to ``data_type='f'``
@@ -3660,7 +3656,7 @@ def write_evidence_sheet(ws, df, is_duplicate=False):
             ),
         )
 
-    # Phase 2 follow-on: post-loop pass to render the "Duplicate
+    # post-loop pass to render the "Duplicate
     # Of" column.  The matched-against keystrokes live in
     # ``match_positions_series`` (a pd.Series keyed on the dup
     # sheet's df-index by df-positional index) so the click-through
@@ -3949,7 +3945,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         # Pass 2: records with no period info (e.g. Local PDF) — match by
         # Amount within a 60-day window of any already-kept record.
         #
-        # Phase 2.2 follows the spec: group candidates by Amount (£)
+        # group candidates by Amount (£)
         # first, then look up matches inside each amount-bucket
         # rather than scanning the entire kept-mask frame for every
         # candidate.  The previous implementation was O(N²) — at
@@ -4096,7 +4092,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
 
     # Compute Unit Rate (p/kWh) where both Period Charge and Units are available.
     #
-    # Phase 2.1: vectorised path.  The historic row-wise apply walked
+    # vectorised path.  The historic row-wise apply walked
     # Python per row, which the bench measured at ~63 ms at 5,000
     # records (not the bottleneck we'd been worried about, but the
     # spec asks for vectorisation).  New path uses pd.to_numeric
@@ -4135,7 +4131,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
 
     if not dup_df.empty:
         dup_df["Unit Rate (p/kWh)"] = dup_df.apply(_compute_unit_rate, axis=1)
-        # Matched-against kept-record block (Phase-2 follow-up).
+        # Matched-against kept-record block (follow-up).
         # Each duplicate row gets a clickable summary pointing
         # back to the *kept* record so an ombudsman reviewing the
         # workbook can navigate from the dup sheet to the
@@ -5206,7 +5202,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
     write_tariff_analysis_sheet(wb.create_sheet(title="Tariff Analysis"), dfc)
 
     # ------------------------------------------------------------------
-    # Phase-2 analysis tabs (back-billing, rebilling, meter rollover,
+    # Analysis tabs (back-billing, rebilling, meter rollover,
     # contract history). run_analysers runs the four detectors on the
     # same `dfc` (post-dedup, post-filter) the rest of the workbook
     # uses, then each writer paints the result onto its own tab.
@@ -5250,7 +5246,7 @@ def export_to_excel(data, output_path, error_log, config, filtered=None, sap_row
         evidence_index=analyses["evidence_index"],
     )
 
-    # Stream P1 + P2: SAP CSV-in-PDF data dumps and the cross-source
+    # SAP CSV-in-PDF data dumps and the cross-source
     # Reconciliation sheet. When ``sap_rows`` is supplied (from the
     # engine's three SAP-row accumulators) and the user hasn't opted
     # out via ``config["scan_sap_dumps"] = False``, emit the three SAP
@@ -6055,7 +6051,7 @@ def write_payment_analysis_sheet(ws, dfc):
         _text(ws, r, 5, str(row.get("Details", ""))[:60], fill_hex=bg, wrap=True)
 
     # Chart - Payment amounts over time.
-    # Phase-2 portability fix: the previous layout anchored the
+    # Portability: the previous layout anchored the
     # chart at ``cell(row+2, column H)`` (column 8) which sat past
     # the visible data table (columns A-E) **and** the user's
     # roughly-default Excel viewport (about seven column-units
@@ -6635,7 +6631,7 @@ def _assess_reason(
     period_to: pd.Timestamp,
 ) -> str:
     """Return a short, deterministic narrative for the Reason Assessment
-    column of the Back-billing sheet. Template-driven (no LLM).
+    column of the Back-billing sheet. Template-driven.
     """
     pf = period_from.strftime("%d %b %Y")
     pt = period_to.strftime("%d %b %Y")
@@ -6688,7 +6684,7 @@ def _open_pdf_hyperlink_cell(
         cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
 
 
-# Evidence Report row index (Stream P4 / Task 7)
+# Evidence Report row index
 # ---------------------------------------------------------------------------
 # A ``dict[str, int]`` mapping per-row signatures to the 1-indexed Excel row
 # on the ``EDF Evidence Report`` sheet so the 4 analyser writers can emit a
@@ -7549,7 +7545,7 @@ def write_rebilling_sheet(
 
 
 def run_analysers(df: pd.DataFrame) -> dict[str, Any]:
-    """Run all Phase-2 detection analyses on the deduplicated
+    """Run all detection analyses on the deduplicated
     DataFrame and return their outputs in a dict.
 
     The orchestrator is a thin wrapper so :func:`export_to_excel` can
@@ -9196,7 +9192,7 @@ class App:
         self.output_folder = tk.StringVar(value="")
         self.amalgamate_duplicates = tk.BooleanVar(value=False)
         self.auto_generate_report = tk.BooleanVar(value=False)
-        # Stream P5: save evidence files referenced by the workbook into a
+        # save evidence files referenced by the workbook into a
         # flat ``output/evidence_files/`` folder and a themed DOCX index.
         # Defaults to True so the bundle is produced alongside the workbook
         # by default; reviewer can uncheck if they only want the XLSX.
@@ -9501,7 +9497,7 @@ class App:
             command=self._save_config,
         ).pack(anchor=tk.W)
 
-        # Stream P5: save evidence files + themed DOCX bundle index alongside
+        # save evidence files + themed DOCX bundle index alongside
         # the workbook (spec Design Section 2 + §7). Defaults True.
         tk.Checkbutton(
             s2,
@@ -9511,7 +9507,7 @@ class App:
             command=self._save_config,
         ).pack(anchor=tk.W)
 
-        # Stream P1: detect + render the three SAP CSV-in-PDF data
+        # detect + render the three SAP CSV-in-PDF data
         # dumps (Contract / Meter-Read / Financial-Transactions) on
         # their own dedicated sheets.
         tk.Checkbutton(
@@ -9522,7 +9518,7 @@ class App:
             command=self._save_config,
         ).pack(anchor=tk.W)
 
-        # Stream P2: cross-source Reconciliation sheet (SAP rows vs
+        # cross-source Reconciliation sheet (SAP rows vs
         # inferred analyser data). Independent of the SAP-scan
         # toggle so a reviewer can keep the SAP data without the
         # cross-source match view if they want only the raw SAP
@@ -10016,7 +10012,7 @@ class App:
                     summary += f"\n  Parse errors: {len(engine.error_log)} (see Parse Errors tab)"
                 summary += f"\n\nSaved to:\n{xlsx_path}"
 
-                # Stream P5: save evidence files + themed DOCX bundle index
+                # save evidence files + themed DOCX bundle index
                 # into a sibling ``evidence_files/`` folder when the toggle is
                 # set on (default True).
                 if self.save_evidence_files_var.get():
@@ -10197,17 +10193,17 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # ``_scalar_to_array``/``_restore_array``-style restoration
         # routines, never ``os.system`` or ``subprocess.Popen``.
         "pyarrow.lib": None,
-        # Phase 1.4: ``BlockManager`` is the internal layout primitive
+        # ``BlockManager`` is the internal layout primitive
         # that pandas 2.x uses to back every ``DataFrame`` /
         # ``Series``.  Without it, a pickle of a ``records`` list
         # containing a DataFrame falls back to "Can't pickle local
         # object" or "Blocked unsafe class ... BlockManager"
         # depending on whether the unpickler bails before/after
-        # resolving the type.  Phase 1.4 acceptance: pin the round-trip
+        # resolving the type.  pin the round-trip
         # of a real engine whose ``engine.records`` includes a
         # ``pandas.DataFrame`` — see tests/test_pickle_roundtrip.py.
         "pandas.core.internals.managers": {"BlockManager"},
-        # Phase 1.4: pandas's ``_unpickle_block`` is the C-extension
+        # pandas's ``_unpickle_block`` is the C-extension
         # helper that ``BlockManager.__setstate__`` falls through to
         # when materialising ``Block`` objects from a pickled stream.
         # Without it the BlockManager round-trip falls back to
@@ -10215,7 +10211,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # itself is a thin Python wrapper around this C-level loader,
         # so both are required for a clean DataFrame round-trip.
         "pandas._libs.internals": {"_unpickle_block"},
-        # Phase 1.4: numpy's ``_frombuffer`` is the C-extension helper
+        # numpy's ``_frombuffer`` is the C-extension helper
         # used by ``ndarray.__reduce__`` to round-trip the raw byte
         # buffer that holds the array alongside a type descriptor.
         # ``ndarray`` was already on the whitelist; this lets the
@@ -10224,7 +10220,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # both paths for backward/forward compatibility.
         "numpy.core.numeric": {"_frombuffer"},
         "numpy._core.numeric": {"_frombuffer"},
-        # Phase 1.4: ``numpy.dtype`` is the scalar-type descriptor
+        # ``numpy.dtype`` is the scalar-type descriptor
         # every ndarray carries — without it a round-tripped
         # ndarray raises "Object has no attribute 'itemsize'".
         # Whitelist the dedicated ``dtype`` module too, alongside
@@ -10232,7 +10228,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
         "numpy.dtype": {"dtype"},
         "numpy": {"ndarray", "dtype"},
         "numpy.ndarray": {"ndarray"},
-        # Phase 1.4: ``_reconstruct`` is the C-extension helper that
+        # ``_reconstruct`` is the C-extension helper that
         # rebuilds an ``ndarray`` of a given shape/dtype from the
         # pickle-encoded byte buffer.  Without this entry, a
         # round-tripped 2D ``numpy.ndarray`` (under the bonnet of
@@ -10242,7 +10238,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # keep both paths for compatibility.
         "numpy.core.multiarray": {"_reconstruct"},
         "numpy._core.multiarray": {"_reconstruct"},
-        # Phase 1.4: ``_new_Index`` rebuilds a pandas Index from a
+        # ``_new_Index`` rebuilds a pandas Index from a
         # pickled (dtype, kind) tuple — needed because the persistent
         # RangeIndex(DataFrame.index) carries a ``kind`` token.  The
         # public ``Index`` class is the parent that ``_new_Index``
@@ -10250,7 +10246,7 @@ class _RestrictedUnpickler(pickle.Unpickler):
         # round-trip to construct a fully-fledged ``Index`` after
         # the C-extension helper has built its layout.
         "pandas.core.indexes.base": {"_new_Index", "Index"},
-        # Phase 1.4: ``RangeIndex`` is the integer-only Index
+        # ``RangeIndex`` is the integer-only Index
         # subclass that pandas DataFrames grow by default.  Without
         # it the round-trip works for ``Index`` but raises
         # "Blocked unsafe class 'pandas.core.indexes.range'.'RangeIndex'"
