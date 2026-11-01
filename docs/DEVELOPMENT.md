@@ -67,6 +67,7 @@ source tests alone do not exercise bundled dependencies.
 | Corrections or review drafts | `application/record_review.py`, `review_session.py`, `io/review_workbook.py`, Qt review widgets; `test_excel_review.py`, `test_native_review.py`, `test_native_review_ui.py`. |
 | Claims and complaint packs | `processors/claim_reconciliation.py`, `io/claim_workbook.py`, `application/complaint_pack.py`; `test_claim_reconciliation.py`, `test_claim_outputs.py`, `test_claim_ui.py`. |
 | Desktop behavior | `ui/qt_app.py` and related Qt modules; `test_qt_desktop.py`, `test_review_gui_2026.py`. |
+| Browser accounts, workspace access or catalogue migrations | `web/accounts.py`, `web/storage.py`, `web/migrations/`, `web/api.py`, `frontend/src/accounts.tsx`; `test_web_accounts.py`, `test_web_migration_boundaries.py`, `frontend/tests/accounts.spec.ts`. |
 | Output presentation | `io/writers/`, `io/reporters/`, shared table models; `test_output_usability.py`, `test_dispatch_parity.py`. |
 
 Test filenames in the table are under `tests/`. Read the
@@ -180,6 +181,35 @@ Coverage is a useful gap detector, not proof of correctness. Do not lower the
 a failing change pass. See the
 [coverage policy](COVERAGE.md#coverage-exclusions).
 
+## Browser and database changes
+
+Install the Python `[dev,msg,web]` extras and follow [browser setup](WEB_UI.md)
+for the frontend toolchain. When API contracts change, regenerate the committed
+client types with `npm run generate --prefix frontend`, then run
+`npm run build --prefix frontend`. Browser workflows run through
+`npm test --prefix frontend`; Playwright manages the synthetic test server.
+See [CI](CI.md) for the browser installation commands and platform checks.
+
+Account and permission contracts run against SQLite by default:
+
+```console
+python -m pytest tests/test_web_accounts.py tests/test_web_migration_boundaries.py
+```
+
+To exercise PostgreSQL too, set `EDF_TEST_DATABASE_URL` to a dedicated test
+database URL using the `postgresql+psycopg://` scheme. The account fixture creates
+an isolated `edf_test_*` schema per test and drops it afterward; its database user
+must be allowed to create schemas. Use a test database rather than an operational
+catalogue. Without this variable, PostgreSQL-specific cases are reported as skips.
+`EDF_DATABASE_URL` configures the application itself and does not opt tests into
+the PostgreSQL contracts.
+
+Changes to roles must cover both successful operations and denied requests,
+including existing sessions, queued jobs, source files and generated downloads.
+Migration changes must preserve existing identities, evidence references and
+review revisions. Update [administration](WEB_ADMINISTRATION.md) alongside any
+change to setup, recovery, sharing, storage or upgrade behavior.
+
 ## Documentation and delivery
 
 Update the guide that owns the changed behavior. User instructions belong in
@@ -195,7 +225,8 @@ prefix is enforced by the project tooling.
 
 CI is configured for pushes and pull requests targeting the branches listed in
 [ci.yml](../.github/workflows/ci.yml), and is reusable for releases. Its aggregate
-validation succeeds only when all nine matrix legs pass. Automatic executable
+validation requires all nine native matrix legs, three browser engines, both
+container architectures and PostgreSQL contracts to pass. Automatic executable
 builds use the validated revision; manually dispatched builds remain labelled
 `manual-unvalidated`. Tagged releases validate the tagged revision before building
 and publishing it. See [CI](CI.md) for diagnostics and provenance.

@@ -176,4 +176,7 @@ or `redo` command only when intending to change that saved draft. Original resul
 and evidence inputs cannot be overwritten by command outputs.
 
 `python main.py --web --help` launches the optional browser server entry point.
-See [web setup](WEB_UI.md) for its dependencies and account creation.
+See [web setup](WEB_UI.md) for dependencies and hosting. Fresh installations use
+`admin` / `admin` and require account setup after login; existing accounts retain
+their credentials. [Account administration](WEB_ADMINISTRATION.md) covers password
+recovery, workspace roles and `--database-url` configuration.

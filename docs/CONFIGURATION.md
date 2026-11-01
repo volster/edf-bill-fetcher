@@ -68,6 +68,14 @@ A sender entry `edfenergy.com` matches that domain and its subdomains;
 accepted for the domain form. Matching is case-insensitive; arbitrary glob
 patterns and regular expressions are not supported.
 
+## Browser server configuration
+
+Hosting, accounts, sessions and database settings belong to the web server, not
+the analysis configuration below. See [browser hosting](WEB_UI.md) for launch
+options and [account and database administration](WEB_ADMINISTRATION.md) for
+`EDF_DATABASE_URL`, PostgreSQL, workspace folder grants, recovery and backups.
+Desktop and CLI analysis do not require a database server.
+
 ## Analysis and report options
 
 On `feature/web-ui`, **All analysis settings…** in desktop and the browser
