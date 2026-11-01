@@ -76,6 +76,45 @@ test("review a saved analysis, reject stale edits, undo and preserve pending for
   await expect(
     page.getByLabel("Complaint summary", { exact: true }),
   ).toHaveValue("Synthetic disputed rebill");
+  await page.getByRole("tab", { name: "Dispute ledger", exact: true }).click();
+  await page
+    .getByLabel("Bill", { exact: true })
+    .selectOption({ label: "BROWSER-001 · 01/02/2024 · A-123" });
+  await expect(
+    page.getByText("Unapplied form edits", { exact: true }),
+  ).not.toBeVisible();
+  await page.getByLabel("Status", { exact: true }).selectOption("challenged");
+  await page.getByLabel("Challenged Amount", { exact: true }).fill("80.00");
+  await page.getByLabel("Proposed Reduction", { exact: true }).fill("40.00");
+  await page
+    .getByLabel("Basis", { exact: true })
+    .fill("Synthetic review position");
+  await page
+    .getByRole("button", { name: "Save position", exact: true })
+    .click();
+  await expect(
+    page.getByText("Draft revision 5", { exact: false }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Clear position", exact: true })
+    .click();
+  await expect(
+    page.getByText("Draft revision 6", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Challenged Amount", { exact: true }),
+  ).toHaveValue("");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(
+    page.getByLabel("Challenged Amount", { exact: true }),
+  ).toHaveValue("80.00");
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(
+    page.getByLabel("Challenged Amount", { exact: true }),
+  ).toHaveValue("");
+  await expect(
+    page.getByText("Unapplied form edits", { exact: true }),
+  ).not.toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -116,8 +155,46 @@ test("extract from a configured server folder, inspect original PDF and download
   await expect(
     page.getByRole("button", { name: "KI-12345", exact: true }),
   ).toBeVisible({ timeout: 60_000 });
+  const runId = page.url().split("/runs/")[1];
+  let finishing = false;
+  let unblockArtifacts!: () => void;
+  let artifactsRequested!: () => void;
+  const artifactGate = new Promise<void>((resolve) => {
+    unblockArtifacts = resolve;
+  });
+  const requested = new Promise<void>((resolve) => {
+    artifactsRequested = resolve;
+  });
+  await page.route(`**/api/jobs/${runId}`, async (route) => {
+    const response = await route.fetch();
+    const job = await response.json();
+    await route.fulfill({
+      response,
+      json: {
+        ...job,
+        data: { ...job.data, status: finishing ? job.data.status : "running" },
+      },
+    });
+  });
+  await page.route(`**/api/jobs/${runId}/artifacts`, async (route) => {
+    const response = await route.fetch();
+    if (finishing) {
+      artifactsRequested();
+      await artifactGate;
+    }
+    await route.fulfill({ response });
+  });
+  await page.reload();
   await page.getByRole("button", { name: "KI-12345", exact: true }).click();
   await expect(page.getByLabel("PDF page", { exact: true })).toBeVisible();
+  finishing = true;
+  await requested;
+  try {
+    // A final artifact refresh must retain the selected record and its PDF.
+    await expect(page.getByLabel("PDF page", { exact: true })).toBeVisible();
+  } finally {
+    unblockArtifacts();
+  }
   await expect(page.locator(".pdfViewer .page canvas").first()).toBeVisible();
   await page.getByRole("tab", { name: "Outputs", exact: true }).click();
   const download = page.waitForEvent("download");

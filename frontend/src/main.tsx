@@ -963,6 +963,8 @@ function Run() {
     queryKey: ["artifacts", id, job.data?.data.status],
     queryFn: () =>
       api<{ path: string; size: number }[]>(`/jobs/${id}/artifacts`),
+    placeholderData: (previous, query) =>
+      query?.queryKey[1] === id ? previous : undefined,
   });
   const hasResult = artifacts.data?.some((item) => item.path === "result.json");
   useEffect(() => {
@@ -1580,7 +1582,11 @@ function RowSelect({
   return (
     <label>
       {title}
-      <select value={value} onChange={(event) => setValue(event.target.value)}>
+      <select
+        aria-label={title}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+      >
         <option value="">Choose…</option>
         {rows.map((row) => (
           <option key={row.id} value={row.id}>
@@ -1721,6 +1727,9 @@ function PositionEditor({
       return;
     reset(value);
   };
+  useEffect(() => {
+    if (!changed.current) reset(selected);
+  }, [data.revision]);
   return (
     <form
       className="panel"
@@ -1762,6 +1771,7 @@ function PositionEditor({
             {label(key)}
             {key === "status" ? (
               <select
+                aria-label={label(key)}
                 value={value}
                 onChange={(event) =>
                   setFields((items) => ({
