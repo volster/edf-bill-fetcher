@@ -44,6 +44,7 @@ first login, workspace roles, account recovery, PostgreSQL upgrades and backups.
 | [Architecture](ARCHITECTURE.md) | Evidence flow, accepted results, financial contracts, review drafts and publication. |
 | [Coverage](COVERAGE.md) | Reproducing the CI measurement and choosing meaningful tests. |
 | [CI troubleshooting](CI.md) | Matrix and release gates, diagnostic artifacts and past platform failures. |
+| [Web reliability checks](WEB_RELIABILITY.md) | Repeatable synthetic upload, archive, recovery and concurrency checks. |
 
 ## History
 

@@ -1,5 +1,6 @@
 """Independent access, revocation and migration contracts on SQLite and real PostgreSQL."""
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -690,3 +691,114 @@ def test_invalid_legacy_username_upgrade_rolls_back_before_retry(tmp_path):
 def test_server_folders_cannot_bypass_isolation_by_containing_managed_evidence(tmp_path, location):
     with pytest.raises(ValueError, match="separate from the app data"):
         create_app(tmp_path / "data", roots={"bills": str(tmp_path / location)}, start_worker=False)
+
+
+@pytest.mark.parametrize("same_file", [True, False])
+def test_concurrent_editors_never_duplicate_chunks_or_lose_folder_members(server, same_file):
+    client, store, app = server
+    owner(client)
+    new_user(client)
+    identity = workspace(client)["id"]
+    assert share(client, "reader", "editor").status_code == 200
+    asset = client.post("/api/assets", json={"kind": "auto", "name": "Shared upload"}).json()
+    url = f"/api/assets/{asset['id']}"
+    with TestClient(app) as reader:
+        login(reader, "reader", "b")
+        finish_setup(reader, "reader", "b")
+        reader.headers["x-workspace-id"] = identity
+        barrier = Barrier(2)
+        selections = [
+            (client, "a.pdf", b"a" * 524_288),
+            (reader, "a.pdf" if same_file else "b.pdf", b"b" * 524_288),
+        ]
+
+        def send(selection):
+            sender, path, data = selection
+            barrier.wait(timeout=10)
+            response = sender.put(
+                url + "/content", params={"path": path, "offset": 0}, content=data
+            )
+            return path, data, response.status_code
+
+        with ThreadPoolExecutor(2) as executor:
+            results = list(executor.map(send, selections))
+        assert sorted(result[2] for result in results) == ([200, 409] if same_file else [200, 200])
+        successful = [result for result in results if result[2] == 200]
+        for order, (path, data, _) in enumerate(successful):
+            assert (store.directory(asset) / path).read_bytes() == data
+            assert (
+                client.post(
+                    url + "/file-complete",
+                    params={"path": path},
+                    json={
+                        "size": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "batch_id": "concurrent",
+                        "order": order,
+                    },
+                ).status_code
+                == 200
+            )
+        assert (
+            client.post(
+                url + "/seal",
+                json={
+                    "batch_id": "concurrent",
+                    "files_count": len(successful),
+                },
+            ).status_code
+            == 200
+        )
+        assert store.get(asset["id"])["data"]["file_count"] == len(successful)
+        assert len(store.upload_files(asset["id"])) == len(successful)
+
+
+def test_simultaneous_review_saves_accept_one_revision_and_audit_only_its_actor(server):
+    client, store, app = server
+    operator = owner(client)
+    new_user(client)
+    identity = workspace(client)["id"]
+    assert share(client, "reader", "editor").status_code == 200
+    entry, baseline = accepted(store)
+    path = f"/api/jobs/{entry['id']}/review"
+    first = client.get(path).json()
+    with TestClient(app) as reader:
+        login(reader, "reader", "b")
+        account = finish_setup(reader, "reader", "b")
+        reader.headers["x-workspace-id"] = identity
+        assert reader.get(path).json()["revision"] == first["revision"]
+        barrier = Barrier(2)
+
+        def save(selection):
+            sender, actor, amount = selection
+            barrier.wait(timeout=10)
+            response = sender.post(
+                path,
+                json={
+                    "revision": first["revision"],
+                    "operation": "update",
+                    "arguments": {
+                        "row_id": first["rows"][0]["id"],
+                        "changes": {"Period Charge (£)": amount},
+                        "include": True,
+                        "reason": "Checked synthetic original",
+                        "status": "verified",
+                    },
+                },
+            )
+            return actor, amount, response.status_code
+
+        with ThreadPoolExecutor(2) as executor:
+            results = list(
+                executor.map(save, [(client, operator["id"], "60"), (reader, account["id"], "80")])
+            )
+    assert sorted(result[2] for result in results) == [200, 409]
+    actor, amount, _ = next(result for result in results if result[2] == 200)
+    review = client.get(path).json()
+    assert review["revision"] == first["revision"] + 1
+    assert review["rows"][0]["record"]["Period Charge (£)"] == int(amount)
+    assert baseline.summary.charges == 250
+    events = client.get(f"/api/workspaces/{identity}/audit").json()
+    changes = [event for event in events if event["action"] == "review.updated"]
+    assert len(changes) == 1
+    assert changes[0]["actor_id"] == actor

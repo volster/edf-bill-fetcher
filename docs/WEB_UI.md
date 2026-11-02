@@ -109,12 +109,28 @@ not automatically published as analysed evidence. Mixed extractions also retain
 `intake_inventory.json` in their output pack.
 
 Uploads use 4 MiB browser chunks, with an 8 MiB server request ceiling. Resume
-checks the existing prefix against the selected original. Files have independent
+checks the existing prefix against the selected original. New pending uploads also
+retain a compact fingerprint of the selected paths and sizes in the browser tab,
+so an incomplete or resized selection is rejected before more bytes are sent.
+Files have independent
 catalogue records, completion checks compare size/SHA256, and finalisation checks
 that the whole selected batch is complete. If interrupted, select the same files
 and choose **Resume pending upload** in that browser tab. A changed original or
 different/incomplete selection is rejected instead of producing a mixed file.
-Keep files unchanged until upload completion.
+**Pause upload** stops the current browser request; resume with the same source
+type and original selection in the same workspace and browser tab. Leaving the
+upload screen also stops its active request. A partially received chunk may
+already be on the server; resume checks its actual size and hash before continuing.
+Keep files unchanged until upload completion. Completed selections clear the
+file picker so the same originals can be selected again.
+
+If the connection drops after the server finalises the source, resume safely
+checks the existing originals and confirmation instead of uploading them again.
+Finalised originals cannot be changed through the upload endpoints. A storage
+failure returns a resumable error; restore server free space or fix its storage
+before retrying. A failed write invalidates the affected file's completion check
+and attempts to roll back the partial chunk, preventing it from being published
+as verified evidence.
 
 Current bounds are 64 GiB per uploaded file, 100,000 files per collection,
 64 GiB aggregate ZIP expansion per discovery, and three archive nesting levels.
@@ -122,6 +138,8 @@ ZIP traversal, symbolic links, encrypted members and conflicting portable names
 are rejected. Free space is checked before chunk writes and archive expansion.
 Large ZIPs still require disk space for the compressed upload and expanded files.
 These bounds are explicit limits, not claims of unlimited storage or processing.
+See [upload and concurrency validation](WEB_RELIABILITY.md) for repeatable
+synthetic stress checks and their scope.
 
 ## Review, regenerate and share
 

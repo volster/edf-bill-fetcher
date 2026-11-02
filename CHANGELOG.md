@@ -8,6 +8,13 @@ semver-friendly.
 
 ## [Unreleased]
 
+- Added browser upload pause/resume and recovery when a chunk or final confirmation
+  response is lost. Completed file selections reset for reuse; invalid collection
+  sizes and duplicate paths are rejected before creating a source.
+- Failed storage writes invalidate verification and attempt partial-chunk rollback;
+  completed upload confirmations can be repeated without changing finalised originals.
+- Added concurrent upload/review checks for both databases, browser recovery tests,
+  and an opt-in multi-user HTTP stress check for large files and ZIP collections.
 - New web installations start with `admin` / `admin` and require account setup
   before accessing evidence. Passwords no longer have a 12-character minimum;
   existing accounts retain their credentials and have a terminal recovery command.

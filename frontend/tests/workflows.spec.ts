@@ -1,8 +1,47 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { test, expect, type Page } from "@playwright/test";
+import { basename, join, resolve } from "node:path";
+import { test, expect, errors, type Page } from "@playwright/test";
+
+async function selectFolder(page: Page, folder: string, browserName: string) {
+  const input = page.getByLabel("Choose a folder", { exact: true });
+  const paths = (
+    directory: string,
+    prefix: string,
+  ): { path: string; size: number }[] =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const path = `${prefix}/${entry.name}`;
+      const absolute = join(directory, entry.name);
+      return entry.isDirectory()
+        ? paths(absolute, path)
+        : [{ path, size: statSync(absolute).size }];
+    });
+  const expected = paths(folder, basename(folder)).sort((a, b) =>
+    a.path.localeCompare(b.path),
+  );
+  try {
+    await input.setInputFiles(folder, { timeout: 10_000 });
+  } catch (error) {
+    // WebKit can deliver change before Playwright installs its input listener.
+    // Accept only that timeout, and only if the complete native FileList agrees.
+    if (browserName !== "webkit" || !(error instanceof errors.TimeoutError))
+      throw error;
+  }
+  await expect
+    .poll(() =>
+      input.evaluate((element: HTMLInputElement) =>
+        Array.from(element.files || [], (file) => ({
+          path: file.webkitRelativePath,
+          size: file.size,
+        })).sort((a, b) => a.path.localeCompare(b.path)),
+      ),
+    )
+    .toEqual(expected);
+  await expect(
+    page.getByText(`${expected.length} files selected.`, { exact: false }),
+  ).toBeVisible();
+}
 
 async function signIn(page: Page) {
   await page.goto("/");
@@ -243,6 +282,7 @@ test("small screens retain navigation and inline sign-in errors", async ({
 
 test("mixed folder uploads include ZIP members and retain unsupported-file decisions", async ({
   page,
+  browserName,
 }) => {
   const temporary = mkdtempSync(join(tmpdir(), "edf-upload-browser-"));
   try {
@@ -263,9 +303,7 @@ test("mixed folder uploads include ZIP members and retain unsupported-file decis
     await page
       .getByLabel("Upload selection", { exact: true })
       .selectOption("folder");
-    await page
-      .getByLabel("Choose a folder", { exact: true })
-      .setInputFiles(join(temporary, "mixed"));
+    await selectFolder(page, join(temporary, "mixed"), browserName);
     await page
       .getByRole("button", { name: "Upload and add", exact: true })
       .click();

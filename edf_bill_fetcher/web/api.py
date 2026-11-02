@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
 import os
@@ -636,6 +637,10 @@ def create_app(
         try:
             return store.get(identity, "upload_file")
         except KeyError:
+            if asset["data"]["sealed"]:
+                raise Conflict(
+                    "This source is finalized; create a new upload to change it"
+                ) from None
             count = asset["data"].get("file_count", 0)
             if count >= 100_000:
                 raise HTTPException(413, "Folder exceeds the 100,000-file limit") from None
@@ -680,10 +685,29 @@ def create_app(
                 if len(content) > shutil.disk_usage(store.root).free:
                     raise HTTPException(507, "Not enough free space to continue this upload")
                 file_record = upload_record(asset, path)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with target.open("ab") as output:
-                    output.write(content)
-                    output.flush()
+                if file_record["data"].get("complete"):
+                    file_record = store.replace(
+                        file_record, {**file_record["data"], "complete": False}
+                    )
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with target.open("ab") as output:
+                        output.write(content)
+                        output.flush()
+                except OSError as error:
+                    # A full disk can fail after part of a buffered chunk was written.
+                    # Keep that chunk retryable and never retain a completed-file claim.
+                    try:
+                        with target.open("r+b") as output:
+                            output.truncate(actual)
+                    except OSError:
+                        pass  # The recorded file remains incomplete even if rollback fails.
+                    raise HTTPException(
+                        507
+                        if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
+                        else 503,
+                        "The server could not save this upload. Check its storage, then resume the same selection.",
+                    ) from error
                 store.replace(
                     file_record,
                     {**file_record["data"], "size": actual + len(content), "complete": False},
@@ -696,12 +720,17 @@ def create_app(
     def complete_file(identity: str, expected: CompleteFile, path: str) -> Any:
         with FileLock(str(contained(store.root, identity + ".upload.lock")), timeout=10):
             asset = store.get(identity, "asset")
-            if asset["data"]["sealed"]:
-                raise Conflict("This source is already finalized")
             actual = artifact_record(str(contained(store.directory(asset), path)))
             if actual["bytes"] != expected.size or actual["sha256"] != expected.sha256:
                 raise Conflict("Uploaded bytes do not match the selected original")
             entry = upload_record(asset, path)
+            if asset["data"]["sealed"]:
+                if entry["data"].get("complete") and all(
+                    entry["data"].get(key) == value
+                    for key, value in expected.model_dump(exclude={"order"}).items()
+                ):
+                    return entry
+                raise Conflict("This source is already finalized")
             return store.replace(
                 entry, {**entry["data"], **expected.model_dump(), "complete": True}
             )
@@ -746,6 +775,8 @@ def create_app(
                     entry["data"]["path"]
                     for entry in sorted(entries, key=lambda entry: entry["data"]["order"])
                 ]
+            if asset["data"]["sealed"]:
+                return asset
             return store.replace(asset, {**asset["data"], "files": files, "sealed": True})
 
     @app.get("/api/jobs")

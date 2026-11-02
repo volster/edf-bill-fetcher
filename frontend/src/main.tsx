@@ -558,6 +558,9 @@ function Sources({
   allowed?: string[];
 }) {
   const [selection, setSelection] = useState("files");
+  const fileInput = useRef<HTMLInputElement>(null);
+  const uploadController = useRef<AbortController | null>(null);
+  useEffect(() => () => uploadController.current?.abort(), []);
   const [kind, setKind] = useState<Source["kind"]>(
       (allowed?.[0] || "pdf_dir") as Source["kind"],
     ),
@@ -588,8 +591,11 @@ function Sources({
   });
   const [existing, setExisting] = useState("");
   async function send(resume = false) {
+    const controller = new AbortController();
+    uploadController.current = controller;
     setBusy(true);
     setError(undefined);
+    setProgress(resume ? "Checking pending upload…" : "Preparing upload…");
     try {
       const saved = resume
         ? JSON.parse(sessionStorage.getItem(uploadStorageKey()) || "null")
@@ -608,14 +614,24 @@ function Sources({
               `${Math.round((done / Math.max(total, 1)) * 100)}% uploaded`,
           ),
         saved?.id,
+        controller.signal,
       );
       onAdd({ kind, asset_id: identity }, name || files[0]?.name || "Evidence");
       setFiles([]);
+      if (fileInput.current) fileInput.current.value = "";
       setProgress("Source ready");
       await assets.refetch();
     } catch (error) {
-      setError(error);
+      setProgress("");
+      setError(
+        controller.signal.aborted
+          ? new Error(
+              "Upload paused. Use Resume pending upload with the same files to continue.",
+            )
+          : error,
+      );
     } finally {
+      uploadController.current = null;
       setBusy(false);
     }
   }
@@ -627,6 +643,7 @@ function Sources({
           Source type
           <select
             aria-label="Source type"
+            disabled={busy}
             value={kind}
             onChange={(event) => {
               setKind(event.target.value as Source["kind"]);
@@ -646,6 +663,7 @@ function Sources({
           Location
           <select
             aria-label="Location"
+            disabled={busy}
             value={mode}
             onChange={(event) => setMode(event.target.value)}
           >
@@ -662,6 +680,7 @@ function Sources({
               Upload selection
               <select
                 aria-label="Upload selection"
+                disabled={busy}
                 value={selection}
                 onChange={(event) => {
                   setSelection(event.target.value);
@@ -677,6 +696,7 @@ function Sources({
             Source label
             <input
               value={name}
+              disabled={busy}
               onChange={(event) => setName(event.target.value)}
               placeholder="e.g. Bills 2023–2025"
             />
@@ -690,7 +710,9 @@ function Sources({
                 ? "Choose a folder"
                 : "Choose a file"}
             <input
-              key={kind}
+              key={`${kind}:${selection}`}
+              ref={fileInput}
+              disabled={busy}
               type="file"
               multiple={kind === "auto" || kind.endsWith("_dir")}
               {...((kind === "auto" && selection === "folder") ||
@@ -713,6 +735,11 @@ function Sources({
             >
               Upload and add
             </button>
+            {busy && (
+              <button onClick={() => uploadController.current?.abort()}>
+                Pause upload
+              </button>
+            )}
             {sessionStorage.getItem(uploadStorageKey()) && (
               <button
                 disabled={busy || !files.length}

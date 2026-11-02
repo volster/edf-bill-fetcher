@@ -172,11 +172,14 @@ check file decoding before weakening the identity validation.
 `feature/web-ui` runs the native Python/OS matrix with the optional web extra,
 plus three isolated Playwright jobs (Chromium, Firefox and WebKit). Browser jobs
 regenerate OpenAPI input types and require a clean generated diff before checking
-formatting and building static assets. Their server and evidence are synthetic.
-Failure traces are retained for diagnosis.
+formatting and building static assets. TypeScript also checks browser tests and
+the Playwright configuration. Their server and evidence are synthetic.
+Failure traces are retained for diagnosis. The
+[web reliability guide](WEB_RELIABILITY.md) explains the upload recovery,
+concurrency and folder-selection regressions, plus the separate opt-in stress check.
 
 The container matrix builds and loads linux/amd64 and linux/arm64 images, then
 checks installed processing capabilities and packaged browser assets. It does
 not publish images. Required validation waits for the Python, browser and
-container matrices. Desktop release workflows remain tied to their existing
+container matrices and PostgreSQL contracts. Desktop release workflows remain tied to their existing
 release branches; web branch CI does not relabel a desktop build as validated.

@@ -209,6 +209,8 @@ including existing sessions, queued jobs, source files and generated downloads.
 Migration changes must preserve existing identities, evidence references and
 review revisions. Update [administration](WEB_ADMINISTRATION.md) alongside any
 change to setup, recovery, sharing, storage or upgrade behavior.
+For changes affecting large folders, ZIP discovery or concurrent uploaders, also
+run the opt-in [HTTP stress check](WEB_RELIABILITY.md#repeatable-http-stress-check).
 
 ## Documentation and delivery
 

@@ -829,7 +829,7 @@ def test_folder_uploads_use_per_file_state_and_verify_the_complete_selection(web
                 "order": 0,
             },
         ).status_code
-        == 409
+        == 200
     )
 
 
@@ -1010,6 +1010,153 @@ def test_busy_upload_returns_a_resumable_conflict_instead_of_an_internal_error(w
     assert response.status_code == 409
     assert response.headers["retry-after"] == "1"
     assert "resume the same selection" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("failure", ["preflight", "disk_full", "quota", "io", "rollback"])
+def test_failed_chunk_cannot_publish_partial_bytes_and_can_be_resumed(web, monkeypatch, failure):
+    import errno
+    from types import SimpleNamespace
+
+    import edf_bill_fetcher.web.api as api_module
+
+    client, store = web
+    asset = client.post("/api/assets", json={"kind": "auto", "name": "Storage recovery"}).json()
+    url = f"/api/assets/{asset['id']}"
+    path = store.directory(asset) / "archive.pst"
+    original = b"verified original prefix"
+    chunk = b"next chunk"
+    assert client.put(url + "/content?path=archive.pst", content=original).status_code == 200
+    completion = {
+        "size": len(original),
+        "sha256": hashlib.sha256(original).hexdigest(),
+        "batch_id": "disk-recovery",
+        "order": 0,
+    }
+    assert client.post(url + "/file-complete?path=archive.pst", json=completion).status_code == 200
+    actual_open = Path.open
+
+    class FailingWrite:
+        def __enter__(self):
+            self.stream = actual_open(path, "ab", buffering=0)
+            return self
+
+        def write(self, value):
+            self.stream.write(value[:3])
+            raise OSError(
+                errno.EIO
+                if failure == "io"
+                else getattr(errno, "EDQUOT", errno.ENOSPC)
+                if failure == "quota"
+                else errno.ENOSPC,
+                "synthetic storage failure",
+            )
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+    def fail_open(target, mode="r", *args, **kwargs):
+        if target == path and mode == "ab":
+            return FailingWrite()
+        if target == path and mode == "r+b" and failure == "rollback":
+            raise OSError(errno.EIO, "synthetic rollback failure")
+        return actual_open(target, mode, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        if failure == "preflight":
+            patch.setattr(api_module.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+        else:
+            patch.setattr(Path, "open", fail_open)
+        response = client.put(
+            url + "/content", params={"path": "archive.pst", "offset": len(original)}, content=chunk
+        )
+    assert response.status_code == (503 if failure == "io" else 507)
+    if failure == "preflight":
+        assert path.read_bytes() == original
+        assert store.upload_files(asset["id"])[0]["data"]["complete"]
+        return  # No write started; the earlier verified original is still valid.
+    assert not store.upload_files(asset["id"])[0]["data"]["complete"]
+    seal = {"batch_id": "disk-recovery", "files_count": 1}
+    assert client.post(url + "/seal", json=seal).status_code == 409
+    expected = original + (chunk[:3] if failure == "rollback" else b"")
+    assert path.read_bytes() == expected
+    offset = client.get(url + "/offset?path=archive.pst").json()
+    assert offset == {"offset": len(expected), "sha256": hashlib.sha256(expected).hexdigest()}
+    assert (
+        client.put(
+            url + "/content",
+            params={"path": "archive.pst", "offset": len(expected)},
+            content=(original + chunk)[len(expected) :],
+        ).status_code
+        == 200
+    )
+    completion.update(
+        size=len(original + chunk), sha256=hashlib.sha256(original + chunk).hexdigest()
+    )
+    assert client.post(url + "/file-complete?path=archive.pst", json=completion).status_code == 200
+    assert client.post(url + "/seal", json=seal).status_code == 200
+    assert path.read_bytes() == original + chunk
+
+
+def test_lost_final_confirmation_can_be_repeated_without_changing_a_sealed_source(web):
+    client, store = web
+    asset = client.post("/api/assets", json={"kind": "auto", "name": "Lost confirmation"}).json()
+    url = f"/api/assets/{asset['id']}"
+    completions = {}
+    for order, (name, value) in enumerate([("empty.txt", b""), ("bill.pdf", b"original")]):
+        assert client.put(url + "/content", params={"path": name}, content=value).status_code == 200
+        completion = {
+            "size": len(value),
+            "sha256": hashlib.sha256(value).hexdigest(),
+            "batch_id": "confirmation",
+            "order": order,
+        }
+        completions[name] = completion
+        assert (
+            client.post(url + "/file-complete", params={"path": name}, json=completion).status_code
+            == 200
+        )
+    seal = {"batch_id": "confirmation", "files_count": 2}
+    assert client.post(url + "/seal", json=seal).status_code == 200
+    before = store.get(asset["id"])
+    files_before = store.upload_files(asset["id"])
+    for name, completion in completions.items():
+        assert (
+            client.post(url + "/file-complete", params={"path": name}, json=completion).status_code
+            == 200
+        )
+    assert client.post(url + "/seal", json=seal).status_code == 200
+    assert store.get(asset["id"]) == before
+    assert store.upload_files(asset["id"]) == files_before
+    assert (
+        client.post(url + "/seal", json={"batch_id": "different", "files_count": 2}).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            url + "/file-complete?path=bill.pdf",
+            json={**completions["bill.pdf"], "batch_id": "different"},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.put(url + "/content?path=bill.pdf&offset=8", content=b"changed").status_code == 409
+    )
+    assert (store.directory(asset) / "bill.pdf").read_bytes() == b"original"
+    # A file appearing outside the upload protocol must not extend a sealed manifest.
+    (store.directory(asset) / "unexpected.pdf").write_bytes(b"extra")
+    assert (
+        client.post(
+            url + "/file-complete?path=unexpected.pdf",
+            json={
+                "size": 5,
+                "sha256": hashlib.sha256(b"extra").hexdigest(),
+                "batch_id": "confirmation",
+                "order": 2,
+            },
+        ).status_code
+        == 409
+    )
+    assert store.get(asset["id"]) == before
 
 
 @pytest.mark.parametrize(
