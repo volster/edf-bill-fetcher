@@ -802,3 +802,20 @@ def test_simultaneous_review_saves_accept_one_revision_and_audit_only_its_actor(
     changes = [event for event in events if event["action"] == "review.updated"]
     assert len(changes) == 1
     assert changes[0]["actor_id"] == actor
+
+
+def test_rejected_file_registration_cannot_leave_an_orphan_or_change_the_count(server):
+    client, store, _ = server
+    owner(client)
+    asset = client.post("/api/assets", json={"kind": "auto", "name": "Atomic folder"}).json()
+    changed = store.replace(asset, {**asset["data"], "name": "Updated folder"})
+    file_id = "file-" + asset["id"] + "-" + hashlib.sha256(b"bill.pdf").hexdigest()
+    with pytest.raises(Conflict, match="source changed"):
+        store.register_upload(asset, file_id, "bill.pdf")
+    with pytest.raises(KeyError):
+        store.get(file_id)
+    assert store.get(asset["id"]) == changed
+    assert store.upload_files(asset["id"]) == []
+    store.register_upload(changed, file_id, "bill.pdf")
+    assert store.get(asset["id"])["data"]["file_count"] == 1
+    assert len(store.upload_files(asset["id"])) == 1

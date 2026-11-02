@@ -1077,8 +1077,23 @@ def test_failed_chunk_cannot_publish_partial_bytes_and_can_be_resumed(web, monke
     assert not store.upload_files(asset["id"])[0]["data"]["complete"]
     seal = {"batch_id": "disk-recovery", "files_count": 1}
     assert client.post(url + "/seal", json=seal).status_code == 409
+    assert client.post(url + "/seal", json={}).status_code == 409
     expected = original + (chunk[:3] if failure == "rollback" else b"")
     assert path.read_bytes() == expected
+    assert (
+        client.post(
+            url + "/seal",
+            json={
+                "files": {
+                    "archive.pst": {
+                        "size": len(expected),
+                        "sha256": hashlib.sha256(expected).hexdigest(),
+                    }
+                }
+            },
+        ).status_code
+        == 409
+    )
     offset = client.get(url + "/offset?path=archive.pst").json()
     assert offset == {"offset": len(expected), "sha256": hashlib.sha256(expected).hexdigest()}
     assert (

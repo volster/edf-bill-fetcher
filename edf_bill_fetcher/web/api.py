@@ -644,14 +644,7 @@ def create_app(
             count = asset["data"].get("file_count", 0)
             if count >= 100_000:
                 raise HTTPException(413, "Folder exceeds the 100,000-file limit") from None
-            entry = store.create(
-                "upload_file",
-                {"path": canonical, "complete": False},
-                identity,
-                workspace_id=asset["workspace_id"],
-            )
-            store.replace(asset, {**asset["data"], "file_count": count + 1})
-            return entry
+            return store.register_upload(asset, identity, canonical)
 
     @app.get("/api/assets/{identity}/offset")
     def offset(identity: str, path: str) -> Any:
@@ -685,9 +678,10 @@ def create_app(
                 if len(content) > shutil.disk_usage(store.root).free:
                     raise HTTPException(507, "Not enough free space to continue this upload")
                 file_record = upload_record(asset, path)
-                if file_record["data"].get("complete"):
+                if not file_record["data"].get("write_pending"):
                     file_record = store.replace(
-                        file_record, {**file_record["data"], "complete": False}
+                        file_record,
+                        {**file_record["data"], "complete": False, "write_pending": True},
                     )
                 try:
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -710,7 +704,12 @@ def create_app(
                     ) from error
                 store.replace(
                     file_record,
-                    {**file_record["data"], "size": actual + len(content), "complete": False},
+                    {
+                        **file_record["data"],
+                        "size": actual + len(content),
+                        "complete": False,
+                        "write_pending": False,
+                    },
                 )
             return {"offset": actual + len(content)}
 
@@ -732,7 +731,13 @@ def create_app(
                     return entry
                 raise Conflict("This source is already finalized")
             return store.replace(
-                entry, {**entry["data"], **expected.model_dump(), "complete": True}
+                entry,
+                {
+                    **entry["data"],
+                    **expected.model_dump(),
+                    "complete": True,
+                    "write_pending": False,
+                },
             )
 
     @app.post("/api/assets/{identity}/seal")
@@ -740,6 +745,10 @@ def create_app(
         with FileLock(str(contained(store.root, identity + ".upload.lock")), timeout=10):
             asset = store.get(identity, "asset")
             entries = store.upload_files(identity)
+            if any(entry["data"].get("write_pending") for entry in entries):
+                raise Conflict(
+                    "A file write did not finish; resume and verify the original files before finalizing"
+                )
             files = [entry["data"]["path"] for entry in entries] or asset["data"]["files"]
             if not files or (
                 asset["data"]["kind"] != "auto"

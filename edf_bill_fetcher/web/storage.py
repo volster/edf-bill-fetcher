@@ -158,6 +158,34 @@ class Store:
                 ).mappings()
             ]
 
+    def register_upload(self, asset: dict, identity: str, path: str) -> dict:
+        """Commit a folder member and its collection count together, including on failure."""
+        with self.engine.begin() as connection:
+            connection.execute(
+                self.entries.insert().values(
+                    id=identity,
+                    kind="upload_file",
+                    revision=0,
+                    data={"path": path, "complete": False, "write_pending": True},
+                    workspace_id=asset["workspace_id"],
+                    created=time.time(),
+                )
+            )
+            result = connection.execute(
+                update(self.entries)
+                .where(
+                    self.entries.c.id == asset["id"],
+                    self.entries.c.revision == asset["revision"],
+                )
+                .values(
+                    revision=asset["revision"] + 1,
+                    data={**asset["data"], "file_count": asset["data"].get("file_count", 0) + 1},
+                )
+            )
+            if result.rowcount != 1:
+                raise Conflict("This source changed while adding a file; resume the same selection")
+        return self.get(identity, "upload_file")
+
     def replace(
         self,
         entry: dict,

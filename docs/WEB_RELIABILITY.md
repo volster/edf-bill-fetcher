@@ -66,6 +66,9 @@ npm test --prefix frontend
 - Storage regressions inject full-disk, quota and I/O errors after partial writes,
   including failure to roll back. Finalisation must reject incomplete evidence;
   a later resume verifies the actual prefix and completes the original bytes.
+  Both batch confirmation and the older finalisation request reject an unfinished
+  write. Folder-member registration and its collection count commit in one
+  database transaction, so a rejected registration cannot leave an orphan entry.
 - Concurrent editors writing the same offset produce one accepted chunk and a
   conflict. Uploads to different files retain both manifest entries.
 - Concurrent review saves against one draft revision accept one change and
